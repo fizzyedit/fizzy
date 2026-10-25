@@ -3,7 +3,7 @@
 //! A tape is to a demo what a video file is to a film, and borrows its two ideas:
 //!
 //!   * **Keyframes and deltas.** A `keyframe` op puts the app into a state it declares outright
-//!     (these files, these open, the default layout); every other op is a small delta on what is
+//!     (these files, these open); every other op is a small delta on what is
 //!     there — a pointer glide, a click, a typed string, a command. Any moment of the demo is
 //!     therefore "the last keyframe, plus the ops since", which is the whole of how a demo is
 //!     rewound: `Sequencer.rewind` to the keyframe, then replay the deltas to the moment, fast.
@@ -95,6 +95,9 @@ pub const Action = union(enum) {
     /// Hold demo time until a condition holds. Waits are how a tape stays deterministic over an
     /// app that does things on its own time (loading a file, animating a pane open).
     wait: Wait,
+    /// Carry on past the next ops when a condition already holds: the gesture that brings the app
+    /// to a state is not made when it is already there (`Skip`).
+    skip: Skip,
     /// Apply one step of a document's history to a file of the keyframe before it, shown being
     /// made over `Op.ms` (the time it took, as recorded). Lands with no frame drawn between it and
     /// the next: an effect needs no layout to land on, so a seek applies thousands a frame.
@@ -162,6 +165,14 @@ pub const Wait = struct {
     timeout: u32 = 10_000,
 };
 
+/// Leave out the `count` ops after this one (a gesture, its aim and its waits) when `when` holds
+/// as this op is reached, as a person who finds the explorer open does not press the rail again.
+/// The ops left out are not played: their time still passes, and a seek replays the same choice.
+pub const Skip = struct {
+    when: Until,
+    count: u32,
+};
+
 pub const Until = union(enum) {
     /// The tagged widget is drawn and visible.
     shown: []const u8,
@@ -213,7 +224,7 @@ pub const Chapter = struct {
 };
 
 /// A state the app can be put into outright. What it *means* is the stage's (the app's): fizzy
-/// mounts `files` under `root` as the project folder, opens `open`, and resets the layout.
+/// mounts `files` under `root` as the project folder and opens `open`.
 pub const Keyframe = struct {
     /// Where the stage mounts `files`, conventionally `demo://<tape name>`. Targets that name a
     /// file name it under this root.
@@ -221,7 +232,7 @@ pub const Keyframe = struct {
     files: []const File = &.{},
     /// Paths relative to `root`, opened in order; the last one is the active document.
     open: []const []const u8 = &.{},
-    layout: Layout = .focused,
+    layout: Layout = .keep,
     /// Settings the demo depends on — an editor that closes brackets, a preview beside the text —
     /// put in place at the cut whatever the viewer has chosen, and given back when the demo ends.
     settings: []const Setting = &.{},
@@ -232,7 +243,8 @@ pub const Keyframe = struct {
         return null;
     }
 
-    /// How the window is arranged at the cut. The stage's to interpret, like the rest.
+    /// How the window is arranged at the cut. The stage's to interpret, like the rest; fizzy's
+    /// leaves every window as it is, whatever is asked.
     pub const Layout = enum {
         /// As it is.
         keep,
@@ -419,7 +431,7 @@ pub fn pointerShown(self: Tape, applied: usize, t: f64, fade_ms: f64) f32 {
             .move, .trace, .press, .release, .scroll => .pointer,
             // A keyframe is a fresh start.
             .keyframe => break,
-            .wait, .step => continue,
+            .wait, .skip, .step => continue,
         };
         const at: f64 = @floatFromInt(op.at);
         if (moved_at) |m| {

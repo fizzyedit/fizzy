@@ -1,0 +1,72 @@
+name: Hello numbers
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    name: Minimal (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, ubuntu-24.04]
+    defaults:
+      run:
+        working-directory: fizzy
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: fizzy
+      - uses: actions/checkout@v4
+        with:
+          repository: fizzyedit/example-app
+          path: example-app
+      - uses: actions/checkout@v4
+        with:
+          repository: fizzyedit/example-plugin
+          path: example-plugin
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: '0.17.0'
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0'
+      - name: Linux display and packaging dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb xauth libgtk-3-dev libgl1-mesa-dri libegl1 libvulkan1 mesa-vulkan-drivers libfuse2
+          echo "VK_DRIVER_FILES=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -n 1)" >> "$GITHUB_ENV"
+      - name: Test the measurement harness without windows
+        run: python3 scripts/test-hello-numbers.py
+      - name: Measure both release modes
+        env:
+          LIBGL_ALWAYS_SOFTWARE: '1'
+          SDL_VIDEO_DRIVER: x11
+        run: |
+          set -euo pipefail
+          args=(--output "$RUNNER_TEMP/hello-numbers.jsonl"
+            --revision "$(git rev-parse HEAD)" fizzy
+            --example ../example-app --plugin ../example-plugin
+            --example-revision "$(git -C ../example-app rev-parse HEAD)"
+            --plugin-revision "$(git -C ../example-plugin rev-parse HEAD)")
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            xvfb-run -a -s "-screen 0 1280x1024x24" scripts/hello-numbers.sh "${args[@]}"
+          else
+            scripts/hello-numbers.sh "${args[@]}"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hello-numbers-${{ runner.os }}-${{ runner.arch }}
+          path: ${{ runner.temp }}/hello-numbers.jsonl
+          if-no-files-found: error
+          retention-days: 90

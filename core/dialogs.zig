@@ -1419,6 +1419,7 @@ pub fn spinner(src: std.lang.SourceLocation, spinner_opts: SpinnerOptions, opts:
 pub fn toast(src: std.lang.SourceLocation, opts: dvui.ToastOptions) void {
     var o = opts;
     if (o.displayFn == @as(dvui.Dialog.DisplayFn, dvui.toastDisplay)) o.displayFn = toastDisplay;
+    // lint-allow(raw-transient-surface): the one place a toast is raised; toastDisplay swaps in the shared surface
     dvui.toast(src, o);
 }
 

@@ -113,6 +113,7 @@ animating: bool = false,
 stack: std.ArrayList(StackFrame) = .empty,
 started: bool = false,
 float_index: usize = 0,
+// lint-allow(raw-transient-surface): type of the float window DockingWidget itself hosts; panes draw their own material
 current_float: ?*dvui.FloatingWindowWidget = null,
 content_box: ?*dvui.BoxWidget = null,
 /// The `panel_background` box wrapping the current leaf's header + content,
@@ -1004,6 +1005,7 @@ fn nextFloat(self: *Dockspace) ?Panel {
         const idx = self.float_index;
         self.float_index += 1;
 
+        // lint-allow(raw-transient-surface): a docked float is a pane host, not a popup; its content draws the material
         const fwin = dvui.floatingWindow(@src(), .{
             .rect = &layout.floats.items[idx].rect,
         }, .{ .id_extra = layout.floats.items[idx].leaf });
@@ -1186,6 +1188,7 @@ test "dockspace onTabContextMenu: fires while a tab's context menu is open, clos
             call_count += 1;
             last_id = id;
 
+            // lint-allow(raw-transient-surface): DockingWidget unit test, never shown
             var fw = dvui.floatingMenu(@src(), .{ .from = dvui.Rect.Natural.fromPoint(pt) }, .{});
             defer fw.deinit();
             if (dvui.menuItemLabel(@src(), "Add Something", .{}, .{ .tag = "ctx_add" }) != null) {
@@ -1250,12 +1253,14 @@ test "dockspace onTabContextMenu: reads each dockspace's own tab rect, not a sta
         fn onCtxA(id: Layout.PanelId, pt: dvui.Point.Natural) void {
             _ = id;
             calls_a += 1;
+            // lint-allow(raw-transient-surface): DockingWidget unit test, never shown
             var fw = dvui.floatingMenu(@src(), .{ .from = dvui.Rect.Natural.fromPoint(pt) }, .{ .id_extra = 1 });
             defer fw.deinit();
         }
         fn onCtxB(id: Layout.PanelId, pt: dvui.Point.Natural) void {
             _ = id;
             calls_b += 1;
+            // lint-allow(raw-transient-surface): DockingWidget unit test, never shown
             var fw = dvui.floatingMenu(@src(), .{ .from = dvui.Rect.Natural.fromPoint(pt) }, .{ .id_extra = 2 });
             defer fw.deinit();
         }
@@ -1483,6 +1488,7 @@ test "dockspace: floating a panel via a drawHeaderExtra menu doesn't corrupt the
 
             const dots_tag = dvui.currentWindow().arena().print("hdr_dots:{s}", .{id}) catch return;
             if (dvui.menuItemLabel(@src(), "...", .{ .submenu = true }, .{ .id_extra = slugIdExtra(id), .tag = dots_tag })) |r| {
+                // lint-allow(raw-transient-surface): DockingWidget unit test, never shown
                 var fw = dvui.floatingMenu(@src(), .{ .from = r }, .{});
                 defer fw.deinit();
 

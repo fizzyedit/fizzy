@@ -299,9 +299,16 @@ title card in the middle of the home view instead, for a demo's opening and clos
 Captions at home stack with one another; any other caption begins alone — a callout or a title
 card ends the captions still showing, so they close as it opens rather than competing with it.
 
-A keyframe starts with the explorer put away (`.layout = .focused`), so the editor has the room;
-a demo opens it from the rail when it is about to use it and puts it away after —
-`catalog.openFile(s, "README.md")` does all three.
+A keyframe never arranges the window: the person's places, panes and floats stay as they have
+them, and their documents stay open and showing beside the demo's. A demo that needs the explorer
+presses the rail for it only if it is not showing already (`s.skipIfShown(tag)` … `s.endSkip(mark)`
+leave out the ops between when `tag` is drawn, `s.skipIfGone(tag)` when it is not; aim it at the
+place (`region:role:explorer`), after a `waitIdle`, not at a row inside it); `catalog.openFile(s,
+"README.md")` does that and opens the file, and on a phone puts away the sheet it brought up.
+
+A demo owns only what it opened: its `demo://` documents. A file the person opens while it plays is
+theirs, and the workbench does not write the panes the demo arranges to `panes.zon`
+(`Workbench.panes_held`); they go back as they were when the tape plays to its end.
 
 **One keyframe, then carry on.** A keyframe is a cut, and a cut mid-demo snaps the window back to
 a fresh layout in front of the viewer. Chapters continue in the window the last one left; one that
@@ -343,7 +350,7 @@ one.
         .root = "demo://hello",
         .files = .{ .{ .path = "hello.md", .text = "# Hello\n" } },
         .open = .{"hello.md"},       // the last one is active
-        .layout = .focused,          // .keep | .reset | .focused (default; fizzy: no panel, explorer away)
+        .layout = .keep,             // fizzy leaves the window as it is whatever this says
         .settings = .{ .{ .owner = "markdown", .key = "default_md_view", .value = ".split" } },
     } },
     .chapters = .{ .{ .at = 0, .title = "Hello" } },
@@ -374,6 +381,7 @@ one.
 | `key: "chord"` | Press and release a chord (`enter`, `escape`, `mod+s`, `mod+k mod+c`). |
 | `type: "text"` | Type over `ms`; `\n` is Enter, `\t` is Tab. |
 | `command: .{ .id, .args }` | Run a command: with no `args`, as its menu row or shortcut would (one that needs arguments asks for them); with `args`, ZON keyed by its parameters (`".{ .line = 1 }"`), as the palette does once they are given. A script writes `s.command(id)` or `s.commandWith(id, .{ .line = 1 })`. |
+| `skip: .{ .when, .count }` | Leave out the next `count` ops when `.when` (a wait's `.idle`, `.shown` or `.gone`) holds as the op is reached: a gesture for a state the app is in already. A seek makes the same choice. |
 | `wait: .{ .until, .timeout }` | Hold demo time until `.idle`, `.shown = "tag"` or `.gone = "tag"`; give up after `timeout` ms of wall time. |
 | `step: .{ .file, .effect, .motion }` | Apply one step of a document's history to `file` of the keyframe before it, shown being made over `ms`: `effect` is what the step did and `motion` how it was made (optional), both in the file's `owner`'s encoding. Steps land together, with no frame between them, so a seek across an hour of drawing is one call. |
 

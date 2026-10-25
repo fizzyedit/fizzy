@@ -16,6 +16,12 @@
 //! +--------------------------+
 //! ```
 //!
+//! **Sheets follow the window's shape.** In portrait a sheet rises from the foot, `sheet_share` of
+//! the height tall and at most `sheet_max_w` wide, centred. In landscape (wider than tall) the
+//! explorer is a side sheet on the left and the panel one on the right, each at most `sheet_max_w`
+//! wide and `side_share` of the width, with the scrim between them: a 1024x768 tablet or a phone
+//! on its side keeps Main's height instead of losing most of it to a slab.
+//!
 //! **A sheet is a resizable region at the foot of a transparent column laid over Main.** Opening
 //! and shutting it is `Region.open`/`close`, so it slides on the same curve every split does. The
 //! column is declared before Main inside `RenderFrontToBack`: dvui hands an event to the first
@@ -52,8 +58,12 @@ const panel_name = "Panel";
 const strip_h: f32 = 48;
 const bar_h: f32 = 56;
 const icon_side: f32 = 22;
-/// A sheet opens to this much of the window's height.
+/// A sheet at the foot opens to this much of the window's height.
 const sheet_share: f32 = 0.6;
+/// No sheet is wider than this, so a tablet's file list is not a slab across the screen.
+const sheet_max_w: f32 = 560;
+/// In landscape a side sheet takes at most this much of the window's width, leaving Main the rest.
+const side_share: f32 = 0.5;
 const place_radius: f32 = 16;
 const place_padding: f32 = 8;
 
@@ -71,6 +81,19 @@ pub fn layout(ctx: ?*anyopaque, f: *Layout) !dvui.App.Result {
         dvui.dataSet(null, body.data().id, "_seeded", true);
         inline for (.{ explorer_name, panel_name }) |name| _ = f.state.setExtent(f.gpa, name, 0);
     }
+
+    // A sheet's extent is a height at the foot and a width at the side, so turning the device
+    // shuts what was open rather than reading one as the other.
+    const side = sideSheets();
+    if (dvui.dataGet(null, body.data().id, "_side", bool)) |was| {
+        if (was != side) {
+            shutSheets(editor);
+            // The sheets of the other shape are other widgets, and read the extent saved under
+            // their name when they first draw: shut that too, or they open on the old turn's.
+            inline for (.{ explorer_name, panel_name }) |name| _ = f.state.setExtent(f.gpa, name, 0);
+        }
+    }
+    dvui.dataSet(null, body.data().id, "_side", side);
 
     topStrip(editor);
 
@@ -118,13 +141,25 @@ fn topStrip(editor: *fizzy.Editor) void {
     if (iconButton(@src(), icons.tvg.lucide.search, "fizzy.mobile.commands")) editor.command_palette.show(.commands);
 }
 
+/// Landscape: the sheets stand at the sides instead of rising from the foot.
+fn sideSheets() bool {
+    const win = dvui.windowRect();
+    return win.w > win.h;
+}
+
 /// Both sheets and the scrim beside them. True when the scrim was tapped.
 fn sheets(editor: *fizzy.Editor, f: *Layout) !bool {
-    var column = try f.region(@src(), .{ .dir = .vertical }, .{ .expand = .both, .background = false });
+    const side = sideSheets();
+    var column = try f.region(@src(), .{ .dir = if (side) .horizontal else .vertical }, .{ .expand = .both, .background = false });
     defer column.deinit();
 
     const showing = sheetOpen(f, sidebar) or sheetOpen(f, bottom);
     var tapped = false;
+    if (side) {
+        var explorer = try explorerSheet(editor, f, true);
+        defer explorer.deinit();
+    }
+
     {
         var scrim = dvui.box(@src(), .{}, .{
             .expand = .both,
@@ -136,28 +171,66 @@ fn sheets(editor: *fizzy.Editor, f: *Layout) !bool {
         if (showing and dvui.clicked(scrim.data(), .{ .hover_cursor = null })) tapped = true;
     }
 
-    const height = dvui.windowRect().h * sheet_share;
-    {
-        var panel = try f.region(@src(), .{
-            .name = panel_name,
-            .keywords = bottom,
-            .resize = true,
-            .card = true,
-            .pane_cards = true,
-        }, .{ .min_size_content = .{ .h = height }, .expand = .horizontal });
+    if (side) {
+        var panel = try panelSheet(f, true);
         defer panel.deinit();
-    }
-    {
-        var explorer = try f.region(@src(), .{
-            .name = explorer_name,
-            .keywords = sidebar,
-            .content = .{ .ctx = editor, .draw = explorerPane },
-            .resize = true,
-            .card = true,
-        }, .{ .min_size_content = .{ .h = height }, .expand = .horizontal });
+    } else {
+        // Capped and centred: the regions fill this box, not the window.
+        var foot = dvui.box(@src(), .{ .dir = .vertical }, .{
+            .gravity_x = 0.5,
+            .background = false,
+            .min_size_content = .{ .w = @min(sheet_max_w, dvui.windowRect().w) },
+            .max_size_content = .width(sheet_max_w),
+        });
+        defer foot.deinit();
+        {
+            var panel = try panelSheet(f, false);
+            defer panel.deinit();
+        }
+        var explorer = try explorerSheet(editor, f, false);
         defer explorer.deinit();
     }
     return tapped;
+}
+
+fn panelSheet(f: *Layout, side: bool) !Layout.Region {
+    return f.region(@src(), .{
+        .name = panel_name,
+        .keywords = bottom,
+        .resize = true,
+        .max_extent = sideExtentCap(side),
+        .card = true,
+        .pane_cards = true,
+    }, sheetOptions(side));
+}
+
+fn explorerSheet(editor: *fizzy.Editor, f: *Layout, side: bool) !Layout.Region {
+    return f.region(@src(), .{
+        .name = explorer_name,
+        .keywords = sidebar,
+        .content = .{ .ctx = editor, .draw = explorerPane },
+        .resize = true,
+        .max_extent = sideExtentCap(side),
+        .card = true,
+    }, sheetOptions(side));
+}
+
+/// The widest a side sheet shows, drag or saved extent notwithstanding; null at the foot, where
+/// the column it stands in already bounds the width.
+fn sideExtentCap(side: bool) ?f32 {
+    if (!side) return null;
+    return @min(sheet_max_w, dvui.windowRect().w * side_share);
+}
+
+/// A side sheet reaches `side_share` of the width down the window; one at the foot, `sheet_share`
+/// of the height across it.
+fn sheetOptions(side: bool) dvui.Options {
+    const win = dvui.windowRect();
+    if (side) return .{
+        .min_size_content = .{ .w = sideExtentCap(true).? },
+        .expand = .vertical,
+    };
+    return .{ .min_size_content = .{ .h = win.h * sheet_share }, .expand = .horizontal };
 }
 
 fn explorerPane(ctx: ?*anyopaque, f: *Layout, keywords: []const []const u8) Layout.Region.Error!dvui.App.Result {

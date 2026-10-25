@@ -3008,9 +3008,6 @@ fn registerDocSurface(editor: *Editor, doc: sdk.DocHandle) !void {
     });
     // The owner's own name for it, when it has one, copied in (`Host.documentTitleChanged`).
     editor.app.host.documentTitleChanged(doc);
-    // One of the person's, set aside while a demo plays (made again by a rename, or landing in a
-    // pane of theirs): hidden too.
-    if (!editor.demo.ownsDocument(doc)) editor.app.host.setSurfaceHidden(ds.id, true);
 }
 
 fn unregisterDocSurface(editor: *Editor, doc_id: u64) void {
