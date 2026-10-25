@@ -6025,6 +6025,7 @@ fn demoRun() !dvui.App.Result {
         te.deinit();
     }
     if (demo_float) |*r| {
+        // lint-allow(raw-transient-surface): headless test fixture, not a shown surface
         var fw = dvui.floatingWindow(@src(), .{ .rect = r }, .{ .tag = "demo.float" });
         defer fw.deinit();
         dvui.labelNoFmt(@src(), "Float", .{}, .{});
