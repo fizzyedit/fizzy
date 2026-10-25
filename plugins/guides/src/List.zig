@@ -23,7 +23,7 @@ pub fn deinit(gpa: std.mem.Allocator) void {
 }
 
 pub fn draw(gpa: std.mem.Allocator, service: ?*Api) void {
-    var scroll = dvui.scrollArea(@src(), .{ .horizontal = .none, .vertical_bar = .auto_overlay }, .{ .expand = .both, .background = false });
+    var scroll = core.widgets.ScrollArea.init(@src(), .{ .horizontal = .none, .vertical_bar = .auto_overlay }, .{ .expand = .both, .background = false });
     defer scroll.deinit();
 
     const api = service orelse return note("This app plays no demos.");
