@@ -42,6 +42,7 @@ const core = fizzy.core;
 const sdk = fizzy.sdk;
 const automation = @import("app").automation;
 const dvui_adapter = @import("app").keymap.dvui_adapter;
+const SplitTree = @import("app").layout.State.SplitTree;
 const Editor = @import("Editor.zig");
 const Popout = @import("Popout.zig");
 const Keybinds = @import("Keybinds.zig");
@@ -301,6 +302,11 @@ pub fn frame(self: *Demo) void {
             },
         }
     }
+    // A drop beside is aimed at where the workbench would split, as the room is now.
+    self.editor.app.layout.beside = if (self.active())
+        if (self.editor.workbench.besideEdge()) |side| std.meta.stringToEnum(SplitTree.Side, @tagName(side)) else null
+    else
+        null;
     self.snapshot.beginFrame();
     self.live.frame();
     self.player.frame();

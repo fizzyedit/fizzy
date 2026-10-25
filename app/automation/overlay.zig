@@ -156,24 +156,20 @@ const Reveal = struct {
 };
 
 /// The surface under a card — `wd` a box that paints nothing of its own (`cardOptions`) — `r` of
-/// the way open, grown out of `origin` (a point in it, as fractions), in the window's material
-/// (`core.material`): Liquid Glass where the window is made of it, the same lens as the key pills
-/// and the transport's bubbles (`core.dialogs.glassBubbles`), a card's corners rather than a
-/// capsule's; else the frost at the dialog style and the shadow ring round it, or with the blur
-/// off the dialog fill over its shadow. What the card draws after this is cut to the glass as it
-/// grows.
+/// the way open, grown out of `origin` (a point in it, as fractions), in the material every
+/// floating surface wears (`core.dialogs.dialogFrost`): the frost at the dialog style, clear
+/// glass where the blur is off and the glass program draws, with the shadow ring round it; with
+/// neither, the dialog fill over its shadow. What the card draws after this is cut to the glass
+/// as it grows.
 ///
 /// Before the alpha for its contents is set: glass forms rather than fades (`r.form`) — a frost
-/// replaces what it covers, and at partial alpha would punch a hole. Liquid Glass grows with the
-/// card instead, whole from its first frame, as the pills' does.
+/// replaces what it covers, and at partial alpha would punch a hole.
 fn glass(wd: *dvui.WidgetData, origin: dvui.Point, r: Reveal) void {
     const s = wd.borderRectScale().s;
     const rect = grown(wd, origin, r);
     const c = corners();
     const bs = core.dialogs.surfaceShadow();
-    if (core.widgets.LiquidField.ready() and core.widgets.liquidFrost() != null) {
-        if (rect.w >= 1 and rect.h >= 1) core.dialogs.glassBubbles(wd.id, &.{.{ .rect = rect, .radius = c.tl.radius() * s }}, s, .{ .shadow = r.alpha });
-    } else if (core.dialogs.dialogFrost()) |f| {
+    if (core.dialogs.dialogFrost()) |f| {
         // The ring after the frost, so the glass does not blur it in (`dialogs.glassShadow`).
         defer core.dialogs.glassShadow(rect, c, s, bs, r.alpha);
         // Under a couple of pixels of blur there is nothing to see yet.
@@ -1162,4 +1158,58 @@ fn drawSeeking(player: *Player, win: dvui.Rect) void {
     var done = r;
     done.w *= f;
     done.fill(.all(r.h / 2), .{ .color = .{ .color = theme().color(.highlight, .fill) }, .fade = 1 });
+}
+
+test "a caption's card is made of the material tooltips and menus wear" {
+    const fns = struct {
+        var blur: f32 = 0;
+        var tooltip: ?f32 = null;
+        var caption: ?f32 = null;
+        var menu: ?core.widgets.BlurBackdrop.Pane = null;
+        var dialog: ?core.widgets.FloatingWindowWidget.Frost = null;
+        fn frame() !dvui.App.Result {
+            core.dialogs.publishStyle(.{ .blur = blur, .opacity = 0.5 });
+            menu = core.widgets.menuFrost();
+            dialog = core.dialogs.dialogFrost();
+            {
+                var box = dvui.box(@src(), .{}, core.dialogs.tooltipOptions(0));
+                defer box.deinit();
+                core.dialogs.tooltipSurface(box.data());
+                tooltip = radiusOf(box.data().id);
+                dvui.labelNoFmt(@src(), "tooltip", .{}, .{});
+            }
+            {
+                var box = dvui.box(@src(), .{}, cardOptions(.{}));
+                defer box.deinit();
+                glass(box.data(), .{ .x = 0.5, .y = 0.5 }, .{});
+                caption = radiusOf(box.data().id);
+                dvui.labelNoFmt(@src(), "caption", .{}, .{});
+            }
+            return .ok;
+        }
+        fn radiusOf(id: dvui.Id) ?f32 {
+            const f = dvui.dataGetPtr(null, id, "_frost", core.widgets.BlurBackdrop) orelse return null;
+            return f.radius_px;
+        }
+        /// A window of its own each, so no frost is left over from the other's frame.
+        fn drawnAt(b: f32) !void {
+            var t = try dvui.testing.init(.{ .window_size = .{ .w = 400, .h = 300 } });
+            defer t.deinit();
+            blur = b;
+            _ = try dvui.testing.step(frame);
+        }
+    };
+    // Blur on: both are the dialog frost, at the style's radius.
+    try fns.drawnAt(20);
+    try std.testing.expectEqual(@as(?f32, 20), fns.tooltip);
+    try std.testing.expectEqual(fns.tooltip, fns.caption);
+    // The menus ask for the same frost from the same place.
+    try std.testing.expectEqual(fns.dialog.?.radius, fns.menu.?.radius);
+    try std.testing.expectEqual(fns.dialog.?.mix, fns.menu.?.mix);
+    try std.testing.expectEqual(fns.dialog.?.tint, fns.menu.?.tint);
+    // Blur off (and no glass program in the testing backend): a plain fill for both, no frost.
+    try fns.drawnAt(0);
+    try std.testing.expectEqual(@as(?f32, null), fns.tooltip);
+    try std.testing.expectEqual(@as(?f32, null), fns.caption);
+    try std.testing.expect(fns.menu == null);
 }

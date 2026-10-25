@@ -292,6 +292,10 @@ pub const InitOptions = struct {
     /// starting extent comes from `min_size_content` in the `dvui.Options`; the user's drag
     /// replaces it and persists.
     resize: bool = false,
+    /// With `resize`, the most the extent shows, however far the user drags it or whatever a
+    /// saved layout holds. The stored extent is clamped to it too, so shrinking the cap (a
+    /// window turned narrower) is felt at once rather than only on the next drag.
+    max_extent: ?f32 = null,
     /// Collapse while nothing matches, rather than holding empty space open.
     hide_when_empty: bool = false,
     /// Drop this region from persisted extents when it is closed and has no assigned surface.
@@ -448,7 +452,8 @@ pub fn init(self: *Layout, src: std.lang.SourceLocation, init_opts: InitOptions,
         // The size the user chose. Auto-collapse must never overwrite it, or folding the window
         // small destroys the extent it is supposed to restore: the stored size stays put and
         // only what is *shown* goes to zero.
-        const chosen = dvui.dataGet(null, id, "_size", f32) orelse default;
+        var chosen = dvui.dataGet(null, id, "_size", f32) orelse default;
+        if (init_opts.max_extent) |cap| chosen = @min(chosen, cap);
         if (init_opts.name.len > 0) {
             if (self.state.takeSlideOpen(init_opts.name)) |from| {
                 dvui.dataSet(null, id, "_shown", chosen * from);
@@ -459,6 +464,10 @@ pub fn init(self: *Layout, src: std.lang.SourceLocation, init_opts: InitOptions,
         if (init_opts.collapsible) {
             target = collapseTarget(id, chosen, if (parent) |p| p.extent(axis) else 0);
         }
+        // An adaptive split turning (`orientBranch`) slides this place shut first. Its `chosen`
+        // stays what the person left, and while it is drawn turned that is not theirs to save.
+        if (dvui.dataGet(null, id, "_fold", bool) orelse false) target = 0;
+        const turned = dvui.dataGet(null, id, "_turned", bool) orelse false;
 
         // Ease toward the target when it moved for a reason other than a drag — the collapse
         // when the window runs out of room, and the restore when it comes back.
@@ -471,9 +480,12 @@ pub fn init(self: *Layout, src: std.lang.SourceLocation, init_opts: InitOptions,
         // different speeds is the kind of wrongness nobody can name but everybody feels. It also
         // carries the asymmetry — out with a little overshoot, in without any (`core.anim.slide`).
         extent = Split.eased(id, target);
+        // The ease starts from the last shown extent, which a drag or a wider window may have
+        // left above the cap: bound what is drawn, so motion stays within it.
+        if (init_opts.max_extent) |cap| extent = @min(extent, cap);
         dvui.dataSet(null, id, "_size", chosen);
         // A leaf draws on regardless: it walks no tree node.
-        if (init_opts.name.len > 0) _ = persistExtent(self, init_opts, id, chosen, extent);
+        if (init_opts.name.len > 0 and !turned) _ = persistExtent(self, init_opts, id, chosen, extent);
 
         // Pin both ends. A minimum alone is only a floor, so a region whose content wants to be
         // wider than the size the user dragged it to simply stays wider, and the split appears to
@@ -1316,7 +1328,7 @@ fn initTree(
 
     if (init_opts.resize) self.drawPendingSplit(id) else self.drawPendingSplit(null);
 
-    const branch = node.kind.branch;
+    const branch = orientBranch(self, node.kind.branch, id);
     var box_opts = opts;
     var default_extent: f32 = 0;
     // Forgotten this frame, the tree `branch` points into may be freed: its children wait for
@@ -1337,9 +1349,13 @@ fn initTree(
         if (init_opts.collapsible) {
             target = collapseTarget(id, chosen, if (parent) |p| p.extent(axis) else 0);
         }
+        // An adaptive split turning (`orientBranch`) slides this place shut first. Its `chosen`
+        // stays what the person left, and while it is drawn turned that is not theirs to save.
+        if (dvui.dataGet(null, id, "_fold", bool) orelse false) target = 0;
+        const turned = dvui.dataGet(null, id, "_turned", bool) orelse false;
         const extent = Split.eased(id, target);
         dvui.dataSet(null, id, "_size", chosen);
-        if (init_opts.name.len > 0) dropped = persistExtent(self, init_opts, id, chosen, extent);
+        if (init_opts.name.len > 0 and !turned) dropped = persistExtent(self, init_opts, id, chosen, extent);
         box_opts.min_size_content = switch (axis) {
             .horizontal => .{ .w = extent, .h = given.h },
             .vertical => .{ .w = given.w, .h = extent },
@@ -1377,6 +1393,7 @@ fn initTree(
     box_opts.padding = .{};
     const box = dvui.box(src, .{ .dir = branch.dir }, box_opts);
     if (init_opts.resize) Split.recordEdges(id, box.data(), axis);
+    if (branch.adaptive) dvui.dataSet(null, id, "_dims", box.data().rect.size());
 
     if (keywords.len > 0) self.state.registerRegion(self.gpa, .{
         .name = init_opts.name,
@@ -1410,6 +1427,93 @@ fn initTree(
         .kind_slot = init_opts.kind_slot,
         .resize = init_opts.resize,
     };
+}
+
+/// The branch as it is drawn this frame. A saved one is drawn as saved. An adaptive one runs the
+/// way its box's shape asks (`core.placement.orient`, from the size the box had last frame, `_dims`
+/// on `id`), and the saved `side`, `dir` and extent stay as the person left them: a turn is
+/// transient, like the dock's `drawn`, and writes nothing (`_turned` on `id`).
+///
+/// A turn is the new half sliding shut along the old axis (`_fold`, which its place reads as a
+/// target of zero), then easing open along the new one. Its share of the box is kept through the
+/// turn (`_share`, taken from the extent when that was last chosen, not from a box that has since
+/// changed shape), and follows a drag while turned.
+fn orientBranch(self: *Layout, saved: SplitTree.Branch, id: dvui.Id) SplitTree.Branch {
+    if (!saved.adaptive) return saved;
+    const dims = dvui.dataGet(null, id, "_dims", dvui.Size) orelse return saved;
+    const leaf = idOf(self.state, saved.created);
+    const chosen = if (leaf) |at| dvui.dataGet(null, at, "_size", f32) else null;
+    var turned = dvui.dataGet(null, id, "_turned", bool) orelse false;
+    var drawn = saved;
+    if (turned) SplitTree.turn(&drawn);
+
+    if (!turned) {
+        const extent = chosen orelse return saved;
+        const seen = dvui.dataGet(null, id, "_seen", f32);
+        const room = alongSize(saved.dir, dims);
+        if (seen == null or seen.? != extent) {
+            dvui.dataSet(null, id, "_seen", extent);
+            if (room > 0) dvui.dataSet(null, id, "_share", std.math.clamp(extent / room, 0, 1));
+        }
+    } else if (chosen) |extent| {
+        // Dragged since the branch set it: the drag is the new share.
+        const set = dvui.dataGet(null, id, "_set", f32) orelse extent;
+        const room = alongSize(drawn.dir, dims);
+        if (set != extent and room > 0) dvui.dataSet(null, id, "_share", std.math.clamp(extent / room, 0, 1));
+    }
+    const share = dvui.dataGet(null, id, "_share", f32) orelse return drawn;
+
+    const was: core.placement.Axis = switch (drawn.dir) {
+        .horizontal => .side_by_side,
+        .vertical => .stacked,
+    };
+    const folding = dvui.dataGet(null, id, "_fold", bool) orelse false;
+    if (core.placement.orient(was, dims.w, dims.h) == was) {
+        if (folding) setFold(id, leaf, false);
+        if (turned) {
+            const extent = std.math.clamp(share * alongSize(drawn.dir, dims), 0, @max(0, alongSize(drawn.dir, dims) - Split.handle_size));
+            if (leaf) |at| dvui.dataSet(null, at, "_size", extent);
+            dvui.dataSet(null, id, "_set", extent);
+        }
+        return drawn;
+    }
+    if (!folding) {
+        setFold(id, leaf, true);
+        return drawn;
+    }
+    // Shut along the old axis, and the curve done: across to the new one.
+    if (leaf) |at| {
+        const shown = dvui.dataGet(null, at, "_shown", f32) orelse 0;
+        if (shown > 0.5 or dvui.animationGet(at, "_ease") != null) return drawn;
+    }
+    turned = !turned;
+    setFold(id, leaf, false);
+    dvui.dataSet(null, id, "_turned", turned);
+    drawn = saved;
+    if (turned) SplitTree.turn(&drawn);
+    const room = alongSize(drawn.dir, dims);
+    const extent = if (turned) std.math.clamp(share * room, 0, @max(0, room - Split.handle_size)) else self.state.extent(saved.created, 0);
+    dvui.dataSet(null, id, "_set", extent);
+    if (leaf) |at| {
+        dvui.dataSet(null, at, "_turned", turned);
+        dvui.dataSet(null, at, "_size", extent);
+        dvui.dataSet(null, at, "_shown", @as(f32, 0));
+    }
+    dvui.refresh(null, @src(), id);
+    return drawn;
+}
+
+fn alongSize(dir: dvui.enums.Direction, size: dvui.Size) f32 {
+    return switch (dir) {
+        .horizontal => size.w,
+        .vertical => size.h,
+    };
+}
+
+fn setFold(id: dvui.Id, leaf: ?dvui.Id, on: bool) void {
+    dvui.dataSet(null, id, "_fold", on);
+    if (leaf) |at| dvui.dataSet(null, at, "_fold", on);
+    dvui.refresh(null, @src(), id);
 }
 
 fn drawTreeChildren(
@@ -1579,8 +1683,9 @@ fn drawTreeNode(
             var r = try init(self, src, o, child_opts);
             r.deinit();
         },
-        .branch => |b| {
+        .branch => |*branch| {
             if (self.depth >= Layout.max_nesting) return;
+            const b = orientBranch(self, branch.*, dvui.parentGet().extendId(src, nameExtra(branch.origin)));
             const parent_dir = if (self.depth > 0) self.containers[self.depth - 1].dir else .horizontal;
             // Same extra as the leaf this branch replaced, so the parent sash
             // keeps the widget it was already dragging.
@@ -1619,6 +1724,7 @@ fn drawTreeNode(
                 }
             }
             const box = dvui.box(src, .{ .dir = b.dir }, box_opts);
+            if (b.adaptive) dvui.dataSet(null, box.data().id, "_dims", box.data().rect.size());
             if (!leftover) {
                 const id = box.data().id;
                 Split.recordEdges(id, box.data(), parent_dir);
@@ -1752,6 +1858,17 @@ pub fn splitOnSized(self: *Layout, name: []const u8, side: SplitTree.Side, size:
     self.state.markDirty();
     dvui.refresh(null, @src(), null);
     return new;
+}
+
+/// Fizzy made the split that minted `new` (`splitOn`), not the person: it runs the way its space's
+/// shape asks from here on and turns with it (`core.placement`).
+pub fn markAdaptive(self: *Layout, new: []const u8) void {
+    if (self.state.dock) |*dock| if (dock.findPanel(new)) |leaf| {
+        if (dock.findParent(leaf)) |parent| dock.nodes.items[parent.idx].split.adaptive = true;
+        self.state.markDirty();
+        return;
+    };
+    if (self.state.splits.markAdaptive(new)) self.state.markDirty();
 }
 
 fn splitDock(

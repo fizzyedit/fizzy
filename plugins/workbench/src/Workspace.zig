@@ -745,7 +745,7 @@ pub fn paneDrop(ctx: ?*anyopaque, drop: sdk.RegionSpec.Drop) bool {
         .center => grouping,
         .edge => |side| blk: {
             const g = wb.newGroupingID();
-            wb.paneBeside(g, grouping, paneSide(side)) catch return false;
+            wb.paneBeside(g, grouping, paneSide(side), false) catch return false;
             break :blk g;
         },
     };

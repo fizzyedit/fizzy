@@ -328,8 +328,9 @@ pub fn build(
 }
 
 /// The steps over `build`'s result: `web` installs it into `zig-out/web/`, and the ones that
-/// serve, copy or only compile it.
+/// serve, copy or only compile it. `web-wasm` hands a consuming app the module itself.
 pub fn install(b: *std.Build, web: Web) void {
+    b.addNamedLazyPath("web-wasm", web.wasm.getEmittedBin());
     const web_install_dir: std.Build.InstallDir = .{ .custom = "web" };
     const install_wasm = b.addInstallArtifact(web.wasm, .{
         .dest_dir = .{ .override = web_install_dir },
