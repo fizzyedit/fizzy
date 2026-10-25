@@ -257,7 +257,7 @@ fn rootLabel(path: []const u8) []const u8 {
     // period instead of the folder's name.
     const base = std.fs.path.basename(path);
     if (base.len > 0 and !std.mem.eql(u8, base, ".") and !std.mem.eql(u8, base, "..")) return base;
-    const resolved = std.fs.path.resolve(dvui.currentWindow().arena(), &.{path}) catch return base;
+    const resolved = std.fs.path.resolveAlloc(dvui.currentWindow().arena(), &.{path}) catch return base;
     const resolved_base = std.fs.path.basename(resolved);
     return if (resolved_base.len > 0) resolved_base else base;
 }
@@ -1161,7 +1161,6 @@ pub fn recurseFiles(root_directory: []const u8, root_label: []const u8, outer_tr
                             //     .alpha = 0.15 * t,
                             // },
                         })) {
-                            runtime.workbench().setBranchOpen(branch_id, true);
                             try search(
                                 abs_path,
                                 tree,
@@ -1172,15 +1171,9 @@ pub fn recurseFiles(root_directory: []const u8, root_label: []const u8, outer_tr
                                 branch,
                                 if (root) |r| r.ranked else null,
                             );
-                        } else {
-                            if (runtime.workbench().open_branches.contains(branch_id)) {
-                                runtime.workbench().setBranchOpen(branch_id, false);
-                            }
                         }
-                        // Keep open_branches in sync so hover-expand and drop-into expand persist next frame
-                        if (branch.expanded) {
-                            runtime.workbench().setBranchOpen(branch_id, true);
-                        }
+                        // The host's open state is the only one; the tree reports what the user asked for.
+                        if (branch.requested) |open| runtime.workbench().setBranchOpen(branch_id, open);
                         color_id.* = color_id.* + 1;
                     },
                     else => {},

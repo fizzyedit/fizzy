@@ -98,7 +98,7 @@ pending_new_file_path: ?[]u8 = null,
 /// Documents on their way, by the placeholder surface id their tab shows while they load: the
 /// app fills this in (`Openings` in fizzy) and the tab strip reads it to draw a tab that has no
 /// document yet. Strings are the app's; this only borrows them.
-loading: std.StringArrayHashMapUnmanaged(Loading) = .empty,
+loading: std.array_hash_map.String(Loading) = .empty,
 
 /// The app's half of arranging the panes (`places`). Every pane is named by its grouping; what
 /// it is called in the app's layout is the app's business.

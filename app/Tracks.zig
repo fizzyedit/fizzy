@@ -82,6 +82,9 @@ swept_gone: bool = false,
 /// Checkpoint writes of kept tracks in flight on another thread (`takeChanged`, `doneWriting`):
 /// `keep` waits them out, so an older history is never renamed over a newer one.
 writing: std.atomic.Value(u32) = .init(0),
+/// The kept files of tracks whose documents closed, waiting for the checkpoint's writer thread
+/// (`takeChanged`) to pack and write them, so closing a big document costs its frame a copy.
+pending: std.ArrayList(KeptFile) = .empty,
 
 pub const default_cap = 256 << 20;
 pub const default_kept_cap: u64 = 2 << 30;
@@ -242,6 +245,7 @@ pub fn handOff(self: *Tracks) void {
 
 /// The app is quitting: keep every open document's track, while its document can still be read.
 pub fn keepOpen(self: *Tracks) void {
+    self.flushPending();
     for (self.open.values()) |t| self.keep(t);
     self.sweep();
 }
@@ -250,10 +254,14 @@ pub fn keepOpen(self: *Tracks) void {
 /// moved since it was last kept, as its file holds it, for the checkpoint's thread to write
 /// (`writeKept`), so a document the checkpoint brings back after a crash picks its history up, as
 /// a restart's does. Taken on the frame the documents' states are, so each ends where its state
-/// does. A saved document opens from its file after a crash, with nothing to recover. Owned.
-pub fn takeChanged(self: *Tracks) []KeptFile {
-    var out: std.ArrayList(KeptFile) = .empty;
-    for (self.open.values()) |t| {
+/// does (`with_open`; a write of only the closed documents' tracks has no states to end at). A saved
+/// document opens from its file after a crash, with nothing to recover. Also hands over the tracks
+/// of documents that closed (`keepLater`). Owned.
+pub fn takeChanged(self: *Tracks, with_open: bool) []KeptFile {
+    // The closed documents' first: one reopened and changed since is then written after its old.
+    var out = self.pending;
+    self.pending = .empty;
+    if (with_open) for (self.open.values()) |t| {
         if (t.steps.items.len == t.kept_steps or !t.owner.isDirty(t.doc)) continue;
         const k = self.encodeKept(t) orelse continue;
         out.append(self.gpa, k) catch {
@@ -262,7 +270,7 @@ pub fn takeChanged(self: *Tracks) []KeptFile {
         };
         // Written on another thread: one that fails is kept again only once it moves again.
         t.kept_steps = t.steps.items.len;
-    }
+    };
     const taken = out.toOwnedSlice(self.gpa) catch {
         for (out.items) |k| k.deinit(self.gpa);
         out.deinit(self.gpa);
@@ -280,6 +288,8 @@ pub fn doneWriting(self: *Tracks) void {
 pub fn deinit(self: *Tracks) void {
     const dir = self.dir;
     defer self.dir = dir;
+    for (self.pending.items) |k| k.deinit(self.gpa);
+    self.pending.deinit(self.gpa);
     for (self.open.values()) |t| t.deinit(self.gpa);
     self.open.deinit(self.gpa);
     for (self.ended.items) |t| t.deinit(self.gpa);
@@ -318,9 +328,10 @@ pub fn opened(self: *Tracks, doc: sdk.DocHandle) void {
 /// holds nothing and goes.
 pub fn closed(self: *Tracks, doc_id: u64) void {
     const kv = self.open.fetchSwapRemove(doc_id) orelse return;
-    self.keep(kv.value);
+    const queued = self.keepLater(kv.value);
     self.end(kv.value);
-    self.sweep();
+    // A queued file is swept once written (`Checkpoint.tick`).
+    if (!queued) self.sweep();
 }
 
 /// The file `path`'s document's track is kept in, under `dir`: named by a hash of the path, so any
@@ -492,10 +503,41 @@ fn keep(self: *Tracks, t: *Track) void {
     defer k.deinit(self.gpa);
     // A checkpoint's older copy, still being written, would land over this one.
     while (self.writing.load(.acquire) != 0) std.Thread.yield() catch {};
-    if (writeKept(k, "part")) t.kept_steps = t.steps.items.len;
+    if (writeKept(self.gpa, k, "part")) t.kept_steps = t.steps.items.len;
 }
 
-/// A track as its kept file holds it, to write (`writeKept`): owned.
+/// `keep` for a document that closed: the copy of its steps is taken now, while it can be read, and
+/// left for the checkpoint's thread to pack and write (`takeChanged`), so closing costs no scan or
+/// deflate on the frame. Returns whether the copy waits for that thread.
+fn keepLater(self: *Tracks, t: *Track) bool {
+    if (comptime !can_keep) return false;
+    const k = self.encodeKept(t) orelse return false;
+    self.pending.append(self.gpa, k) catch {
+        defer k.deinit(self.gpa);
+        while (self.writing.load(.acquire) != 0) std.Thread.yield() catch {};
+        _ = writeKept(self.gpa, k, "part");
+        return false;
+    };
+    // The checkpoint looks for these on a frame of its own.
+    if (dvui.current_window != null) dvui.refresh(null, @src(), null);
+    return true;
+}
+
+/// Write what `keepLater` left, here: for a read of a kept file (`pickUp`) or the app quitting,
+/// neither of which can wait for the checkpoint.
+fn flushPending(self: *Tracks) void {
+    if (comptime !can_keep) return;
+    // The checkpoint's thread may hold older copies of the same files.
+    while (self.writing.load(.acquire) != 0) std.Thread.yield() catch {};
+    for (self.pending.items) |k| {
+        _ = writeKept(self.gpa, k, "part");
+        k.deinit(self.gpa);
+    }
+    self.pending.clearRetainingCapacity();
+}
+
+/// A track as its kept file holds it, to write (`writeKept`): owned. Its bytes are the version 1
+/// file, unpacked (`track_file.compact`), so taking one costs a copy; `writeKept` packs them.
 pub const KeptFile = struct {
     file: []u8,
     bytes: []u8,
@@ -518,22 +560,27 @@ fn encodeKept(self: *Tracks, t: *const Track) ?KeptFile {
     defer prof.end();
     const file = self.keptFile(self.gpa, path) orelse return null;
     const ends: track_file.End = .{ .fingerprint = fingerprint, .file_hash = if (t.owner.isDirty(t.doc)) null else fileHashOf(self.gpa, path) };
-    const bytes = track_file.write(self.gpa, t, t.owner.id, path, ends) catch {
+    const bytes = track_file.write(self.gpa, t, t.owner.id, path, ends, 1) catch {
         self.gpa.free(file);
         return null;
     };
     return .{ .file = file, .bytes = bytes };
 }
 
-/// Write `k` beside its file as `<file>.<part>`, then rename it over: any thread. Each writer names
-/// its own `part`, so two never write into one.
-pub fn writeKept(k: KeptFile, part: []const u8) bool {
+/// Pack `k` and write it beside its file as `<file>.<part>`, then rename it over: any thread, with
+/// `gpa` safe to use there. Each writer names its own `part`, so two never write into one.
+pub fn writeKept(gpa: std.mem.Allocator, k: KeptFile, part: []const u8) bool {
     if (comptime !can_keep) return false;
+    const packed_bytes = track_file.compact(gpa, k.bytes) catch |err| {
+        dvui.log.warn("tracks: could not pack {s}: {t}", .{ k.file, err });
+        return false;
+    };
+    defer gpa.free(packed_bytes);
     var buf: [std.fs.max_path_bytes]u8 = undefined;
     const beside = std.mem.print(&buf, "{s}.{s}", .{ k.file, part }) catch return false;
     const cwd = std.Io.Dir.cwd();
     cwd.createDirPath(dvui.io, std.fs.path.dirname(k.file).?) catch {};
-    cwd.writeFile(dvui.io, .{ .sub_path = beside, .data = k.bytes }) catch |err| {
+    cwd.writeFile(dvui.io, .{ .sub_path = beside, .data = packed_bytes }) catch |err| {
         dvui.log.warn("tracks: could not keep {s}: {t}", .{ k.file, err });
         return false;
     };
@@ -553,6 +600,7 @@ fn pickUp(self: *Tracks, t: *Track) bool {
     if (!keepable(path)) return false;
     const file = self.keptFile(self.gpa, path) orelse return false;
     defer self.gpa.free(file);
+    self.flushPending();
     const bytes = std.Io.Dir.cwd().readFileAlloc(dvui.io, file, self.gpa, .unlimited) catch return false;
     defer self.gpa.free(bytes);
     const prof = core.profile.begin("fizzy", "tracks.pickUp");
@@ -1256,6 +1304,104 @@ const Stand = struct {
         rec.vtable.step(rec.ctx, id, .{ .kind = .added, .id = 1, .effect = effect });
     }
 };
+
+/// `Stand`, its document an unsaved file at `KeptStand.path`: what a track is kept for.
+const KeptStand = struct {
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var path: []const u8 = "";
+
+    fn documentPath(_: *anyopaque, _: sdk.DocHandle) []const u8 {
+        return path;
+    }
+    fn isDirty(_: *anyopaque, _: sdk.DocHandle) bool {
+        return true;
+    }
+
+    const vtable: sdk.Plugin.VTable = v: {
+        var v = Stand.vtable;
+        v.documentPath = documentPath;
+        v.isDirty = isDirty;
+        break :v v;
+    };
+    var plugin: sdk.Plugin = .{ .state = &Stand.state, .vtable = &vtable, .id = "kept", .display_name = "Kept", .step_format = 1 };
+
+    /// A track of one step on a document at `file` in `tmp`, kept in its `tracks` folder.
+    fn tracks(tmp: *std.testing.TmpDir) !Tracks {
+        dvui.io = testing.io;
+        const root = try tmp.dir.realPathFileAlloc(dvui.io, ".", testing.allocator);
+        defer testing.allocator.free(root);
+        path = try std.fmt.bufPrint(&path_buf, "{s}/doc", .{root});
+        var t = Stand.tracks();
+        errdefer t.deinit();
+        const dir = try std.fs.path.join(testing.allocator, &.{ root, "tracks" });
+        defer testing.allocator.free(dir);
+        try t.keepIn(dir);
+        const doc: sdk.DocHandle = .{ .ptr = &Stand.state, .owner = &plugin, .id = 1 };
+        t.opened(doc);
+        t.tick();
+        Stand.step(&t, 1, "ab", 10);
+        return t;
+    }
+
+    fn keptFileSize(t: *Tracks, tmp: *std.testing.TmpDir) !?u64 {
+        const file = t.keptFile(testing.allocator, path).?;
+        defer testing.allocator.free(file);
+        const stat = tmp.dir.statFile(dvui.io, file[std.fs.path.dirname(std.fs.path.dirname(file).?).?.len + 1 ..], .{}) catch return null;
+        return stat.size;
+    }
+};
+
+test "a checkpoint's track is taken unpacked on the frame, and packed when its thread writes it" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var t = try KeptStand.tracks(&tmp);
+    defer t.deinitAll();
+    const taken = t.takeChanged(true);
+    defer testing.allocator.free(taken);
+    try testing.expectEqual(@as(usize, 1), taken.len);
+    defer taken[0].deinit(testing.allocator);
+    // The frame's share is a copy: the base still whole, nothing on disk.
+    try testing.expect(taken[0].bytes.len > Stand.bytes.len);
+    try testing.expectEqual(@as(?u64, null), try KeptStand.keptFileSize(&t, &tmp));
+    // What the thread does with it.
+    try testing.expect(writeKept(testing.allocator, taken[0], "checkpoint"));
+    t.doneWriting();
+    const size = (try KeptStand.keptFileSize(&t, &tmp)).?;
+    try testing.expect(size < taken[0].bytes.len / 2);
+}
+
+test "a closed document's track waits unpacked for the checkpoint's thread" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var t = try KeptStand.tracks(&tmp);
+    defer t.deinitAll();
+    t.closed(1);
+    // Closing took a copy and wrote nothing.
+    try testing.expectEqual(@as(usize, 1), t.pending.items.len);
+    try testing.expectEqual(@as(?u64, null), try KeptStand.keptFileSize(&t, &tmp));
+    const taken = t.takeChanged(false);
+    defer testing.allocator.free(taken);
+    try testing.expectEqual(@as(usize, 0), t.pending.items.len);
+    try testing.expectEqual(@as(usize, 1), taken.len);
+    defer taken[0].deinit(testing.allocator);
+    try testing.expect(taken[0].bytes.len > Stand.bytes.len);
+    // The thread packs and writes it.
+    try testing.expect(writeKept(testing.allocator, taken[0], "checkpoint"));
+    t.doneWriting();
+    const size = (try KeptStand.keptFileSize(&t, &tmp)).?;
+    try testing.expect(size < Stand.bytes.len / 2);
+}
+
+test "a read of a kept file writes the closed documents' tracks first" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var t = try KeptStand.tracks(&tmp);
+    defer t.deinitAll();
+    t.closed(1);
+    t.flushPending();
+    try testing.expectEqual(@as(usize, 0), t.pending.items.len);
+    try testing.expect((try KeptStand.keptFileSize(&t, &tmp)) != null);
+}
 
 test "a frame's top does work only when a track asked for some" {
     var t = Stand.tracks();

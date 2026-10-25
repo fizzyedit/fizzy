@@ -37,6 +37,11 @@ root: []const u8 = "",
 /// Where the demo's popups gather when they are about no one thing (`Tape.home`), by anchor: an
 /// app's documents, say, so they sit over the work rather than at the window's foot.
 home: []const u8 = "",
+/// The window the script is built for is a phone's: a script that aims at the desktop's anchors
+/// (a rail, a sidebar place, floats) aims at the phone's shape instead, or leaves that step out.
+/// Set by the app that builds it; a tape built where there is no window (`zig build demos`) is the
+/// desktop's.
+compact: bool = false,
 /// What the app says about a tape (`Tape.Check`): its spelling of key chords, checked as each is
 /// written and again when the tape is finished.
 check: Tape.Check = .{},

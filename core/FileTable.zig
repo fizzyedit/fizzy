@@ -138,12 +138,12 @@ local: LocalFs,
 mounts: std.ArrayList(Mount) = .empty,
 /// Directories asked of a mount whose answer has not landed yet, keyed by full path (owned by
 /// the job). A second `listDir` for one of these waits rather than asking twice.
-pending: std.StringArrayHashMapUnmanaged(*ListJob) = .empty,
+pending: std.array_hash_map.String(*ListJob) = .empty,
 
 /// Keyed by absolute directory path (owned). Values are boxed because a listing is borrowed
 /// across a whole draw and the map rehashes as nested directories are read, which would
 /// otherwise move the value out from under the loop iterating it.
-listings: std.StringArrayHashMapUnmanaged(*Listing) = .empty,
+listings: std.array_hash_map.String(*Listing) = .empty,
 
 /// Listings unlinked from the cache but possibly still being read by the draw in progress.
 ///

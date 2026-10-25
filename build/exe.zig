@@ -327,24 +327,7 @@ pub fn addFizzyExecutableForTarget(
     const app_module = sdk.wireAppModule(b, resolved_target, optimize, dvui_mod, core_module, sdk_module, icons_module, markdown_module, if (nightwatch_dep) |dep| dep.module("nightwatch") else null, build_opts, singleton_app_dep.module("singleton_app"), exe.root_module);
     app_module.addImport("bundled_plugins", bundled);
 
-    if (app_layout) |path| {
-        // A `.zon` shape is data, not code, so it gets a generated shim that imports the file as
-        // a typed `layout.Shape` and walks it. Everything downstream — Editor's call, the
-        // module's imports, `has_app_layout` — is unchanged, because from here on the two kinds
-        // of shape are the same thing: a module exporting `layout(?*anyopaque, *Layout)`.
-        const is_zon = std.mem.endsWith(u8, path.getDisplayName(), ".zon");
-        const app_layout_mod = b.createModule(.{
-            .target = resolved_target,
-            .optimize = optimize,
-            .root_source_file = if (is_zon) b.addWriteFiles().add("app_layout_spec.zig", spec_shim) else path,
-        });
-        if (is_zon) app_layout_mod.addAnonymousImport("app_layout_spec", .{ .root_source_file = path });
-        app_layout_mod.addImport("dvui", dvui_mod);
-        app_layout_mod.addImport("app", app_module);
-        app_layout_mod.addImport("core", core_module);
-        app_layout_mod.addImport("fizzy_sdk", sdk_module);
-        exe.root_module.addImport("app_layout", app_layout_mod);
-    }
+    sdk.wireAppLayout(b, resolved_target, optimize, app_layout, dvui_mod, app_module, core_module, sdk_module, exe.root_module);
 
     var dylibs: std.ArrayList(Dylib) = .empty;
     const workbench_dylib: ?*std.Build.Step.Compile = if (dynamic_plugins and resolved_target.result.cpu.arch != .wasm32) blk: {
@@ -446,20 +429,3 @@ pub fn addFizzyExecutableForTarget(
         .backend = if (native_backend == .fizzy) native.backend else null,
     };
 }
-
-/// The whole of a `.zon` shape's generated module: import the file as a `Shape` — which is where
-/// it is type-checked, at comptime, against the field names and enums `Shape` declares —
-/// and hand it to the same walk a hand-written shape's calls would have performed itself.
-const spec_shim =
-    \\//! Generated for `-Dapp-layout=<file>.zon`. See `app/layout/Shape.zig`.
-    \\const dvui = @import("dvui");
-    \\const layout_ns = @import("app").layout;
-    \\
-    \\pub const shape: layout_ns.Shape = @import("app_layout_spec");
-    \\
-    \\pub fn layout(_: ?*anyopaque, f: *layout_ns.Layout) !dvui.App.Result {
-    \\    try layout_ns.Shape.apply(shape, f);
-    \\    return .ok;
-    \\}
-    \\
-;

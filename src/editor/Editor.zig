@@ -3199,9 +3199,9 @@ fn drawDocSurface(ctx: ?*anyopaque) anyerror!dvui.App.Result {
     const recorded = if (editor.app.tracks) |*t| t.trackOf(doc.id) else null;
     if (recorded != null) {
         const pane = canvas.data().borderRectScale().r;
-        // Above the bar as it stands, its strip and the feed over it included.
-        const under = if (ds.transport.place(pane, dvui.frameTimeNS())) |bar| pane.y + pane.h - bar.y + 40 * dvui.windowRectScale().s else 0;
-        ds.frames.take(editor.app.gpa, pane, @max(76 * dvui.windowRectScale().s, under), @import("app").HistoryTransport.stripPixels(pane));
+        // Above where the bar can reach, whether or not it shows or its strip is open: a
+        // size that followed the bar would make each kept picture another view of the pane.
+        ds.frames.take(editor.app.gpa, pane, @import("app").HistoryTransport.cover * dvui.windowRectScale().s, @import("app").HistoryTransport.stripPixels(pane));
     }
 
     const focus_before = dvui.lastFocusedIdInFrame();
@@ -7511,6 +7511,22 @@ fn pmSelf(ctx: *anyopaque) *Editor {
     return @ptrCast(@alignCast(ctx));
 }
 
+/// The store's `PluginManager.Error` for what fizzy's own code raised; the cause of `Failed` is logged.
+fn pmError(err: anyerror) PluginManager.Error {
+    return PluginManager.preserved(err) orelse {
+        dvui.log.err("plugin action failed: {s}", .{@errorName(err)});
+        return error.Failed;
+    };
+}
+
+/// The call sites return different `void` error unions (the loader's, the installer's,
+/// `Allocator.Error`), and a named type for them would be `anyerror!void`, which says less;
+/// each is only `catch`ed and translated by `pmError`.
+// anytype: differing void error unions, each only caught and translated
+fn pmResult(result: anytype) PluginManager.Error!void {
+    result catch |err| return pmError(err);
+}
+
 const plugin_manager_vtable: PluginManager.VTable = .{
     .isDisabled = struct {
         fn f(ctx: *anyopaque, id: []const u8) bool {
@@ -7528,8 +7544,8 @@ const plugin_manager_vtable: PluginManager.VTable = .{
         }
     }.f,
     .setAutoUpdate = struct {
-        fn f(ctx: *anyopaque, id: []const u8, on: bool) anyerror!void {
-            return pmSelf(ctx).setPluginAutoUpdate(id, on);
+        fn f(ctx: *anyopaque, id: []const u8, on: bool) PluginManager.Error!void {
+            return pmResult(pmSelf(ctx).setPluginAutoUpdate(id, on));
         }
     }.f,
     .updateMode = struct {
@@ -7575,49 +7591,49 @@ const plugin_manager_vtable: PluginManager.VTable = .{
         }
     }.f,
     .install = struct {
-        fn f(ctx: *anyopaque, id: []const u8) anyerror!void {
-            return pmSelf(ctx).installAndLoadPlugin(id);
+        fn f(ctx: *anyopaque, id: []const u8) PluginManager.Error!void {
+            return pmResult(pmSelf(ctx).installAndLoadPlugin(id));
         }
     }.f,
     .installFromUrl = struct {
-        fn f(ctx: *anyopaque, id: []const u8, url: []const u8, sha256: []const u8) anyerror!void {
+        fn f(ctx: *anyopaque, id: []const u8, url: []const u8, sha256: []const u8) PluginManager.Error!void {
             const editor = pmSelf(ctx);
             // Installing is choosing it, as on the desktop (`installAndLoadPlugin`) — and, as
             // there, an install is an arrival, so fizzy asks about its file types once it has
             // loaded. Not `isPluginUndecided`: that is a drop-in found on disk and never
             // decided, which a plugin coming from the store never is, so the web never asked.
             editor.app.untrackDisabledPlugin(id);
-            try editor.setPluginEnabledPersisted(id, true);
+            editor.setPluginEnabledPersisted(id, true) catch |err| return pmError(err);
             queueWebFileTypePrompt(editor.app.gpa, id);
-            return editor.loadWebPlugin(id, url, sha256);
+            return pmResult(editor.loadWebPlugin(id, url, sha256));
         }
     }.f,
     .loadFromUrl = struct {
-        fn f(ctx: *anyopaque, id: []const u8, url: []const u8, sha256: []const u8) anyerror!void {
+        fn f(ctx: *anyopaque, id: []const u8, url: []const u8, sha256: []const u8) PluginManager.Error!void {
             const editor = pmSelf(ctx);
             // For the visit: the arrival neither remembers it nor asks about its file types.
-            if (!web_visit_only.contains(id)) web_visit_only.put(editor.app.gpa, try editor.app.gpa.dupe(u8, id), {}) catch {};
-            return editor.loadWebPlugin(id, url, sha256);
+            if (!web_visit_only.contains(id)) web_visit_only.put(editor.app.gpa, editor.app.gpa.dupe(u8, id) catch return error.OutOfMemory, {}) catch {};
+            return pmResult(editor.loadWebPlugin(id, url, sha256));
         }
     }.f,
     .updateFromUrl = struct {
-        fn f(ctx: *anyopaque, id: []const u8, url: []const u8, sha256: []const u8) anyerror!void {
-            return pmSelf(ctx).updateWebPlugin(id, url, sha256);
+        fn f(ctx: *anyopaque, id: []const u8, url: []const u8, sha256: []const u8) PluginManager.Error!void {
+            return pmResult(pmSelf(ctx).updateWebPlugin(id, url, sha256));
         }
     }.f,
     .update = struct {
-        fn f(ctx: *anyopaque, id: []const u8, force: bool) anyerror!void {
-            return pmSelf(ctx).updatePlugin(id, force);
+        fn f(ctx: *anyopaque, id: []const u8, force: bool) PluginManager.Error!void {
+            return pmResult(pmSelf(ctx).updatePlugin(id, force));
         }
     }.f,
     .uninstall = struct {
-        fn f(ctx: *anyopaque, id: []const u8, force: bool) anyerror!void {
-            return pmSelf(ctx).uninstallPlugin(id, force);
+        fn f(ctx: *anyopaque, id: []const u8, force: bool) PluginManager.Error!void {
+            return pmResult(pmSelf(ctx).uninstallPlugin(id, force));
         }
     }.f,
     .setEnabled = struct {
-        fn f(ctx: *anyopaque, id: []const u8, enabled: bool, force: bool) anyerror!void {
-            return pmSelf(ctx).setPluginEnabled(id, enabled, force);
+        fn f(ctx: *anyopaque, id: []const u8, enabled: bool, force: bool) PluginManager.Error!void {
+            return pmResult(pmSelf(ctx).setPluginEnabled(id, enabled, force));
         }
     }.f,
     .reconcileDiscovered = struct {

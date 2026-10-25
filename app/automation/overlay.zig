@@ -22,6 +22,7 @@ const Player = @import("replay").Player;
 /// The pointer, and the layer every part of this overlay is drawn in (`layer`).
 const plain = @import("replay").overlay;
 const LiveDriver = @import("replay").LiveDriver;
+const Stage = @import("replay").Stage;
 const Input = @import("replay").Input;
 const Tape = @import("tape").Tape;
 const Sequencer = @import("tape").Sequencer;
@@ -241,7 +242,7 @@ fn drawCaptions(player: *Player, tape: *const Tape, win: dvui.Rect, floor: f32) 
         if (!c.shownAt(now)) continue;
         const shown = Reveal.between(now, @floatFromInt(c.at), @floatFromInt(c.at + c.ms));
         if (c.place == .middle) {
-            drawTitle(tape, c, i, shown, win);
+            drawTitle(player.stage, tape, c, i, shown, win);
         } else if (tape.besideAction(c)) {
             drawCallout(player, tape, c, i, shown, win, floor, callouts == 0);
             callouts += 1;
@@ -298,7 +299,7 @@ const Stacked = struct {
 /// settles back as one below it closes.
 fn drawStack(player: *Player, tape: *const Tape, items: []Stacked, win: dvui.Rect, floor: f32) void {
     std.sort.insertion(Stacked, items, {}, Stacked.before);
-    const home = (if (tape.home.len > 0) tagRect(tape.home) else null) orelse win;
+    const home = (if (tape.home.len > 0) tagRect(player.stage, tape.home) else null) orelse win;
     const base = @min(home.y + home.h * home_down, floor);
     const w = @min(520, win.w - 32);
     const cx = std.math.clamp(home.x + home.w / 2, win.x + 16 + w / 2, @max(win.x + 16 + w / 2, win.x + win.w - 16 - w / 2));
@@ -327,8 +328,8 @@ fn drawStack(player: *Player, tape: *const Tape, items: []Stacked, win: dvui.Rec
 
 /// A title card: in the middle of the home view, opening about its middle as a dialog does. Each
 /// caption (`index`) its own widget, so none is placed by the size of the one before it.
-fn drawTitle(tape: *const Tape, c: Tape.Caption, index: usize, shown: Reveal, win: dvui.Rect) void {
-    const home = (if (tape.home.len > 0) tagRect(tape.home) else null) orelse win;
+fn drawTitle(stage: Stage, tape: *const Tape, c: Tape.Caption, index: usize, shown: Reveal, win: dvui.Rect) void {
+    const home = (if (tape.home.len > 0) tagRect(stage, tape.home) else null) orelse win;
     const w = @min(620, win.w - 32);
     const fw = layer(@src(), .{ .id_extra = index + 1, .max_size_content = .{ .w = w, .h = win.h } }, .{
         .from = dvui.windowRectScale().pointToPhysical(.{ .x = home.x + home.w / 2, .y = home.y + home.h / 2 }),
@@ -360,7 +361,7 @@ fn drawCallout(player: *Player, tape: *const Tape, c: Tape.Caption, index: usize
     const floor_in = if (in_main) floor else frame.y + frame.h;
     var keep_buf: [40]dvui.Rect = undefined;
     const keep = keepClear(player, tape, c, win, !in_main, &keep_buf);
-    const home = (if (in_main and tape.home.len > 0) tagRect(tape.home) else null) orelse frame;
+    const home = (if (in_main and tape.home.len > 0) tagRect(player.stage, tape.home) else null) orelse frame;
     const now = player.now();
 
     // Its own, so two showing at once each keep theirs.
@@ -464,7 +465,7 @@ const Subject = struct { rect: dvui.Rect, key: u64 };
 /// nothing to sit beside.
 fn subjectOf(player: *Player, tape: *const Tape, c: Tape.Caption, win: dvui.Rect) ?Subject {
     if (c.near.len > 0) {
-        if (tagRect(c.near)) |r| return .{ .rect = r, .key = std.hash.Wyhash.hash(0, c.near) };
+        if (tagRect(player.stage, c.near)) |r| return .{ .rect = r, .key = std.hash.Wyhash.hash(0, c.near) };
     }
     var ahead = player.seq.cursor;
     const until = player.now() + lead_ms;
@@ -475,12 +476,12 @@ fn subjectOf(player: *Player, tape: *const Tape, c: Tape.Caption, win: dvui.Rect
     // callout goes to it once it is rather than staying by the pointer.
     var h = std.hash.Wyhash.init(1);
     h.update(aim.tag);
-    const r = (if (aim.tag.len > 0) tagRect(aim.tag) else null) orelse {
+    const r = (if (aim.tag.len > 0) tagRect(player.stage, aim.tag) else null) orelse {
         h.update("?");
         return .{ .rect = pointRect(player.seq.pointer), .key = h.final() };
     };
     if (small(r, win)) return .{ .rect = r, .key = h.final() };
-    return .{ .rect = pointRect(Input.targetPoint(aim) orelse player.seq.pointer), .key = h.final() };
+    return .{ .rect = pointRect(Input.targetPoint(player.stage, aim) orelse player.seq.pointer), .key = h.final() };
 }
 
 /// What a callout must not cover, besides what it is beside: what the caption says to keep clear
@@ -508,16 +509,16 @@ fn keepClear(player: *Player, tape: *const Tape, c: Tape.Caption, win: dvui.Rect
     }
     for (c.clear) |tag| {
         if (keep.items.len == keep.capacity) break;
-        if (tagRect(tag)) |r| keep.appendAssumeCapacity(r);
+        if (tagRect(player.stage, tag)) |r| keep.appendAssumeCapacity(r);
     }
     for (tape.ops) |op| {
         if (op.at < c.at) continue;
         if (op.at >= c.at + c.ms or keep.items.len == keep.capacity) break;
         const target = op.do.target() orelse continue;
-        const r = (if (target.tag.len > 0) tagRect(target.tag) else null) orelse continue;
+        const r = (if (target.tag.len > 0) tagRect(player.stage, target.tag) else null) orelse continue;
         if (small(r, win)) {
             keep.appendAssumeCapacity(r);
-        } else if (Input.targetPoint(target)) |p| keep.appendAssumeCapacity(pointRect(p));
+        } else if (Input.targetPoint(player.stage, target)) |p| keep.appendAssumeCapacity(pointRect(p));
     }
     for (dome.barsOut()) |b| {
         if (keep.items.len == keep.capacity) break;
@@ -564,8 +565,8 @@ fn pointRect(p: Sequencer.Point) dvui.Rect {
 }
 
 /// A tag's rect, natural, when it is drawn and visible.
-fn tagRect(tag: []const u8) ?dvui.Rect {
-    const td = dvui.tagGet(tag) orelse return null;
+fn tagRect(stage: Stage, tag: []const u8) ?dvui.Rect {
+    const td = Input.tagData(stage, tag) orelse return null;
     if (!td.visible) return null;
     return dvui.windowRectScale().rectFromPhysical(td.rect);
 }

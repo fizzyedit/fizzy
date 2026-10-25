@@ -124,7 +124,7 @@ const Job = struct {
     tasks: std.Io.Group = .init,
 };
 
-var jobs: std.StringArrayHashMapUnmanaged(*Job) = .empty;
+var jobs: std.array_hash_map.String(*Job) = .empty;
 
 /// UI actions queued during `draw` and applied in `tick` so plugin unload never mutates
 /// `host.plugins` (or dlcloses an image) while the store view is still iterating it.
@@ -144,14 +144,14 @@ var pending_actions: std.ArrayList(PendingAction) = .empty;
 /// toggled. We remember the name the first time we see it (loaded plugin or registry row) and reuse
 /// it as the stable title for the disabled/failed states. (Session-scoped: a plugin disabled before
 /// it was ever loaded this session still shows its id until enabled once.)
-var name_cache: std.StringArrayHashMapUnmanaged([]u8) = .empty;
+var name_cache: std.array_hash_map.String([]u8) = .empty;
 
 /// Last-known installed version per plugin id (app-allocator owned keys, plain values). Like
 /// `name_cache`, a sideloaded plugin only exposes its version while loaded — once disabled it is
 /// unloaded, and a failed build's version is only known if the dylib could be probed. We remember
 /// the version the first time we see it (loaded plugin, failed-load probe, or on-disk probe) and
 /// reuse it as the "current version" for disabled/failed cards.
-var version_cache: std.StringArrayHashMapUnmanaged(std.SemanticVersion) = .empty;
+var version_cache: std.array_hash_map.String(std.SemanticVersion) = .empty;
 
 /// Disk-probed manifest fields per plugin id (app-allocator owned keys and values; an all-empty
 /// entry means "probed, genuinely has nothing" so it isn't re-probed every frame either). Backs
@@ -159,7 +159,7 @@ var version_cache: std.StringArrayHashMapUnmanaged(std.SemanticVersion) = .empty
 /// `authorUrlFor` — registry and built-in values are already cheap and never touch this. One
 /// cache rather than one per field, because a single `dlopen` + parse yields all of them at once.
 /// Cleared by `refreshDiskScan`.
-var manifest_cache: std.StringArrayHashMapUnmanaged(PluginLoader.ProbedManifest) = .empty;
+var manifest_cache: std.array_hash_map.String(PluginLoader.ProbedManifest) = .empty;
 
 /// Every plugin id with a directory in `{config}/plugins/` (app-allocator owned), refreshed by
 /// `refreshDiskScan`. The installed pane's in-memory sources (loaded plugins, disabled ids,
@@ -951,23 +951,23 @@ fn markPendingUpdateFailed(id: []const u8) void {
 /// simply replaced) and from inside the card list's own draw, since it touches no catalog state.
 /// Ids whose web load or update is in flight — the page is fetching and linking, and the host
 /// has not yet accepted or refused the module. `app.gpa`-owned; one entry per id.
-var web_in_flight: std.StringArrayHashMapUnmanaged(void) = .empty;
+var web_in_flight: std.array_hash_map.String(void) = .empty;
 
 /// The web's plugins directory: every id the page remembers a build for (it brings each back at
 /// startup) or that loaded this visit. `refreshDiskScan` lists the ones the page still remembers
 /// into `disk_ids`, so everything the desktop does with a plugin on disk — the Installed card,
 /// Uninstall and Reinstall, the update pass — applies here too. `app.gpa`-owned keys.
-var web_known: std.StringArrayHashMapUnmanaged(void) = .empty;
+var web_known: std.array_hash_map.String(void) = .empty;
 /// Startup loads the page asked for that have not landed yet. The update pass waits for these:
 /// until a remembered build has been accepted or refused, the pass cannot tell a plugin that is
 /// running from one that needs repairing.
-var web_startup_waiting: std.StringArrayHashMapUnmanaged(void) = .empty;
+var web_startup_waiting: std.array_hash_map.String(void) = .empty;
 /// The page has made all of its startup requests (`webStartupRequested`).
 var web_startup_requested = false;
 
 const web_loader = if (builtin.target.cpu.arch == .wasm32) @import("PluginLoader_web.zig") else struct {};
 
-fn putId(set: *std.StringArrayHashMapUnmanaged(void), id: []const u8) void {
+fn putId(set: *std.array_hash_map.String(void), id: []const u8) void {
     const gop = set.getOrPut(app.gpa, id) catch return;
     if (!gop.found_existing) {
         gop.key_ptr.* = app.gpa.dupe(u8, id) catch {
@@ -977,11 +977,11 @@ fn putId(set: *std.StringArrayHashMapUnmanaged(void), id: []const u8) void {
     }
 }
 
-fn removeId(set: *std.StringArrayHashMapUnmanaged(void), id: []const u8) void {
+fn removeId(set: *std.array_hash_map.String(void), id: []const u8) void {
     if (set.fetchSwapRemove(id)) |kv| app.gpa.free(kv.key);
 }
 
-fn freeIds(set: *std.StringArrayHashMapUnmanaged(void)) void {
+fn freeIds(set: *std.array_hash_map.String(void)) void {
     for (set.keys()) |k| app.gpa.free(k);
     set.deinit(app.gpa);
     set.* = .empty;

@@ -145,13 +145,13 @@ auto_update_off_ids: std.ArrayList([]const u8) = .empty,
 /// `writeMergedSettings` alongside `host.plugin_settings_pending`. Never touched by a
 /// plugin itself — only by `setPluginEnabled` / `setPluginAutoUpdate` / store install. Keys are
 /// app-allocator-owned.
-plugin_flags_pending: std.StringArrayHashMapUnmanaged(PendingPluginFlags) = .empty,
+plugin_flags_pending: std.array_hash_map.String(PendingPluginFlags) = .empty,
 
 /// Fizzy-only pending `.plugins.<id>.extensions` writes (id → the plugin's complete new list).
 /// A separate map from `plugin_flags_pending` because the value is owned, variable-length data
 /// rather than two bools: both the key and every extension string are app-allocator-owned and
 /// freed when `writeMergedSettings` drains it. Written only by `resolveExtensionConflict`.
-plugin_extensions_pending: std.StringArrayHashMapUnmanaged([]const []const u8) = .empty,
+plugin_extensions_pending: std.array_hash_map.String([]const []const u8) = .empty,
 
 /// In-memory `ext → owning plugin id` map, rebuilt by `rebuildExtensionOwnerCache` from the
 /// persisted per-plugin `.extensions` lists of the *currently loaded* plugins. Backs
@@ -160,7 +160,7 @@ plugin_extensions_pending: std.StringArrayHashMapUnmanaged([]const []const u8) =
 /// **Every string here is duped and owned by the Editor** — never a slice borrowed from
 /// `plugin.id`, which lives inside a dylib image that `dlclose` can unmap out from under us
 /// (see `Host.unregisterPlugin`'s ordering note).
-extension_owner: std.StringArrayHashMapUnmanaged([]const u8) = .empty,
+extension_owner: std.array_hash_map.String([]const u8) = .empty,
 
 /// `.extensions` entries fizzy could not honor as written, rebuilt alongside `extension_owner`
 /// and surfaced in Settings > File Types exactly as `keybind_conflicts` is surfaced in Keyboard
