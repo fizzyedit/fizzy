@@ -516,6 +516,7 @@ test "demo: every bundled demo plays to the end through fizzy's stage, a seek la
 
     try revertClosesWhatTheTourOpened(&app);
     try revertKeepsAMovedFloat(&app);
+    try tourOnARearrangedLayout(&app);
     try tourOnAPhone(&app);
 
     // Left loaded for `down`, which quits the way `appQuit` does.
@@ -585,6 +586,71 @@ fn revertKeepsAMovedFloat(app: *BundledApp) !void {
 
     state.floats.removeAt(0);
     try state.assign(gpa, "Float 1", &.{});
+}
+
+/// The tour on a window arranged unlike the recording (the panel and the explorer shut): every
+/// target is found there, a played-out tour reverted leaves the arrangement as it was, and a tour
+/// stopped or closed from its bar midway leaves it exactly as it stood at that moment.
+fn tourOnARearrangedLayout(app: *BundledApp) !void {
+    const editor = app.editor;
+    const p = &editor.demo.player;
+    const name = fizzy.Editor.Demo.catalog.entries[0].name;
+
+    editor.explorer.close(editor);
+    if (editor.regionFor(sdk.keywords.ide.panel)) |panel| panel.close();
+    try dvui.testing.settle(headlessFrame);
+    const print_before = fizzy.Editor.Demo.layoutPrint(editor);
+    const docs_before = editor.app.open_files.count();
+    const explorer_closed = editor.explorer.closed;
+    const panel_closed = (editor.regionFor(sdk.keywords.ide.panel) orelse return error.TestUnexpectedResult).isClosed();
+
+    // Played to its end with every target found, then reverted: the person's arrangement again.
+    try editor.demo.play(name);
+    var frames: usize = 0;
+    while (p.state != .ended and frames < 20_000) : (frames += 1) _ = try dvui.testing.step(headlessFrame);
+    try std.testing.expectEqual(automation.Player.State.ended, p.state);
+    try std.testing.expectEqual(@as(u32, 0), p.timeouts);
+    try std.testing.expectEqual(@as(u32, 0), p.mismatches);
+    p.revert();
+    frames = 0;
+    while (frames < 120) : (frames += 1) _ = try dvui.testing.step(headlessFrame);
+    try std.testing.expectEqual(print_before, fizzy.Editor.Demo.layoutPrint(editor));
+    try std.testing.expectEqual(explorer_closed, editor.explorer.closed);
+    try std.testing.expectEqual(panel_closed, (editor.regionFor(sdk.keywords.ide.panel) orelse return error.TestUnexpectedResult).isClosed());
+    try std.testing.expectEqual(docs_before, editor.app.open_files.count());
+
+    // Stopped midway, and closed from the bar midway: nothing is closed, restored or moved.
+    for ([_]enum { stop, close }{ .stop, .close }) |how| {
+        try editor.demo.play(name);
+        frames = 0;
+        while ((p.state != .playing or p.seq.now < 6000) and frames < 2_000) : (frames += 1) _ = try dvui.testing.step(headlessFrame);
+        try std.testing.expectEqual(automation.Player.State.playing, p.state);
+        try std.testing.expectEqual(@as(u32, 0), p.timeouts);
+        const print_then = fizzy.Editor.Demo.layoutPrint(editor);
+        const floats_then = editor.app.layout.floats.items.items.len;
+        switch (how) {
+            .stop => p.stop(),
+            .close => p.close(),
+        }
+        // The bar closes by pausing the tape where it is; the overlay, not drawn headless, then
+        // reports it run back (`Transport.shut`) and the frame lets the demo go.
+        if (how == .close) {
+            try std.testing.expectEqual(automation.Player.State.paused, p.state);
+            try std.testing.expect(editor.demo.active());
+            p.transport.shut = true;
+        }
+        frames = 0;
+        while (editor.demo.active() and frames < 400) : (frames += 1) _ = try dvui.testing.step(headlessFrame);
+        try std.testing.expect(!editor.demo.active());
+        for (0..60) |_| _ = try dvui.testing.step(headlessFrame);
+        try std.testing.expectEqual(print_then, fizzy.Editor.Demo.layoutPrint(editor));
+        try std.testing.expectEqual(floats_then, editor.app.layout.floats.items.items.len);
+
+        // The person's own window back for the next pass.
+        editor.explorer.close(editor);
+        if (editor.regionFor(sdk.keywords.ide.panel)) |panel| panel.close();
+        try dvui.testing.settle(headlessFrame);
+    }
 }
 
 /// What straight play of a demo must keep steady, watched a frame at a time:
