@@ -38,7 +38,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-for tool in bc /usr/bin/time; do
+for tool in bc; do
   command -v "$tool" >/dev/null || { echo "perf-incremental: needs $tool" >&2; exit 2; }
 done
 [ -r /proc/loadavg ] || { echo "perf-incremental: needs /proc (Linux)" >&2; exit 2; }
@@ -189,7 +189,8 @@ series() {
     else
       (cd "$root/$dir" && timeout "$timeout_s" zig build --cache-dir "$cache" --prefix "$out" --summary line) >"$wlog" 2>&1 && status=ok || status=failed
       secs=$(elapsed "$(now)" "$t0")
-      msg=$(first_message "$wlog" "$from")
+      # The redirect above truncated the log, so this build's diagnostics start at byte 1.
+      msg=$(first_message "$wlog" 1)
     fi
   }
   # settle <file> <source>: put a file back and, under watch, wait out the build that causes.
@@ -248,7 +249,14 @@ series() {
       settle "$bfile" "$tmp/orig_build"; build_edited=""
     else
       settle "$file" "$tmp/orig"
-      if [ "$kind" = compile_error ] && [ "$mode" = watch ]; then emit "$target" compile_error_recover "$mode" 1 0 "$secs" ""; fi
+      if [ "$kind" = compile_error ] && [ "$mode" = watch ]; then
+        # settle left the restore build's outcome in $status, $secs and $msg.
+        if [ "$status" = ok ]; then
+          emit "$target" compile_error_recover "$mode" 1 0 "$secs" ""
+        else
+          emit "$target" compile_error_recover "$mode" 0 1 null "$status: $msg"
+        fi
+      fi
     fi
     [ "$status" = died ] && break
   done

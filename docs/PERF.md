@@ -74,13 +74,12 @@ Seconds, watch / full (`-` where not run):
 | plugin guides | 0.72 / 1.7 | 0.29 / 1.8 | 0.67 / 1.7 | 0.16 / 1.7 | 0.73 / 1.7 | 0.12 / 1.6 | 8.6 / 1.3 |
 | plugin image | 0.28 / 1.8 | 0.18 / 1.8 | 0.29 / 1.8 | 0.29 / 1.8 | 0.28 / 1.8 | 0.13 / 1.6 | 7.8 / 1.0 |
 | plugin markdown | 0.33 / 4.5 | 0.18 / 4.5 | 0.49 / 15.7 | 1.2 / 4.4 | 4.5 / 4.3 | 0.13 / 2.7 | 10.8 / 3.3 |
-| plugin text | 0.40 / 2.1 | 0.33 / 2.1 | 0.18 / 2.1 | 0.01 / 2.1 | 1.4 / 2.1 | 0.17 / 1.9 | 12.5 / 1.2 |
+| plugin text | 0.40 / 2.1 | 0.33 / 2.1 | 0.18 / 2.1 | 0.33 / 2.1 | 1.4 / 2.1 | 0.17 / 1.9 | 12.5 / 1.2 |
 | plugin workbench | 0.33 / 4.8 | 0.19 / 3.5 | 0.33 / 3.7 | 0.32 / 5.9 | 0.19 / 2.2 | 0.13 / 1.9 | 8.0 / 1.7 |
 
 (The first eight rows were measured at commit `5fc11d83`, text and workbench at current `main`;
-no later commit touched the build graph. The `text` `comptime_const` 0.01 s is below what a
-rebuild can cost: the edit's build was probably coalesced with the previous one, so read it as
-"fast", not as a figure.)
+no later commit touched the build graph. The `text` `comptime_const` watch figure was rerun, 5
+runs, after a first sample coalesced with the previous build and read 0.01 s.)
 
 What the table says:
 
@@ -95,5 +94,5 @@ What the table says:
   that is analysis the compiler really has to redo, not a fallback.
 - Nothing printed a fallback or "unsupported" line, so there is no compiler bug to report.
 
-See a run's numbers in the PR that last changed this file, and append new runs there rather than
-here: they depend on the machine.
+The numbers depend on the machine: rerun `scripts/perf-incremental` before relying on them, and
+put new runs in the PR that changes the build graph as well as here.
