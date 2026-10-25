@@ -138,7 +138,7 @@ fn reset() void {
     plugin_name = "";
 }
 
-pub fn dialog(id: dvui.Id) anyerror!bool {
+pub fn dialog(id: dvui.Id) fizzy.core.dialogs.Error!bool {
     const theme = dvui.themeGet();
     const body = dvui.Font.theme(.body);
     const arena = dvui.currentWindow().arena();

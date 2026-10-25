@@ -214,6 +214,7 @@ fn readStruct(comptime T: type, bytes: []const u8, off: u64) ?T {
     return v;
 }
 
+// anytype: ZIP record structs have different layouts serialized with the same endian conversion.
 fn writeStruct(allocator: Allocator, out: *std.ArrayList(u8), value: anytype) Allocator.Error!void {
     var v = value;
     if (@import("builtin").target.cpu.arch.endian() == .big) std.mem.byteSwapAllFields(@TypeOf(v), &v);

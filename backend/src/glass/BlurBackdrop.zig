@@ -128,6 +128,7 @@ pub fn markDirty(self: *BlurBackdrop) void {
 /// Cheap and safe to call every frame even when not dirty. Per-frame
 /// bracket-open; does not allocate or own any resources itself (see `get`
 /// for the one-time setup and `releaseTexture` for GPU teardown).
+// anytype: Cache witnesses may be any value or tuple whose bytes determine invalidation.
 pub fn init(self: *BlurBackdrop, rect: Rect, witness: anytype) void {
     self.rect = dvui.windowRectScale().rectToPhysical(rect);
 

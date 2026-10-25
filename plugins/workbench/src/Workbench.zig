@@ -104,9 +104,11 @@ loading: std.array_hash_map.String(Loading) = .empty,
 /// it is called in the app's layout is the app's business.
 pub const Places = struct {
     ctx: *anyopaque,
-    /// Give `grouping`'s pane a place on `side` of the place holding `anchor`'s. False when there
-    /// is no room, or `anchor`'s pane is in no place yet.
-    beside: *const fn (ctx: *anyopaque, grouping: u64, anchor: u64, side: Panes.Side) bool,
+    /// Give `grouping`'s pane a place on `side` of the place holding `anchor`'s. `adaptive`: fizzy
+    /// made the split, not the person, so it runs the way its room's shape asks from here on
+    /// (`core.placement.orient`), `side` being where it starts. False when there is no room, or
+    /// `anchor`'s pane is in no place yet.
+    beside: *const fn (ctx: *anyopaque, grouping: u64, anchor: u64, side: Panes.Side, adaptive: bool) bool,
     /// Whether `grouping`'s pane has a place, or will have one without being given it: the one
     /// pane the layout's keywords show where no other is.
     placed: *const fn (ctx: *anyopaque, grouping: u64) bool,
@@ -186,7 +188,8 @@ pub fn paneLeaf(self: *Workbench, grouping: u64) ?Panes.NodeIndex {
 
 /// Give `grouping` a leaf if it has none: the root when the tree is empty, else a split off the
 /// current pane's right edge (or off the last pane, when the current one is gone). Where the app
-/// arranges the panes, a place beside the current one's.
+/// arranges the panes, a place beside the current one's. The split is fizzy's, so it follows its
+/// room's shape (`sideBeside`) and turns with it.
 fn seatPane(self: *Workbench, grouping: u64) !void {
     if (self.places) |p| {
         if (p.placed(p.ctx, grouping)) return;
@@ -196,7 +199,7 @@ fn seatPane(self: *Workbench, grouping: u64) !void {
             if (g != grouping) break g;
         } else return;
         // No room yet (the layout has not drawn): the app places it once there is.
-        _ = p.beside(p.ctx, grouping, anchor, .right);
+        _ = p.beside(p.ctx, grouping, anchor, self.sideBeside(anchor), true);
         return;
     }
     if (self.paneLeaf(grouping) != null) return;
@@ -213,14 +216,80 @@ fn seatPane(self: *Workbench, grouping: u64) !void {
         const last = self.panes.lastLeaf(self.panes.root);
         break :blk Workspace.groupingOfName(self.panes.nodes.items[last].leaf.tabs.items[0]) orelse self.open_workspace_grouping;
     };
-    try self.paneBeside(grouping, anchor, .right);
+    try self.paneBeside(grouping, anchor, self.sideBeside(anchor), true);
 }
 
-/// Open a new pane for `grouping` on `side` of `anchor`'s pane — a drop on a pane's edge. The
-/// workspace is created too, so `pane()` afterwards finds both.
-pub fn paneBeside(self: *Workbench, grouping: u64, anchor: u64, side: Panes.Side) !void {
+/// The side a split off a `w` by `h` room starts on: right of one wider than tall, below one taller
+/// (`core.placement.orient`).
+pub fn sideFor(w: f32, h: f32) Panes.Side {
+    return switch (core.placement.orient(null, w, h)) {
+        .side_by_side => .right,
+        .stacked => .bottom,
+    };
+}
+
+/// `grouping`'s pane as it was last drawn, in points. Null before it has drawn.
+fn paneSize(self: *const Workbench, grouping: u64) ?core.placement.Size {
+    const pr = (self.workspaces.get(grouping) orelse return null).pane_rect_physical orelse return null;
+    const s = dvui.windowNaturalScale();
+    return .{ .w = pr.w / s, .h = pr.h / s };
+}
+
+/// The side a pane opened beside `anchor`'s starts on, from the shape of `anchor`'s room.
+pub fn sideBeside(self: *const Workbench, anchor: u64) Panes.Side {
+    const room = self.paneSize(anchor) orelse return .right;
+    return sideFor(room.w, room.h);
+}
+
+/// What opening beside the person's pane asks of `core.placement.place`: the other pane that is
+/// there, if any, and the answer over the person's room and that pane's. Null before the person's
+/// pane has drawn, with no room to judge.
+const Beside = struct { other: ?u64, answer: ?core.placement.Result };
+
+fn besideAnswer(self: *Workbench) Beside {
+    const here = self.open_workspace_grouping;
+    const other = for (self.workspaces.values()) |ws| {
+        if (ws.grouping != here and !self.paneClosing(ws.grouping)) break ws.grouping;
+    } else null;
+    const room = self.paneSize(here) orelse return .{ .other = other, .answer = null };
+    var others: [1]core.placement.Size = undefined;
+    const places: []const core.placement.Size = if (other) |g| blk: {
+        others[0] = self.paneSize(g) orelse .{ .w = 0, .h = 0 };
+        break :blk &others;
+    } else &.{};
+    return .{ .other = other, .answer = core.placement.place(room, places) };
+}
+
+/// The grouping a document opened beside the person's goes in (`core.placement.place`): another
+/// pane that is there, else a new one when the person's has room for two, else the person's own,
+/// where it becomes a card. The caller makes it the front card, as a plain open does.
+pub fn besideGrouping(self: *Workbench) u64 {
+    const asked = self.besideAnswer();
+    // Not drawn yet, so no room to judge: beside as before, in the other pane if there is one.
+    const answer = asked.answer orelse return asked.other orelse self.newGroupingID();
+    return switch (answer) {
+        .into => asked.other.?,
+        .split => self.newGroupingID(),
+        .tab => self.open_workspace_grouping,
+    };
+}
+
+/// The edge of the person's pane an open beside splits it on, or null where it joins a pane or
+/// becomes a card. What a demo's `drop:beside` aims at.
+pub fn besideEdge(self: *Workbench) ?Panes.Side {
+    const room = self.paneSize(self.open_workspace_grouping) orelse return null;
+    return switch (self.besideAnswer().answer orelse return null) {
+        .split => sideFor(room.w, room.h),
+        .into, .tab => null,
+    };
+}
+
+/// Open a new pane for `grouping` on `side` of `anchor`'s pane — a drop on a pane's edge, which
+/// stays on that side, or fizzy's own split (`adaptive`), which follows the room. The workspace
+/// is created too, so `pane()` afterwards finds both.
+pub fn paneBeside(self: *Workbench, grouping: u64, anchor: u64, side: Panes.Side, adaptive: bool) !void {
     if (self.places) |p| {
-        if (!p.beside(p.ctx, grouping, anchor, side)) return error.NoRoom;
+        if (!p.beside(p.ctx, grouping, anchor, side, adaptive)) return error.NoRoom;
         const gop = try self.workspaces.getOrPut(self.allocator, grouping);
         if (!gop.found_existing) gop.value_ptr.* = Workspace.init(grouping);
         gop.value_ptr.expecting = true;
@@ -233,6 +302,8 @@ pub fn paneBeside(self: *Workbench, grouping: u64, anchor: u64, side: Panes.Side
     const pane_name = try self.allocator.dupe(u8, Workspace.name(&buf, grouping));
     errdefer self.allocator.free(pane_name);
     try self.panes.splitLeaf(anchor_leaf, side, pane_name);
+    // The leaf's slot is now the split.
+    self.panes.nodes.items[anchor_leaf].split.adaptive = adaptive;
     self.panes_dirty = true;
     const gop = try self.workspaces.getOrPut(self.allocator, grouping);
     if (!gop.found_existing) gop.value_ptr.* = Workspace.init(grouping);
@@ -514,10 +585,7 @@ pub fn showBeside(self: *Workbench, doc: sdk.DocHandle) void {
     }
     const id = sdk.document.surfaceId(runtime.host().arena(), doc.owner.id, doc.owner.documentPath(doc)) catch return;
     if (self.workspaces.getPtr(here)) |ws| if (ws.hasTab(id) and ws.tabCount() == 1) return;
-    // Beside: a pane there is already, or else a new one on this one's right.
-    const target = for (self.workspaces.values()) |ws| {
-        if (ws.grouping != here and !self.paneClosing(ws.grouping)) break ws.grouping;
-    } else self.newGroupingID();
+    const target = self.besideGrouping();
     for (self.workspaces.values()) |*ws| if (ws.grouping != target) ws.removeTab(id);
     const side = self.pane(target) catch return;
     side.addTab(id, true);

@@ -60,7 +60,7 @@ pub fn draw(
     editor: *fizzy.Editor,
     f: *Layout,
     keywords: []const []const u8,
-) !dvui.App.Result {
+) Layout.Region.Error!dvui.App.Result {
     const vbox = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .both,
         .background = false,

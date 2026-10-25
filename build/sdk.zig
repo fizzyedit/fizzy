@@ -18,6 +18,7 @@ const std = @import("std");
 /// The direction is forced: `sdk/` ships standalone as `fizzy-sdk-v*.tar.gz` for third-party
 /// plugins, so it must carry its own pin and can never read anything above its own root. The app
 /// can always reach down into it.
+// anytype: Dependency options are an open tuple forwarded to std.Build.
 pub fn dvuiDependency(b: *std.Build, args: anytype) *std.Build.Dependency {
     // Only the SDK package's resolved dependency table is wanted here, not its artifacts, so its
     // own target/optimize are left at default; `args` carries the target dvui is really built for.

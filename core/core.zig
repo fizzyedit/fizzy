@@ -109,6 +109,9 @@ pub const fuzzy = @import("fuzzy.zig");
 /// Std-only diffing (images and text): which regions of a document's state differ. See `diff.zig`.
 pub const diff = @import("diff.zig");
 
+/// Std-only: where a new view goes by the shape of its room. See `placement.zig`.
+pub const placement = @import("placement.zig");
+
 /// The project's file set: one cached, searchable view of what is on disk, owned by the host and
 /// shared by every plugin that cares about files. See `FileTable.zig`.
 pub const FileTable = @import("FileTable.zig");

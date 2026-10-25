@@ -1327,7 +1327,10 @@ pub fn drawZones(l: *Layout, name: []const u8, key: dvui.Id) void {
         const b = zones.bubble(z);
         const r: dvui.Rect.Physical = .{ .x = b.c.x - b.r, .y = b.c.y - b.r, .w = 2 * b.r, .h = 2 * b.r };
         switch (z) {
-            .edge => |side| core.anchor.markRect(key, r, true, "drop:{t}", .{side}),
+            .edge => |side| {
+                core.anchor.markRect(key, r, true, "drop:{t}", .{side});
+                if (l.state.beside) |aimed_side| if (std.mem.eql(u8, @tagName(aimed_side), @tagName(side))) core.anchor.markRect(key, r, true, "drop:beside", .{});
+            },
             else => core.anchor.markRect(key, r, true, "drop:{t}", .{z}),
         }
     };

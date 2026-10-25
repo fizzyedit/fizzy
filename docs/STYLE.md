@@ -91,10 +91,12 @@ Source: `lib/std` practice (`std` uses named error sets rather than `anyerror!`)
 ## anytype
 
 Use a concrete type when one exists, and `comptime T: type` when the caller can name the type.
-`anytype` is allowed only on an allowlist, each entry with its reason (the lint's allowlist
-file once it exists; until then a comment at the use): writer and format
-plumbing that `std` itself leaves open, and comptime-generic helpers whose parameter set is
-truly open. The reason keeps `anytype` from becoming the easy way out of a signature.
+`anytype` parameters require a one-line `// anytype: <reason>` comment on the same line
+or immediately before the parameter (before the declaration for a one-line signature).
+The reason explains why the parameter's type is open. Writer sinks named `writer` and format
+argument tuples named `args` or ending in `_args`, alongside a comptime `[]const u8`
+format parameter named `fmt`, `format` or ending in `_fmt`, are exempt as std-style plumbing.
+The `anytype-reason` lint checks every other use; it has no baseline allowance.
 
 Source: `std` takes `*Writer` or `comptime T: type` wherever it can.
 

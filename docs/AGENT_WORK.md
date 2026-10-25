@@ -128,11 +128,18 @@ runs the publishing helper after collecting the edits.
 4. After the first push, run `scripts/agent-finish --claim <issue>` (a number or
    `fizzyedit/work#N`): it pushes the branch and opens the draft PR saying
    `Part of fizzyedit/work#N` with "gates not run yet", so the claim is visible early.
-5. When the work is done run `scripts/agent-finish <issue>` in the worker checkout. It checks
+5. Before finishing, write `$(git rev-parse --git-dir)/PR_SUMMARY.md` (inside the git dir, never
+   committed) in a few lines under four headings: `## Goal`, `## What changed and why`,
+   `## How it was verified` (the tests that fail without the change; screenshots or a tape for a
+   UI change) and `## Not done / follow-ups`.
+6. When the work is done run `scripts/agent-finish <issue>` in the worker checkout. It checks
    formatting and the build gates, records the current change (keeping your description; it
    only fills in an empty one), pushes, and updates the PR body, creating the draft if the
-   claim step was skipped. The body always includes `Part of fizzyedit/work#N`, the diff stat
-   and the last 50 lines of each gate's output, even if the worker supplied no final message.
+   claim step was skipped. The body is `Part of fizzyedit/work#N`, your summary, then two
+   collapsed sections: the diff stat (`Changes (N files, +A/-D)`) and the last 50 lines of each
+   gate's output (`Gates: K of K passed`). With no `PR_SUMMARY.md` it keeps the summary already in
+   the PR body (above the `agent-finish: generated below` marker); with neither it writes the
+   headings with "(to fill)". `--claim` writes the headings with "Draft: work in progress".
    Additional gate evidence and explanations belong in the PR before review.
 
 Both helpers exit non-zero and print a one-line reason on failure. A failed prepare can leave
