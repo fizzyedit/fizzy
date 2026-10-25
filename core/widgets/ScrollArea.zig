@@ -33,6 +33,8 @@ const Touch = struct {
     x: Fling = .{},
     y: Fling = .{},
     dragging: bool = false,
+    /// The finger that owns the drag; another finger's release or motion is not this area's.
+    finger: dvui.enums.Button = .none,
 };
 
 /// Seconds of recent motion the release velocity averages over: native scrollers read the last
@@ -86,15 +88,18 @@ pub fn deinit(self: *ScrollArea) void {
     var released = false;
     for (dvui.events()) |*e| {
         if (e.evt != .mouse or !e.evt.mouse.button.touch()) continue;
+        const finger = e.evt.mouse.button;
         switch (e.evt.mouse.action) {
-            .release => released = released or t.dragging,
+            .release => released = released or (t.dragging and finger == t.finger),
             .motion => |motion| {
+                if (t.dragging and finger != t.finger) continue;
                 if (!dvui.eventMatch(e, .{ .id = c.data().id, .r = c.init_opts.event_rect orelse rs.r })) continue;
                 e.handle(@src(), c.data());
                 // The touch usually went down on a child that has since given up capture.
                 if (!dvui.captured(c.data().id)) dvui.captureMouse(c.data(), e.num);
                 if (!t.dragging) {
                     t.dragging = true;
+                    t.finger = finger;
                     t.x.begin();
                     t.y.begin();
                 }
@@ -116,6 +121,9 @@ pub fn deinit(self: *ScrollArea) void {
 
     if (!t.dragging) self.coast();
 
+    // A nested child's propagated motion sets this (parent) area's velocity through dvui's
+    // `processMotionScroll`; clear it so dvui's coast never runs beside ours.
+    self.si.velocity = .{};
     self.area.deinit();
 }
 
@@ -257,6 +265,8 @@ test "a fling coasts at the speed of the last 100 ms, not of the last move" {
     try std.testing.expect(coasted < 400);
 }
 
+// The canary for dvui bumps: if this fails, upstream changed the touch path, so port the change
+// or delete this wrapper (docs/DEPENDENCIES.md, "Local copies of dvui").
 test "dvui's own area, given the same flick, stops almost at once" {
     var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
     defer t.deinit();
@@ -281,4 +291,58 @@ test "a press while coasting stops the coast without tapping" {
     _ = try cw.addEventPointer(.{ .button = .touch0, .action = .release, .xynorm = .{ .x = 0.5, .y = 0.5 } });
     for (0..10) |_| try frameAfter(16);
     try std.testing.expectEqual(stopped, t_viewport_y);
+}
+
+test "another finger's release does not end the drag" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    t_use_dvui = false;
+    const cw = dvui.currentWindow();
+    try dvui.testing.settle(testFrame);
+    const h = cw.data().rect.h;
+    var y: f32 = 0.8;
+    _ = try cw.addEventPointer(.{ .button = .touch0, .action = .press, .xynorm = .{ .x = 0.5, .y = y } });
+    try frameAfter(16);
+    for (0..10) |_| {
+        _ = try cw.addEventTouchMotion(.touch0, 0.5, y - 10 / h, 0, -10 / h);
+        y -= 10 / h;
+        try frameAfter(16);
+    }
+    _ = try cw.addEventPointer(.{ .button = .touch1, .action = .press, .xynorm = .{ .x = 0.2, .y = 0.2 } });
+    try frameAfter(16);
+    _ = try cw.addEventPointer(.{ .button = .touch1, .action = .release, .xynorm = .{ .x = 0.2, .y = 0.2 } });
+    try frameAfter(16);
+    const held = t_viewport_y;
+    // Finger 0 is still down and still: nothing may coast.
+    for (0..30) |_| try frameAfter(16);
+    try std.testing.expectEqual(held, t_viewport_y);
+}
+
+var t_scroll_to: bool = false;
+
+fn scrollToFrame() !dvui.App.Result {
+    var root = dvui.box(@src(), .{}, .{ .expand = .both });
+    defer root.deinit();
+    var scroll = ScrollArea.init(@src(), .{ .horizontal = .none, .vertical_bar = .hide }, .{ .expand = .both });
+    defer scroll.deinit();
+    _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 100, .h = 1000 } });
+    var child = dvui.box(@src(), .{}, .{ .min_size_content = .{ .w = 100, .h = 50 } });
+    defer child.deinit();
+    if (t_scroll_to) {
+        t_scroll_to = false;
+        dvui.scrollTo(.{ .screen_rect = child.data().borderRectScale().r });
+    }
+    _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 100, .h = 20000 } });
+    t_viewport_y = scroll.si.viewport.y;
+    return .ok;
+}
+
+test "dvui.scrollTo from a child moves a ScrollArea" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    try dvui.testing.settle(scrollToFrame);
+    try std.testing.expectEqual(@as(f32, 0), t_viewport_y);
+    t_scroll_to = true;
+    try dvui.testing.settle(scrollToFrame);
+    try std.testing.expect(t_viewport_y > 500);
 }
