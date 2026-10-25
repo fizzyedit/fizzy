@@ -130,6 +130,7 @@ pub const Catalog = struct {
     /// wasm `web_fetch` module (`request(allocator, url)` → pending / ready / failed); it is
     /// passed in rather than imported so this file stays a standalone test root (relative
     /// `@import` cannot leave `plugin_store/`). Native callers pass `{}`.
+    // anytype: The browser fetch module or native empty stub is supplied without a web import.
     pub fn pump(self: *Catalog, fetcher: anytype) void {
         if (comptime !is_wasm) return;
         switch (self.wasm_phase) {

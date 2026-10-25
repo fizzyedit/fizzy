@@ -209,7 +209,7 @@ const sink_vtable: Sequencer.Sink.VTable = .{
     .command = command,
     .keyframe = keyframe,
     .holds = holds,
-    .timedOut = timedOut,
+    .failed = failed,
 };
 
 fn from(ctx: *anyopaque) *LiveDriver {
@@ -260,15 +260,17 @@ fn holds(ctx: *anyopaque, until: Tape.Until) bool {
     return Input.tagHolds(from(ctx).stage, until) orelse from(ctx).stage.idle();
 }
 
-fn timedOut(ctx: *anyopaque, until: Tape.Until) void {
+fn failed(ctx: *anyopaque, failure: Sequencer.Failure) void {
     const self = from(ctx);
-    // The sequencer has not moved past the wait yet: its cursor is the wait.
-    self.gave_up_at = self.seq.cursor;
+    self.gave_up_at = failure.op;
     // Reported in `outcome`, so only noted here.
     const name = if (self.owned) |o| o.tape.name else "?";
-    switch (until) {
-        .idle => dvui.log.info("live tape '{s}': gave up waiting for the app to settle", .{name}),
-        .shown => |tag| dvui.log.info("live tape '{s}': gave up waiting for '{s}' to be drawn", .{ name, tag }),
-        .gone => |tag| dvui.log.info("live tape '{s}': gave up waiting for '{s}' to go", .{ name, tag }),
+    switch (failure.what) {
+        .wait => |until| switch (until) {
+            .idle => dvui.log.info("live tape '{s}': gave up waiting for the app to settle", .{name}),
+            .shown => |tag| dvui.log.info("live tape '{s}': gave up waiting for '{s}' to be drawn", .{ name, tag }),
+            .gone => |tag| dvui.log.info("live tape '{s}': gave up waiting for '{s}' to go", .{ name, tag }),
+        },
+        .target => |t| dvui.log.info("live tape '{s}': '{s}' was never drawn to move to", .{ name, t.tag }),
     }
 }

@@ -71,6 +71,8 @@ pub fn holdPointer(pt: Sequencer.Point) void {
 }
 
 pub fn button(self: *Input, b: Tape.Button, down: bool) void {
+    // The release of a press that was already let go of (a cut, a pause) has nothing to land on.
+    if (!down and !self.held.contains(b)) return;
     _ = dvui.currentWindow().addEventMouseButton(dvuiButton(b), if (down) .press else .release) catch {};
     if (down) self.held.insert(b) else self.held.remove(b);
 }

@@ -93,6 +93,7 @@ pub fn positionToByteOffset(text: []const u8, pos: Position, encoding: PositionE
 }
 
 /// Serializes `value` to JSON and writes it as one `Content-Length`-framed LSP message.
+// anytype: LSP messages have method-specific JSON shapes serialized by std.json.
 pub fn writeMessage(allocator: std.mem.Allocator, writer: *std.Io.Writer, value: anytype) !void {
     const body = try std.json.Stringify.valueAlloc(allocator, value, .{});
     defer allocator.free(body);

@@ -317,6 +317,7 @@ fn drawStack(player: *Player, tape: *const Tape, items: []Stacked, win: dvui.Rec
             .from_gravity_y = 0,
         });
         defer fw.deinit();
+        if (item.what == .caption) core.anchor.mark(fw.data(), "automation.caption:{d}", .{item.what.caption});
         // Each opens up out of its foot, where it joins the stack.
         switch (item.what) {
             .caption => |ci| captionCard(tape.captions[ci], item.shown, .{ .x = 0.5, .y = 1 }, w),

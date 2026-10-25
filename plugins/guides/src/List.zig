@@ -49,7 +49,7 @@ pub fn draw(gpa: std.mem.Allocator, service: ?*Api) void {
                 if (row(tree, i * 1000 + j + 1, c.title, c.at, false, .chapter)) _ = api.play(d.name, c.at);
             }
         }
-        if (b.expanded != open) unfolded.put(gpa, key, b.expanded) catch {};
+        if (b.requested) |want| unfolded.put(gpa, key, want) catch {};
     }
 }
 

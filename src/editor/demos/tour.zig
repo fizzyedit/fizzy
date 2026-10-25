@@ -105,6 +105,7 @@ pub fn build(s: *Script) !void {
         try catalog.cornerButton(s, "role:explorer");
         try s.drag(try catalog.corner(s, "role:explorer"), .{ .tag = try catalog.place(s, "role:explorer") }, .{ .ms = 900 });
         try s.waitFor(try catalog.place(s, "Float 1"), .{});
+        try s.waitFor("float-header:Float 1", .{});
         try s.caption("A float goes wherever you carry it by its header.", .{ .near = "float-header:Float 1" });
         try s.drag(.{ .tag = "float-header:Float 1" }, .{ .tag = catalog.documents, .x = 0.45, .y = 0.15 }, .{ .ms = 1000 });
         s.pause(600);
@@ -127,6 +128,7 @@ pub fn build(s: *Script) !void {
     s.pause(1200);
     try s.commandWith("fizzy.windowMaterial", .{ .kind = "liquid" });
     if (!s.compact) {
+        try s.waitFor("float-close:Float 1", .{});
         try s.caption("Close a float, and its views go back where they came from.", .{ .near = "float-close:Float 1" });
         try s.click(.{ .tag = "float-close:Float 1" }, .{});
         try s.waitGone(try catalog.place(s, "Float 1"), .{});

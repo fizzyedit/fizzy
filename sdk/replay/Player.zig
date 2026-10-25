@@ -137,8 +137,8 @@ scene: ?usize = null,
 /// Replays that did not reach the model a snapshot holds (`Stage.fingerprint`): the tape does
 /// not replay exactly. Logged as they happen; tests read it.
 mismatches: u32 = 0,
-/// Waits that gave up since the demo was loaded: what one waited for never came, and the tape
-/// carried on regardless. Logged as they happen; tests read it.
+/// Ops that failed since the demo was loaded: a wait gave up, or a move never found its target,
+/// and the rest of that chapter was skipped. Logged as they happen; tests read it.
 timeouts: u32 = 0,
 /// Whether letting go of the scrubber plays or stays paused: as it was when it was taken.
 scrub_after: After = .pause,
@@ -528,6 +528,12 @@ fn arrive(self: *Player) void {
         .play => .playing,
         .pause => .paused,
     };
+    // Landing paused mid-drag is the same cut-short drag `pause` drops: nothing stays held for
+    // later real motion to drag with.
+    if (self.state == .paused and self.input.held.count() > 0) {
+        self.input.releaseHeld();
+        self.diverged = true;
+    }
 }
 
 /// Back to the keyframe op `kf`, to replay from there.
@@ -921,7 +927,9 @@ fn takeRealInput(self: *Player) void {
                             self.pause();
                             self.diverged = true;
                         },
-                        .release, .position => {},
+                        // A drag the tape is making is the tape's to end.
+                        .release => if (self.input.held.count() > 0) e.handle(@src(), wd),
+                        .position => {},
                     },
                     // A replay in progress takes nothing from anyone.
                     .seeking => e.handle(@src(), wd),
@@ -1107,7 +1115,7 @@ const sink_vtable: Sequencer.Sink.VTable = .{
     .command = command,
     .keyframe = keyframe,
     .holds = holds,
-    .timedOut = timedOut,
+    .failed = failed,
     .step = step,
     .still = targetStill,
 };
@@ -1189,13 +1197,18 @@ fn holds(ctx: *anyopaque, until: Tape.Until) bool {
     return Input.tagHolds(from(ctx).stage, until) orelse from(ctx).stage.idle();
 }
 
-fn timedOut(ctx: *anyopaque, until: Tape.Until) void {
-    from(ctx).timeouts += 1;
-    const name = if (from(ctx).tape()) |t| t.name else "?";
-    switch (until) {
-        .idle => dvui.log.warn("demo '{s}': gave up waiting for the app to settle", .{name}),
-        .shown => |tag| dvui.log.warn("demo '{s}': gave up waiting for '{s}' to be drawn", .{ name, tag }),
-        .gone => |tag| dvui.log.warn("demo '{s}': gave up waiting for '{s}' to go", .{ name, tag }),
+fn failed(ctx: *anyopaque, failure: Sequencer.Failure) void {
+    const self = from(ctx);
+    self.timeouts += 1;
+    const name = if (self.tape()) |t| t.name else "?";
+    const at = if (self.tape()) |t| t.ops[failure.op].at else 0;
+    switch (failure.what) {
+        .wait => |until| switch (until) {
+            .idle => dvui.log.warn("demo '{s}': gave up waiting for the app to settle (op {d}, {d} ms); skipping {d} ops to the next chapter", .{ name, failure.op, at, failure.skipped }),
+            .shown => |tag| dvui.log.warn("demo '{s}': gave up waiting for '{s}' to be drawn (op {d}, {d} ms); skipping {d} ops to the next chapter", .{ name, tag, failure.op, at, failure.skipped }),
+            .gone => |tag| dvui.log.warn("demo '{s}': gave up waiting for '{s}' to go (op {d}, {d} ms); skipping {d} ops to the next chapter", .{ name, tag, failure.op, at, failure.skipped }),
+        },
+        .target => |t| dvui.log.warn("demo '{s}': '{s}' was never drawn to move to (op {d}, {d} ms); skipping {d} ops to the next chapter", .{ name, t.tag, failure.op, at, failure.skipped }),
     }
 }
 

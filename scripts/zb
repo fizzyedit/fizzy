@@ -7,10 +7,11 @@
 # Several agents and people share one machine, and parallel Zig builds have driven its load past
 # 17 and crashed it. Every heavy build takes one of N slots (default 2) and waits while the
 # 1-minute load average is above a ceiling. Slots are per user, not per checkout, so a workspace
-# beside the main checkout shares them. A slot is a directory holding the pid of its zb; a slot
-# whose pid is dead is reclaimed. A slot is a symlink whose target is the pid, so taking one is
-# a single atomic step. Do not hold a slot for a long-running program: `zig build run` of the
-# editor keeps it until the editor quits; use plain `zig` (or FIZZY_BUILD_SKIP=1) for that.
+# beside the main checkout shares them. A slot is a directory holding a `pid` file with the pid
+# of its zb; a slot whose pid is dead is reclaimed. `mkdir` is the atomic take, because it works
+# on every OS (a symlink does not under Git Bash on Windows). Do not hold a slot for a
+# long-running program: `zig build run` of the editor keeps it until the editor quits; use plain
+# `zig` (or FIZZY_BUILD_SKIP=1) for that.
 #
 #   FIZZY_BUILD_SLOTS      number of slots (default 2)
 #   FIZZY_BUILD_MAX_LOAD   load ceiling (default: performance cores, `nproc` off macOS)
@@ -19,6 +20,7 @@
 #   FIZZY_BUILD_SKIP       set to run zig at once, with no waiting
 #   FIZZY_BUILD_ZIG        the zig to run (default zig)
 #   FIZZY_BUILD_POLL       seconds between checks while waiting (default 2)
+#   FIZZY_BUILD_WAIT       seconds to wait for a slot before failing (default 1800)
 
 zig=${FIZZY_BUILD_ZIG:-zig}
 
@@ -31,6 +33,7 @@ esac
 
 slots=${FIZZY_BUILD_SLOTS:-2}
 poll=${FIZZY_BUILD_POLL:-2}
+wait_max=${FIZZY_BUILD_WAIT:-1800}
 dir=${FIZZY_BUILD_SLOTS_DIR:-$HOME/.cache/fizzy-build-slots}
 mkdir -p "$dir" || exit 1
 
@@ -51,21 +54,30 @@ load1() {
 
 alive() { kill -0 "$1" 2>/dev/null; }
 
-# Take a free slot, reclaiming one whose holder died. Sets $mine.
+slot_pid() { cat "$1/pid" 2>/dev/null; }
+
+# Take a free slot, reclaiming one whose holder died. Sets $mine. A slot with no pid file yet is
+# its taker between `mkdir` and the write, so it counts as held until it is a minute old.
 mine=
 try_slot() {
     i=0
     while [ "$i" -lt "$slots" ]; do
         s=$dir/slot.$i
         i=$((i + 1))
-        if ln -s "$$" "$s" 2>/dev/null; then
+        if mkdir "$s" 2>/dev/null; then
+            echo "$$" >"$s/pid"
             mine=$s
             return 0
         fi
-        p=$(readlink "$s" 2>/dev/null)
-        if [ -z "$p" ] || ! alive "$p"; then
-            # Rename is atomic, so only one waiter wins a dead slot; it retries the take next poll.
-            mv "$s" "$dir/dead.$$" 2>/dev/null && rm -f "$dir/dead.$$"
+        p=$(slot_pid "$s")
+        if [ -z "$p" ]; then
+            [ -n "$(find "$s" -maxdepth 0 -mmin +1 2>/dev/null)" ] || continue
+        elif alive "$p"; then
+            continue
+        fi
+        # Rename is atomic, so only one waiter wins a dead slot; it retries the take next pass.
+        if mv "$s" "$dir/dead.$$" 2>/dev/null; then
+            rm -rf "$dir/dead.$$"
             i=$((i - 1))
         fi
     done
@@ -74,13 +86,12 @@ try_slot() {
 
 busy_pids() {
     for s in "$dir"/slot.*; do
-        [ -L "$s" ] && printf ' %s' "$(readlink "$s")"
+        [ -d "$s" ] && printf ' %s' "$(slot_pid "$s")"
     done
 }
 
-child=
 release() {
-    [ -n "$mine" ] && rm -f "$mine"
+    [ -n "$mine" ] && rm -rf "$mine"
     mine=
 }
 trap 'release' EXIT
@@ -88,16 +99,22 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
 
-told=
+start=$(date +%s)
+next_tell=0
 while :; do
     load=$(load1)
     if awk "BEGIN{exit !($load <= $max_load)}" && try_slot; then break; fi
-    if [ -z "$told" ]; then
-        told=1
+    waited=$(($(date +%s) - start))
+    if [ "$waited" -ge "$wait_max" ]; then
+        echo "zb: no build slot after ${wait_max}s (slots in $dir; pids$(busy_pids)); remove a stale slot.* there, or set FIZZY_BUILD_SKIP=1" >&2
+        exit 1
+    fi
+    if [ "$waited" -ge "$next_tell" ]; then
+        next_tell=$((waited + 30))
         if [ -n "$(busy_pids)" ] && ! awk "BEGIN{exit !($load > $max_load)}"; then
-            echo "zb: waiting for a build slot ($slots busy: pids$(busy_pids))" >&2
+            echo "zb: waiting for a build slot ($slots busy: pids$(busy_pids), ${waited}s)" >&2
         else
-            echo "zb: waiting for load to fall ($load > $max_load; slots: pids$(busy_pids))" >&2
+            echo "zb: waiting for load to fall ($load > $max_load; slots: pids$(busy_pids), ${waited}s)" >&2
         fi
     fi
     sleep "$poll"

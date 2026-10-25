@@ -233,7 +233,7 @@ fn sheetOptions(side: bool) dvui.Options {
     return .{ .min_size_content = .{ .h = win.h * sheet_share }, .expand = .horizontal };
 }
 
-fn explorerPane(ctx: ?*anyopaque, f: *Layout, keywords: []const []const u8) !dvui.App.Result {
+fn explorerPane(ctx: ?*anyopaque, f: *Layout, keywords: []const []const u8) Layout.Region.Error!dvui.App.Result {
     const editor: *fizzy.Editor = @ptrCast(@alignCast(ctx.?));
     return editor.explorer.draw(editor, f, keywords);
 }

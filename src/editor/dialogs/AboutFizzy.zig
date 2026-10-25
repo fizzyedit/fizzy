@@ -189,7 +189,7 @@ fn consumeCheckResult() void {
     check_outcome = .none;
 }
 
-pub fn dialog(id: dvui.Id) anyerror!bool {
+pub fn dialog(id: dvui.Id) fizzy.core.dialogs.Error!bool {
     // Drain a finished background check (if any) into `status_line` /
     // `update_ready_after_check` before laying out the dialog body, so the
     // result is visible this frame instead of next.

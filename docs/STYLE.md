@@ -91,10 +91,12 @@ Source: `lib/std` practice (`std` uses named error sets rather than `anyerror!`)
 ## anytype
 
 Use a concrete type when one exists, and `comptime T: type` when the caller can name the type.
-`anytype` is allowed only on an allowlist, each entry with its reason (the lint's allowlist
-file once it exists; until then a comment at the use): writer and format
-plumbing that `std` itself leaves open, and comptime-generic helpers whose parameter set is
-truly open. The reason keeps `anytype` from becoming the easy way out of a signature.
+`anytype` parameters require a one-line `// anytype: <reason>` comment on the same line
+or immediately before the parameter (before the declaration for a one-line signature).
+The reason explains why the parameter's type is open. Writer sinks named `writer` and format
+argument tuples named `args` or ending in `_args`, alongside a comptime `[]const u8`
+format parameter named `fmt`, `format` or ending in `_fmt`, are exempt as std-style plumbing.
+The `anytype-reason` lint checks every other use; it has no baseline allowance.
 
 Source: `std` takes `*Writer` or `comptime T: type` wherever it can.
 
@@ -200,8 +202,12 @@ today.
 // with the disk.
 ```
 
-Once the lint exists, this rule is report-only at first, then fails. A false hit (such as
-"fixed-size") goes on its allowlist with a reason; the word list is not loosened.
+`zig build lint` prints `changelog-words` findings without failing the gate. It checks Zig
+comments for whole words or phrases, ignoring case: "fixed", "now", "used to", "previously",
+"formerly", "no longer", and "new:". It reports at most one finding per line, including the
+comment text so real hits can guide tuning before enforcement. A false hit (such as
+"fixed-size") uses `// lint-allow(changelog-words): <reason>` on the line or immediately
+before it, following the lint's usual suppression syntax. String literals are excluded.
 
 ### When a comment is required
 

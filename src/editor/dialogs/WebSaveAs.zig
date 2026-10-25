@@ -101,7 +101,7 @@ pub fn active(win: *dvui.Window) bool {
     return false;
 }
 
-pub fn dialog(id: dvui.Id) anyerror!bool {
+pub fn dialog(id: dvui.Id) fizzy.core.dialogs.Error!bool {
     var outer = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .padding = .all(12) });
     defer outer.deinit();
 
@@ -126,7 +126,7 @@ pub fn dialog(id: dvui.Id) anyerror!bool {
     return name.len > 0;
 }
 
-pub fn callAfter(id: dvui.Id, response: dvui.enums.DialogResponse) anyerror!void {
+pub fn callAfter(id: dvui.Id, response: dvui.enums.DialogResponse) fizzy.core.dialogs.Error!void {
     const name = dvui.dataGetSlice(null, id, "_save_as_name", []const u8) orelse "";
     defer {
         if (default_name_storage) |old| {

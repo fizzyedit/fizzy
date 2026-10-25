@@ -36,6 +36,10 @@ tape: *const Tape,
 now: f64 = 0,
 /// The next op to start, as an index into `tape.ops`.
 cursor: usize = 0,
+/// The last failure (see `Failure`): the op that failed and the op index its skip resumed at.
+/// Only tests read these, to check the skip landed on the next chapter.
+failed_op: ?usize = null,
+resumed_at: ?usize = null,
 /// Where the pointer is, in the sink's coordinates.
 pointer: Point = .{},
 glide: ?Glide = null,
@@ -44,7 +48,7 @@ typing: ?Typing = null,
 holding: bool = false,
 held_ms: f64 = 0,
 /// Buttons the tape holds down: a glide while one is carries something (`Glide.carried`).
-pressed: u8 = 0,
+pressed: std.EnumSet(Tape.Button) = .empty,
 /// Set by whoever plays the tape while it replays to a moment rather than plays live (a seek):
 /// a carried glide then takes a frame per step of its path (`path_step_ms`).
 replaying: bool = false,
@@ -111,8 +115,10 @@ pub const Sink = struct {
         command: *const fn (ctx: *anyopaque, cmd: Tape.Command) void,
         keyframe: *const fn (ctx: *anyopaque, kf: *const Tape.Keyframe) void,
         holds: *const fn (ctx: *anyopaque, until: Tape.Until) bool,
-        /// A wait gave up. The sink says so where a person will see it.
-        timedOut: *const fn (ctx: *anyopaque, until: Tape.Until) void,
+        /// An op could not do its job (see `Failure`) and the rest of its chapter was skipped. The
+        /// sink says so where a person will see it. Called before the skip lands, with the
+        /// sequencer's cursor already past the failed op.
+        failed: *const fn (ctx: *anyopaque, failure: Failure) void,
         /// Apply a step to its file, shown being made over `ms` (the op's). Null for a sink that
         /// plays only live tapes, which have none (`Tape.validate`).
         step: ?*const fn (ctx: *anyopaque, step: Tape.Step, ms: u32) void = null,
@@ -123,6 +129,24 @@ pub const Sink = struct {
         /// where the place was. Null, or always true: glides begin at once (live play).
         still: ?*const fn (ctx: *anyopaque, target: Tape.Target) bool = null,
     };
+};
+
+/// What went wrong, and how much of the tape it cost. A tape that carries on after a missing
+/// anchor acts on an app that is not where the script thinks: a press lands off its target, a
+/// key types into the wrong view. So the rest of that chapter is skipped, and the next chapter
+/// begins from whatever state the app is in (a chapter is the unit a viewer can jump to).
+pub const Failure = struct {
+    /// The index of the op that failed.
+    op: usize,
+    what: union(enum) {
+        /// The wait's timeout passed before what it waited for came.
+        wait: Tape.Until,
+        /// A move or trace never saw its target drawn.
+        target: Tape.Target,
+    },
+    /// The ops skipped after it: those up to the next chapter (keyframes included) that were
+    /// not releases of a button already held.
+    skipped: usize,
 };
 
 pub fn init(tape: *const Tape) Sequencer {
@@ -163,7 +187,7 @@ pub fn restoreTo(self: *Sequencer, cursor: usize, now: f64, pointer: Point) void
     self.holding = false;
     self.held_ms = 0;
     // A moment is calm with no button held (`Player.keepSnapshot`).
-    self.pressed = 0;
+    self.pressed = .empty;
 }
 
 /// Play at `speed` times the tape's own pace, kept within `min_speed`...`max_speed`.
@@ -218,7 +242,7 @@ pub fn rewind(self: *Sequencer, op_index: usize) void {
     self.typing = null;
     self.holding = false;
     self.held_ms = 0;
-    self.pressed = 0;
+    self.pressed = .empty;
 }
 
 pub const Progress = enum {
@@ -240,14 +264,18 @@ pub fn advance(self: *Sequencer, until: f64, wall_ms: f64, sink: Sink) Progress 
         if (gave_up) {
             self.held_ms += wall_ms;
             if (self.held_ms < @as(f64, @floatFromInt(wait.timeout))) return .holding;
-            sink.vtable.timedOut(sink.ctx, wait.until);
         }
+        const failed_op = self.cursor;
         self.holding = false;
         self.held_ms = 0;
         self.cursor += 1;
         // A wait that gave up yields: whoever plays the tape hears of it before anything after
-        // the wait lands, and may stop there (a live tape does) or carry on (a demo does).
-        if (gave_up) return .yielded;
+        // the wait lands, and may stop there (a live tape does) or carry on (a demo does) from
+        // the next chapter.
+        if (gave_up) {
+            self.fail(failed_op, .{ .wait = wait.until }, sink);
+            return .yielded;
+        }
     }
 
     while (true) {
@@ -260,7 +288,10 @@ pub fn advance(self: *Sequencer, until: f64, wall_ms: f64, sink: Sink) Progress 
             if (std.math.isFinite(until)) self.now = @max(self.now, until);
             return .reached;
         }
-        self.finishSpans(sink);
+        if (self.finishSpans(sink)) |missed| {
+            self.fail(missed.op, .{ .target = missed.target }, sink);
+            return .yielded;
+        }
         self.now = next_at;
 
         const op = ops[self.cursor];
@@ -277,7 +308,7 @@ pub fn advance(self: *Sequencer, until: f64, wall_ms: f64, sink: Sink) Progress 
                 // A move only: a stroke's points are on a canvas that is not going anywhere, and a
                 // drawing has hundreds of them.
                 if (op.do == .move) if (sink.vtable.still) |still| if (!still(sink.ctx, target)) return .holding;
-                self.glide = .{ .op = self.cursor, .from = self.pointer, .at = self.now, .carried = self.pressed > 0 };
+                self.glide = .{ .op = self.cursor, .from = self.pointer, .at = self.now, .carried = self.pressed.count() > 0 };
                 self.cursor += 1;
             },
             .type => {
@@ -295,13 +326,13 @@ pub fn advance(self: *Sequencer, until: f64, wall_ms: f64, sink: Sink) Progress 
             },
             .press => |b| {
                 self.cursor += 1;
-                self.pressed +|= 1;
+                self.pressed.insert(b);
                 sink.vtable.button(sink.ctx, b, true);
                 return .yielded;
             },
             .release => |b| {
                 self.cursor += 1;
-                self.pressed -|= 1;
+                self.pressed.remove(b);
                 sink.vtable.button(sink.ctx, b, false);
                 return .yielded;
             },
@@ -359,8 +390,11 @@ fn advanceSpans(self: *Sequencer, to: f64, sink: Sink) ?Progress {
         self.pointer = pathPoint(op, g.from, dest, f);
         sink.vtable.moveTo(sink.ctx, self.pointer);
         if (f >= 1) {
+            const never_seen = g.to == null;
+            const op_index = g.op;
             self.glide = null;
             self.now = @max(self.now, @as(f64, @floatFromInt(op.end())));
+            if (never_seen) self.fail(op_index, .{ .target = op.do.target().? }, sink);
             return .yielded;
         }
     }
@@ -379,14 +413,20 @@ fn advanceSpans(self: *Sequencer, to: f64, sink: Sink) ?Progress {
     return null;
 }
 
-/// Land whatever is still in flight, as if its time had come.
-fn finishSpans(self: *Sequencer, sink: Sink) void {
+const Missed = struct { op: usize, target: Tape.Target };
+
+/// Land whatever is still in flight, as if its time had come. Returns the glide whose target was
+/// never drawn, if there was one: the pointer did not go anywhere, and what follows would act on
+/// the wrong place.
+fn finishSpans(self: *Sequencer, sink: Sink) ?Missed {
+    var missed: ?Missed = null;
     if (self.glide) |g| {
-        const to = if (g.locked) g.to else sink.vtable.locate(sink.ctx, self.tape.ops[g.op].do.target().?);
+        const target = self.tape.ops[g.op].do.target().?;
+        const to = if (g.locked) g.to else sink.vtable.locate(sink.ctx, target) orelse g.to;
         if (to) |pt| {
             self.pointer = pt;
             sink.vtable.moveTo(sink.ctx, pt);
-        }
+        } else missed = .{ .op = g.op, .target = target };
         self.glide = null;
     }
     if (self.typing) |ty| {
@@ -394,6 +434,39 @@ fn finishSpans(self: *Sequencer, sink: Sink) void {
         self.deliver(text[ty.sent..], sink);
         self.typing = null;
     }
+    return missed;
+}
+
+/// `op` failed: tell the sink, then skip to the next chapter. Releases of a button already held
+/// still land, or the app would be left mid-drag by a tape that has gone on.
+fn fail(self: *Sequencer, op: usize, what: @FieldType(Failure, "what"), sink: Sink) void {
+    const ops = self.tape.ops;
+    const failed_at = ops[op].at;
+    const chapter_at: u32 = for (self.tape.chapters) |c| {
+        if (c.at > failed_at) break c.at;
+    } else std.math.maxInt(u32);
+    var end = self.cursor;
+    while (end < ops.len and ops[end].at < chapter_at) end += 1;
+    var skipped = end - self.cursor;
+    // A button releases at most once while skipped (the set is empty after), so the releases fit
+    // one slot per button, in tape order.
+    var releases: [std.enums.values(Tape.Button).len]Tape.Button = undefined;
+    var released: usize = 0;
+    var pressed = self.pressed;
+    for (ops[self.cursor..end]) |o| {
+        if (o.do == .release and pressed.contains(o.do.release)) {
+            pressed.remove(o.do.release);
+            releases[released] = o.do.release;
+            released += 1;
+            skipped -= 1;
+        }
+    }
+    sink.vtable.failed(sink.ctx, .{ .op = op, .what = what, .skipped = skipped });
+    for (releases[0..released]) |button| sink.vtable.button(sink.ctx, button, false);
+    self.pressed = pressed;
+    self.cursor = end;
+    self.failed_op = op;
+    self.resumed_at = end;
 }
 
 /// Send typed bytes a keystroke at a time, turning `\n` and `\t` into the keys a person presses
@@ -532,7 +605,7 @@ const Log = struct {
             .command = command,
             .keyframe = keyframe,
             .holds = holds,
-            .timedOut = timedOut,
+            .failed = failed,
             .step = step,
         } };
     }
@@ -572,8 +645,11 @@ const Log = struct {
             .gone => |t| !from(ctx).tags.contains(t),
         };
     }
-    fn timedOut(ctx: *anyopaque, _: Tape.Until) void {
-        from(ctx).print("timeout", .{});
+    fn failed(ctx: *anyopaque, f: Failure) void {
+        switch (f.what) {
+            .wait => from(ctx).print("timeout {d} skipping {d}", .{ f.op, f.skipped }),
+            .target => |t| from(ctx).print("missing {s} {d} skipping {d}", .{ t.tag, f.op, f.skipped }),
+        }
     }
     fn step(ctx: *anyopaque, st: Tape.Step, ms: u32) void {
         from(ctx).print("step {s} {s} {d}", .{ st.file, st.effect, ms });
@@ -824,12 +900,97 @@ test "a wait that never holds gives up after its timeout, in wall time" {
     _ = seq.advance(0, 16, log.sink());
     var frames: usize = 0;
     while (seq.advance(0, 30, log.sink()) == .holding) frames += 1;
-    // Entering the wait, then 30, 60 and 90 ms held; at 120 it gives up, and yields so whoever
-    // plays it hears before the key lands — which it does on the next call.
+    // Entering the wait, then 30, 60 and 90 ms held; at 120 it gives up and yields. With no
+    // chapter after it, the key that followed is skipped with the rest of the tape.
     try testing.expectEqual(@as(usize, 4), frames);
-    try testing.expectEqualStrings("keyframe demo://a\ntimeout\n", log.out.items);
-    _ = seq.advance(0, 30, log.sink());
-    try testing.expectEqualStrings("keyframe demo://a\ntimeout\nkey mod+s\n", log.out.items);
+    try testing.expectEqualStrings("keyframe demo://a\ntimeout 1 skipping 1\n", log.out.items);
+    try testing.expect(seq.done());
+}
+
+test "a timed-out wait skips the rest of its chapter and the next one plays" {
+    const ops = [_]Tape.Op{
+        .{ .at = 0, .do = .{ .keyframe = 0 } },
+        .{ .at = 100, .do = .{ .wait = .{ .until = .{ .shown = "never" }, .timeout = 50 } } },
+        .{ .at = 200, .do = .{ .key = "skipped" } },
+        .{ .at = 900, .do = .{ .command = .{ .id = "skipped.too" } } },
+        .{ .at = 1000, .do = .{ .key = "plays" } },
+    };
+    const chapters = [_]Tape.Chapter{ .{ .at = 0, .title = "one" }, .{ .at = 1000, .title = "two" } };
+    const tape: Tape = .{ .name = "t", .ops = &ops, .keyframes = &test_keyframes, .chapters = &chapters };
+    var log: Log = .{};
+    defer log.deinit();
+    var seq: Sequencer = .init(&tape);
+    while (!seq.done()) _ = seq.advance(std.math.inf(f64), 30, log.sink());
+    try testing.expectEqualStrings("keyframe demo://a\ntimeout 1 skipping 2\nkey plays\n", log.out.items);
+}
+
+test "a timed-out wait still releases a button held across it, but not a press it skipped" {
+    const ops = [_]Tape.Op{
+        .{ .at = 0, .do = .{ .keyframe = 0 } },
+        .{ .at = 0, .do = .{ .press = .left } },
+        .{ .at = 10, .do = .{ .wait = .{ .until = .{ .shown = "never" }, .timeout = 10 } } },
+        .{ .at = 20, .do = .{ .release = .left } },
+        .{ .at = 30, .do = .{ .press = .left } },
+        .{ .at = 40, .do = .{ .release = .left } },
+    };
+    const tape: Tape = .{ .name = "t", .ops = &ops, .keyframes = &test_keyframes };
+    var log: Log = .{};
+    defer log.deinit();
+    var seq: Sequencer = .init(&tape);
+    while (!seq.done()) _ = seq.advance(std.math.inf(f64), 30, log.sink());
+    try testing.expectEqualStrings("keyframe demo://a\npress left\ntimeout 2 skipping 2\nrelease left\n", log.out.items);
+}
+
+test "a timed-out wait skips a keyframe and the commands after it, up to the next chapter" {
+    const ops = [_]Tape.Op{
+        .{ .at = 0, .do = .{ .keyframe = 0 } },
+        .{ .at = 100, .do = .{ .wait = .{ .until = .{ .shown = "never" }, .timeout = 50 } } },
+        .{ .at = 200, .do = .{ .keyframe = 0 } },
+        .{ .at = 300, .do = .{ .command = .{ .id = "skipped" } } },
+        .{ .at = 1000, .do = .{ .key = "plays" } },
+    };
+    const chapters = [_]Tape.Chapter{ .{ .at = 0, .title = "one" }, .{ .at = 1000, .title = "two" } };
+    const tape: Tape = .{ .name = "t", .ops = &ops, .keyframes = &test_keyframes, .chapters = &chapters };
+    var log: Log = .{};
+    defer log.deinit();
+    var seq: Sequencer = .init(&tape);
+    while (!seq.done()) _ = seq.advance(std.math.inf(f64), 30, log.sink());
+    try testing.expectEqualStrings("keyframe demo://a\ntimeout 1 skipping 2\nkey plays\n", log.out.items);
+}
+
+test "a timed-out wait releases the buttons held across it, whichever order the tape lets go" {
+    const ops = [_]Tape.Op{
+        .{ .at = 0, .do = .{ .keyframe = 0 } },
+        .{ .at = 0, .do = .{ .press = .left } },
+        .{ .at = 10, .do = .{ .wait = .{ .until = .{ .shown = "never" }, .timeout = 10 } } },
+        .{ .at = 20, .do = .{ .press = .right } },
+        .{ .at = 30, .do = .{ .release = .right } },
+        .{ .at = 40, .do = .{ .release = .left } },
+    };
+    const tape: Tape = .{ .name = "t", .ops = &ops, .keyframes = &test_keyframes };
+    var log: Log = .{};
+    defer log.deinit();
+    var seq: Sequencer = .init(&tape);
+    while (!seq.done()) _ = seq.advance(std.math.inf(f64), 30, log.sink());
+    try testing.expectEqualStrings("keyframe demo://a\npress left\ntimeout 2 skipping 2\nrelease left\n", log.out.items);
+    try testing.expectEqual(@as(usize, 0), seq.pressed.count());
+}
+
+test "a move to a target never drawn skips the chapter, so no press lands off target" {
+    const ops = [_]Tape.Op{
+        .{ .at = 0, .do = .{ .keyframe = 0 } },
+        .{ .at = 0, .ms = 100, .do = .{ .move = .{ .tag = "missing" } } },
+        .{ .at = 100, .do = .{ .press = .left } },
+        .{ .at = 150, .do = .{ .release = .left } },
+        .{ .at = 500, .do = .{ .key = "plays" } },
+    };
+    const chapters = [_]Tape.Chapter{ .{ .at = 0, .title = "one" }, .{ .at = 500, .title = "two" } };
+    const tape: Tape = .{ .name = "t", .ops = &ops, .keyframes = &test_keyframes, .chapters = &chapters };
+    var log: Log = .{};
+    defer log.deinit();
+    var seq: Sequencer = .init(&tape);
+    while (!seq.done()) _ = seq.advance(std.math.inf(f64), 30, log.sink());
+    try testing.expectEqualStrings("keyframe demo://a\nmove 0,0\nmissing missing 1 skipping 2\nkey plays\n", log.out.items);
 }
 
 test "rewinding to a keyframe and replaying fast lands where live play did" {
@@ -906,7 +1067,7 @@ test "carrying something, the pointer goes where the target settled; with nothin
     try log.tags.put(testing.allocator, "slot", .{ .x = 100, .y = 10 });
     playTo(&seq, 700, 16, log.sink());
     try testing.expectEqual(@as(f32, 700), seq.pointer.x);
-    try testing.expectEqual(@as(u8, 0), seq.pressed);
+    try testing.expectEqual(@as(usize, 0), seq.pressed.count());
 }
 
 test "replaying, a carried glide takes a frame per step of its path" {
