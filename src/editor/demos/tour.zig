@@ -78,8 +78,17 @@ pub fn build(s: *Script) !void {
         try s.caption("Here every document is a card. Tap a tab to bring it forward.", .{ .near = try catalog.tab(s, "src/main.zig") });
         try s.click(.{ .tag = try catalog.tab(s, "src/main.zig") }, .{});
     } else {
+        // A person's window may be too small to split once the explorer is open: a drop there
+        // would only make a card, so the step is left out.
+        try s.waitIdle(.{});
+        const room = try s.skipIfGone("workbench.beside-room");
         try s.caption("Drop one on the editor's edge, and it opens beside the others.", .{});
         try s.drag(.{ .tag = try catalog.tab(s, "src/main.zig") }, .{ .tag = "drop:beside" }, .{ .via = .{ .tag = catalog.documents } });
+        s.endSkip(room);
+        const cards = try s.skipIfShown("workbench.beside-room");
+        try s.caption("Here every document is a card. Tap a tab to bring it forward.", .{ .near = try catalog.tab(s, "src/main.zig") });
+        try s.click(.{ .tag = try catalog.tab(s, "src/main.zig") }, .{});
+        s.endSkip(cards);
     }
     try s.waitFor(try catalog.editor(s, "src/main.zig"), .{});
     s.pause(900);

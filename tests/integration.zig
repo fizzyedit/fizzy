@@ -10230,6 +10230,10 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
     lookback.budget_ns = 0;
     defer lookback.budget_ns = std.time.ns_per_s / 60;
     const unattributed_before = editor.app.host.unattributed_steps;
+    // The explorer shut, so the person's pane has the room for the tour's drop to split it
+    // (`core.placement`); with it open the tour leaves that drop out.
+    editor.explorer.close(editor);
+    try dvui.testing.settle(headlessFrame);
     try editor.demo.play("tour");
     var frames: usize = 0;
     var desktop_panes: PaneWatch = .{};

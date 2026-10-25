@@ -391,6 +391,10 @@ test "demo: every bundled demo plays to the end through fizzy's stage, a seek la
         defer gpa.free(panes_zon);
         try std.Io.Dir.cwd().writeFile(dvui.io, .{ .sub_path = panes_zon, .data = ".{ .persons = true }" });
 
+        // The explorer shut, so the person's pane has the room for the tour's drop to split it
+        // (`core.placement`): with it open the drop is left out of the tour.
+        app.editor.explorer.close(app.editor);
+        try dvui.testing.settle(headlessFrame);
         try app.editor.demo.play("tour");
         var held = true;
         var split = false;
