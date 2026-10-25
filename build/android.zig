@@ -88,6 +88,7 @@ pub fn add(b: *std.Build) void {
     const package = b.addSystemCommand(&.{
         "sh",      "-ec",
         \\so=$1 manifest=$2 activity=$3 sdl_java=$4 jar=$5 out=$6 bt=$7 abi=$8 keystore=$9 app_id=${10}
+        \\bt=$(cd "$bt" && pwd) # absolute: aapt runs from the staging directory
         \\stage=$(mktemp -d); trap 'rm -rf "$stage"' EXIT
         \\mkdir -p "$stage/classes" "$stage/lib/$abi"
         \\javac --release 17 -cp "$jar" -d "$stage/classes" "$sdl_java"/org/libsdl/app/*.java "$activity"
