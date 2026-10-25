@@ -410,7 +410,14 @@ pub fn close(l: *Layout, name: []const u8, how: Closing) void {
         if (state.forgetPlace(l.gpa, leaf)) l.extents_changed = true;
     }
     state.splits.forget(l.gpa, name);
+    flyShut(state, i);
+}
+
+/// Float `i` flies shut, its views left where they are: whoever calls has placed them already
+/// (`close` sent them home; a restored arrangement assigned them again).
+pub fn flyShut(state: *Layout.State, i: usize) void {
     const f = &state.floats.items.items[i];
+    if (f.closing) return;
     endLanding(f);
     // Marked, not removed: `draw` may be walking the list, and drops it when it comes to it —
     // at once if it never drew a window or was a ghost, after the flight shut if it did.

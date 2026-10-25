@@ -510,7 +510,36 @@ test "demo: every bundled demo plays to the end through fizzy's stage, a seek la
         try dvui.testing.settle(headlessFrame);
     }
 
+    try revertClosesWhatTheTourOpened(&app);
     try tourOnAPhone(&app);
+}
+
+/// A tour played to its end and reverted closes what it opened, and the window is the person's
+/// again: here with the explorer shut, a window the recording was not made on.
+fn revertClosesWhatTheTourOpened(app: *BundledApp) !void {
+    const editor = app.editor;
+    const p = &editor.demo.player;
+
+    // A window the recording does not match: the explorer shut.
+    editor.explorer.close(editor);
+    try dvui.testing.settle(headlessFrame);
+    const print_before = fizzy.Editor.Demo.layoutPrint(editor);
+    const closed_before = editor.explorer.closed;
+
+    try editor.demo.play(fizzy.Editor.Demo.catalog.entries[0].name);
+    var frames: usize = 0;
+    while (p.state != .ended and frames < 20_000) : (frames += 1) _ = try dvui.testing.step(headlessFrame);
+    try std.testing.expectEqual(automation.Player.State.ended, p.state);
+    try std.testing.expectEqual(@as(u32, 0), p.timeouts);
+    try std.testing.expect(fizzy.Editor.Demo.layoutPrint(editor) != print_before);
+
+    p.revert();
+    // What the tour opened glides shut over a few frames.
+    frames = 0;
+    while (frames < 120) : (frames += 1) _ = try dvui.testing.step(headlessFrame);
+    try std.testing.expectEqual(print_before, fizzy.Editor.Demo.layoutPrint(editor));
+    try std.testing.expectEqual(closed_before, editor.explorer.closed);
+    try std.testing.expectEqual(@as(usize, 0), editor.app.layout.floats.items.items.len);
 }
 
 /// What straight play of a demo must keep steady, watched a frame at a time:
