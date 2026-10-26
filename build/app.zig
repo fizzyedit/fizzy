@@ -30,7 +30,7 @@ pub const WebPluginDir = struct {
     };
 };
 
-/// `Chrome.Edge`, for the build option.
+/// The type of `Chrome.sidebar_edge`, for the build option.
 const ChromeEdge = enum { left, right };
 
 pub const Options = struct {

@@ -462,7 +462,6 @@ pub fn init(
         .explorer = try app.allocator.create(Explorer),
         .sidebar = try .init(),
         .infobar = try .init(),
-        .chrome = .configured,
         .last_titlebar_color = dvui.themeGet().color(.control, .fill),
         .themes = .empty,
         .workbench = .init(app.allocator),
