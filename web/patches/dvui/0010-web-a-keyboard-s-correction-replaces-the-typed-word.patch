@@ -18,7 +18,7 @@ diff --git a/src/backends/web.js b/src/backends/web.js
 index cecf29a..cc084e5 100644
 --- a/src/backends/web.js
 +++ b/src/backends/web.js
-@@ -162,16 +162,136 @@ const StylusAction = Object.freeze({
+@@ -162,16 +162,138 @@ const StylusAction = Object.freeze({
      /** motion only */
      move: 1,
      /** motion, then the left button pressed */
@@ -88,14 +88,16 @@ index cecf29a..cc084e5 100644
 +
 +    /** Replace [start, end) of the word with `text`: the deleted tail, then the text. */
 +    replace(start, end, text) {
-+        const chars = Array.from(this.word);
-+        start = Math.max(0, Math.min(start, chars.length));
-+        end = Math.max(start, Math.min(end, chars.length));
++        // The DOM counts UTF-16 code units, so slice the string by them; the keyboard erases code points.
++        start = Math.max(0, Math.min(start, this.word.length));
++        end = Math.max(start, Math.min(end, this.word.length));
 +        // The caret is at the end of the word, so what follows `end` goes too and comes back.
-+        const after = chars.slice(end).join("");
-+        for (let i = start; i < chars.length; i++) this.sink.backspace();
++        const after = this.word.slice(end);
++        const kept = this.word.slice(0, start);
++        const deleted = Array.from(this.word.slice(start)).length;
++        for (let i = 0; i < deleted; i++) this.sink.backspace();
 +        this.sink.text(text + after);
-+        this.set(chars.slice(0, start).join(""));
++        this.set(kept);
 +        this.typed(text + after);
 +    }
 +
@@ -155,7 +157,7 @@ index cecf29a..cc084e5 100644
      /** @type {WebGLBuffer} */
      vertexBuffer;
      /** @type {WebGLProgram} */
-@@ -1164,21 +1284,24 @@ export class Dvui {
+@@ -1164,21 +1286,24 @@ export class Dvui {
                  }
                  if (this.cur !== this.stock) this.useProgram(0, null, 0, 0);
              },
@@ -180,7 +182,7 @@ index cecf29a..cc084e5 100644
                      window.open(url);
                  } else {
                      window.location.href = url;
-@@ -1725,16 +1848,17 @@ export class Dvui {
+@@ -1725,16 +1850,17 @@ export class Dvui {
                      0,
                  );
              }
@@ -198,7 +200,7 @@ index cecf29a..cc084e5 100644
                  // switches tabs and we don't do anything.
                  if (ev.ctrlKey) return;
  
-@@ -1771,49 +1895,32 @@ export class Dvui {
+@@ -1771,49 +1897,32 @@ export class Dvui {
                  (ev.metaKey << 3) + (ev.altKey << 2) + (ev.ctrlKey << 1) +
                  (ev.shiftKey << 0),
              );

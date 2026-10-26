@@ -62,6 +62,14 @@ const replacement = (data, ranges = []) => ({
   check("only the word after the space is replaced", field.text, "a the");
 }
 {
+  // The DOM's offsets are UTF-16 code units: the emoji spans [0, 2), "teh" is [2, 5).
+  const { field, type, fire, select } = fixture();
+  for (const c of ["\u{1F600}", "t", "e", "h"]) type(c);
+  select(2, 5);
+  fire("beforeinput", replacement("the", [{ startOffset: 2, endOffset: 5 }]));
+  check("offsets count UTF-16 units past an astral character", field.text, "\u{1F600}the");
+}
+{
   const { hidden, field, type, fire } = fixture();
   for (const c of "im") type(c);
   fire("compositionstart", {});
