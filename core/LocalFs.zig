@@ -1,18 +1,21 @@
 //! The local disk as a `vfs.Fs`, so `FileTable` has exactly one read path whether a directory
 //! lives on this machine or on a cloud mount.
 //!
-//! Paths are the OS's own absolute paths — the local mount has no prefix to strip. Every op
-//! but a read runs to completion inside its start call (the disk is synchronous here, as it
-//! always was) and the result is parked until `pump`, which is the `vfs.Fs` contract.
-//! `FileTable` pumps the mount it just asked right away, so a local listing still comes back
-//! in the same call that requested it and nothing above notices a difference.
+//! Paths are the OS's own absolute paths — the local mount has no prefix to strip. A read and a
+//! listing run on the `Io`'s pool, so their start call returns a job before the disk has been
+//! touched and the result is delivered by `pump`, which is the `vfs.Fs` contract; a caller must
+//! treat a listing as pending (`FileTable.listDir` returns null) until a later `pump` lands it, and
+//! rely on `wake` rather than assume the same call completes; `FileTable` only waits a moment
+//! (`inline_wait_ns`) so a small folder still answers at once. The other ops run to completion
+//! inside their start call and park the result until `pump`.
 //!
 //! A read and a listing are the ops worth overlapping: a cold index of a large vault is hundreds
 //! of thousands of small files, each ~120 µs of waiting when nothing else is in flight, and one
 //! folder of that many notes is seconds of directory reads that a frame must not wait for.
 //! `readFile` and `listDir` go through `io.concurrent`, which the host's threaded `Io` runs on its
 //! pool and a single-threaded `Io` (tests, or a saturated pool) runs inline — one implementation,
-//! and the caller that issues a window of them and pumps gets the overlap where it exists.
+//! and the caller that issues a window of them and pumps gets the overlap where it exists. Only
+//! on the inline path has the result landed by the time the start call returns.
 const std = @import("std");
 const builtin = @import("builtin");
 const vfs = @import("vfs/vfs.zig");
