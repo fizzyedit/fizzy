@@ -182,8 +182,10 @@ jobs:
       # ReleaseSmall are "fast" — and the plugin store publishes "fast" builds only. Built
       # ReleaseSafe, the app asks the registry for a shard nobody publishes under, so every
       # plugin in a healthy store reads "No store build" and nothing can be installed. The debug
-      # copy is the exception on purpose: a Debug host's class is "safe", and the test channel
-      # publishes ReleaseSafe builds against main's SDK for it.
+      # copy is the exception on purpose: a Debug host's class is "safe", so it reads the test
+      # channel's "safe" shard (ReleaseSafe plugin builds against main's SDK). Until the app asks
+      # for the class it was built with (work#188 step d, `optimize_classes`), it still asks for
+      # "fast" and installs nothing from the test channel.
       - name: Build web app
         run: |
           bash scripts/ci-retry.sh zig build web -Doptimize="${{ matrix.optimize }}" \

@@ -1,20 +1,23 @@
-# A preview of a pull request's head at fizzyed.it/testapp/pr-N/, for the PRs a person asked QA
-# on: **only those labelled `qa:needed`**, so unlabelled PRs cost no CI.
+# A preview of a pull request's head at https://pr-N-fizzy-previews.fizzyedit.workers.dev/, for the
+# PRs a person asked QA on: **only those labelled `qa:needed`**, so unlabelled PRs cost no CI.
 #
 # - Built when the label is applied, and on each push while the PR carries it.
 # - A Debug build that loads plugins through the store's test channel, like
 #   fizzyed.it/testapp/debug/ (web.yml), with browser storage of its own per PR.
-# - Removed when the PR closes or loses the label: its release in fizzyedit/website is deleted and
-#   the site redeployed, which lays out only the releases that exist (website `deploy-web.yml`
-#   puts each `web-pr-N` under /testapp/pr-N/).
+# - Served from a **separate origin** (a Cloudflare Workers preview of the Worker `fizzy-previews`,
+#   behind Cloudflare Access), never fizzyed.it: a preview runs a PR's code before it is reviewed,
+#   and must not share browser storage or OAuth state with the real site.
+# - Removed when the PR closes or loses the label, or when its build fails.
 # - The URL is commented on the PR's private thread (the fizzyedit/work issue titled
 #   `PR #N: ...`), never on the PR, whose watchers are public.
 #
-# Same-repo PRs only: a fork's code never gets a build here. The build job runs the PR's code
-# with no secret; only `publish`, which checks out nothing, holds WEBSITE_DISPATCH_TOKEN.
+# Same-repo PRs only: a fork's code never gets a build here. Three kinds of job, three secrets:
+# `build` runs the PR's code with no secret; `publish` and `remove` hold the Cloudflare secrets
+# and run none of it (they unzip the build into a directory and hand it to wrangler); `comment`
+# holds WORK_THREAD_TOKEN and checks out nothing.
 #
-# Needs the secrets WEBSITE_DISPATCH_TOKEN (as web.yml) and WORK_THREAD_TOKEN: Issues read/write
-# on fizzyedit/work, for the thread comment (the step is skipped without it).
+# Needs the secrets CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID (Workers edit), and
+# WORK_THREAD_TOKEN: Issues read/write on fizzyedit/work (the thread comment is skipped without it).
 
 name: Web PR preview
 
@@ -24,15 +27,19 @@ on:
 
 env:
   ZIG_VERSION: "0.17.0"
-  WEBSITE: fizzyedit/website
+  WORKER: fizzy-previews
+  SUBDOMAIN: fizzyedit
+  WRANGLER: wrangler@4.135.0
 
-# One preview per PR at a time: a push replaces the build in flight, and removal replaces a build
-# that would put the preview back. The group is on the jobs, not the workflow: a skipped job never
-# joins it, so a label event for anything but `qa:needed` cannot cancel a running build.
+# Two groups per PR. `web-pr-N-build` is cancel-in-progress: a push replaces the build in flight,
+# and a skipped job never joins it, so a label event for anything but `qa:needed` cannot cancel a
+# running build. `web-pr-N-deploy` (publish, remove) queues and never cancels, so a deploy is
+# never cut off halfway and a build's cancellation cannot be caused by an older run's publish; each
+# deploy job checks the PR's current head before it acts.
 jobs:
   build:
     concurrency:
-      group: web-pr-${{ github.event.pull_request.number }}
+      group: web-pr-${{ github.event.pull_request.number }}-build
       cancel-in-progress: true
     # Labelled qa:needed, and (for the labeled event) by that very label.
     if: >-
@@ -91,72 +98,116 @@ jobs:
     needs: build
     if: success()
     concurrency:
-      group: web-pr-${{ github.event.pull_request.number }}
-      cancel-in-progress: true
+      group: web-pr-${{ github.event.pull_request.number }}-deploy
+      cancel-in-progress: false
     permissions:
       contents: read
+      pull-requests: read
     runs-on: ubuntu-latest
     env:
       PR: ${{ github.event.pull_request.number }}
-      RELEASE: web-pr-${{ github.event.pull_request.number }}
+      SHA: ${{ github.event.pull_request.head.sha }}
+    outputs:
+      url: ${{ steps.deploy.outputs.url }}
     steps:
+      # A newer push, a closed PR or a removed label since this run's build: publish nothing, so
+      # an older build never overwrites a newer one nor brings back a removed preview.
+      - name: Is this still the PR's head?
+        id: fresh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          read -r state head labelled < <(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" \
+            --jq '[.state, .head.sha, ([.labels[].name] | index("qa:needed") != null)] | @tsv')
+          if [ "$state" = open ] && [ "$head" = "$SHA" ] && [ "$labelled" = true ]; then
+            echo "current=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Stale run: PR is $state at $head (labelled: $labelled), this build is $SHA. Nothing published."
+            echo "current=false" >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/download-artifact@v4
+        if: steps.fresh.outputs.current == 'true'
         with:
           name: web-pr
-      - name: Hand the build to the website
+      - name: Deploy the preview
+        id: deploy
+        if: steps.fresh.outputs.current == 'true'
         env:
-          GH_TOKEN: ${{ secrets.WEBSITE_DISPATCH_TOKEN }}
-          SHA: ${{ github.event.pull_request.head.sha }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          notes="Preview of $GITHUB_REPOSITORY#$PR at https://fizzyed.it/testapp/pr-$PR/, built from $SHA"
-          if ! gh release view "$RELEASE" --repo "$WEBSITE" > /dev/null 2>&1; then
-            gh release create "$RELEASE" --repo "$WEBSITE" --prerelease --title "$RELEASE" --notes "$notes"
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "::error title=No Cloudflare secrets::CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID must be set for previews."
+            exit 1
           fi
-          gh release upload "$RELEASE" web.zip --clobber --repo "$WEBSITE"
-          gh release edit "$RELEASE" --repo "$WEBSITE" --notes "$notes"
-          gh api "repos/$WEBSITE/dispatches" -f event_type=fizzy-updated
-      # Once per PR: a later push replaces the build under the same URL.
+          # The build is data here: unzipped, never run.
+          mkdir site deploy
+          unzip -q web.zip -d site
+          printf '{"name":"%s","compatibility_date":"2026-10-01","assets":{"directory":"../site"}}\n' "$WORKER" > deploy/wrangler.jsonc
+          (cd deploy && npx --yes "$WRANGLER" preview --name "pr-$PR")
+          echo "url=https://pr-$PR-$WORKER.$SUBDOMAIN.workers.dev/" >> "$GITHUB_OUTPUT"
+
+  # A job of its own: WORK_THREAD_TOKEN never sits beside the PR's code or the Cloudflare secrets.
+  # Once per PR: a later push replaces the build under the same URL.
+  comment:
+    needs: publish
+    if: needs.publish.outputs.url != ''
+    permissions: {}
+    runs-on: ubuntu-latest
+    env:
+      PR: ${{ github.event.pull_request.number }}
+      SHA: ${{ github.event.pull_request.head.sha }}
+      URL: ${{ needs.publish.outputs.url }}
+    steps:
       - name: Tell the PR's private thread
         env:
           GH_TOKEN: ${{ secrets.WORK_THREAD_TOKEN }}
-          SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           if [ -z "$GH_TOKEN" ]; then echo "No WORK_THREAD_TOKEN: the thread is not told."; exit 0; fi
-          url="https://fizzyed.it/testapp/pr-$PR/"
           thread=$(gh issue list -R fizzyedit/work --label pr-thread --state all --search "\"PR #$PR:\" in:title" \
             --json number,title --jq "[.[] | select(.title | startswith(\"PR #$PR:\"))][0].number // empty")
           if [ -z "$thread" ]; then echo "No thread for PR #$PR: nothing to comment on."; exit 0; fi
-          if gh issue view "$thread" -R fizzyedit/work --json comments --jq '.comments[].body' | grep -qF "Preview: $url"; then
+          if gh issue view "$thread" -R fizzyedit/work --json comments --jq '.comments[].body' | grep -qF "Preview: $URL"; then
             echo "Thread already has the URL."; exit 0
           fi
-          printf 'Preview: %s\n\nA Debug build of %s, loading plugins from the store test channel. It is rebuilt on each push while the PR is labelled `qa:needed`, and removed when it closes or loses the label.\n' \
-            "$url" "$SHA" | gh issue comment "$thread" -R fizzyedit/work --body-file -
+          printf 'Preview: %s\n\nA Debug build of %s on an origin of its own, loading plugins from the store test channel. It is rebuilt on each push while the PR is labelled `qa:needed`, and removed when it closes or loses the label.\n' \
+            "$URL" "$SHA" | gh issue comment "$thread" -R fizzyedit/work --body-file -
 
-  # The release (and so /testapp/pr-N/) goes when the PR closes or loses the label, and when a
-  # build fails, so the URL never serves an older push's build as if it were this one.
+  # The preview goes when the PR closes or loses the label, and when this push's build or publish
+  # fails, so the URL never serves an older push's build as if it were this one. A failure only
+  # removes while this run's commit is still the PR's head: a newer push owns the preview.
   remove:
-    needs: build
+    needs: [build, publish]
     if: >-
       !cancelled()
       && github.event.pull_request.head.repo.full_name == github.repository
       && (github.event.action == 'closed'
           || (github.event.action == 'unlabeled' && github.event.label.name == 'qa:needed')
-          || needs.build.result == 'failure')
+          || needs.build.result == 'failure'
+          || needs.publish.result == 'failure')
     concurrency:
-      group: web-pr-${{ github.event.pull_request.number }}
-      cancel-in-progress: true
-    permissions: {}
+      group: web-pr-${{ github.event.pull_request.number }}-deploy
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      pull-requests: read
     runs-on: ubuntu-latest
     env:
-      RELEASE: web-pr-${{ github.event.pull_request.number }}
+      PR: ${{ github.event.pull_request.number }}
+      SHA: ${{ github.event.pull_request.head.sha }}
     steps:
       - name: Remove the preview
         env:
-          GH_TOKEN: ${{ secrets.WEBSITE_DISPATCH_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          if gh release view "$RELEASE" --repo "$WEBSITE" > /dev/null 2>&1; then
-            gh release delete "$RELEASE" --repo "$WEBSITE" --cleanup-tag --yes
-            gh api "repos/$WEBSITE/dispatches" -f event_type=fizzy-updated
-          else
-            echo "No $RELEASE to remove."
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "::error title=No Cloudflare secrets::CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID must be set for previews."
+            exit 1
           fi
+          if [ "${{ github.event.action }}" = synchronize ] || [ "${{ github.event.action }}" = labeled ] || [ "${{ github.event.action }}" = reopened ]; then
+            head=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" --jq .head.sha)
+            if [ "$head" != "$SHA" ]; then echo "A newer push ($head) owns the preview; leaving it."; exit 0; fi
+          fi
+          npx --yes "$WRANGLER" preview delete --name "pr-$PR" --skip-confirmation || echo "No preview pr-$PR to remove."
