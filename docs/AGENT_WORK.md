@@ -146,6 +146,16 @@ Both helpers exit non-zero and print a one-line reason on failure. A failed prep
 its workspace for inspection; a failed finish can leave a published branch if GitHub refused
 PR creation. Fix the reported problem and retry finish. Neither helper merges or marks ready.
 
+## Where verification happens
+
+Three places, in order: the worker's **local gates** (step 3), which decide whether the PR is
+worth pushing; **cross-review** by a different worker; and **CI at ready**. A draft PR runs only
+the light `changes` job (`ci.yml`), so pushing to a draft costs almost nothing and proves nothing;
+`gh pr ready` starts the full matrix, and `ci-ok` is the required check on that run. A reviewer
+waits for finished checks, so a draft is reviewed from its diff and the gate output in its body,
+and a cross-reviewer may give a verdict on a draft without CI. The merge question waits for the
+full CI at ready.
+
 ## Review
 
 The stages and markers above are the review. Reviewer and author both answer the four questions
@@ -153,6 +163,7 @@ in [`REVIEW.md`](REVIEW.md). A worker working an issue leaves its PR draft and n
 marking it ready (once the gates pass and CI is green), the merge and the `pm:approve` yes are the
 maintainer's. `CONTRIBUTING.md`'s "take it to ready yourself" is for a person's own session, not
 for a worker on this contract.
+A draft's CI is only the light `changes` job, so the full CI runs at ready and must be green before the merge question.
 
 ## Which worker suits which work
 
