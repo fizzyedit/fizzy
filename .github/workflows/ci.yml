@@ -375,6 +375,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       # The Zig cache as in the test job: a fixed key, one cold build saved once.
