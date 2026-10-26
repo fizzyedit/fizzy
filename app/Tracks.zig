@@ -630,6 +630,9 @@ fn pickUp(self: *Tracks, t: *Track) bool {
     for (self.pending.items) |k| {
         if (std.mem.eql(u8, k.file, file)) waiting = k.bytes;
     }
+    // One the thread already took is on its way to the file: wait it out, which is rare, so the
+    // read finds the newest history and not an absent or older file.
+    if (waiting == null) while (self.writing.load(.acquire) != 0) std.Thread.yield() catch {};
     const read_bytes = if (waiting) |_| null else std.Io.Dir.cwd().readFileAlloc(dvui.io, file, self.gpa, .unlimited) catch return false;
     defer if (read_bytes) |b| self.gpa.free(b);
     const bytes = waiting orelse read_bytes.?;
@@ -1486,6 +1489,30 @@ test "reopening a document reads its closed track from memory and writes nothing
     try testing.expectEqual(@as(usize, 1), t.open.get(1).?.steps.items.len);
     try testing.expectEqual(@as(usize, 1), t.pending.items.len);
     try testing.expectEqual(@as(?u64, null), try KeptStand.keptFileSize(&t, &tmp));
+}
+
+test "reopening a document while the checkpoint's thread writes its track keeps the history" {
+    const Writer = struct {
+        fn run(t: *Tracks, k: KeptFile) void {
+            dvui.io.sleep(.fromMilliseconds(50), .awake) catch {};
+            _ = writeKept(testing.allocator, k, "checkpoint");
+            t.doneWriting();
+        }
+    };
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var t = try KeptStand.tracks(&tmp);
+    defer t.deinitAll();
+    t.closed(1);
+    const taken = t.takeChanged(false);
+    defer testing.allocator.free(taken);
+    defer taken[0].deinit(testing.allocator);
+    const thread = try std.Thread.spawn(.{}, Writer.run, .{ &t, taken[0] });
+    defer thread.join();
+    // Taken, and not yet renamed into place: a reopen now must not start a fresh track.
+    t.opened(.{ .ptr = &Stand.state, .owner = &KeptStand.plugin, .id = 1 });
+    t.tick();
+    try testing.expectEqual(@as(usize, 1), t.open.get(1).?.steps.items.len);
 }
 
 test "the app quitting writes the closed documents' tracks" {
