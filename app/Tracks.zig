@@ -548,8 +548,7 @@ fn keepLater(self: *Tracks, t: *Track) bool {
     return true;
 }
 
-/// Write what `keepLater` left, here: for a read of a kept file (`pickUp`) or the app quitting,
-/// neither of which can wait for the checkpoint.
+/// Write what `keepLater` left, here: for the app quitting, which cannot wait for the checkpoint.
 fn flushPending(self: *Tracks) void {
     if (comptime !can_keep) return;
     // The checkpoint's thread may hold older copies of the same files.
@@ -625,9 +624,15 @@ fn pickUp(self: *Tracks, t: *Track) bool {
     if (!keepable(path)) return false;
     const file = self.keptFile(self.gpa, path) orelse return false;
     defer self.gpa.free(file);
-    self.flushPending();
-    const bytes = std.Io.Dir.cwd().readFileAlloc(dvui.io, file, self.gpa, .unlimited) catch return false;
-    defer self.gpa.free(bytes);
+    // A closed document's track still waiting for the checkpoint's thread is read where it is, not
+    // written first: a reopen never packs or writes on the frame. The last is the newest.
+    var waiting: ?[]const u8 = null;
+    for (self.pending.items) |k| {
+        if (std.mem.eql(u8, k.file, file)) waiting = k.bytes;
+    }
+    const read_bytes = if (waiting) |_| null else std.Io.Dir.cwd().readFileAlloc(dvui.io, file, self.gpa, .unlimited) catch return false;
+    defer if (read_bytes) |b| self.gpa.free(b);
+    const bytes = waiting orelse read_bytes.?;
     const prof = core.profile.begin("fizzy", "tracks.pickUp");
     defer prof.end();
     var kept = track_file.read(self.gpa, bytes) catch return false;
@@ -1389,10 +1394,14 @@ const KeptStand = struct {
         return true;
     }
 
+    // lint-allow(anyerror): the vtable's signature
+    fn restoreHistory(_: *anyopaque, _: sdk.DocHandle, _: sdk.Plugin.RestoredHistory) anyerror!void {}
+
     const vtable: sdk.Plugin.VTable = v: {
         var v = Stand.vtable;
         v.documentPath = documentPath;
         v.isDirty = isDirty;
+        v.restoreHistory = restoreHistory;
         break :v v;
     };
     var plugin: sdk.Plugin = .{ .state = &Stand.state, .vtable = &vtable, .id = "kept", .display_name = "Kept", .step_format = 1 };
@@ -1464,7 +1473,22 @@ test "a closed document's track waits unpacked for the checkpoint's thread" {
     try testing.expect(size < Stand.bytes.len / 2);
 }
 
-test "a read of a kept file writes the closed documents' tracks first" {
+test "reopening a document reads its closed track from memory and writes nothing" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var t = try KeptStand.tracks(&tmp);
+    defer t.deinitAll();
+    t.closed(1);
+    try testing.expectEqual(@as(usize, 1), t.pending.items.len);
+    t.opened(.{ .ptr = &Stand.state, .owner = &KeptStand.plugin, .id = 1 });
+    t.tick();
+    // The track came back, and the frame neither wrote nor dropped the copy waiting for the thread.
+    try testing.expectEqual(@as(usize, 1), t.open.get(1).?.steps.items.len);
+    try testing.expectEqual(@as(usize, 1), t.pending.items.len);
+    try testing.expectEqual(@as(?u64, null), try KeptStand.keptFileSize(&t, &tmp));
+}
+
+test "the app quitting writes the closed documents' tracks" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
     var t = try KeptStand.tracks(&tmp);
