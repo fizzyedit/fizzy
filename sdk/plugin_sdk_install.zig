@@ -51,7 +51,7 @@ pub fn main(init: std.process.Init) !void {
 /// replaces the plugin a person has installed.
 fn pluginsDir(arena: std.mem.Allocator, env: *const std.process.Environ.Map) ![]const u8 {
     if (env.get("FIZZY_PROFILE")) |profile| {
-        if (profile.len > 0) return std.fs.path.resolve(arena, &.{ profile, "plugins" });
+        if (profile.len > 0) return std.fs.path.resolveAlloc(arena, &.{ profile, "plugins" });
     }
     const config_root = (try paths.localConfigRoot(
         builtin.target.os.tag,

@@ -995,9 +995,9 @@ fn drawRow(
     const is_activated = if (self.activated) |a| a == i else false;
     const is_selected = i == self.selected;
     if (is_activated) {
-        row_r.fill(.all(fizzy.core.dialogs.row_radius), .{ .color = .{ .color = fizzy.core.dialogs.rowPress() } });
+        row_r.fill(.all(fizzy.core.dialogs.row_radius), .{ .color = .{ .color = fizzy.core.dialogs.rowPress() }, .fade = 1 });
     } else if (is_selected) {
-        row_r.fill(.all(fizzy.core.dialogs.row_radius), .{ .color = .{ .color = fizzy.core.dialogs.rowHover() } });
+        row_r.fill(.all(fizzy.core.dialogs.row_radius), .{ .color = .{ .color = fizzy.core.dialogs.rowHover() }, .fade = 1 });
     }
 
     if (is_selected and self.scroll_to_selected) {

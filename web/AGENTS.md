@@ -22,11 +22,12 @@ The page and its JavaScript (`index.html`, `web.js`, workers). The Zig half is
 - **A new `export fn` the page calls goes in `build/web.zig`'s `export_symbol_names`.** The wasm
   exports only what that list names. An unlisted one still compiles, and its name even shows in
   the binary, but the page finds `exports.FizzyWebX` undefined and its guard returns silently.
-- **Preview the phone shape with `?form=phone|tablet|desktop`.** By design a fine pointer is
-  always `.desktop` (`core/form_factor.zig`), and a browser's phone emulation leaves hover on, so
+- **Preview the mobile shape with `?form=mobile|tablet|desktop` (`phone` is an alias for `mobile`).**
+  By design a fine pointer is always `.desktop` (`core/form_factor.zig`), and a browser's mobile
+  emulation leaves hover on, so
   a desktop browser never shows the mobile shape on its own. The override is read from the URL
   on each load, never stored, and anything else is ignored. The console prints
-  `form-factor: coarse=.. hover=.. w=.. h=.. override=.. -> phone|tablet|desktop` at startup and
+  `form-factor: coarse=.. hover=.. w=.. h=.. override=.. -> mobile|tablet|desktop` at startup and
   whenever the measurement changes: on a device that shows the wrong shape, that line says which
   number failed the rule (`coarse` = `(pointer: coarse)`, `hover` = `(hover: hover)`; w/h are
   `screen.*`). The main-thread loop (Firefox, Safari, `?worker=0`) sends the same message.

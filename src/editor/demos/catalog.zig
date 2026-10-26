@@ -67,7 +67,8 @@ pub fn aboutWriting(s: *Script, rel: []const u8) !Script.CaptionOptions {
     return .{ .near = try end(s, rel), .clear = clear };
 }
 
-/// A place by name (`Sidebar`, `Main`, `Float 1`): the whole of it.
+/// A place by name (`Sidebar`, `Main`, `Float 1`) or by role (`role:documents`, `role:explorer`,
+/// `role:panel`: what the place is, wherever the person's layout has it): the whole of it.
 pub fn place(s: *Script, name: []const u8) ![]const u8 {
     return s.print("region:{s}", .{name});
 }
@@ -104,7 +105,7 @@ pub fn tab(s: *Script, rel: []const u8) ![]const u8 {
 
 /// The documents' place: where the work is, and so where a demo's popups gather when they are
 /// about no one thing (`Script.home`).
-pub const documents = "region:Main";
+pub const documents = "region:role:documents";
 
 /// The command palette's text field.
 pub const palette = "fizzy.palette";
@@ -115,12 +116,40 @@ pub const palette = "fizzy.palette";
 /// `tests/demos.zig` holds them equal.
 pub const files_icon = "fizzy.rail:workbench.files";
 
-/// Open `rel` the way a person who keeps the explorer put away would: open the explorer from the
-/// rail, click the file, and put the explorer away again so the editor has the room. A demo's
-/// keyframe starts with the explorer put away (`Keyframe.Layout.focused`).
+/// The phone's bar icon for the same view (`layout_mobile.zig`); a click opens the explorer sheet on
+/// it, and puts the sheet away again when it is showing.
+pub const files_tab = "fizzy.mobile.tab:workbench.files";
+
+/// The rail's Plugins icon, and the phone bar's.
+pub const store_icon = "fizzy.rail:fizzy.store";
+pub const store_tab = "fizzy.mobile.tab:fizzy.store";
+
+/// Open `rel` the way a person would: from the explorer, which the rail or the bar brings up only
+/// when its place is not showing already, then the file's row. On a desktop the explorer stays as it
+/// is after. On a phone its sheet covers the document, so one the demo brought up it puts away
+/// again, and one the person had open stays.
 pub fn openFile(s: *Script, rel: []const u8) !void {
-    try s.click(.{ .tag = files_icon }, .{});
-    try s.click(.{ .tag = try file(s, rel) }, .{});
+    const row = try file(s, rel);
+    const explorer = try place(s, "role:explorer");
+    // The choice reads a frame drawn after whatever came before settled.
+    try s.waitIdle(.{});
+    if (!s.compact) {
+        const skip = try s.skipIfShown(explorer);
+        try s.click(.{ .tag = files_icon }, .{});
+        s.endSkip(skip);
+        try s.click(.{ .tag = row }, .{});
+        try s.waitFor(try editor(s, rel), .{});
+        return;
+    }
+    const brought = try s.skipIfShown(explorer);
+    try s.click(.{ .tag = files_tab }, .{});
+    try s.click(.{ .tag = row }, .{});
     try s.waitFor(try editor(s, rel), .{});
-    try s.click(.{ .tag = files_icon }, .{});
+    try s.click(.{ .tag = files_tab }, .{});
+    try s.waitGone(explorer, .{});
+    s.endSkip(brought);
+    const theirs = try s.skipIfGone(explorer);
+    try s.click(.{ .tag = row }, .{});
+    try s.waitFor(try editor(s, rel), .{});
+    s.endSkip(theirs);
 }

@@ -62,15 +62,20 @@ issue with the same fingerprint.
 Stale check: an open `fan:<name>` issue not touched for 14 days is re-checked by this fan on
 its next run; if its fingerprint no longer reproduces, close it with one line saying so.
 
+Lint rules are out of scope for every fan: `zig build lint` (`scripts/lint.zig`, the `Rule`
+enum) already checks them and `scripts/lint-allow.zon` ratchets what is known. Read the enum
+and never file what a listed rule covers.
+
 ## 4. Filing
 
-- Repo `fizzyedit/work` (private). Labels `agent`, `superfan`, `fan:<name>`, one of
+- Repo `fizzyedit/work` (private). Labels `superfan`, `fan:<name>`, one of
   `sev:high` `sev:med` `sev:low`. The labels exist; a fan never creates labels. A missing label
-  is a setup failure (section 1, step 3).
+  is a setup failure (section 1, step 3). A fan never adds `agent`, `os:*`, `kind:*` or
+  `prio:*`: the PM triages each finding against the goals, then labels it for agents.
 - Title `fan:<name>: <what is wrong>`, at most 72 characters.
 - Body: severity; one paragraph on why it matters; **Repro** (the exact command or tape,
   expected against actual); `file:line` at the commit examined (`main@<sha>`); for medium and
-  high a filled kickoff block (the template in the fizzy-pm skill); last line the fingerprint.
+  high a filled kickoff block (the template in `docs/AGENT_WORK.md`); last line the fingerprint.
 - Cap: at most 5 new issues per run, highest severity first. Overflow is one line in the run
   record. Lows go into one `fan:<name>: low-severity batch` issue per run, not one each, with one
   `fingerprint:` line per low at the end of the body (dedupe indexes every such line); the batch
@@ -87,7 +92,7 @@ file what is confirmed. Report tokens used in the run record.
 ## 6. Run record
 
 Every run, including zero findings and `unchanged`, ends by adding one comment to the pinned
-issue `fan:<name>: runs` in `fizzyedit/work` (create it the first time: labels `agent`,
+issue `fan:<name>: runs` in `fizzyedit/work` (create it the first time: labels
 `superfan`, `fan:<name>`). One line:
 
 `<UTC date> runner=<name> main@<sha> tokens=<n> filed=<n> duplicates=<n> gate=<pass|fail|unchanged|no runner> <note>`

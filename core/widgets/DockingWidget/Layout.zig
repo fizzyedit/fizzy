@@ -4,6 +4,7 @@
 //! types), so this can be unit tested without a Window.
 const std = @import("std");
 const dvui = @import("dvui");
+const placement = @import("../../placement.zig");
 
 /// Accordion-row arithmetic used by a sash drag. The widget gathers a `Row`
 /// from the live tree and drawn ratios, calls there, then writes ratios back.
@@ -53,6 +54,32 @@ pub const Node = union(enum) {
         /// it and then applies `.collapse`, which promotes the other child. Set by
         /// `closeLeaf`, and by an emptied leaf when `animated`. Never serialized.
         closing: ?Child = null,
+        /// Fizzy made this split, not the person: it runs the way its space's shape asks
+        /// (`core.placement.orient`), stacked in a tall room and side by side in a wide one, and
+        /// turns when the room does. `dir` is the direction it was made with and is what is
+        /// saved; `ratio` is kept through a turn, so it sizes by `ratio` and never by `fixed`.
+        adaptive: bool = false,
+        /// Transient: the direction an adaptive split is drawn in now, null before its first
+        /// frame. Never serialized: turning a device writes nothing.
+        drawn: ?dvui.enums.Direction = null,
+
+        /// The direction this split is drawn in: `dir`, unless it is adaptive and has turned.
+        pub fn axis(sp: Split) dvui.enums.Direction {
+            return if (sp.adaptive) sp.drawn orelse sp.dir else sp.dir;
+        }
+
+        /// The direction an adaptive split draws in for a `w` by `h` cell: the shape's, held
+        /// where it was inside the dead band (`core.placement.orient`).
+        pub fn orientedFor(sp: Split, w: f32, h: f32) dvui.enums.Direction {
+            const prev: placement.Axis = switch (sp.axis()) {
+                .horizontal => .side_by_side,
+                .vertical => .stacked,
+            };
+            return switch (placement.orient(prev, w, h)) {
+                .side_by_side => .horizontal,
+                .stacked => .vertical,
+            };
+        }
 
         pub const Fixed = struct { child: Child, points: f32 };
         pub const Fit = struct { child: Child, min: f32 = 0, max: f32 = 1 };
@@ -539,7 +566,7 @@ fn freeSubtree(self: *DockLayout, idx: NodeIndex) void {
 pub fn floorAlong(self: *const DockLayout, node: NodeIndex, dir: dvui.enums.Direction, gap: f32) f32 {
     return switch (self.nodes.items[node]) {
         .leaf, .free => 0,
-        .split => |sp| if (sp.dir == dir)
+        .split => |sp| if (sp.axis() == dir)
             self.floorAlong(sp.first, dir, gap) + gap + self.floorAlong(sp.second, dir, gap)
         else
             @max(self.floorAlong(sp.first, dir, gap), self.floorAlong(sp.second, dir, gap)),
@@ -762,6 +789,8 @@ pub const Snapshot = struct {
             ratio: f32 = 0.5,
             fixed: ?Node.Split.Fixed = null,
             fit: ?Node.Split.Fit = null,
+            /// Absent in a file from before adaptive splits: every such split is the person's.
+            adaptive: bool = false,
             first: *const Tree,
             second: *const Tree,
         };
@@ -832,7 +861,7 @@ fn snapshotNode(self: *const DockLayout, idx: NodeIndex, allocator: std.mem.Allo
             errdefer allocator.destroy(second);
             second.* = try self.snapshotNode(sp.second, allocator);
 
-            return .{ .split = .{ .dir = sp.dir, .ratio = sp.ratio, .fixed = sp.fixed, .fit = sp.fit, .first = first, .second = second } };
+            return .{ .split = .{ .dir = sp.dir, .ratio = sp.ratio, .fixed = sp.fixed, .fit = sp.fit, .adaptive = sp.adaptive, .first = first, .second = second } };
         },
         .leaf => |l| return .{ .leaf = try snapshotLeaf(l, allocator) },
         .free => unreachable,
@@ -867,7 +896,7 @@ fn buildNode(self: *DockLayout, node: Snapshot.Tree) !NodeIndex {
             const first = try self.buildNode(sp.first.*);
             const second = try self.buildNode(sp.second.*);
             const idx = try self.allocNode();
-            self.nodes.items[idx] = .{ .split = .{ .dir = sp.dir, .ratio = sp.ratio, .fixed = sp.fixed, .fit = sp.fit, .first = first, .second = second, .key = self.nextKey() } };
+            self.nodes.items[idx] = .{ .split = .{ .dir = sp.dir, .ratio = sp.ratio, .fixed = sp.fixed, .fit = sp.fit, .adaptive = sp.adaptive, .first = first, .second = second, .key = self.nextKey() } };
             return idx;
         },
         .leaf => |l| {
@@ -1212,6 +1241,46 @@ test "closing a pinned leaf hands the pin and the name to its sibling" {
     defer std.testing.allocator.free(r.from);
     try std.testing.expectEqualStrings("Main/r1", r.from);
     try std.testing.expectEqualStrings("Main", r.to);
+}
+
+test "an adaptive split turns with its cell, and the turn is never saved" {
+    var layout = try DockLayout.initSingleLeaf(std.testing.allocator, "a");
+    defer layout.deinit();
+    const root = layout.root;
+    try layout.splitLeaf(root, .right, "b");
+    const sp = &layout.nodes.items[root].split;
+    sp.adaptive = true;
+
+    // Side by side as made, until its first frame draws.
+    try std.testing.expectEqual(dvui.enums.Direction.horizontal, sp.axis());
+    sp.drawn = sp.orientedFor(390, 844);
+    try std.testing.expectEqual(dvui.enums.Direction.vertical, sp.axis());
+    // Turned to landscape, and held inside the dead band.
+    sp.drawn = sp.orientedFor(844, 390);
+    try std.testing.expectEqual(dvui.enums.Direction.horizontal, sp.axis());
+    try std.testing.expectEqual(dvui.enums.Direction.horizontal, sp.orientedFor(1000, 1100));
+
+    // A person's split never turns, whatever the cell.
+    sp.adaptive = false;
+    sp.drawn = .vertical;
+    try std.testing.expectEqual(dvui.enums.Direction.horizontal, sp.axis());
+    sp.adaptive = true;
+
+    // Saved as made, with the flag: the drawn direction is not in the snapshot, so turning a
+    // device writes nothing, and it loads as a split no frame has drawn.
+    sp.drawn = .vertical;
+    sp.ratio = 0.3;
+    const snap = try layout.snapshot(std.testing.allocator);
+    defer snap.deinit(std.testing.allocator);
+    try std.testing.expectEqual(dvui.enums.Direction.horizontal, snap.root.split.dir);
+    try std.testing.expect(snap.root.split.adaptive);
+    var loaded = try DockLayout.fromSnapshot(std.testing.allocator, snap);
+    defer loaded.deinit();
+    const back = loaded.nodes.items[loaded.root].split;
+    try std.testing.expect(back.adaptive);
+    try std.testing.expectEqual(@as(?dvui.enums.Direction, null), back.drawn);
+    try std.testing.expectEqual(dvui.enums.Direction.horizontal, back.axis());
+    try std.testing.expectApproxEqAbs(@as(f32, 0.3), back.ratio, 0.0001);
 }
 
 test "a fixed child derives its ratio from points and writes a drag back as points" {

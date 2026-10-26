@@ -109,6 +109,7 @@ pub fn Suite(comptime Driver: type) type {
 
         /// Runs every applicable case, each on a fresh driver, calling `report` per case.
         /// `report` may be null.
+        // anytype: Report callbacks and their contexts are supplied by each conformance runner.
         pub fn run(gpa: std.mem.Allocator, options: Options, context: anytype, comptime report: anytype) Summary {
             var summary: Summary = .{};
             for (all) |case| {

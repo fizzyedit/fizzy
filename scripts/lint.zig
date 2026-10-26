@@ -1,7 +1,17 @@
 //! Repository lint with per-file budgets for existing findings.
 const std = @import("std");
 
-const Rule = enum { @"fn-length", @"create-needs-destroy", @"lint-allow-reason", @"file-alias", anyerror };
+const Rule = enum {
+    @"fn-length",
+    @"create-needs-destroy",
+    @"lint-allow-reason",
+    @"file-alias",
+    anyerror,
+    @"deprecated-names-replacement",
+    @"anytype-reason",
+    @"changelog-words",
+    @"raw-transient-surface",
+};
 const Finding = struct { rule: Rule, line: usize, message: []const u8 };
 const Allow = struct { rule: Rule, file: []const u8, count: usize };
 const Suppression = struct { rule: []const u8, line: usize };
@@ -53,13 +63,18 @@ pub fn main(init: std.process.Init) !void {
             const stem = entry.basename[0 .. entry.basename.len - ".zig".len];
             const findings = try std.mem.concat(allocator, Finding, &.{
                 try analyze(allocator, bytes),
+                try anytypeReasons(allocator, bytes),
                 try fileAlias(allocator, bytes, stem),
+                try deprecatedReplacement(allocator, bytes, path),
             });
             failed = try reportFile(&output.writer, path, findings, parsed, seen, verbose) or failed;
         }
     }
     for (parsed, seen) |allow, visited| if (!visited) {
-        try output.writer.print("{s}:1: {s}: file not found; remove its allowance of {d}\n", .{ allow.file, @tagName(allow.rule), allow.count });
+        try output.writer.print(
+            "{s}:1: {s}: file not found; remove its allowance of {d}\n",
+            .{ allow.file, @tagName(allow.rule), allow.count },
+        );
         failed = true;
     };
     std.debug.print("{s}", .{output.written()});
@@ -87,25 +102,33 @@ fn reportFile(
                 budget = allow.count;
             }
         }
+        // Report-only rules collect real hits before any wording should block a change.
+        const report_only = rule == .@"changelog-words";
         const status = ratchet(count, budget);
-        if (verbose or status == .over) {
+        if (verbose or report_only or status == .over) {
             for (findings) |finding| {
-                if (finding.rule == rule) try writer.print("{s}:{d}: {s}: {s}\n", .{
-                    path, finding.line, @tagName(rule), finding.message,
+                if (finding.rule == rule) try writer.print("{s}:{d}: {s}: {s}{s}\n", .{
+                    path, finding.line, @tagName(rule), finding.message, if (report_only) " (report-only)" else "",
                 });
             }
         }
-        switch (status) {
+        if (!report_only) switch (status) {
             .over => {
-                try writer.print("{s}:1: {s}: count {d} exceeds allowance {d}\n", .{ path, @tagName(rule), count, budget });
+                try writer.print(
+                    "{s}:1: {s}: count {d} exceeds allowance {d}\n",
+                    .{ path, @tagName(rule), count, budget },
+                );
                 failed = true;
             },
             .under => {
-                try writer.print("{s}:1: {s}: count {d} is under allowance {d}; lower the allowance to {d}\n", .{ path, @tagName(rule), count, budget, count });
+                try writer.print(
+                    "{s}:1: {s}: count {d} is under allowance {d}; lower the allowance to {d}\n",
+                    .{ path, @tagName(rule), count, budget, count },
+                );
                 failed = true;
             },
             .equal => {},
-        }
+        };
     }
     return failed;
 }
@@ -134,11 +157,42 @@ fn analyze(allocator: std.mem.Allocator, source: [:0]const u8) ![]Finding {
         const close = std.mem.findScalar(u8, text, ')') orelse text.len;
         const tail = if (close < text.len) std.mem.trim(u8, text[close + 1 ..], " \t\r") else "";
         if (tail.len < 2 or tail[0] != ':' or std.mem.trim(u8, tail[1..], " \t\r").len == 0) {
-            try findings.append(allocator, .{ .rule = .@"lint-allow-reason", .line = line_number, .message = "lint-allow requires a reason after ':'" });
+            try findings.append(allocator, .{
+                .rule = .@"lint-allow-reason",
+                .line = line_number,
+                .message = "lint-allow requires a reason after ':'",
+            });
         } else {
             try suppressions.append(allocator, .{ .rule = text[prefix.len..close], .line = line_number });
         }
     }
+    lines.reset();
+    line_number = 0;
+    while (lines.next()) |line| {
+        line_number += 1;
+        const comment = commentStart(line) orelse continue;
+        const text = std.mem.trim(u8, line[comment + 2 ..], " /!\t\r");
+        if (std.mem.startsWith(u8, text, "lint-allow(")) continue;
+        if (silenced(suppressions.items, .@"changelog-words", line_number)) continue;
+        const words = [_][]const u8{ "fixed", "now", "used to", "previously", "formerly", "no longer", "new:" };
+        word_loop: for (words) |word| {
+            for (0..text.len) |start| {
+                if (start + word.len > text.len) break;
+                if (start > 0 and (std.ascii.isAlphanumeric(text[start - 1]) or text[start - 1] == '_')) continue;
+                const end = start + word.len;
+                if (std.ascii.isAlphanumeric(word[word.len - 1]) and end < text.len and
+                    (std.ascii.isAlphanumeric(text[end]) or text[end] == '_')) continue;
+                if (!std.ascii.eqlIgnoreCase(text[start..end], word)) continue;
+                try findings.append(allocator, .{
+                    .rule = .@"changelog-words",
+                    .line = line_number,
+                    .message = try allocator.print("comment contains '{s}': {s}", .{ word, text }),
+                });
+                break :word_loop;
+            }
+        }
+    }
+    try rawTransientSurfaces(allocator, tree, suppressions.items, &findings);
     var create_line: ?usize = null;
     var has_destroy = false;
     for (0..tree.nodes.len) |index| {
@@ -174,7 +228,11 @@ fn analyze(allocator: std.mem.Allocator, source: [:0]const u8) ![]Finding {
         const end = tree.tokenLocation(0, tree.lastToken(node)).line + 1;
         const length = end - line + 1;
         if (length > 150 and !silenced(suppressions.items, .@"fn-length", line)) {
-            try findings.append(allocator, .{ .rule = .@"fn-length", .line = line, .message = try allocator.print("function {s} is {d} lines (limit 150)", .{ name, length }) });
+            try findings.append(allocator, .{
+                .rule = .@"fn-length",
+                .line = line,
+                .message = try allocator.print("function {s} is {d} lines (limit 150)", .{ name, length }),
+            });
         }
     }
     if (create_line != null and !has_destroy) try findings.append(allocator, .{
@@ -183,6 +241,105 @@ fn analyze(allocator: std.mem.Allocator, source: [:0]const u8) ![]Finding {
         .message = "file has pub fn create* but no destroy function",
     });
     return findings.toOwnedSlice(allocator);
+}
+
+/// dvui's own entry points for a transient surface. Each paints its background inside `init`, where
+/// the app's glass cannot get beneath it, so a surface made with one is a different material from
+/// every other popup. `core.widgets` (and `core.dialogs` for toasts and dialogs) wrap the same
+/// widgets with the shared surface; an exception says why in a `lint-allow` comment.
+const raw_surface_names = [_][]const u8{
+    "tooltip", "FloatingTooltipWidget", "floatingMenu",   "FloatingMenuWidget",
+    "popup",   "PopupWidget",           "floatingWindow", "FloatingWindowWidget",
+    "dialog",  "toast",                 "contextMenu",    "dropdown",
+};
+
+fn rawTransientSurfaces(
+    allocator: std.mem.Allocator,
+    tree: std.zig.Ast,
+    suppressions: []const Suppression,
+    findings: *std.ArrayList(Finding),
+) !void {
+    const tags = tree.tokens.items(.tag);
+    if (tags.len < 3) return;
+    for (0..tags.len - 2) |i| {
+        if (tags[i] != .identifier or tags[i + 1] != .period or tags[i + 2] != .identifier) continue;
+        if (!std.mem.eql(u8, tree.tokenSlice(@intCast(i)), "dvui")) continue;
+        const name = tree.tokenSlice(@intCast(i + 2));
+        for (raw_surface_names) |banned| {
+            if (!std.mem.eql(u8, name, banned)) continue;
+            const line = tree.tokenLocation(0, @intCast(i)).line + 1;
+            if (silenced(suppressions, .@"raw-transient-surface", line)) break;
+            try findings.append(allocator, .{
+                .rule = .@"raw-transient-surface",
+                .line = line,
+                .message = try allocator.print("dvui.{s} paints its own surface; use the core.widgets / core.dialogs wrapper", .{name}),
+            });
+            break;
+        }
+    }
+}
+
+/// The caller owns the findings and frees them with `allocator`.
+fn anytypeReasons(allocator: std.mem.Allocator, source: [:0]const u8) ![]Finding {
+    var tree = try std.zig.Ast.parse(allocator, source, .{});
+    defer tree.deinit(allocator);
+    if (tree.errors.len != 0) return error.InvalidZigSource;
+    var findings: std.ArrayList(Finding) = .empty;
+    errdefer findings.deinit(allocator);
+    for (0..tree.nodes.len) |index| {
+        const node: std.zig.Ast.Node.Index = @fromBackingInt(@intCast(index));
+        // fn_decl and its fn_proto share parameters; visit only the prototype.
+        if (tree.nodeTag(node) == .fn_decl) continue;
+        var buffer: [1]std.zig.Ast.Node.Index = undefined;
+        const proto = tree.fullFnProto(&buffer, node) orelse continue;
+        var params = proto.iterate(&tree);
+        var has_format = false;
+        while (params.next()) |param| {
+            const name = tree.tokenSlice(param.name_token orelse continue);
+            if (param.comptime_noalias != null and
+                std.mem.eql(u8, tree.tokenSlice(param.comptime_noalias.?), "comptime") and
+                param.type_expr != null and
+                (std.mem.eql(u8, name, "fmt") or std.mem.eql(u8, name, "format") or
+                    std.mem.endsWith(u8, name, "_fmt")))
+            {
+                const ty = tree.getNodeSource(param.type_expr.?);
+                if (std.mem.eql(u8, ty, "[]const u8")) has_format = true;
+            }
+        }
+        params = proto.iterate(&tree);
+        while (params.next()) |param| {
+            const token = param.anytype_ellipsis3 orelse continue;
+            if (!std.mem.eql(u8, tree.tokenSlice(token), "anytype")) continue;
+            const name = if (param.name_token) |t| tree.tokenSlice(t) else "";
+            // Writer sinks and tuples forwarded to std-style formatting are open plumbing.
+            if (std.mem.eql(u8, name, "writer") or
+                (has_format and (std.mem.eql(u8, name, "args") or
+                    std.mem.endsWith(u8, name, "_args")))) continue;
+            const loc = tree.tokenLocation(0, token);
+            if (anytypeReason(source[loc.line_start..loc.line_end])) continue;
+            if (loc.line_start > 0) {
+                const end = loc.line_start - 1;
+                const start = if (std.mem.lastIndexOfScalar(u8, source[0..end], '\n')) |i| i + 1 else 0;
+                const previous = source[start..end];
+                if (std.mem.startsWith(u8, std.mem.trimStart(u8, previous, " \t"), "//") and
+                    anytypeReason(previous)) continue;
+            }
+            try findings.append(allocator, .{
+                .rule = .@"anytype-reason",
+                .line = loc.line + 1,
+                .message = "anytype parameter requires // anytype: <reason> on this or the preceding line",
+            });
+        }
+    }
+    return findings.toOwnedSlice(allocator);
+}
+
+fn anytypeReason(line: []const u8) bool {
+    const start = commentStart(line) orelse return false;
+    const text = std.mem.trim(u8, line[start + 2 ..], " \t\r");
+    const prefix = "anytype:";
+    return std.mem.startsWith(u8, text, prefix) and
+        std.mem.trim(u8, text[prefix.len..], " \t\r").len != 0;
 }
 
 /// A file-level `const X = @This();` is named for the file, as in std (`const Writer = @This();`).
@@ -208,6 +365,67 @@ fn fileAlias(allocator: std.mem.Allocator, source: [:0]const u8, stem: []const u
             .line = tree.tokenLocation(0, decl.ast.mut_token).line + 1,
             .message = try allocator.print("@This() alias is {s}; name it for the file ({s})", .{ name, stem }),
         });
+    }
+    return findings.toOwnedSlice(allocator);
+}
+
+/// The caller owns the findings and frees them with `allocator`.
+fn deprecatedReplacement(allocator: std.mem.Allocator, source: [:0]const u8, path: []const u8) ![]Finding {
+    var findings: std.ArrayList(Finding) = .empty;
+    errdefer findings.deinit(allocator);
+    if (!std.mem.startsWith(u8, path, "sdk/src/")) return findings.toOwnedSlice(allocator);
+    var suppressions: std.ArrayList(Suppression) = .empty;
+    defer suppressions.deinit(allocator);
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    var line_number: usize = 0;
+    while (lines.next()) |line| {
+        line_number += 1;
+        const comment = commentStart(line) orelse continue;
+        const text = std.mem.trim(u8, line[comment + 2 ..], " \t\r");
+        const prefix = "lint-allow(";
+        if (!std.mem.startsWith(u8, text, prefix)) continue;
+        const close = std.mem.findScalar(u8, text, ')') orelse continue;
+        try suppressions.append(allocator, .{ .rule = text[prefix.len..close], .line = line_number });
+    }
+    var tokenizer = std.zig.Tokenizer.init(source);
+    var in_block = false;
+    while (true) {
+        const token = tokenizer.next();
+        if (token.tag == .eof) break;
+        const continues_block = in_block;
+        in_block = token.tag == .doc_comment;
+        if (!in_block or continues_block) continue;
+        const text = std.mem.trimStart(u8, source[token.loc.start + 3 .. token.loc.end], " \t");
+        if (!std.mem.startsWith(u8, text, "Deprecated")) continue;
+        const tail = text["Deprecated".len..];
+        if (tail.len > 0 and (std.ascii.isAlphanumeric(tail[0]) or tail[0] == '_')) continue;
+        var description: std.ArrayList(u8) = .empty;
+        defer description.deinit(allocator);
+        try description.appendSlice(allocator, tail);
+        var following = tokenizer;
+        while (true) {
+            const next = following.next();
+            if (next.tag != .doc_comment) break;
+            try description.append(allocator, '\n');
+            try description.appendSlice(allocator, source[next.loc.start + 3 .. next.loc.end]);
+        }
+        var ticks = std.mem.splitScalar(u8, description.items, '`');
+        _ = ticks.next();
+        var replacement = false;
+        while (ticks.next()) |name| {
+            if (ticks.next() == null) break;
+            if (std.mem.trim(u8, name, " \t\r\n").len > 0) {
+                replacement = true;
+                break;
+            }
+        }
+        const line = std.mem.count(u8, source[0..token.loc.start], "\n") + 1;
+        if (!replacement and !silenced(suppressions.items, .@"deprecated-names-replacement", line))
+            try findings.append(allocator, .{
+                .rule = .@"deprecated-names-replacement",
+                .line = line,
+                .message = "Deprecated marker must name a backticked replacement",
+            });
     }
     return findings.toOwnedSlice(allocator);
 }
@@ -445,4 +663,169 @@ test "anyerror return type covers hit, allowed file, suppressed line, and ratche
             "under.zig:1: anyerror: count 1 is under allowance 2; lower the allowance to 1\n",
         output.written(),
     );
+}
+
+test "SDK deprecated markers name a backticked replacement" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][:0]const u8{
+        "/// Deprecated\npub const old = 1;",
+        "/// Deprecated: use replacement.\npub const old = 1;",
+        "/// Deprecated: use ``.\npub const old = 1;",
+        "/// Deprecated: use `replacement.\npub const old = 1;",
+        "/// Deprecated\n// internal note about `helper`\n/// No replacement.\npub const old = 1;",
+    }) |source| {
+        const findings = try deprecatedReplacement(a, source, "sdk/src/nested/old.zig");
+        try std.testing.expectEqual(@as(usize, 1), findings.len);
+        try std.testing.expectEqual(@as(usize, 1), findings[0].line);
+        var output: std.Io.Writer.Allocating = .init(a);
+        defer output.deinit();
+        try std.testing.expect(try reportFile(&output.writer, "sdk/src/old.zig", findings, &.{}, &.{}, false));
+        try std.testing.expectEqual(@as(usize, 0), (try deprecatedReplacement(a, source, "core/old.zig")).len);
+    }
+    for ([_][:0]const u8{
+        "/// Deprecated: use `replacement`.\npub const old = 1;",
+        "/// Deprecated.\n/// Use `replacement`.\npub const old = 1;",
+        "// Deprecated\npub const old = 1;",
+        "//! Deprecated\npub const old = 1;",
+        "const text = \"/// Deprecated\";",
+        "/// DeprecatedThing is an identifier.\npub const old = 1;",
+        "/// Foo\n/// Deprecated, see below\npub const old = 1;",
+    }) |source| try std.testing.expectEqual(
+        @as(usize, 0),
+        (try deprecatedReplacement(a, source, "sdk/src/old.zig")).len,
+    );
+}
+
+test "deprecated marker honors lint-allow suppression and a file budget" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const suppressed = "// lint-allow(deprecated-names-replacement): removed with the next SDK\n" ++
+        "/// Deprecated\npub const old = 1;";
+    try std.testing.expectEqual(@as(usize, 0), (try deprecatedReplacement(a, suppressed, "sdk/src/old.zig")).len);
+    const inside_doc = "/// Deprecated // lint-allow(deprecated-names-replacement): not a comment\npub const old = 1;";
+    try std.testing.expectEqual(@as(usize, 1), (try deprecatedReplacement(a, inside_doc, "sdk/src/old.zig")).len);
+    // Two markers in one doc block are one finding.
+    const twice = "/// Deprecated: gone.\n/// Deprecated: still gone.\npub const old = 1;";
+    try std.testing.expectEqual(@as(usize, 1), (try deprecatedReplacement(a, twice, "sdk/src/old.zig")).len);
+    // A suppression for another rule, or two lines above the marker, does not silence it.
+    for ([_][:0]const u8{
+        "// lint-allow(anyerror): wrong rule\n/// Deprecated\npub const old = 1;",
+        "// lint-allow(deprecated-names-replacement): too far\n\n/// Deprecated\npub const old = 1;",
+    }) |source| try std.testing.expectEqual(
+        @as(usize, 1),
+        (try deprecatedReplacement(a, source, "sdk/src/old.zig")).len,
+    );
+
+    const hit = try deprecatedReplacement(a, "/// Deprecated\npub const old = 1;", "sdk/src/old.zig");
+    const allowances = [_]Allow{
+        .{ .rule = .@"deprecated-names-replacement", .file = "sdk/src/allowed.zig", .count = 1 },
+        .{ .rule = .@"deprecated-names-replacement", .file = "sdk/src/under.zig", .count = 2 },
+    };
+    var seen = [_]bool{ false, false };
+    var output: std.Io.Writer.Allocating = .init(a);
+    try std.testing.expect(try reportFile(&output.writer, "sdk/src/hit.zig", hit, &allowances, &seen, false));
+    try std.testing.expect(!try reportFile(&output.writer, "sdk/src/allowed.zig", hit, &allowances, &seen, false));
+    try std.testing.expect(try reportFile(&output.writer, "sdk/src/under.zig", hit, &allowances, &seen, false));
+    try std.testing.expect(seen[0] and seen[1]);
+}
+
+test "anytype parameters require a local reason except writer and format plumbing" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][:0]const u8{
+        "fn f(value: anytype) void {}",
+        "fn f(value: anytype) void {} // anytype:",
+        "// anytype: tuple of types\n\nfn f(value: anytype) void {}",
+        "const F = fn (anytype) void;",
+        "fn f(args: anytype) void {}",
+        "fn f(fmt: u8, args: anytype) void {}",
+        "fn f(noalias fmt: []const u8, args: anytype) void {}",
+        "const s = \"// anytype: fake\"; fn f(x: anytype) void {}",
+    }) |source| {
+        const findings = try anytypeReasons(a, source);
+        try std.testing.expectEqual(@as(usize, 1), findings.len);
+        try std.testing.expectEqual(Rule.@"anytype-reason", findings[0].rule);
+    }
+    for ([_][:0]const u8{
+        "// anytype: tuple of types\nfn f(value: anytype) void {}",
+        "fn f(value: anytype) void {} // anytype: tuple of types",
+        "fn f(\n    // anytype: callback context\n    ctx: anytype,\n) void {}",
+        "fn f(writer: anytype) void {}",
+        "fn f(comptime fmt: []const u8, args: anytype) void {}",
+        "fn f(comptime anchor_fmt: []const u8, anchor_args: anytype) void {}",
+        "const s = \"anytype\"; // anytype in a comment",
+    }) |source| try std.testing.expectEqual(@as(usize, 0), (try anytypeReasons(a, source)).len);
+    const mixed = try anytypeReasons(a, "fn f(\n x: anytype, // anytype: callback context\n y: anytype,\n) void {}");
+    try std.testing.expectEqual(@as(usize, 1), mixed.len);
+    try std.testing.expectEqual(@as(usize, 3), mixed[0].line);
+}
+
+test "changelog words report hits, honor line allows, and never fail the runner" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const hit = try analyze(a, "// Previously used a different buffer.\nconst n = 1;");
+    try std.testing.expectEqual(@as(usize, 1), hit.len);
+    try std.testing.expectEqual(Rule.@"changelog-words", hit[0].rule);
+    try std.testing.expectEqual(@as(usize, 1), hit[0].line);
+    for ([_][:0]const u8{
+        "// lint-allow(changelog-words): describes buffer capacity\n// Fixed-size buffer.\nconst n = 1;",
+        "const n = 1; // lint-allow(changelog-words): describes capacity\n// Fixed-size buffer.",
+    }) |source| {
+        try std.testing.expectEqual(@as(usize, 0), (try analyze(a, source)).len);
+    }
+    for ([_][:0]const u8{
+        "const s = \"// now fixed\";",
+        "const s =\n    \\\\// now fixed\n;",
+        "// Unknown prefix and renewed storage.\nconst n = 1;",
+    }) |source| try std.testing.expectEqual(@as(usize, 0), (try analyze(a, source)).len);
+    for ([_][]const u8{
+        "fixed", "NOW", "used to", "previously", "formerly", "no longer", "New:", "new:behavior",
+    }) |word| {
+        const source = try a.printSentinel("//! {s} works.\n", .{word}, 0);
+        try std.testing.expectEqual(@as(usize, 1), (try analyze(a, source)).len);
+    }
+    var output: std.Io.Writer.Allocating = .init(a);
+    try std.testing.expect(!try reportFile(&output.writer, "hit.zig", hit, &.{}, &.{}, false));
+    try std.testing.expectEqualStrings(
+        "hit.zig:1: changelog-words: comment contains 'previously': " ++
+            "Previously used a different buffer. (report-only)\n",
+        output.written(),
+    );
+}
+
+test "raw transient surface: dvui entry points are findings, wrappers and suppressed lines are not" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][:0]const u8{
+        "fn f() void { dvui.tooltip(@src(), .{}, \"x\", .{}, .{}); }",
+        "fn f() void { var m = dvui.floatingMenu(@src(), .{}, .{}); _ = m; }",
+        "const W = dvui.FloatingWindowWidget;",
+    }) |source| {
+        const findings = try analyze(a, source);
+        try std.testing.expectEqual(@as(usize, 1), findings.len);
+        try std.testing.expectEqual(Rule.@"raw-transient-surface", findings[0].rule);
+    }
+    for ([_][:0]const u8{
+        "fn f() void { core.widgets.tooltip(@src(), .{}, \"x\", .{}, .{}); }",
+        "fn f() void { const s = \"dvui.tooltip\"; _ = s; } // dvui.popup",
+        "// lint-allow(raw-transient-surface): a fixture\nconst W = dvui.FloatingWindowWidget;",
+    }) |source| try std.testing.expectEqual(@as(usize, 0), (try analyze(a, source)).len);
+}
+
+test "report-only findings preserve failures from enforced rules" {
+    var output: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer output.deinit();
+    const findings = [_]Finding{
+        .{ .rule = .@"changelog-words", .line = 1, .message = "history" },
+        .{ .rule = .anyerror, .line = 2, .message = "explicit error set" },
+    };
+    try std.testing.expect(try reportFile(&output.writer, "mixed.zig", &findings, &.{}, &.{}, false));
+    try std.testing.expect(std.mem.containsAtLeast(u8, output.written(), 1, "changelog-words: history (report-only)"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, output.written(), 1, "anyerror: count 1 exceeds allowance 0"));
 }

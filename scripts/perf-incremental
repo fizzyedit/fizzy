@@ -1,0 +1,282 @@
+#!/usr/bin/env bash
+# perf-incremental: which edits stay fast under `zig build -fincremental --watch`, and which don't.
+#
+#   scripts/perf-incremental                          # every target and edit kind, median of 3
+#   scripts/perf-incremental --runs 5 --targets core,plugin:text --kinds body,sig
+#   scripts/perf-incremental --list
+#   scripts/perf-incremental --no-full                # skip the non-incremental comparison
+#
+# For each target, one watch process runs in a scratch cache; for each edit kind the script
+# applies the edit `--runs` times and records the time from the edit to the next Build Summary,
+# whether that build succeeded, and the first error or fallback line it printed. The same edits
+# then run against a plain `zig build` in its own scratch cache (the "full" column), so each row
+# compares like with like. JSON lines on stdout, progress on stderr; docs/PERF.md explains the
+# kinds. Same rules as scripts/perf-compile: a quiet machine, one run at a time, scratch caches
+# and profile, edited files restored on exit.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+root=$PWD
+
+runs=3
+only_targets=""
+only_kinds=""
+full=1
+timeout_s=${FIZZY_PERF_EDIT_TIMEOUT:-180}
+kinds="new_decl body sig comptime_const import compile_error build_zig"
+targets="app core sdk $(for p in plugins/*/; do [ -f "$p/plugin.zig" ] && echo "plugin:$(basename "$p")"; done | tr '\n' ' ')"
+
+while [ $# -gt 0 ]; do
+  case $1 in
+  --runs | --targets | --kinds)
+    [ $# -ge 2 ] || { echo "perf-incremental: $1 needs a value" >&2; exit 2; }
+    case $1 in --runs) runs=$2 ;; --targets) only_targets=$2 ;; --kinds) only_kinds=$2 ;; esac
+    shift 2 ;;
+  --no-full) full=0; shift ;;
+  --list) echo "targets: $targets"; echo "kinds: $kinds"; exit 0 ;;
+  -h | --help) sed -n '2,15p' "$0"; exit 0 ;;
+  *) echo "perf-incremental: unknown argument $1" >&2; exit 2 ;;
+  esac
+done
+
+for tool in bc; do
+  command -v "$tool" >/dev/null || { echo "perf-incremental: needs $tool" >&2; exit 2; }
+done
+[ -r /proc/loadavg ] || { echo "perf-incremental: needs /proc (Linux)" >&2; exit 2; }
+
+selected() { # <list> <item>
+  [ -z "$1" ] || case ",$1," in *",$2,"*) return 0 ;; *) return 1 ;; esac
+}
+
+tmp_base=${FIZZY_PERF_TMP:-${TMPDIR:-/tmp}}
+mkdir -p "$tmp_base"
+tmp=$(mktemp -d "$tmp_base/perf-incremental.XXXXXX")
+watch_pid=""
+edited=""   # file currently carrying a probe, restored on exit
+
+restore() {
+  [ -n "$watch_pid" ] && kill "$watch_pid" 2>/dev/null || true
+  [ -n "$edited" ] && [ -f "$tmp/orig" ] && cp "$tmp/orig" "$root/$edited"
+  [ -n "${build_edited:-}" ] && [ -f "$tmp/orig_build" ] && cp "$tmp/orig_build" "$root/$build_edited"
+  [ -n "${FIZZY_PERF_KEEP:-}" ] || rm -rf "$tmp"
+}
+trap restore EXIT
+
+date_s=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+commit=$(git rev-parse --short HEAD)
+machine="$(hostname)/$(nproc)cpu/$(awk '/MemTotal/ {printf "%dGiB", $2/1048576}' /proc/meminfo)"
+zigv=$(zig version)
+
+median() { sort -n | awk '{a[NR]=$1} END {if (NR) print (NR%2) ? a[(NR+1)/2] : (a[NR/2]+a[NR/2+1])/2; else print "null"}'; }
+now() { date +%s%N; }
+elapsed() { printf '%.3f' "$(echo "($1 - $2) / 1000000000" | bc -l)"; } # <end-ns> <start-ns>
+json_str() { printf '%s' "$1" | head -c 300 | sed 's/\\/\\\\/g; s/"/\\"/g' | tr -d '\n\r\t'; }
+
+max_load=${FIZZY_PERF_MAX_LOAD:-$(( $(nproc) / 4 ))}
+[ "$max_load" -ge 1 ] || max_load=1
+quiet() {
+  local waited=0 load
+  while :; do
+    load=$(cut -d. -f1 /proc/loadavg)
+    [ "$load" -lt "$max_load" ] && return 0
+    [ "$waited" -ge "${FIZZY_PERF_WAIT:-300}" ] && { echo "perf-incremental: load $load stays over $max_load; not measuring" >&2; exit 1; }
+    sleep 5; waited=$((waited + 5))
+  done
+}
+
+# probe <kind> <i> <sibling>: the appended block. Every declaration is exported so Zig analyzes
+# and generates it; `kind` decides which one differs on edit `i`.
+probe() {
+  local body=0 sig=u32 k=0 imp="" new=""
+  case $1 in
+  body) body=$2 ;;
+  sig) [ $(( $2 % 2 )) -eq 0 ] || sig=u64 ;;
+  comptime_const) k=$(( $2 % 4 )) ;;
+  import) [ $(( $2 % 2 )) -eq 0 ] || imp="comptime { _ = @import(\"$3\"); }" ;;
+  new_decl) new="pub const perf_probe_new_$2 = $2;" ;;
+  compile_error) new="comptime { @compileError(\"perf-incremental: expected error $2\"); }" ;;
+  esac
+  cat <<EOF
+
+// perf-incremental probe
+export fn perf_probe_body() u32 {
+    return $body;
+}
+pub fn perf_probe_sig(x: u32) $sig {
+    return x;
+}
+export fn perf_probe_user() u64 {
+    return perf_probe_sig(1);
+}
+pub const perf_probe_k = $k;
+export var perf_probe_arr: [perf_probe_k + 1]u8 = undefined;
+comptime {
+    _ = &perf_probe_body;
+    _ = &perf_probe_user;
+    _ = &perf_probe_arr;
+}
+$imp
+$new
+EOF
+}
+
+# One complete edit, never a half-written file: the copy is made outside the tree and renamed in
+# (same filesystem, so atomic). A temp file beside the source makes the watcher see a create event
+# first and report a no-op build before the real one.
+replace() { # <file> <source>
+  local staged
+  staged=$(mktemp "$tmp/stage.XXXXXX")
+  cp "$2" "$staged" && mv -f "$staged" "$root/$1"
+}
+
+emit() { # target kind mode runs_ok runs_failed median message
+  printf '{"date":"%s","commit":"%s","machine":"%s","zig":"%s","target":"%s","kind":"%s","mode":"%s","ok":%s,"failed":%s,"median_s":%s,"message":"%s"}\n' \
+    "$date_s" "$commit" "$machine" "$zigv" "$1" "$2" "$3" "$4" "$5" "$6" "$(json_str "$7")"
+}
+
+# The first line of a build log slice worth reading: an error, panic or fallback note.
+first_message() { # <logfile> <from-byte>
+  tail -c +"$2" "$1" | grep -m1 -i -E 'error:|fallback|unsupported|panic' || true
+}
+
+# series <target> <dir> <file> <build_file> <mode>, mode watch|full
+series() {
+  local target=$1 dir=$2 file=$3 bfile=$4 mode=$5
+  local cache=$tmp/cache-$mode out=$tmp/out-$mode wlog=$tmp/$mode.log
+  local sib
+  sib=$(cd "$(dirname "$root/$file")" && ls ./*.zig src/*.zig 2>/dev/null | sed 's|^\./||' | grep -v -x "$(basename "$file")" | head -1 || true)
+  cp "$root/$file" "$tmp/orig"
+  edited=$file
+  rm -rf "$cache" "$out"
+  : >"$wlog"
+  export FIZZY_PROFILE=$tmp/profile
+  quiet
+  if [ "$mode" = watch ]; then
+    (cd "$root/$dir" && exec zig build --cache-dir "$cache" --prefix "$out" --summary line -fincremental --watch) >"$wlog" 2>&1 &
+    watch_pid=$!
+  fi
+
+  summaries() { grep -c 'Build Summary' "$wlog" || true; }
+  # await_build: wait for the watch to report one more build. Sets $secs (from $t0), $status
+  # (ok|failed|timeout|died) and $msg.
+  local seen=0 t0 from
+  await_build() {
+    local deadline=$(( $(date +%s) + timeout_s ))
+    while [ "$(summaries)" -le "$seen" ]; do
+      kill -0 "$watch_pid" 2>/dev/null || { status=died; msg="watch process exited"; secs=null; return; }
+      [ "$(date +%s)" -lt "$deadline" ] || { status=timeout; msg="no Build Summary in ${timeout_s}s"; secs=null; return; }
+      sleep 0.05
+    done
+    # One save can start two builds (the watcher sees more than one event), the second usually a
+    # no-op. The edit is done at the last summary of a burst: keep reading until 0.6 s pass quietly.
+    local n last
+    n=$(summaries); last=$(now)
+    while [ $(( $(now) - last )) -lt 600000000 ]; do
+      sleep 0.02
+      if [ "$(summaries)" -gt "$n" ]; then n=$(summaries); last=$(now); fi
+    done
+    secs=$(elapsed "$last" "$t0")
+    seen=$n
+    if grep 'Build Summary' "$wlog" | tail -1 | grep -q 'failed'; then status=failed; else status=ok; fi
+    msg=$(first_message "$wlog" "$from")
+  }
+  # run_build <edit command...>: apply the edit and time the build it causes.
+  run_build() {
+    from=$(( $(stat -c %s "$wlog") + 1 ))
+    t0=$(now)
+    "$@"
+    if [ "$mode" = watch ]; then
+      await_build
+    else
+      (cd "$root/$dir" && timeout "$timeout_s" zig build --cache-dir "$cache" --prefix "$out" --summary line) >"$wlog" 2>&1 && status=ok || status=failed
+      secs=$(elapsed "$(now)" "$t0")
+      # The redirect above truncated the log, so this build's diagnostics start at byte 1.
+      msg=$(first_message "$wlog" 1)
+    fi
+  }
+  # settle <file> <source>: put a file back and, under watch, wait out the build that causes.
+  settle() {
+    from=$(( $(stat -c %s "$wlog") + 1 )); t0=$(now)
+    replace "$1" "$2"
+    if [ "$mode" = watch ]; then await_build; fi
+  }
+
+  local status secs msg kind i
+  if [ "$mode" = watch ]; then
+    from=1; t0=$(now); await_build
+    [ "$status" = ok ] || { echo "perf-incremental: $target first watch build $status: $msg" >&2; exit 1; }
+  else
+    run_build true
+    [ "$status" = ok ] || { echo "perf-incremental: $target first build $status: $msg" >&2; exit 1; }
+  fi
+  local baseline=$tmp/baseline
+  # Baseline: the probe at edit 0 for the kind under test, built once, uncounted.
+  for kind in $kinds; do
+    selected "$only_kinds" "$kind" || continue
+    if [ "$kind" = build_zig ]; then
+      [ "$target" = app ] || [ "${target#plugin:}" != "$target" ] || continue
+    fi
+    echo "perf-incremental: $target $kind ($mode)" >&2
+    local oks=() nfail=0 first="" want=ok base_kind=$kind
+    # The error kind expects the build to fail; its baseline is a clean probe.
+    if [ "$kind" = compile_error ]; then want=failed; base_kind=body; fi
+    if [ "$kind" = build_zig ]; then
+      build_edited=$bfile
+      cp "$root/$bfile" "$tmp/orig_build"
+    else
+      { cat "$tmp/orig"; probe "$base_kind" 0 "$sib"; } >"$baseline"
+    fi
+    if [ "$kind" != build_zig ]; then
+      run_build replace "$file" "$baseline"
+      [ "$status" = ok ] || { emit "$target" "$kind" "$mode" 0 1 null "baseline $status: $msg"; settle "$file" "$tmp/orig"; continue; }
+    fi
+    for i in $(seq "$runs"); do
+      if [ "$mode" = watch ]; then sleep 1; fi
+      if [ "$kind" = build_zig ]; then
+        { cat "$tmp/orig_build"; printf '\n// perf-incremental probe %s\n' "$i"; } >"$tmp/edit"
+        run_build replace "$bfile" "$tmp/edit"
+      else
+        { cat "$tmp/orig"; probe "$kind" "$i" "$sib"; } >"$tmp/edit"
+        run_build replace "$file" "$tmp/edit"
+      fi
+      echo "perf-incremental:   run $i $status ${secs}s" >&2
+      if [ "$status" = "$want" ]; then oks+=("$secs"); else nfail=$((nfail + 1)); [ -n "$first" ] || first="$status: $msg"; fi
+      [ "$status" = died ] && break
+    done
+    # A message on a passing series is a fallback note worth keeping.
+    [ -n "$first" ] || first=$msg
+    emit "$target" "$kind" "$mode" "${#oks[@]}" "$nfail" "$( [ ${#oks[@]} -gt 0 ] && printf '%s\n' "${oks[@]}" | median || echo null)" "$first"
+    if [ "$kind" = build_zig ]; then
+      settle "$bfile" "$tmp/orig_build"; build_edited=""
+    else
+      settle "$file" "$tmp/orig"
+      if [ "$kind" = compile_error ] && [ "$mode" = watch ]; then
+        # settle left the restore build's outcome in $status, $secs and $msg.
+        if [ "$status" = ok ]; then
+          emit "$target" compile_error_recover "$mode" 1 0 "$secs" ""
+        else
+          emit "$target" compile_error_recover "$mode" 0 1 null "$status: $msg"
+        fi
+      fi
+    fi
+    [ "$status" = died ] && break
+  done
+  edited=""
+  if [ "$mode" = watch ]; then
+    kill "$watch_pid" 2>/dev/null || true
+    wait "$watch_pid" 2>/dev/null || true
+    watch_pid=""
+  fi
+}
+
+# target -> dir (where zig build runs), probed file, build.zig the build_zig kind edits
+for target in $targets; do
+  selected "$only_targets" "$target" || continue
+  case $target in
+  app) dir=.; file=src/editor/CommandPalette.zig; bfile=build.zig ;;
+  core) dir=.; file=core/anim.zig; bfile=build.zig ;;
+  sdk) dir=.; file=sdk/src/keywords.zig; bfile=build.zig ;;
+  plugin:*) name=${target#plugin:}; dir=plugins/$name; file=plugins/$name/plugin.zig; bfile=plugins/$name/build.zig ;;
+  esac
+  series "$target" "$dir" "$file" "$bfile" watch
+  if [ "$full" -eq 1 ]; then series "$target" "$dir" "$file" "$bfile" full; fi
+done

@@ -18,6 +18,7 @@ const std = @import("std");
 /// The direction is forced: `sdk/` ships standalone as `fizzy-sdk-v*.tar.gz` for third-party
 /// plugins, so it must carry its own pin and can never read anything above its own root. The app
 /// can always reach down into it.
+// anytype: Dependency options are an open tuple forwarded to std.Build.
 pub fn dvuiDependency(b: *std.Build, args: anytype) *std.Build.Dependency {
     // Only the SDK package's resolved dependency table is wanted here, not its artifacts, so its
     // own target/optimize are left at default; `args` carries the target dvui is really built for.
@@ -152,13 +153,54 @@ pub fn buildOptsModule(opts: *std.Build.Step.Options) *std.Build.Module {
     return m;
 }
 
+/// The kinds of executable an app builds: the desktop ones (the plain executable and the one
+/// `package` packs share a framework) and the web one.
+pub const Platform = enum { native, web };
+
 pub const BundledPlugin = struct {
     /// The plugin's import name and id — `plugin_id` in its root, `plugin.zig.zon`'s `.id`.
     name: []const u8,
     /// The plugin's static module. Null for one of fizzy's own (`fizzy.plugins`), which fizzy
     /// builds for each executable.
     module: ?*std.Build.Module = null,
+    /// The kinds of executable that link it, each with its own module if it has one (built
+    /// against that kind's framework). Null: every kind, with `module`.
+    targets: ?[]const Target = null,
+
+    pub const Target = struct {
+        target: Platform,
+        /// Null: the plugin's `module`.
+        module: ?*std.Build.Module = null,
+    };
+
+    /// One of fizzy's own: no module for any executable.
+    pub fn isFizzys(self: BundledPlugin) bool {
+        if (self.module != null) return false;
+        for (self.targets orelse &.{}) |t| if (t.module != null) return false;
+        return true;
+    }
+
+    /// The entry as `platform`'s executables link it, or null if they do not.
+    pub fn forPlatform(self: BundledPlugin, platform: Platform) ?BundledPlugin {
+        const targets = self.targets orelse return self;
+        for (targets) |t| if (t.target == platform) return .{ .name = self.name, .module = t.module orelse self.module };
+        return null;
+    }
 };
+
+/// The plugins `platform`'s executables link, in order, each with that kind's module.
+pub fn pluginsFor(b: *std.Build, plugins: []const BundledPlugin, platform: Platform) ![]const BundledPlugin {
+    var linked: std.ArrayList(BundledPlugin) = .empty;
+    for (plugins) |p| {
+        const entry = p.forPlatform(platform) orelse continue;
+        for (linked.items) |l| if (std.mem.eql(u8, l.name, entry.name)) {
+            std.log.err("fizzy: plugin '{s}' is listed twice", .{entry.name});
+            return error.PluginListedTwice;
+        };
+        try linked.append(b.allocator, entry);
+    }
+    return linked.items;
+}
 
 /// The generated `bundled_plugins` module: `pub const modules = .{ @import("a"), @import("b") … }`
 /// over the statically linked plugins, in order. The runtime (`app.App`) iterates it at
@@ -187,3 +229,48 @@ pub fn bundledPluginsModule(
     }
     return mod;
 }
+
+/// Wire an app-owned code or ZON layout against this target's framework modules.
+pub fn wireAppLayout(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.lang.OptimizeMode,
+    app_layout: ?std.Build.LazyPath,
+    dvui: *std.Build.Module,
+    app: *std.Build.Module,
+    core: *std.Build.Module,
+    sdk_module: *std.Build.Module,
+    consumer: *std.Build.Module,
+) void {
+    if (app_layout) |path| {
+        const is_zon = std.mem.endsWith(u8, path.getDisplayName(), ".zon");
+        const app_layout_mod = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = if (is_zon) b.addWriteFiles().add("app_layout_spec.zig", spec_shim) else path,
+        });
+        if (is_zon) app_layout_mod.addAnonymousImport("app_layout_spec", .{ .root_source_file = path });
+        app_layout_mod.addImport("dvui", dvui);
+        app_layout_mod.addImport("app", app);
+        app_layout_mod.addImport("core", core);
+        app_layout_mod.addImport("fizzy_sdk", sdk_module);
+        consumer.addImport("app_layout", app_layout_mod);
+    }
+}
+
+/// The whole of a `.zon` shape's generated module: import the file as a `Shape` — which is where
+/// it is type-checked, at comptime, against the field names and enums `Shape` declares —
+/// and hand it to the same walk a hand-written shape's calls would have performed itself.
+const spec_shim =
+    \\//! Generated for `-Dapp-layout=<file>.zon`. See `app/layout/Shape.zig`.
+    \\const dvui = @import("dvui");
+    \\const layout_ns = @import("app").layout;
+    \\
+    \\pub const shape: layout_ns.Shape = @import("app_layout_spec");
+    \\
+    \\pub fn layout(_: ?*anyopaque, f: *layout_ns.Layout) !dvui.App.Result {
+    \\    try layout_ns.Shape.apply(shape, f);
+    \\    return .ok;
+    \\}
+    \\
+;

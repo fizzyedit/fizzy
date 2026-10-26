@@ -218,6 +218,7 @@ pub const store = struct {
 // whose tests no std-only test root of their own reaches. `Layout`'s own `test` block brings in
 // the split trees, seeds, regions, drop plans and view drag beside it.
 test {
+    _ = settings.Settings;
     _ = view.ViewHost;
     _ = layout.Layout;
     _ = layout.Shape;
@@ -225,6 +226,7 @@ test {
     _ = watch.SettingsWatcher;
     _ = watch.ExecutableWatcher;
     _ = store.Loader;
+    _ = store.Manager;
     _ = Tracks;
     _ = HistoryTransport;
     _ = dome;
@@ -233,4 +235,5 @@ test {
     _ = HistoryFrames;
     _ = Recents;
     _ = @import("automation/Calm.zig");
+    _ = @import("automation/overlay.zig");
 }

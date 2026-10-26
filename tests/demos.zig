@@ -47,8 +47,12 @@ const BundledApp = struct {
         try dvui.testing.settle(headlessFrame);
     }
 
+    /// Quits the way `appQuit` does: after the last frame, with no window current.
     fn down(self: *BundledApp) void {
+        const harness_window = dvui.current_window;
+        dvui.current_window = null;
         self.editor.deinit() catch {};
+        dvui.current_window = harness_window;
         gpa.destroy(self.editor);
         gpa.destroy(self.entry);
         @import("app").profile.root = null;
@@ -67,6 +71,7 @@ const bundled_random_seeks = 16;
 
 test "demo: the rail's Files anchor the scripts spell out is the one fizzy publishes" {
     try std.testing.expectEqualStrings("fizzy.rail:" ++ workbench.view_files, fizzy.Editor.Demo.catalog.files_icon);
+    try std.testing.expectEqualStrings("fizzy.mobile.tab:" ++ workbench.view_files, fizzy.Editor.Demo.catalog.files_tab);
 }
 
 test "demo: every bundled demo plays to the end through fizzy's stage, a seek lands on what playing reached, and the person's own folder is theirs again after" {
@@ -91,6 +96,14 @@ test "demo: every bundled demo plays to the end through fizzy's stage, a seek la
 
     for (fizzy.Editor.Demo.catalog.entries) |e| {
         try app.editor.demo.play(e.name);
+
+        // A role in an anchor's name is the place of that kind in the layout as it is.
+        for (0..5) |_| _ = try dvui.testing.step(headlessFrame);
+        const stage = app.editor.demo.player.stage;
+        var buf: [192]u8 = undefined;
+        try std.testing.expectEqualStrings("region:Main", automation.Input.resolve(stage, fizzy.Editor.Demo.catalog.documents, &buf));
+        try std.testing.expectEqualStrings("region:Sidebar", automation.Input.resolve(stage, "region:role:explorer", &buf));
+        try std.testing.expect(automation.Input.tagData(stage, fizzy.Editor.Demo.catalog.documents) != null);
 
         // Straight through, on the testing backend's clock (100 ms a step), keeping every moment
         // a seek could be asked to reproduce.
@@ -243,7 +256,8 @@ test "demo: every bundled demo plays to the end through fizzy's stage, a seek la
     try std.testing.expectEqual(fizzy.core.material.Kind.blur, settings.window_material);
     settings.window_material = .liquid;
 
-    // A demo's panes are its own: a cut is one pane again, and the end gives back the person's.
+    // A demo plays among the person's panes: their split and their documents stay where they are
+    // through a play, a seek and the end, and the demo's tabs open beside them.
     {
         const wb = &app.editor.workbench;
         p.unload();
@@ -268,25 +282,24 @@ test "demo: every bundled demo plays to the end through fizzy's stage, a seek la
         frames = 0;
         while (p.state != .ended and frames < 2_000) : (frames += 1) _ = try dvui.testing.step(headlessFrame);
         try std.testing.expectEqual(@as(u32, 0), p.timeouts);
-        try std.testing.expectEqual(@as(usize, 2), wb.workspaces.count());
+        try std.testing.expect(wb.workspaces.count() >= panes_before);
+        try std.testing.expect(wb.workspaces.contains(zip_pane) and wb.workspaces.contains(beside));
         p.seek(0);
         frames = 0;
-        while ((p.state == .seeking or wb.workspaces.count() != 1) and frames < 400) : (frames += 1) _ = try dvui.testing.step(headlessFrame);
-        try std.testing.expectEqual(@as(usize, 1), wb.workspaces.count());
+        while (p.state == .seeking and frames < 400) : (frames += 1) _ = try dvui.testing.step(headlessFrame);
+        try std.testing.expect(wb.workspaces.contains(zip_pane) and wb.workspaces.contains(beside));
         p.unload();
         try dvui.testing.settle(headlessFrame);
         frames = 0;
         while (app.editor.app.host.docFromPath(readme) == null and frames < 200) : (frames += 1) _ = try dvui.testing.step(headlessFrame);
         try dvui.testing.settle(headlessFrame);
-        try std.testing.expectEqual(panes_before, wb.workspaces.count());
-        try std.testing.expect(wb.held_panes == null and !wb.holding);
-        // Each document back in its own pane, and both panes still there after a rebuild more.
+        // Each document in its own pane, and both panes still there after a rebuild more.
         const back = app.editor.app.host.docFromPath(readme) orelse return error.TestUnexpectedResult;
         try std.testing.expectEqual(beside, back.owner.documentGrouping(back));
         const zip_back = app.editor.app.host.docFromPath("site.zip") orelse return error.TestUnexpectedResult;
         try std.testing.expectEqual(zip_pane, zip_back.owner.documentGrouping(zip_back));
         try dvui.testing.settle(headlessFrame);
-        try std.testing.expectEqual(panes_before, wb.workspaces.count());
+        try std.testing.expect(wb.workspaces.contains(zip_pane) and wb.workspaces.contains(beside));
         try app.editor.rawCloseFileID(back.id);
         try dvui.testing.settle(headlessFrame);
     }
@@ -326,10 +339,10 @@ test "demo: every bundled demo plays to the end through fizzy's stage, a seek la
         frames = 0;
         while (p.state != .ended and frames < 2_000) : (frames += 1) _ = try dvui.testing.step(headlessFrame);
         try std.testing.expectEqual(automation.Player.State.ended, p.state);
-        // On the stage, only the demo's: its pane, its document in front, the draft nowhere.
-        try std.testing.expectEqual(@as(usize, 1), wb.workspaces.count());
+        // The demo's document in front, in the person's pane, the draft still open beside it.
         try std.testing.expect(std.mem.startsWith(u8, activePath(app.editor), "demo://"));
-        try std.testing.expect(!wb.workspaces.contains(grouping));
+        try std.testing.expect(wb.workspaces.contains(grouping));
+        try std.testing.expect(host.docFromPath(draft) != null);
         p.seek(0);
         frames = 0;
         while (p.state == .seeking and frames < 400) : (frames += 1) _ = try dvui.testing.step(headlessFrame);
@@ -355,12 +368,63 @@ test "demo: every bundled demo plays to the end through fizzy's stage, a seek la
         try std.testing.expectEqual(panes_before, wb.workspaces.count());
         try std.testing.expectEqual(docs_open, app.editor.app.open_files.count());
         try std.testing.expectEqual(doc.id, app.editor.activeDoc().?.id);
-        try std.testing.expect(wb.held_tabs.items.len == 0 and wb.held_workspaces.count() == 0);
         // Not written while the demo played, nor by its end.
         const settings_after = try std.Io.Dir.cwd().statFile(dvui.io, settings_path, .{});
         try std.testing.expectEqual(settings_before.mtime, settings_after.mtime);
         try std.testing.expectEqual(settings_before.size, settings_after.size);
         try app.editor.rawCloseFileID(back.id);
+        try dvui.testing.settle(headlessFrame);
+    }
+
+    // The tour on the person's window: a file they open while it plays is theirs, and the panes
+    // the tour splits off are not written to `panes.zon` as theirs and are back as they were when
+    // it ends.
+    {
+        const wb = &app.editor.workbench;
+        const later = try gpa.print("{s}/later.md", .{app.root_buf[0 .. std.mem.findScalar(u8, &app.root_buf, 0) orelse 0]});
+        defer gpa.free(later);
+        try std.Io.Dir.cwd().writeFile(dvui.io, .{ .sub_path = later, .data = "# Later\n" });
+        var arena: std.heap.ArenaAllocator = .init(gpa);
+        defer arena.deinit();
+        const panes_before = try wb.arrangement(arena.allocator());
+        // The person's saved panes, which a split saved during the tour would overwrite.
+        const dir = host.pluginInstallDir("workbench") orelse return error.TestUnexpectedResult;
+        defer host.allocator.free(dir);
+        try std.Io.Dir.cwd().createDirPath(dvui.io, dir);
+        const panes_zon = try std.fs.path.join(gpa, &.{ dir, "panes.zon" });
+        defer gpa.free(panes_zon);
+        try std.Io.Dir.cwd().writeFile(dvui.io, .{ .sub_path = panes_zon, .data = ".{ .persons = true }" });
+
+        // The explorer shut, so the person's pane has the room for the tour's drop to split it
+        // (`core.placement`): with it open the drop is left out of the tour.
+        app.editor.explorer.close(app.editor);
+        try dvui.testing.settle(headlessFrame);
+        try app.editor.demo.play("tour");
+        var held = true;
+        var split = false;
+        frames = 0;
+        while (p.state != .ended and frames < 5_000) : (frames += 1) {
+            _ = try dvui.testing.step(headlessFrame);
+            if (frames == 30) _ = try app.editor.openFilePath(later, wb.currentGroupingID());
+            if (frames > 5 and p.state == .playing) held = held and wb.panes_held;
+            split = split or wb.workspaces.count() > panes_before.groupings.len;
+        }
+        try std.testing.expectEqual(automation.Player.State.ended, p.state);
+        try std.testing.expect(held);
+        try std.testing.expect(split);
+        p.unload();
+        try dvui.testing.settle(headlessFrame);
+
+        try std.testing.expect(host.docFromPath(later) != null);
+        var saved_panes: [64]u8 = undefined;
+        const saved_len = (try std.Io.Dir.cwd().readFile(dvui.io, panes_zon, &saved_panes)).len;
+        try std.testing.expectEqualStrings(".{ .persons = true }", saved_panes[0..saved_len]);
+        try std.testing.expect(!wb.panes_held and !wb.panes_dirty);
+        const panes_after = try wb.arrangement(arena.allocator());
+        try std.testing.expectEqual(panes_before.open, panes_after.open);
+        try std.testing.expectEqualSlices(u64, panes_before.groupings, panes_after.groupings);
+        try std.testing.expectEqualStrings(panes_before.tree, panes_after.tree);
+        try app.editor.rawCloseFileID(host.docFromPath(later).?.id);
         try dvui.testing.settle(headlessFrame);
     }
 
@@ -391,7 +455,7 @@ test "demo: every bundled demo plays to the end through fizzy's stage, a seek la
         const mine = host.docFromPath(draft) orelse return error.TestUnexpectedResult;
 
         // A tape that ended: stopping leaves its documents and its folder, and the person's own
-        // document is back among the tabs of the pane it ended in.
+        // document is among the tabs of the pane it was in all along.
         try app.editor.demo.playTape(glassy);
         frames = 0;
         while (p.state != .ended and frames < 2_000) : (frames += 1) _ = try dvui.testing.step(headlessFrame);
@@ -404,7 +468,6 @@ test "demo: every bundled demo plays to the end through fizzy's stage, a seek la
         try std.testing.expect(!app.editor.demo.active());
         try std.testing.expectEqualStrings(demo_active, activePath(app.editor));
         try std.testing.expectEqualStrings(demo_folder, app.editor.app.folder orelse "");
-        try std.testing.expect(wb.held_tabs.items.len == 0 and wb.held_workspaces.count() == 0 and !wb.holding);
         const id = try sdk.document.surfaceId(host.arena(), mine.owner.id, mine.owner.documentPath(mine));
         var seated = false;
         for (wb.workspaces.values()) |*ws| seated = seated or ws.hasTab(id);
@@ -447,7 +510,81 @@ test "demo: every bundled demo plays to the end through fizzy's stage, a seek la
         try std.testing.expect(!app.editor.demo.active());
         try std.testing.expect(host.docFromPath(draft) != null);
         try std.testing.expect(!std.mem.startsWith(u8, activePath(app.editor), "demo://"));
+        try app.editor.rawCloseFileID(host.docFromPath(draft).?.id);
+        try dvui.testing.settle(headlessFrame);
     }
+
+    try revertClosesWhatTheTourOpened(&app);
+    try revertKeepsAMovedFloat(&app);
+    try tourOnAPhone(&app);
+
+    // Left loaded for `down`, which quits the way `appQuit` does.
+    try app.editor.demo.play(fizzy.Editor.Demo.catalog.entries[0].name);
+    for (0..5) |_| _ = try dvui.testing.step(headlessFrame);
+    try std.testing.expect(app.editor.demo.active());
+}
+
+/// A tour played to its end and reverted closes what it opened, and the window is the person's
+/// again: here with the explorer shut, a window the recording was not made on.
+fn revertClosesWhatTheTourOpened(app: *BundledApp) !void {
+    const editor = app.editor;
+    const p = &editor.demo.player;
+
+    // A window the recording does not match: the explorer shut.
+    editor.explorer.close(editor);
+    try dvui.testing.settle(headlessFrame);
+    const print_before = fizzy.Editor.Demo.layoutPrint(editor);
+    const closed_before = editor.explorer.closed;
+
+    try editor.demo.play(fizzy.Editor.Demo.catalog.entries[0].name);
+    var frames: usize = 0;
+    while (p.state != .ended and frames < 20_000) : (frames += 1) _ = try dvui.testing.step(headlessFrame);
+    try std.testing.expectEqual(automation.Player.State.ended, p.state);
+    try std.testing.expectEqual(@as(u32, 0), p.timeouts);
+    try std.testing.expect(fizzy.Editor.Demo.layoutPrint(editor) != print_before);
+
+    p.revert();
+    // What the tour opened glides shut over a few frames.
+    frames = 0;
+    while (frames < 120) : (frames += 1) _ = try dvui.testing.step(headlessFrame);
+    try std.testing.expectEqual(print_before, fizzy.Editor.Demo.layoutPrint(editor));
+    try std.testing.expectEqual(closed_before, editor.explorer.closed);
+    try std.testing.expectEqual(@as(usize, 0), editor.app.layout.floats.items.items.len);
+}
+
+/// A float the person had, then moved while the tour played, is back where it was after the
+/// revert, not flying shut: only what the snapshot lacks glides away.
+fn revertKeepsAMovedFloat(app: *BundledApp) !void {
+    const editor = app.editor;
+    const p = &editor.demo.player;
+    const gpa = editor.app.gpa;
+    const state = &editor.app.layout;
+
+    const at: dvui.Rect = .{ .x = 120, .y = 90, .w = 220, .h = 160 };
+    try state.assign(gpa, "Float 1", &.{"devtools.dashboard"});
+    _ = try state.floats.add(gpa, .{ .name = state.internName(gpa, "Float 1"), .rect = at, .home = "" });
+    try dvui.testing.settle(headlessFrame);
+
+    try editor.demo.play(fizzy.Editor.Demo.catalog.entries[0].name);
+    var frames: usize = 0;
+    while (frames < 60) : (frames += 1) _ = try dvui.testing.step(headlessFrame);
+    try std.testing.expectEqual(automation.Player.State.playing, p.state);
+
+    const moved = state.floats.find("Float 1") orelse return error.TestExpectedEqual;
+    state.floats.items.items[moved].rect.x += 40;
+
+    p.unload();
+    try std.testing.expect(!editor.demo.active());
+    frames = 0;
+    while (frames < 120) : (frames += 1) _ = try dvui.testing.step(headlessFrame);
+
+    const back = state.floats.items.items[state.floats.find("Float 1") orelse return error.TestExpectedEqual];
+    try std.testing.expect(!back.closing);
+    try std.testing.expectEqual(at.x, back.rect.x);
+    try std.testing.expectEqual(@as(usize, 1), state.floats.items.items.len);
+
+    state.floats.removeAt(0);
+    try state.assign(gpa, "Float 1", &.{});
 }
 
 /// What straight play of a demo must keep steady, watched a frame at a time:
@@ -613,4 +750,39 @@ fn encodedDemo(name: []const u8, demo: bool) ![]u8 {
     var owned = try s.finish();
     defer owned.deinit();
     return automation.binary.encode(gpa, owned.tape, .{});
+}
+
+/// The tour on a phone: the files view is the explorer sheet over the documents, which the role
+/// `explorer` names, and the tour opens it. (Run from the test above: the editor comes up once.)
+fn tourOnAPhone(app: *BundledApp) !void {
+    const p = &app.editor.demo.player;
+    fizzy.core.platform.cached_form_factor = .mobile;
+    defer fizzy.core.platform.cached_form_factor = .desktop;
+    // A phone's screen, not the desktop's window with a phone's shape.
+    app.t.backend.size = .{ .w = 390, .h = 844 };
+    app.t.backend.size_pixels = .{ .w = 780, .h = 1688 };
+    defer {
+        app.t.backend.size = .{ .w = 1280, .h = 800 };
+        app.t.backend.size_pixels = .{ .w = 2560, .h = 1600 };
+    }
+    for (0..5) |_| _ = try dvui.testing.step(headlessFrame);
+
+    try app.editor.demo.play("tour");
+    for (0..5) |_| _ = try dvui.testing.step(headlessFrame);
+    var buf: [192]u8 = undefined;
+    const explorer = app.editor.regionFor(sdk.keywords.ide.sidebar) orelse return error.TestUnexpectedResult;
+    const resolved = automation.Input.resolve(p.stage, "region:role:explorer", &buf);
+    try std.testing.expectEqualStrings(explorer.name, resolved["region:".len..]);
+
+    var opened = false;
+    var frames: usize = 0;
+    while (p.state != .ended and frames < 20_000) : (frames += 1) {
+        _ = try dvui.testing.step(headlessFrame);
+        if (app.editor.regionFor(sdk.keywords.ide.sidebar)) |r| {
+            if (!r.isClosed() and dvui.tagGet("workbench.file:demo://tour/README.md") != null) opened = true;
+        }
+    }
+    try std.testing.expectEqual(automation.Player.State.ended, p.state);
+    try std.testing.expectEqual(@as(u32, 0), p.timeouts);
+    try std.testing.expect(opened);
 }

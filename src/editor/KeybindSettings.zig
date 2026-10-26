@@ -315,7 +315,7 @@ fn drawOwnerBranch(
         drawOwnerGrid(editor, group, query, id_extra, platform, theme);
     }
 
-    if (!searching) setOwnerOpen(group.key, b.expanded);
+    if (!searching) if (b.requested) |open| setOwnerOpen(group.key, open);
 }
 
 /// Solid dot, drawn rather than iconified — lucide's circles are stroked outlines, and a
@@ -332,7 +332,7 @@ fn recordingDot() void {
     defer b.deinit();
 
     const r = b.data().borderRectScale().r;
-    r.fill(.all(r.h / 2), .{ .color = .{ .color = dvui.themeGet().color(.err, .fill) } });
+    r.fill(.all(r.h / 2), .{ .color = .{ .color = dvui.themeGet().color(.err, .fill) }, .fade = 1 });
 }
 
 fn drawConflicts(editor: *fizzy.Editor, theme: dvui.Theme) void {

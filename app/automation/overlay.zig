@@ -22,6 +22,7 @@ const Player = @import("replay").Player;
 /// The pointer, and the layer every part of this overlay is drawn in (`layer`).
 const plain = @import("replay").overlay;
 const LiveDriver = @import("replay").LiveDriver;
+const Stage = @import("replay").Stage;
 const Input = @import("replay").Input;
 const Tape = @import("tape").Tape;
 const Sequencer = @import("tape").Sequencer;
@@ -155,24 +156,20 @@ const Reveal = struct {
 };
 
 /// The surface under a card — `wd` a box that paints nothing of its own (`cardOptions`) — `r` of
-/// the way open, grown out of `origin` (a point in it, as fractions), in the window's material
-/// (`core.material`): Liquid Glass where the window is made of it, the same lens as the key pills
-/// and the transport's bubbles (`core.dialogs.glassBubbles`), a card's corners rather than a
-/// capsule's; else the frost at the dialog style and the shadow ring round it, or with the blur
-/// off the dialog fill over its shadow. What the card draws after this is cut to the glass as it
-/// grows.
+/// the way open, grown out of `origin` (a point in it, as fractions), in the material every
+/// floating surface wears (`core.dialogs.dialogFrost`): the frost at the dialog style, clear
+/// glass where the blur is off and the glass program draws, with the shadow ring round it; with
+/// neither, the dialog fill over its shadow. What the card draws after this is cut to the glass
+/// as it grows.
 ///
 /// Before the alpha for its contents is set: glass forms rather than fades (`r.form`) — a frost
-/// replaces what it covers, and at partial alpha would punch a hole. Liquid Glass grows with the
-/// card instead, whole from its first frame, as the pills' does.
+/// replaces what it covers, and at partial alpha would punch a hole.
 fn glass(wd: *dvui.WidgetData, origin: dvui.Point, r: Reveal) void {
     const s = wd.borderRectScale().s;
     const rect = grown(wd, origin, r);
     const c = corners();
     const bs = core.dialogs.surfaceShadow();
-    if (core.widgets.LiquidField.ready() and core.widgets.liquidFrost() != null) {
-        if (rect.w >= 1 and rect.h >= 1) core.dialogs.glassBubbles(wd.id, &.{.{ .rect = rect, .radius = c.tl.radius() * s }}, s, .{ .shadow = r.alpha });
-    } else if (core.dialogs.dialogFrost()) |f| {
+    if (core.dialogs.dialogFrost()) |f| {
         // The ring after the frost, so the glass does not blur it in (`dialogs.glassShadow`).
         defer core.dialogs.glassShadow(rect, c, s, bs, r.alpha);
         // Under a couple of pixels of blur there is nothing to see yet.
@@ -190,7 +187,7 @@ fn glass(wd: *dvui.WidgetData, origin: dvui.Point, r: Reveal) void {
         const pc = c.scale(s, dvui.CornerRect.Physical);
         const shadow = rect.insetAll(s * bs.shrink).offsetPoint(bs.offset.scale(s, dvui.Point.Physical));
         shadow.fill(pc, .{ .color = .{ .color = bs.color.opacity(bs.alpha * r.alpha) }, .fade = s * bs.fade });
-        rect.fill(pc, .{ .color = .{ .color = core.dialogs.dialogFill().opacity(r.alpha) } });
+        rect.fill(pc, .{ .color = .{ .color = core.dialogs.dialogFill().opacity(r.alpha) }, .fade = 1 });
     }
     dvui.clipSet(dvui.clipGet().intersect(rect));
 }
@@ -241,7 +238,7 @@ fn drawCaptions(player: *Player, tape: *const Tape, win: dvui.Rect, floor: f32) 
         if (!c.shownAt(now)) continue;
         const shown = Reveal.between(now, @floatFromInt(c.at), @floatFromInt(c.at + c.ms));
         if (c.place == .middle) {
-            drawTitle(tape, c, i, shown, win);
+            drawTitle(player.stage, tape, c, i, shown, win);
         } else if (tape.besideAction(c)) {
             drawCallout(player, tape, c, i, shown, win, floor, callouts == 0);
             callouts += 1;
@@ -298,7 +295,7 @@ const Stacked = struct {
 /// settles back as one below it closes.
 fn drawStack(player: *Player, tape: *const Tape, items: []Stacked, win: dvui.Rect, floor: f32) void {
     std.sort.insertion(Stacked, items, {}, Stacked.before);
-    const home = (if (tape.home.len > 0) tagRect(tape.home) else null) orelse win;
+    const home = (if (tape.home.len > 0) tagRect(player.stage, tape.home) else null) orelse win;
     const base = @min(home.y + home.h * home_down, floor);
     const w = @min(520, win.w - 32);
     const cx = std.math.clamp(home.x + home.w / 2, win.x + 16 + w / 2, @max(win.x + 16 + w / 2, win.x + win.w - 16 - w / 2));
@@ -316,6 +313,7 @@ fn drawStack(player: *Player, tape: *const Tape, items: []Stacked, win: dvui.Rec
             .from_gravity_y = 0,
         });
         defer fw.deinit();
+        if (item.what == .caption) core.anchor.mark(fw.data(), "automation.caption:{d}", .{item.what.caption});
         // Each opens up out of its foot, where it joins the stack.
         switch (item.what) {
             .caption => |ci| captionCard(tape.captions[ci], item.shown, .{ .x = 0.5, .y = 1 }, w),
@@ -327,8 +325,8 @@ fn drawStack(player: *Player, tape: *const Tape, items: []Stacked, win: dvui.Rec
 
 /// A title card: in the middle of the home view, opening about its middle as a dialog does. Each
 /// caption (`index`) its own widget, so none is placed by the size of the one before it.
-fn drawTitle(tape: *const Tape, c: Tape.Caption, index: usize, shown: Reveal, win: dvui.Rect) void {
-    const home = (if (tape.home.len > 0) tagRect(tape.home) else null) orelse win;
+fn drawTitle(stage: Stage, tape: *const Tape, c: Tape.Caption, index: usize, shown: Reveal, win: dvui.Rect) void {
+    const home = (if (tape.home.len > 0) tagRect(stage, tape.home) else null) orelse win;
     const w = @min(620, win.w - 32);
     const fw = layer(@src(), .{ .id_extra = index + 1, .max_size_content = .{ .w = w, .h = win.h } }, .{
         .from = dvui.windowRectScale().pointToPhysical(.{ .x = home.x + home.w / 2, .y = home.y + home.h / 2 }),
@@ -360,7 +358,7 @@ fn drawCallout(player: *Player, tape: *const Tape, c: Tape.Caption, index: usize
     const floor_in = if (in_main) floor else frame.y + frame.h;
     var keep_buf: [40]dvui.Rect = undefined;
     const keep = keepClear(player, tape, c, win, !in_main, &keep_buf);
-    const home = (if (in_main and tape.home.len > 0) tagRect(tape.home) else null) orelse frame;
+    const home = (if (in_main and tape.home.len > 0) tagRect(player.stage, tape.home) else null) orelse frame;
     const now = player.now();
 
     // Its own, so two showing at once each keep theirs.
@@ -464,7 +462,7 @@ const Subject = struct { rect: dvui.Rect, key: u64 };
 /// nothing to sit beside.
 fn subjectOf(player: *Player, tape: *const Tape, c: Tape.Caption, win: dvui.Rect) ?Subject {
     if (c.near.len > 0) {
-        if (tagRect(c.near)) |r| return .{ .rect = r, .key = std.hash.Wyhash.hash(0, c.near) };
+        if (tagRect(player.stage, c.near)) |r| return .{ .rect = r, .key = std.hash.Wyhash.hash(0, c.near) };
     }
     var ahead = player.seq.cursor;
     const until = player.now() + lead_ms;
@@ -475,26 +473,22 @@ fn subjectOf(player: *Player, tape: *const Tape, c: Tape.Caption, win: dvui.Rect
     // callout goes to it once it is rather than staying by the pointer.
     var h = std.hash.Wyhash.init(1);
     h.update(aim.tag);
-    const r = (if (aim.tag.len > 0) tagRect(aim.tag) else null) orelse {
+    const r = (if (aim.tag.len > 0) tagRect(player.stage, aim.tag) else null) orelse {
         h.update("?");
         return .{ .rect = pointRect(player.seq.pointer), .key = h.final() };
     };
     if (small(r, win)) return .{ .rect = r, .key = h.final() };
-    return .{ .rect = pointRect(Input.targetPoint(aim) orelse player.seq.pointer), .key = h.final() };
+    return .{ .rect = pointRect(Input.targetPoint(player.stage, aim) orelse player.seq.pointer), .key = h.final() };
 }
 
 /// What a callout must not cover, besides what it is beside: what the caption says to keep clear
 /// (`Caption.clear`); what the pointer goes to in the caption's time — the thing, or the point on
 /// a pane, since covering an editor is unavoidable but covering where in it the pointer goes is
 /// not; every bar out under the overlay (`dome.barsOut`: a document's history bar, a corner
-/// vial), which is what a step brings out; and the pointer while it rests. Not while it moves: it
-/// passes under the callout on its way, and would push it about.
+/// vial), which is what a step brings out. Never the pointer itself: a callout holds its place
+/// rather than dodging it.
 fn keepClear(player: *Player, tape: *const Tape, c: Tape.Caption, win: dvui.Rect, in_window: bool, buf: []dvui.Rect) []const dvui.Rect {
     var keep: std.ArrayList(dvui.Rect) = .initBuffer(buf);
-    if (player.pointerShown(0) > 0 and !pointerMoving(tape, player.now())) {
-        const p = dvui.windowRectScale().pointFromPhysical(.{ .x = player.seq.pointer.x, .y = player.seq.pointer.y });
-        keep.appendAssumeCapacity(.{ .x = p.x - 4, .y = p.y - 4, .w = 22, .h = 28 });
-    }
     // Every OS window shown over the main one, where it lies there: a callout in the main window is
     // under it, and is not placed where it would be hidden. Not the subject's own, which the
     // callout is drawn in (`in_window`).
@@ -508,16 +502,16 @@ fn keepClear(player: *Player, tape: *const Tape, c: Tape.Caption, win: dvui.Rect
     }
     for (c.clear) |tag| {
         if (keep.items.len == keep.capacity) break;
-        if (tagRect(tag)) |r| keep.appendAssumeCapacity(r);
+        if (tagRect(player.stage, tag)) |r| keep.appendAssumeCapacity(r);
     }
     for (tape.ops) |op| {
         if (op.at < c.at) continue;
         if (op.at >= c.at + c.ms or keep.items.len == keep.capacity) break;
         const target = op.do.target() orelse continue;
-        const r = (if (target.tag.len > 0) tagRect(target.tag) else null) orelse continue;
+        const r = (if (target.tag.len > 0) tagRect(player.stage, target.tag) else null) orelse continue;
         if (small(r, win)) {
             keep.appendAssumeCapacity(r);
-        } else if (Input.targetPoint(target)) |p| keep.appendAssumeCapacity(pointRect(p));
+        } else if (Input.targetPoint(player.stage, target)) |p| keep.appendAssumeCapacity(pointRect(p));
     }
     for (dome.barsOut()) |b| {
         if (keep.items.len == keep.capacity) break;
@@ -546,17 +540,6 @@ fn windowAround(player: *Player, r: dvui.Rect) ?dvui.Rect {
     return null;
 }
 
-/// Whether a move or a trace is carrying the tape's pointer at `now` (demo ms).
-fn pointerMoving(tape: *const Tape, now: f64) bool {
-    for (tape.ops) |op| {
-        const at: f64 = @floatFromInt(op.at);
-        if (at > now) break;
-        if (op.do != .move and op.do != .trace) continue;
-        if (now < at + @as(f64, @floatFromInt(op.ms))) return true;
-    }
-    return false;
-}
-
 /// A point (physical) as a small rect around it, natural.
 fn pointRect(p: Sequencer.Point) dvui.Rect {
     const n = dvui.windowRectScale().pointFromPhysical(.{ .x = p.x, .y = p.y });
@@ -564,8 +547,8 @@ fn pointRect(p: Sequencer.Point) dvui.Rect {
 }
 
 /// A tag's rect, natural, when it is drawn and visible.
-fn tagRect(tag: []const u8) ?dvui.Rect {
-    const td = dvui.tagGet(tag) orelse return null;
+fn tagRect(stage: Stage, tag: []const u8) ?dvui.Rect {
+    const td = Input.tagData(stage, tag) orelse return null;
     if (!td.visible) return null;
     return dvui.windowRectScale().rectFromPhysical(td.rect);
 }
@@ -741,7 +724,8 @@ fn drawTransport(player: *Player, tape: *const Tape, win: dvui.Rect) f32 {
     const since_stirred: i128 = if (tr.stirred_ns) |ns| wall_ns - ns else std.math.maxInt(i64);
     // Closed from its close button, it closes whatever else would keep it open (`Player.close`).
     const p = barProgress(tr, wall_ns, !tr.closing and !tr.tucked and
-        (player.state != .playing or tr.scrub != null or since_stirred < bar_linger_ns));
+        (player.state != .playing or tr.scrub != null or tr.speed_drag or since_stirred < bar_linger_ns));
+    tr.dropStaleDrag();
 
     // How far the tape has played: the corner's liquid, and the scrubber's. A jump knocks it; a
     // new chapter, played into, splashes it.
@@ -1033,19 +1017,28 @@ fn barTrack(player: *Player, tape: *const Tape, bounds: dvui.Rect, r: dvui.Rect,
     const x1 = r.x + r.w - pad;
     const small_font = dvui.Font.theme(.body).larger(-2);
 
-    // The speed, top right of the capsule: a press steps it (`Sequencer.stepSpeed`).
+    // The speed, top right of the capsule: its value, then a line with a notch for each of
+    // `Sequencer.speeds`, which a press or drag snaps to (`Player.transportTakes`) and the arrow
+    // keys step (`Player.speedKey`).
     var speed_buf: [8]u8 = undefined;
-    const speed = std.mem.print(&speed_buf, "{d}\u{00D7}", .{player.seq.speed}) catch "";
-    const speed_w = small_font.textSize(speed).w;
-    const speed_r: dvui.Rect = .{ .x = x1 - speed_w, .y = r.y + 5, .w = speed_w, .h = small_font.lineHeight() };
+    const speed = std.mem.print(&speed_buf, "{d}x", .{player.seq.speed}) catch "";
+    const value_w = small_font.textSize("0.75x").w;
+    const slider_w: f32 = 64;
+    const slider_h = small_font.lineHeight();
+    const line_r: dvui.Rect = .{ .x = x1 - slider_w - 6, .y = r.y + 5, .w = slider_w, .h = slider_h };
+    const value_r: dvui.Rect = .{ .x = line_r.x - 8 - value_w, .y = r.y + 5, .w = value_w, .h = slider_h };
     dvui.labelNoFmt(@src(), speed, .{}, .{
-        .rect = .{ .x = speed_r.x - bounds.x, .y = speed_r.y - bounds.y, .w = speed_r.w + 2, .h = speed_r.h },
+        .rect = .{ .x = value_r.x - bounds.x, .y = value_r.y - bounds.y, .w = value_r.w + 2, .h = value_r.h },
         .padding = .{},
         .margin = .{},
         .font = small_font,
         .color_text = .{ .color = ink.opacity(if (player.seq.speed == 1) 0.65 else 0.95) },
     });
-    player.transport.speed = wrs.rectToPhysical(speed_r.outsetAll(4));
+    const line_p = wrs.rectToPhysical(line_r);
+    player.transport.speed = wrs.rectToPhysical(line_r.outsetAll(4));
+    player.transport.speed_line = line_p;
+    paintSpeed(line_p, player.seq.speedIndex(), player.transport.speed_focus, ink, wrs.s);
+    const speed_w = value_w + slider_w + 14;
     const chapter = if (tape.chapterAt(now)) |i| tape.chapters[i].title else tape.title;
     const ch = small_font.lineHeight();
     if (x1 - x0 > 8) {
@@ -1094,13 +1087,35 @@ fn seconds(ms: f64) u32 {
 fn paintTrack(r: dvui.Rect.Physical, tape: *const Tape, total: f64, ink: dvui.Color, s: f32) void {
     const line_h = 4 * s;
     const line: dvui.Rect.Physical = .{ .x = r.x, .y = r.y + (r.h - line_h) / 2, .w = r.w, .h = line_h };
-    line.fill(.all(line_h / 2), .{ .color = .{ .color = ink.opacity(0.15) } });
+    line.fill(.all(line_h / 2), .{ .color = .{ .color = ink.opacity(0.15) }, .fade = 1 });
     for (tape.chapters) |c| {
         if (c.at == 0 or total <= 0) continue;
         const x = r.x + r.w * @as(f32, @floatCast(@as(f64, @floatFromInt(c.at)) / total));
         const tick: dvui.Rect.Physical = .{ .x = x - 1 * s, .y = r.y + 1 * s, .w = 2 * s, .h = r.h - 2 * s };
-        tick.fill(.all(1 * s), .{ .color = .{ .color = ink.opacity(0.35) } });
+        tick.fill(.all(1 * s), .{ .color = .{ .color = ink.opacity(0.35) }, .fade = 1 });
     }
+}
+
+/// The speed slider's line in `r`: a notch for each of `Sequencer.speeds`, the knob on the chosen
+/// one, ringed while the arrow keys are its.
+fn paintSpeed(r: dvui.Rect.Physical, at: usize, focused: bool, ink: dvui.Color, s: f32) void {
+    const n = Sequencer.speeds.len;
+    const line_h = 2 * s;
+    const mid = r.y + r.h / 2;
+    const knob_d = 9 * s;
+    const inset = knob_d / 2;
+    const span = r.w - 2 * inset;
+    const line: dvui.Rect.Physical = .{ .x = r.x + inset, .y = mid - line_h / 2, .w = span, .h = line_h };
+    line.fill(.all(line_h / 2), .{ .color = .{ .color = ink.opacity(0.2) } });
+    for (0..n) |i| {
+        const x = line.x + span * @as(f32, @floatFromInt(i)) / @as(f32, n - 1);
+        const notch: dvui.Rect.Physical = .{ .x = x - 1 * s, .y = mid - 3 * s, .w = 2 * s, .h = 6 * s };
+        notch.fill(.all(1 * s), .{ .color = .{ .color = ink.opacity(if (i == at) 0 else 0.4) } });
+    }
+    const kx = line.x + span * @as(f32, @floatFromInt(at)) / @as(f32, n - 1);
+    const knob: dvui.Rect.Physical = .{ .x = kx - knob_d / 2, .y = mid - knob_d / 2, .w = knob_d, .h = knob_d };
+    if (focused) knob.outsetAll(2 * s).fill(.all(knob_d), .{ .color = .{ .color = ink.opacity(0.25) } });
+    knob.fill(.all(knob_d / 2), .{ .color = .{ .color = ink } });
 }
 
 const Glyph = enum { play, pause, replay, prev, next, close };
@@ -1124,8 +1139,62 @@ fn drawSeeking(player: *Player, win: dvui.Rect) void {
     dvui.labelNoFmt(@src(), "Catching up\u{2026}", .{}, .{ .color_text = .{ .color = theme().color(.content, .text) } });
     const wd = dvui.spacer(@src(), .{ .expand = .horizontal, .min_size_content = .{ .w = 120, .h = 3 } });
     const r = wd.rectScale().r;
-    r.fill(.all(r.h / 2), .{ .color = .{ .color = theme().color(.content, .text).opacity(0.15) } });
+    r.fill(.all(r.h / 2), .{ .color = .{ .color = theme().color(.content, .text).opacity(0.15) }, .fade = 1 });
     var done = r;
     done.w *= f;
-    done.fill(.all(r.h / 2), .{ .color = .{ .color = theme().color(.highlight, .fill) } });
+    done.fill(.all(r.h / 2), .{ .color = .{ .color = theme().color(.highlight, .fill) }, .fade = 1 });
+}
+
+test "a caption's card is made of the material tooltips and menus wear" {
+    const fns = struct {
+        var blur: f32 = 0;
+        var tooltip: ?f32 = null;
+        var caption: ?f32 = null;
+        var menu: ?core.widgets.BlurBackdrop.Pane = null;
+        var dialog: ?core.widgets.FloatingWindowWidget.Frost = null;
+        fn frame() !dvui.App.Result {
+            core.dialogs.publishStyle(.{ .blur = blur, .opacity = 0.5 });
+            menu = core.widgets.menuFrost();
+            dialog = core.dialogs.dialogFrost();
+            {
+                var box = dvui.box(@src(), .{}, core.dialogs.tooltipOptions(0));
+                defer box.deinit();
+                core.dialogs.tooltipSurface(box.data());
+                tooltip = radiusOf(box.data().id);
+                dvui.labelNoFmt(@src(), "tooltip", .{}, .{});
+            }
+            {
+                var box = dvui.box(@src(), .{}, cardOptions(.{}));
+                defer box.deinit();
+                glass(box.data(), .{ .x = 0.5, .y = 0.5 }, .{});
+                caption = radiusOf(box.data().id);
+                dvui.labelNoFmt(@src(), "caption", .{}, .{});
+            }
+            return .ok;
+        }
+        fn radiusOf(id: dvui.Id) ?f32 {
+            const f = dvui.dataGetPtr(null, id, "_frost", core.widgets.BlurBackdrop) orelse return null;
+            return f.radius_px;
+        }
+        /// A window of its own each, so no frost is left over from the other's frame.
+        fn drawnAt(b: f32) !void {
+            var t = try dvui.testing.init(.{ .window_size = .{ .w = 400, .h = 300 } });
+            defer t.deinit();
+            blur = b;
+            _ = try dvui.testing.step(frame);
+        }
+    };
+    // Blur on: both are the dialog frost, at the style's radius.
+    try fns.drawnAt(20);
+    try std.testing.expectEqual(@as(?f32, 20), fns.tooltip);
+    try std.testing.expectEqual(fns.tooltip, fns.caption);
+    // The menus ask for the same frost from the same place.
+    try std.testing.expectEqual(fns.dialog.?.radius, fns.menu.?.radius);
+    try std.testing.expectEqual(fns.dialog.?.mix, fns.menu.?.mix);
+    try std.testing.expectEqual(fns.dialog.?.tint, fns.menu.?.tint);
+    // Blur off (and no glass program in the testing backend): a plain fill for both, no frost.
+    try fns.drawnAt(0);
+    try std.testing.expectEqual(@as(?f32, null), fns.tooltip);
+    try std.testing.expectEqual(@as(?f32, null), fns.caption);
+    try std.testing.expect(fns.menu == null);
 }

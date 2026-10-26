@@ -80,12 +80,51 @@ pub const AppUpdate = enum {
     none,
 };
 
+/// What an action can fail with, the whole of it: the seam crosses a `ctx: *anyopaque`, so the
+/// app maps whatever its own code raised into one of these.
+pub const Error = error{
+    OutOfMemory,
+    /// The plugin has unsaved documents open and `force` was not given.
+    DirtyDocuments,
+    /// Shipped with the executable, or this build cannot unload it.
+    NotUnloadable,
+    /// The app has no such action (`installFromUrl` and friends on a desktop build).
+    Unsupported,
+    /// Anything else; the app logged the cause.
+    Failed,
+};
+
+/// `err` as the `Error` it already is, or null when it is anything else, which the app reports
+/// as `Failed` after logging the cause.
+pub fn preserved(err: anyerror) ?Error {
+    return switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        error.DirtyDocuments => error.DirtyDocuments,
+        error.NotUnloadable => error.NotUnloadable,
+        error.Unsupported => error.Unsupported,
+        else => null,
+    };
+}
+
+test "an action's own error comes through unchanged" {
+    try std.testing.expectEqual(error.OutOfMemory, preserved(error.OutOfMemory).?);
+    try std.testing.expectEqual(error.DirtyDocuments, preserved(error.DirtyDocuments).?);
+    try std.testing.expectEqual(error.NotUnloadable, preserved(error.NotUnloadable).?);
+    try std.testing.expectEqual(error.Unsupported, preserved(error.Unsupported).?);
+}
+
+test "any other error is not preserved, so the app reports Failed" {
+    try std.testing.expectEqual(@as(?Error, null), preserved(error.FileNotFound));
+    try std.testing.expectEqual(@as(?Error, null), preserved(error.AccessDenied));
+    try std.testing.expectEqual(@as(?Error, null), preserved(error.Failed));
+}
+
 pub const VTable = struct {
     // ---- decisions the app persists -------------------------------------------------------
     isDisabled: *const fn (ctx: *anyopaque, id: []const u8) bool,
     isUndecided: *const fn (ctx: *anyopaque, id: []const u8) bool,
     isAutoUpdate: *const fn (ctx: *anyopaque, id: []const u8) bool,
-    setAutoUpdate: *const fn (ctx: *anyopaque, id: []const u8, on: bool) anyerror!void,
+    setAutoUpdate: *const fn (ctx: *anyopaque, id: []const u8, on: bool) Error!void,
     updateMode: *const fn (ctx: *anyopaque) UpdateMode,
     /// Ids the user switched off. They have no live `Plugin`, so the store cannot find them any
     /// other way, and it must still list them.
@@ -99,21 +138,21 @@ pub const VTable = struct {
     builtinManifest: *const fn (ctx: *anyopaque, id: []const u8) ?sdk.Manifest,
 
     // ---- actions ---------------------------------------------------------------------------
-    install: *const fn (ctx: *anyopaque, id: []const u8) anyerror!void,
+    install: *const fn (ctx: *anyopaque, id: []const u8) Error!void,
     /// The web's install: fetch and link a plugin's wasm side module straight from its release
     /// URL (there is no plugins directory to download into). Null for an app that does not
     /// load web plugins.
-    installFromUrl: ?*const fn (ctx: *anyopaque, id: []const u8, url: []const u8, sha256: []const u8) anyerror!void = null,
+    installFromUrl: ?*const fn (ctx: *anyopaque, id: []const u8, url: []const u8, sha256: []const u8) Error!void = null,
     /// The web's load for one visit: link the build at `url` as `installFromUrl` does, without
     /// installing it. Not remembered for the next visit and nothing asked about it: a shared
     /// tape's owner, loaded so the tape plays. Null for an app that does not load web plugins.
-    loadFromUrl: ?*const fn (ctx: *anyopaque, id: []const u8, url: []const u8, sha256: []const u8) anyerror!void = null,
+    loadFromUrl: ?*const fn (ctx: *anyopaque, id: []const u8, url: []const u8, sha256: []const u8) Error!void = null,
     /// The web's update: link the build at `url` alongside the running one and hand the id over,
     /// within the session. Null for an app that does not load web plugins.
-    updateFromUrl: ?*const fn (ctx: *anyopaque, id: []const u8, url: []const u8, sha256: []const u8) anyerror!void = null,
-    update: *const fn (ctx: *anyopaque, id: []const u8, force: bool) anyerror!void,
-    uninstall: *const fn (ctx: *anyopaque, id: []const u8, force: bool) anyerror!void,
-    setEnabled: *const fn (ctx: *anyopaque, id: []const u8, enabled: bool, force: bool) anyerror!void,
+    updateFromUrl: ?*const fn (ctx: *anyopaque, id: []const u8, url: []const u8, sha256: []const u8) Error!void = null,
+    update: *const fn (ctx: *anyopaque, id: []const u8, force: bool) Error!void,
+    uninstall: *const fn (ctx: *anyopaque, id: []const u8, force: bool) Error!void,
+    setEnabled: *const fn (ctx: *anyopaque, id: []const u8, enabled: bool, force: bool) Error!void,
     /// Re-read the install directory after the store changed it.
     reconcileDiscovered: *const fn (ctx: *anyopaque) void,
     /// See `AppUpdate`. An app with no self-updater returns `.none`.
@@ -136,7 +175,7 @@ pub fn isUndecided(self: PluginManager, id: []const u8) bool {
 pub fn isAutoUpdate(self: PluginManager, id: []const u8) bool {
     return self.vtable.isAutoUpdate(self.ctx, id);
 }
-pub fn setAutoUpdate(self: PluginManager, id: []const u8, on: bool) anyerror!void {
+pub fn setAutoUpdate(self: PluginManager, id: []const u8, on: bool) Error!void {
     return self.vtable.setAutoUpdate(self.ctx, id, on);
 }
 pub fn updateMode(self: PluginManager) UpdateMode {
@@ -154,31 +193,31 @@ pub fn failures(self: PluginManager) []const Failure {
 pub fn builtinManifest(self: PluginManager, id: []const u8) ?sdk.Manifest {
     return self.vtable.builtinManifest(self.ctx, id);
 }
-pub fn install(self: PluginManager, id: []const u8) anyerror!void {
+pub fn install(self: PluginManager, id: []const u8) Error!void {
     return self.vtable.install(self.ctx, id);
 }
 /// `sha256` is the hash the registry published for this download; the page checks the bytes
 /// against it before anything is linked. Empty means "unverified", which a local `?plugin=`
 /// load is and a store install never is.
-pub fn installFromUrl(self: PluginManager, id: []const u8, url: []const u8, sha256: []const u8) anyerror!void {
+pub fn installFromUrl(self: PluginManager, id: []const u8, url: []const u8, sha256: []const u8) Error!void {
     const f = self.vtable.installFromUrl orelse return error.Unsupported;
     return f(self.ctx, id, url, sha256);
 }
-pub fn loadFromUrl(self: PluginManager, id: []const u8, url: []const u8, sha256: []const u8) anyerror!void {
+pub fn loadFromUrl(self: PluginManager, id: []const u8, url: []const u8, sha256: []const u8) Error!void {
     const f = self.vtable.loadFromUrl orelse return error.Unsupported;
     return f(self.ctx, id, url, sha256);
 }
-pub fn updateFromUrl(self: PluginManager, id: []const u8, url: []const u8, sha256: []const u8) anyerror!void {
+pub fn updateFromUrl(self: PluginManager, id: []const u8, url: []const u8, sha256: []const u8) Error!void {
     const f = self.vtable.updateFromUrl orelse return error.Unsupported;
     return f(self.ctx, id, url, sha256);
 }
-pub fn update(self: PluginManager, id: []const u8, force: bool) anyerror!void {
+pub fn update(self: PluginManager, id: []const u8, force: bool) Error!void {
     return self.vtable.update(self.ctx, id, force);
 }
-pub fn uninstall(self: PluginManager, id: []const u8, force: bool) anyerror!void {
+pub fn uninstall(self: PluginManager, id: []const u8, force: bool) Error!void {
     return self.vtable.uninstall(self.ctx, id, force);
 }
-pub fn setEnabled(self: PluginManager, id: []const u8, enabled: bool, force: bool) anyerror!void {
+pub fn setEnabled(self: PluginManager, id: []const u8, enabled: bool, force: bool) Error!void {
     return self.vtable.setEnabled(self.ctx, id, enabled, force);
 }
 pub fn reconcileDiscovered(self: PluginManager) void {

@@ -36,6 +36,27 @@ Fizzy offers a SDK for developing plugins and several plugins already exist that
 - [agent](https://github.com/fizzyedit/agent) - have an agent drive fizzy over MCP
 - [atlas](https://github.com/fizzyedit/atlas) - Obsidian-styled markdown links and backlinks, and an interactive map for document links
 
+## Minimal app measurements
+
+The [measurement job](https://github.com/fizzyedit/fizzy/actions/workflows/hello-numbers.yml)
+records example-app's minimal shape on macOS and Linux in ReleaseFast and ReleaseSmall.
+Download `hello-numbers-<OS>-<arch>` from a run for the exact JSON lines and source revisions.
+
+| Linux x86_64, example-app minimal | ReleaseFast | ReleaseSmall |
+| --- | --- | --- |
+| Stripped executable | 21,789,128 B | 14,892,728 B |
+| Installer (`.AppImage`) | 31,582,712 B | 15,084,024 B |
+| First frame (`core.profile`) | 491 ms | 87 ms |
+| Idle RSS after 30 s | 144,674,816 B | 133,455,872 B |
+| Gzipped wasm | 4,145,339 B | 3,348,450 B |
+
+Source: [run 40195192369](https://github.com/fizzyedit/fizzy/actions/runs/40195192369) at
+`c4f0e401` (Xvfb with Mesa software rendering on a GitHub runner; one sample each). The macOS
+column is not yet recorded: that run's macOS job failed.
+
+See the [method and manual Electron/Tauri comparison](docs/HELLO_NUMBERS.md) before comparing
+samples: runner hardware, OS caches, packaged resources and startup clocks affect the results.
+
 ## User Interface
 - The user interface is driven by [DVUI](https://github.com/david-vanderson/dvui).
 - The general layout takes many ideas from VSCode or IDE's, as well as general project setup using folders.

@@ -10,6 +10,7 @@ const dvui = fizzy_sdk.dvui;
 const velopack = @import("velopack.zig");
 const rehome_fixture = @import("rehome_fixture.zig");
 const FizzyExecutable = @import("exe.zig").FizzyExecutable;
+const NativeFramework = @import("exe.zig").NativeFramework;
 const web = @import("web.zig");
 
 /// A plugin checkout for the web build, with the modules its own `build.zig` would have added
@@ -30,7 +31,8 @@ pub const WebPluginDir = struct {
 };
 
 pub const Options = struct {
-    /// Every plugin the application links, fizzy's own among them — see `build.zig`'s `buildApp`.
+    /// Every plugin the application links, fizzy's own among them, each in the executables its
+    /// `targets` names — see `build.zig`'s `buildApp`.
     app_plugins: []const @import("sdk.zig").BundledPlugin = &@import("plugins.zig").entries.all,
     /// Dependencies (by the name in `build.zig.zon`) whose `"plugin"` module the **web** build
     /// links in. The browser cannot `dlopen`, so a plugin exists there only if the application
@@ -57,7 +59,8 @@ pub const Options = struct {
 
 pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.OptimizeMode, opts: Options) !void {
     const cfg = try readConfig(b, target, opts);
-    try construct(b, target, optimize, opts, cfg);
+    var frameworks: Frameworks = .{};
+    _ = try construct(b, target, optimize, opts, cfg, &frameworks);
 }
 
 /// Everything `build` reads before it constructs anything — the options, the version, the
@@ -102,6 +105,9 @@ pub const Config = struct {
     /// What the native executable draws with (`-Dnative-backend`, `build/exe.zig`).
     native_backend: @import("exe.zig").NativeBackend,
     test_filters: []const []const u8,
+    /// `-Dpackage-dirs`, `-Dvpk-args` (`package.zig`).
+    package_dirs: []const std.Build.LazyPath,
+    vpk_args: []const []const u8,
     macos_sign_app_identity: ?[]const u8,
     macos_sign_install_identity: ?[]const u8,
     macos_notary_profile: ?[]const u8,
@@ -450,6 +456,11 @@ pub fn readConfig(b: *std.Build, target: std.Build.ResolvedTarget, opts: Options
         "test-filter",
         "Skip tests that do not match any filter",
     ) orelse &[0][]const u8{};
+
+    // What an app's installers carry besides the executable and the plugin dylibs (a helper
+    // program it starts, say), and what it tells vpk besides fizzy's own arguments.
+    const package_dirs = b.option([]const std.Build.LazyPath, "package-dirs", "Directories whose files `package` ships beside the executable") orelse &.{};
+    const vpk_args = b.option([]const []const u8, "vpk-args", "Arguments `package` passes `vpk pack` after its own") orelse &.{};
     return .{
         .vz = vz,
         .macos_sdl_paths = macos_sdl_paths,
@@ -485,6 +496,8 @@ pub fn readConfig(b: *std.Build, target: std.Build.ResolvedTarget, opts: Options
         .accesskit = accesskit,
         .native_backend = native_backend,
         .test_filters = test_filters,
+        .package_dirs = package_dirs,
+        .vpk_args = vpk_args,
         .macos_sign_app_identity = macos_sign_app_identity,
         .macos_sign_install_identity = macos_sign_install_identity,
         .macos_notary_profile = macos_notary_profile,
@@ -492,8 +505,15 @@ pub fn readConfig(b: *std.Build, target: std.Build.ResolvedTarget, opts: Options
     };
 }
 
-/// Phase two of `build`: the executables, the web build, tests, packaging.
-pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.OptimizeMode, opts: Options, cfg: Config) !void {
+/// What `construct` made, for an app built on fizzy to build steps of its own over.
+pub const Built = struct {
+    native: Native,
+    web: web.Web,
+};
+
+/// Phase two of `build`: the executables, the web build, tests, packaging. `frameworks` holds any
+/// an app asked for first (`fizzy.framework`), and gets the rest.
+pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.OptimizeMode, opts: Options, cfg: Config, frameworks: *Frameworks) !Built {
     const assetpack = @import("assetpack");
     const assets_module = assetpack.pack(b, b.path("assets"), .{});
     // The window's icon, apart from `assets` so an app built on fizzy can give its own.
@@ -510,20 +530,39 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
 
     // `zig build web` produces `zig-out/web/{web.wasm, web.js, index.html, NotoSansKR-Regular.ttf}`,
     // deployable as-is to a static host.
-    const w = web.build(b, optimize, cfg.build_opts, cfg.workbench_opts, assets_module, app_icon_module, opts.app_plugins, opts.web_plugin_deps, opts.web_plugin_dirs, opts.own != null);
-    const built = try native(b, target, optimize, opts, cfg, assets_module, app_icon_module);
+    const w = web.build(b, frameworks.getWeb(b, optimize), optimize, cfg.build_opts, cfg.workbench_opts, assets_module, app_icon_module, cfg.app_layout_path, try @import("sdk.zig").pluginsFor(b, opts.app_plugins, .web), opts.web_plugin_deps, opts.web_plugin_dirs, opts.own != null);
+    const built = try native(b, target, optimize, opts, cfg, frameworks.getNative(b, target, optimize, cfg), assets_module, app_icon_module);
     install(b, target, optimize, cfg, w, built);
     try addTests(b, target, optimize, cfg, built, assets_module, app_icon_module);
+    return .{ .native = built, .web = w };
 }
 
+/// Each kind of executable's framework, made the first time it is asked for: by `construct`, or
+/// before it by an app (`fizzy.framework`), whose plugins are then built against the very modules
+/// its executables link.
+pub const Frameworks = struct {
+    native: ?NativeFramework = null,
+    web: ?web.Framework = null,
+
+    pub fn getNative(self: *Frameworks, b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.OptimizeMode, cfg: Config) NativeFramework {
+        if (self.native == null) self.native = @import("exe.zig").nativeFramework(b, target, optimize, cfg.accesskit, cfg.native_backend, cfg.macos_sdl_paths);
+        return self.native.?;
+    }
+
+    pub fn getWeb(self: *Frameworks, b: *std.Build, optimize: std.lang.OptimizeMode) web.Framework {
+        if (self.web == null) self.web = web.framework(b, optimize);
+        return self.web.?;
+    }
+};
+
 /// What `native` made: the executable, and the one `package` packs.
-const Native = struct {
+pub const Native = struct {
     main: FizzyExecutable,
     /// `main`, unless it has no Velopack and the target supports it: then a second, with it.
     package: FizzyExecutable,
 };
 
-fn native(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.OptimizeMode, opts: Options, cfg: Config, assets_module: *std.Build.Module, app_icon_module: *std.Build.Module) !Native {
+fn native(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.OptimizeMode, opts: Options, cfg: Config, framework: NativeFramework, assets_module: *std.Build.Module, app_icon_module: *std.Build.Module) !Native {
     const fizzy_exe = @import("exe.zig");
     const vz = cfg.vz;
     const macos_sdl_paths = cfg.macos_sdl_paths;
@@ -544,10 +583,10 @@ fn native(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Op
     const static_image = cfg.static_image;
     const dynamic_plugins = cfg.dynamic_plugins;
     const workbench_opts = cfg.workbench_opts;
-    const accesskit = cfg.accesskit;
     const native_backend = cfg.native_backend;
+    const app_plugins = try @import("sdk.zig").pluginsFor(b, opts.app_plugins, .native);
 
-    const main_fizzy = try fizzy_exe.addFizzyExecutableForTarget(b, vz, target, optimize, accesskit, native_backend, build_opts, workbench_opts, assets_module, app_icon_module, cfg.branding.rc, macos_sdl_paths, velopack_enabled, app_name, app_layout_path, opts.app_plugins, dynamic_plugins);
+    const main_fizzy = try fizzy_exe.addFizzyExecutableForTarget(b, vz, target, optimize, framework, native_backend, build_opts, workbench_opts, assets_module, app_icon_module, cfg.branding.rc, macos_sdl_paths, velopack_enabled, app_name, app_layout_path, app_plugins, dynamic_plugins);
 
     const package_fizzy: FizzyExecutable = package_blk: {
         if (velopack_enabled) break :package_blk main_fizzy;
@@ -573,7 +612,7 @@ fn native(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Op
         pack_opts.addOption(bool, "static_image", static_image);
         pack_opts.addOption(bool, "dynamic_plugins", dynamic_plugins);
         pack_opts.addOption(bool, "has_app_layout", app_layout_path != null);
-        break :package_blk try fizzy_exe.addFizzyExecutableForTarget(b, vz, target, optimize, accesskit, native_backend, pack_opts, workbench_opts, assets_module, app_icon_module, cfg.branding.rc, macos_sdl_paths, true, app_name, app_layout_path, opts.app_plugins, dynamic_plugins);
+        break :package_blk try fizzy_exe.addFizzyExecutableForTarget(b, vz, target, optimize, framework, native_backend, pack_opts, workbench_opts, assets_module, app_icon_module, cfg.branding.rc, macos_sdl_paths, true, app_name, app_layout_path, app_plugins, dynamic_plugins);
     };
 
     return .{ .main = main_fizzy, .package = package_fizzy };
@@ -661,6 +700,8 @@ fn install(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.O
         .velopack_required_fail = velopack_required_fail,
         .exe_for_package = built.package.exe,
         .package_fizzy = built.package,
+        .package_dirs = cfg.package_dirs,
+        .vpk_args = cfg.vpk_args,
         .macos_sign_app_identity = macos_sign_app_identity,
         .macos_sign_install_identity = macos_sign_install_identity,
         .macos_notary_profile = macos_notary_profile,
@@ -798,7 +839,7 @@ fn addTests(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.
         // Content-swap reveal phase machine. std-only by design (see reveal.zig) — the dvui
         // half is the thin wrapper in core/dvui.zig.
         .{ "fizzy-reveal-tests", "core/reveal.zig" },
-        // Phone, tablet or desktop from the page's pointer and viewport. std-only (see
+        // Mobile, tablet or desktop from the page's pointer and viewport. std-only (see
         // form_factor.zig); `platform.zig` holds the live value.
         .{ "fizzy-form-factor-tests", "core/form_factor.zig" },
         // Fade / blur-fade timeline. std-only (see crossfade.zig) — pictures and the clock
@@ -824,9 +865,15 @@ fn addTests(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.
         // stacking and where a closed float's views go. std-only (see float_rules.zig);
         // `Floats.zig` and `ViewDrag.zig` apply it, covered by `tests/integration.zig`.
         .{ "fizzy-float-rules-tests", "app/layout/float_rules.zig" },
+        // Where a new view goes by the shape of the room, and which way an adaptive split runs.
+        // std-only (see placement.zig); the workbench and the docking widget ask it.
+        .{ "fizzy-placement-tests", "core/placement.zig" },
         // A document state as the bytes that differ from another: how a track's checkpoints
         // stay small. std-only (see state_delta.zig); `Tracks` keeps its checkpoints with it.
         .{ "fizzy-state-delta-tests", "app/state_delta.zig" },
+        // A state packed for a track file (zero runs, then deflate): lossless, so a canvas of
+        // transparent pixels is not stored as tens of megabytes. std-only (see state_pack.zig).
+        .{ "fizzy-state-pack-tests", "app/state_pack.zig" },
         // Image diff (RGBA8 to rects) and text diff (histogram lines, unified output). std-only (see
         // core/diff.zig); `bench-diff` measures it.
         .{ "fizzy-diff-tests", "core/diff.zig" },
@@ -1352,6 +1399,34 @@ fn addTests(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.
         check_integration_step.dependOn(&demo_tests.step);
     }
 
+    {
+        const fuzz_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("tests/fuzz_tapes.zig"),
+        });
+        fuzz_module.addImport("fizzy", fizzy_test_module);
+        fuzz_module.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
+        fuzz_module.addImport("app", app_module_test);
+        fuzz_module.addImport("workbench", workbench_module_test);
+        fuzz_module.addAnonymousImport("hello", .{ .root_source_file = b.path("docs/demos/hello.zon") });
+        const fuzz_tests = b.addTest(.{
+            .name = "fizzy-fuzz-tapes",
+            .root_module = fuzz_module,
+            .filters = test_filters,
+        });
+        if (target.result.os.tag == .windows) fuzz_tests.root_module.linkSystemLibrary("comctl32", .{});
+        fuzz_tests.root_module.link_libcpp = !target_is_windows_msvc;
+        if (velopack_enabled) if (vz) |v| {
+            try velopack.linkVelopack(b, v, fuzz_tests, .{ .target = target, .optimize = optimize, .c_modules = &.{app_module_test} });
+        };
+        // Its output is the report, so a cached run must not hide it.
+        const fuzz_run = b.addRunArtifact(fuzz_tests);
+        fuzz_run.has_side_effects = true;
+        b.step("fuzz-tapes", "Explore seeded tape interruptions and print shrunk findings")
+            .dependOn(&fuzz_run.step);
+    }
+
     // The `app` framework module's own tests — the split trees, seeds, drop plans and view drag
     // under `app/layout/` (`Layout.zig`'s `test` block). `addTest` collects from its root module
     // only, so the integration tests above, which import `app`, never ran them. Against dvui's
@@ -1397,6 +1472,8 @@ fn addTests(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.
             .root_source_file = b.path("core/profile.zig"),
         });
         profile_module.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
+        // `core/profile.zig` times the in-app glass through `glass.prof`.
+        profile_module.addImport("glass", core_module_test.import_table.get("glass").?);
         const profile_tests = b.addTest(.{
             .name = "fizzy-profile-tests",
             .root_module = profile_module,
@@ -1653,6 +1730,26 @@ fn addTests(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.
         text_plugin_tests.root_module.link_libcpp = !target_is_windows_msvc;
         test_integration_step.dependOn(&b.addRunArtifact(text_plugin_tests).step);
         check_integration_step.dependOn(&text_plugin_tests.step);
+    }
+
+    // Give the file extension tests a root; the plugin's lazy exports do not collect them.
+    {
+        const files_tests_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("plugins/workbench/src/files.zig"),
+        });
+        var imports = workbench_module_test.import_table.iterator();
+        while (imports.next()) |entry| {
+            files_tests_module.addImport(entry.key_ptr.*, entry.value_ptr.*);
+        }
+        const workbench_tests = b.addTest(.{
+            .name = "fizzy-workbench-plugin-tests",
+            .root_module = files_tests_module,
+            .filters = test_filters,
+        });
+        test_integration_step.dependOn(&b.addRunArtifact(workbench_tests).step);
+        check_integration_step.dependOn(&workbench_tests.step);
     }
 
     // Every `test` block in the repo is in a binary some step builds (`scripts/tests_reached.zig`):
