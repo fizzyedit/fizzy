@@ -588,14 +588,21 @@ fn revertKeepsAMovedFloat(app: *BundledApp) !void {
     try state.assign(gpa, "Float 1", &.{});
 }
 
-/// The tour on a window arranged unlike the recording (the panel and the explorer shut): every
-/// target is found there, a played-out tour reverted leaves the arrangement as it was, and a tour
-/// stopped or closed from its bar midway leaves it exactly as it stood at that moment.
+/// The tour on a window arranged unlike the recording (the dashboard dragged out of the panel into a
+/// float of its own, the panel and the explorer shut): every target is found there, a tour played out leaves the
+/// arrangement and the documents as they were, reverted too, and a tour stopped or closed from its
+/// bar midway leaves it exactly as it stood at that moment.
 fn tourOnARearrangedLayout(app: *BundledApp) !void {
     const editor = app.editor;
     const p = &editor.demo.player;
     const name = fizzy.Editor.Demo.catalog.entries[0].name;
 
+    const gpa = editor.app.gpa;
+    const state = &editor.app.layout;
+    const at: dvui.Rect = .{ .x = 900, .y = 560, .w = 220, .h = 160 };
+    // Off the explorer, which the tour drags a float from, and named past the tour's own `Float 1`, which the lowest free number gives it.
+    try state.assign(gpa, "Float 2", &.{"devtools.dashboard"});
+    _ = try state.floats.add(gpa, .{ .name = state.internName(gpa, "Float 2"), .rect = at, .home = "" });
     editor.explorer.close(editor);
     if (editor.regionFor(sdk.keywords.ide.panel)) |panel| panel.close();
     try dvui.testing.settle(headlessFrame);
@@ -611,13 +618,22 @@ fn tourOnARearrangedLayout(app: *BundledApp) !void {
     try std.testing.expectEqual(automation.Player.State.ended, p.state);
     try std.testing.expectEqual(@as(u32, 0), p.timeouts);
     try std.testing.expectEqual(@as(u32, 0), p.mismatches);
+    // Before the revert: the tour ends with the window as it left it (what it opened is still
+    // open, which is what `revert` is for), the documents it opened too, and none of the
+    // person's own was closed or moved.
+    for (0..120) |_| _ = try dvui.testing.step(headlessFrame);
+    try std.testing.expect(fizzy.Editor.Demo.layoutPrint(editor) != print_before);
+    try std.testing.expect(!editor.explorer.closed);
+    try std.testing.expect(editor.app.open_files.count() > docs_before);
+    try expectMovedPanelStayed(state, at);
+
     p.revert();
-    frames = 0;
-    while (frames < 120) : (frames += 1) _ = try dvui.testing.step(headlessFrame);
+    for (0..120) |_| _ = try dvui.testing.step(headlessFrame);
     try std.testing.expectEqual(print_before, fizzy.Editor.Demo.layoutPrint(editor));
     try std.testing.expectEqual(explorer_closed, editor.explorer.closed);
     try std.testing.expectEqual(panel_closed, (editor.regionFor(sdk.keywords.ide.panel) orelse return error.TestUnexpectedResult).isClosed());
     try std.testing.expectEqual(docs_before, editor.app.open_files.count());
+    try expectMovedPanelStayed(state, at);
 
     // Stopped midway, and closed from the bar midway: nothing is closed, restored or moved.
     for ([_]enum { stop, close }{ .stop, .close }) |how| {
@@ -651,6 +667,18 @@ fn tourOnARearrangedLayout(app: *BundledApp) !void {
         if (editor.regionFor(sdk.keywords.ide.panel)) |panel| panel.close();
         try dvui.testing.settle(headlessFrame);
     }
+
+    state.floats.removeAt(0);
+    try state.assign(gpa, "Float 2", &.{});
+}
+
+/// The one float the person made is still theirs, where they put it.
+fn expectMovedPanelStayed(state: anytype, at: dvui.Rect) !void {
+    try std.testing.expectEqual(@as(usize, 1), state.floats.items.items.len);
+    const f = state.floats.items.items[state.floats.find("Float 2") orelse return error.TestUnexpectedResult];
+    try std.testing.expect(!f.closing);
+    try std.testing.expectEqual(at.x, f.rect.x);
+    try std.testing.expectEqual(at.y, f.rect.y);
 }
 
 /// What straight play of a demo must keep steady, watched a frame at a time:
