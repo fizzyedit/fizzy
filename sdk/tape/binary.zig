@@ -230,7 +230,11 @@ fn writeBody(gpa: std.mem.Allocator, tape: Tape, w: *std.Io.Writer) !void {
         .blobs = count(blobs.items.len),
         .blob_bytes = count(blob_bytes),
     };
-    inline for (@typeInfo(Header).@"struct".field_names, @typeInfo(Header).@"struct".field_types, @typeInfo(Header).@"struct".field_attrs) |f_name, _, _| try w.writeInt(u32, @field(h, f_name), .little);
+    inline for (
+        @typeInfo(Header).@"struct".field_names,
+        @typeInfo(Header).@"struct".field_types,
+        @typeInfo(Header).@"struct".field_attrs,
+    ) |f_name, _, _| try w.writeInt(u32, @field(h, f_name), .little);
 
     try writeTable(w, table.list.items, table.bytes);
     try writeTable(w, blobs.items, blob_bytes);
@@ -310,7 +314,14 @@ fn writeBody(gpa: std.mem.Allocator, tape: Tape, w: *std.Io.Writer) !void {
         try w.writeInt(u32, table.index(kf.root), .little);
         try w.writeByte(@backingInt(kf.layout));
         try w.splatByteAll(0, 3);
-        for ([_]u32{ files_at, count(kf.files.len), open_at, count(kf.open.len), settings_at, count(kf.settings.len) }) |v|
+        for ([_]u32{
+            files_at,
+            count(kf.files.len),
+            open_at,
+            count(kf.open.len),
+            settings_at,
+            count(kf.settings.len),
+        }) |v|
             try w.writeInt(u32, v, .little);
         files_at += count(kf.files.len);
         open_at += count(kf.open.len);
@@ -502,7 +513,11 @@ pub fn read(gpa: std.mem.Allocator, bytes: []const u8, check: Tape.Check) ReadEr
             } },
             .wait => .{ .wait = .{ .timeout = ib, .until = try untilOf(strings, small, ia) } },
             .skip => .{ .skip = .{ .count = ib, .when = try untilOf(strings, small, ia) } },
-            .step => .{ .step = .{ .file = try strings.get(ia), .effect = try blobs.get(ib), .motion = try blobs.get(words[0]) } },
+            .step => .{ .step = .{
+                .file = try strings.get(ia),
+                .effect = try blobs.get(ib),
+                .motion = try blobs.get(words[0]),
+            } },
         } };
     }
 
@@ -523,7 +538,11 @@ pub fn read(gpa: std.mem.Allocator, bytes: []const u8, check: Tape.Check) ReadEr
     const settings = try a.alloc(Tape.Setting, h.settings);
     for (settings, 0..) |*s, i| {
         var f: Reader = .{ .bytes = setting_bytes[i * setting_size ..][0..setting_size] };
-        s.* = .{ .owner = try strings.get(try f.int(u32)), .key = try strings.get(try f.int(u32)), .value = try strings.get(try f.int(u32)) };
+        s.* = .{
+            .owner = try strings.get(try f.int(u32)),
+            .key = try strings.get(try f.int(u32)),
+            .value = try strings.get(try f.int(u32)),
+        };
     }
     const keyframes = try a.alloc(Tape.Keyframe, h.keyframes);
     for (keyframes, 0..) |*kf, i| {
@@ -674,14 +693,29 @@ const testing = std.testing;
 const Everything = struct {
     const files = [_]Tape.File{ .{ .path = "a.md", .text = "# A\n" }, .{ .path = "b.md", .text = "" } };
     const settings = [_]Tape.Setting{.{ .owner = "markdown", .key = "default_md_view", .value = ".split" }};
-    const keyframe = Tape.Keyframe{ .root = "demo://t", .files = &files, .open = &.{ "a.md", "b.md" }, .settings = &settings, .layout = .reset };
+    const keyframe = Tape.Keyframe{
+        .root = "demo://t",
+        .files = &files,
+        .open = &.{ "a.md", "b.md" },
+        .settings = &settings,
+        .layout = .reset,
+    };
     /// A binary document, by its owner, and its steps.
-    const sprite = [_]Tape.File{.{ .path = "a.pixi", .text = &.{ 0x89, 'P', 0, 0xff, '\n', 0 }, .owner = "pixi", .format = 1 }};
+    const sprite = [_]Tape.File{.{
+        .path = "a.pixi",
+        .text = &.{ 0x89, 'P', 0, 0xff, '\n', 0 },
+        .owner = "pixi",
+        .format = 1,
+    }};
     const ops_v2 = [_]Tape.Op{
         .{ .at = 0, .do = .{ .keyframe = 0 } },
         .{ .at = 0, .do = .{ .wait = .{ .until = .idle } } },
         .{ .at = 0, .do = .{ .wait = .{ .until = .{ .shown = "text.end:demo://t/a.md" }, .timeout = 2500 } } },
-        .{ .at = 100, .ms = 400, .do = .{ .move = .{ .tag = "text.end:demo://t/a.md", .x = 0.25, .y = 0.75, .dx = -3.5, .dy = 8 } } },
+        .{
+            .at = 100,
+            .ms = 400,
+            .do = .{ .move = .{ .tag = "text.end:demo://t/a.md", .x = 0.25, .y = 0.75, .dx = -3.5, .dy = 8 } },
+        },
         .{ .at = 500, .do = .{ .press = .right } },
         .{ .at = 560, .do = .{ .release = .right } },
         .{ .at = 600, .do = .{ .scroll = .{ .x = 1, .y = -3 } } },
@@ -695,7 +729,11 @@ const Everything = struct {
         .{ .at = 1700, .ms = 80, .do = .{ .trace = .{ .tag = "pixi.canvas:demo://t/a.pixi", .x = 0.4, .y = 0.6 } } },
     };
     const ops = ops_v2 ++ [_]Tape.Op{
-        .{ .at = 1800, .ms = 250, .do = .{ .step = .{ .file = "a.pixi", .effect = "\x00\x01\xff", .motion = "\x02\x00" } } },
+        .{
+            .at = 1800,
+            .ms = 250,
+            .do = .{ .step = .{ .file = "a.pixi", .effect = "\x00\x01\xff", .motion = "\x02\x00" } },
+        },
         // The same effect again is stored again; one with no motion stores an empty one.
         .{ .at = 2100, .do = .{ .step = .{ .file = "a.pixi", .effect = "\x00\x01\xff" } } },
         .{ .at = 2200, .do = .{ .skip = .{ .when = .{ .shown = "fizzy.rail:workbench.files" }, .count = 3 } } },
@@ -703,12 +741,26 @@ const Everything = struct {
     };
     const captions = [_]Tape.Caption{
         .{ .at = 0, .ms = 900, .title = "Hi", .text = "Welcome.", .place = .middle },
-        .{ .at = 900, .ms = 600, .text = "Beside it.", .near = "text.end:demo://t/a.md", .clear = &.{ "text.body:demo://t/a.md", "text.preview:demo://t/a.md" } },
+        .{
+            .at = 900,
+            .ms = 600,
+            .text = "Beside it.",
+            .near = "text.end:demo://t/a.md",
+            .clear = &.{ "text.body:demo://t/a.md", "text.preview:demo://t/a.md" },
+        },
     };
     const chapters = [_]Tape.Chapter{ .{ .at = 0, .title = "One" }, .{ .at = 1400, .title = "Two" } };
 
     fn tape(ops_: []const Tape.Op, keyframes: []const Tape.Keyframe) Tape {
-        return .{ .name = "t", .title = "Everything", .home = "region:Main", .ops = ops_, .keyframes = keyframes, .captions = &captions, .chapters = &chapters };
+        return .{
+            .name = "t",
+            .title = "Everything",
+            .home = "region:Main",
+            .ops = ops_,
+            .keyframes = keyframes,
+            .captions = &captions,
+            .chapters = &chapters,
+        };
     }
 };
 
@@ -907,10 +959,13 @@ test "a version-1 tape still reads, its commands without arguments" {
 test "a recording's key chords and steps are checked against the app, as in ZON" {
     const bytes = try encode(testing.allocator, everything(), .{});
     defer testing.allocator.free(bytes);
-    try testing.expectError(error.BadChord, read(testing.allocator, bytes, .{ .steps = steps_check.steps, .key = struct {
-        fn ok(c: []const u8) bool {
-            return std.mem.findScalar(u8, c, ' ') == null;
-        }
-    }.ok }));
+    try testing.expectError(error.BadChord, read(testing.allocator, bytes, .{
+        .steps = steps_check.steps,
+        .key = struct {
+            fn ok(c: []const u8) bool {
+                return std.mem.findScalar(u8, c, ' ') == null;
+            }
+        }.ok,
+    }));
     try testing.expectError(error.StepsUnsupported, read(testing.allocator, bytes, .{}));
 }

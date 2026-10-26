@@ -83,7 +83,10 @@ pub fn selectionBytes(start: u64, end: u64) [16]u8 {
 
 pub fn selection(payload: []const u8) ?struct { start: u64, end: u64 } {
     if (payload.len != 16) return null;
-    return .{ .start = std.mem.readInt(u64, payload[0..8], .little), .end = std.mem.readInt(u64, payload[8..16], .little) };
+    return .{
+        .start = std.mem.readInt(u64, payload[0..8], .little),
+        .end = std.mem.readInt(u64, payload[8..16], .little),
+    };
 }
 
 fn testFrame(t: i64) Frame {

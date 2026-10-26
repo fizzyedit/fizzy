@@ -76,10 +76,10 @@ const Glide = struct {
     /// Demo time the pointer was last put down along the path.
     at: f64,
     /// Begun with a button held: carrying something, the pointer goes where the target was seen
-    /// to settle, and does not follow it after (`locked`). What it is carried over moves for it — a tab strip
-    /// makes room for the tab, a drop opens under it — and chasing that moved the room it made:
-    /// the tab carried at a tab went back and forth between two places every other frame. A person
-    /// aims where they saw it, too.
+    /// to settle, and does not follow it after (`locked`). What it is carried over moves for it — a
+    /// tab strip makes room for the tab, a drop opens under it — and chasing that moved the room
+    /// it made: the tab carried at a tab went back and forth between two places every other frame.
+    /// A person aims where they saw it, too.
     carried: bool = false,
     /// Carried, and the target seen in the same place on two frames: `to` is where it goes.
     locked: bool = false,
@@ -312,7 +312,12 @@ pub fn advance(self: *Sequencer, until: f64, wall_ms: f64, sink: Sink) Progress 
                 // A move only: a stroke's points are on a canvas that is not going anywhere, and a
                 // drawing has hundreds of them.
                 if (op.do == .move) if (sink.vtable.still) |still| if (!still(sink.ctx, target)) return .holding;
-                self.glide = .{ .op = self.cursor, .from = self.pointer, .at = self.now, .carried = self.pressed.count() > 0 };
+                self.glide = .{
+                    .op = self.cursor,
+                    .from = self.pointer,
+                    .at = self.now,
+                    .carried = self.pressed.count() > 0,
+                };
                 self.cursor += 1;
             },
             .type => {
@@ -507,7 +512,8 @@ fn pathPoint(op: Tape.Op, from: Point, to: Point, f: f32) Point {
 }
 
 /// The pointer `f` of the way along a glide: eased in and out, on a slight bow rather than a ruled
-/// line — a hand moving a mouse swings a little, and a dead-straight constant-speed pointer reads as
+/// line — a hand moving a mouse swings a little, and a dead-straight constant-speed pointer reads
+/// as
 /// a machine.
 pub fn glidePoint(from: Point, to: Point, f: f32) Point {
     const e = easeInOut(std.math.clamp(f, 0, 1));
@@ -966,7 +972,10 @@ test "a timed-out wait still releases a button held across it, but not a press i
     defer log.deinit();
     var seq: Sequencer = .init(&tape);
     while (!seq.done()) _ = seq.advance(std.math.inf(f64), 30, log.sink());
-    try testing.expectEqualStrings("keyframe demo://a\npress left\ntimeout 2 skipping 2\nrelease left\n", log.out.items);
+    try testing.expectEqualStrings(
+        "keyframe demo://a\npress left\ntimeout 2 skipping 2\nrelease left\n",
+        log.out.items,
+    );
 }
 
 test "a timed-out wait skips a keyframe and the commands after it, up to the next chapter" {
@@ -1000,7 +1009,10 @@ test "a timed-out wait releases the buttons held across it, whichever order the 
     defer log.deinit();
     var seq: Sequencer = .init(&tape);
     while (!seq.done()) _ = seq.advance(std.math.inf(f64), 30, log.sink());
-    try testing.expectEqualStrings("keyframe demo://a\npress left\ntimeout 2 skipping 2\nrelease left\n", log.out.items);
+    try testing.expectEqualStrings(
+        "keyframe demo://a\npress left\ntimeout 2 skipping 2\nrelease left\n",
+        log.out.items,
+    );
     try testing.expectEqual(@as(usize, 0), seq.pressed.count());
 }
 
@@ -1018,7 +1030,10 @@ test "a move to a target never drawn skips the chapter, so no press lands off ta
     defer log.deinit();
     var seq: Sequencer = .init(&tape);
     while (!seq.done()) _ = seq.advance(std.math.inf(f64), 30, log.sink());
-    try testing.expectEqualStrings("keyframe demo://a\nmove 0,0\nmissing missing 1 skipping 2\nkey plays\n", log.out.items);
+    try testing.expectEqualStrings(
+        "keyframe demo://a\nmove 0,0\nmissing missing 1 skipping 2\nkey plays\n",
+        log.out.items,
+    );
 }
 
 test "rewinding to a keyframe and replaying fast lands where live play did" {

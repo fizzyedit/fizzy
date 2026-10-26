@@ -22,8 +22,8 @@
 //! **Steps** carry a document's own history rather than input: the effect of one change (the
 //! pixels a stroke set, the text a transaction inserted) in its owner's encoding, applied to a
 //! file the keyframe declared. Input replays only in a window laid out as it was recorded; an
-//! effect replays exactly anywhere. What a step's bytes mean is the owner's, versioned by the file's
-//! `format`, and whether the app can apply them is the app's to say (`Check.steps`).
+//! effect replays exactly anywhere. What a step's bytes mean is the owner's, versioned by the
+//! file's `format`, and whether the app can apply them is the app's to say (`Check.steps`).
 //!
 //! Everything here is plain data with no pointers into anything but its own strings, so a tape
 //! round-trips through ZON (`parse`, `write`): the same thing a script builds (`Script`) is what
@@ -484,7 +484,8 @@ pub const Check = struct {
 /// Check what `Sequencer` relies on, once, at load — a tape that fails here would misplay rather
 /// than crash, which is worse to debug.
 pub fn validate(self: Tape, check: Check) Error!void {
-    if (!check.live and (self.ops.len == 0 or self.ops[0].at != 0 or self.ops[0].do != .keyframe)) return error.NoKeyframeAtStart;
+    if (!check.live and (self.ops.len == 0 or self.ops[0].at != 0 or self.ops[0].do != .keyframe))
+        return error.NoKeyframeAtStart;
     var prev: u32 = 0;
     // The keyframe the ops are under: a step's file is one of its.
     var scene: ?*const Keyframe = null;
@@ -542,7 +543,10 @@ pub fn parse(gpa: std.mem.Allocator, source: [:0]const u8, check: Check) !Owned 
     var arena: std.heap.ArenaAllocator = .init(gpa);
     errdefer arena.deinit();
     var diag: std.zon.parse.Diagnostics = undefined;
-    const tape = try std.zon.parse.fromSlice(Tape, .{ .gpa = gpa, .arena = arena.allocator(), .source = source, .diagnostics = &diag });
+    const tape = try std.zon.parse.fromSlice(
+        Tape,
+        .{ .gpa = gpa, .arena = arena.allocator(), .source = source, .diagnostics = &diag },
+    );
     try tape.validate(check);
     return .{ .arena = arena, .tape = tape };
 }
@@ -573,7 +577,14 @@ fn sample() Tape {
         const chapters = [_]Chapter{ .{ .at = 0, .title = "one" }, .{ .at = 1000, .title = "two" } };
         const captions = [_]Caption{.{ .at = 200, .ms = 2000, .text = "hi", .near = "button", .clear = &.{"field"} }};
     };
-    return .{ .name = "t", .ops = &S.ops, .keyframes = &S.keyframes, .chapters = &S.chapters, .captions = &S.captions, .home = "pane" };
+    return .{
+        .name = "t",
+        .ops = &S.ops,
+        .keyframes = &S.keyframes,
+        .chapters = &S.chapters,
+        .captions = &S.captions,
+        .home = "pane",
+    };
 }
 
 test "a seek replays from the last keyframe at or before it" {
@@ -693,8 +704,18 @@ test "a tape must open on a keyframe, in order, with chords the app can spell" {
     try testing.expectError(error.NoKeyframeAtStart, (Tape{ .name = "x", .ops = &bad_start }).validate(.{}));
 
     const kf = [_]Keyframe{.{ .root = "demo://x" }};
-    const backwards = [_]Op{ .{ .at = 0, .do = .{ .keyframe = 0 } }, .{ .at = 50, .do = .{ .key = "a" } }, .{ .at = 10, .do = .{ .key = "b" } } };
-    try testing.expectError(error.OpsOutOfOrder, (Tape{ .name = "x", .ops = &backwards, .keyframes = &kf }).validate(.{}));
+    const backwards = [_]Op{
+        .{
+            .at = 0,
+            .do = .{ .keyframe = 0 },
+        },
+        .{ .at = 50, .do = .{ .key = "a" } },
+        .{ .at = 10, .do = .{ .key = "b" } },
+    };
+    try testing.expectError(
+        error.OpsOutOfOrder,
+        (Tape{ .name = "x", .ops = &backwards, .keyframes = &kf }).validate(.{}),
+    );
 
     // Whether a chord is spelled right is the app's to say; unasked, it is not checked here.
     const bad_chord = [_]Op{ .{ .at = 0, .do = .{ .keyframe = 0 } }, .{ .at = 1, .do = .{ .key = "mod+nosuchkey" } } };
@@ -703,7 +724,10 @@ test "a tape must open on a keyframe, in order, with chords the app can spell" {
     try testing.expectError(error.BadChord, chords.validate(test_check));
 
     const bad_index = [_]Op{.{ .at = 0, .do = .{ .keyframe = 3 } }};
-    try testing.expectError(error.BadKeyframeIndex, (Tape{ .name = "x", .ops = &bad_index, .keyframes = &kf }).validate(.{}));
+    try testing.expectError(
+        error.BadKeyframeIndex,
+        (Tape{ .name = "x", .ops = &bad_index, .keyframes = &kf }).validate(.{}),
+    );
 }
 
 test "a live tape plays on the app as it is: no keyframe, anywhere" {
@@ -715,7 +739,10 @@ test "a live tape plays on the app as it is: no keyframe, anywhere" {
     try (Tape{ .name = "empty", .ops = &.{} }).validate(.{ .live = true });
 
     const cut = [_]Op{ .{ .at = 0, .do = .{ .key = "a" } }, .{ .at = 10, .do = .{ .keyframe = 0 } } };
-    try testing.expectError(error.KeyframeInLiveTape, (Tape{ .name = "x", .ops = &cut, .keyframes = &kf }).validate(.{ .live = true }));
+    try testing.expectError(
+        error.KeyframeInLiveTape,
+        (Tape{ .name = "x", .ops = &cut, .keyframes = &kf }).validate(.{ .live = true }),
+    );
 }
 
 /// A spelling for tests: any chord whose last key is a single letter.
@@ -808,7 +835,15 @@ pub const test_steps: Check = .{ .steps = struct {
 
 test "a step changes a file of the keyframe before it, whose owner the app can apply" {
     const sprite: [5]u8 = .{ 0x89, 'P', 0, 0xff, '\n' };
-    const files = [_]File{ .{ .path = "a.pixi", .text = &sprite, .owner = "pixi", .format = 1 }, .{ .path = "notes.md", .text = "# hi" } };
+    const files = [_]File{
+        .{
+            .path = "a.pixi",
+            .text = &sprite,
+            .owner = "pixi",
+            .format = 1,
+        },
+        .{ .path = "notes.md", .text = "# hi" },
+    };
     const kf = [_]Keyframe{ .{ .root = "demo://s", .files = &files, .open = &.{"a.pixi"} }, .{ .root = "demo://s" } };
     const ops = [_]Op{
         .{ .at = 0, .do = .{ .keyframe = 0 } },
@@ -820,17 +855,37 @@ test "a step changes a file of the keyframe before it, whose owner the app can a
     // An app that says nothing of steps, or no to this owner's format, refuses the tape.
     try testing.expectError(error.StepsUnsupported, tape.validate(.{}));
     const other_format = [_]File{.{ .path = "a.pixi", .text = &sprite, .owner = "pixi", .format = 2 }};
-    try testing.expectError(error.StepsUnsupported, (Tape{ .name = "s", .ops = &ops, .keyframes = &.{.{ .root = "demo://s", .files = &other_format }} }).validate(test_steps));
+    try testing.expectError(
+        error.StepsUnsupported,
+        (Tape{
+            .name = "s",
+            .ops = &ops,
+            .keyframes = &.{.{ .root = "demo://s", .files = &other_format }},
+        }).validate(test_steps),
+    );
     // A file that names its owner and takes no steps needs nothing of the app.
-    try (Tape{ .name = "s", .ops = ops[0..1], .keyframes = &.{.{ .root = "demo://s", .files = &other_format }} }).validate(.{});
+    try (Tape{
+        .name = "s",
+        .ops = ops[0..1],
+        .keyframes = &.{.{ .root = "demo://s", .files = &other_format }},
+    }).validate(.{});
 
     // Its file must be the keyframe's, and one with an owner to apply it.
     const elsewhere = [_]Op{ ops[0], .{ .at = 50, .do = .{ .keyframe = 1 } }, ops[1] };
-    try testing.expectError(error.StepWithoutFile, (Tape{ .name = "s", .ops = &elsewhere, .keyframes = &kf }).validate(test_steps));
+    try testing.expectError(
+        error.StepWithoutFile,
+        (Tape{ .name = "s", .ops = &elsewhere, .keyframes = &kf }).validate(test_steps),
+    );
     const ownerless = [_]Op{ ops[0], .{ .at = 50, .do = .{ .step = .{ .file = "notes.md", .effect = "x" } } } };
-    try testing.expectError(error.StepWithoutFile, (Tape{ .name = "s", .ops = &ownerless, .keyframes = &kf }).validate(test_steps));
+    try testing.expectError(
+        error.StepWithoutFile,
+        (Tape{ .name = "s", .ops = &ownerless, .keyframes = &kf }).validate(test_steps),
+    );
     // A live tape has no keyframe, so nothing to step.
-    try testing.expectError(error.StepWithoutFile, (Tape{ .name = "s", .ops = ops[1..] }).validate(.{ .live = true, .steps = test_steps.steps }));
+    try testing.expectError(
+        error.StepWithoutFile,
+        (Tape{ .name = "s", .ops = ops[1..] }).validate(.{ .live = true, .steps = test_steps.steps }),
+    );
 
     // Through ZON, the binary file and the steps come back byte for byte.
     var out: std.Io.Writer.Allocating = .init(testing.allocator);

@@ -142,9 +142,16 @@ pub fn keyframe(self: *Script, kf: Tape.Keyframe) !void {
     const open = try a.alloc([]const u8, kf.open.len);
     for (kf.open, open) |p, *out| out.* = try self.dupe(p);
     const settings = try a.alloc(Tape.Setting, kf.settings.len);
-    for (kf.settings, settings) |st, *out| out.* = .{ .owner = try self.dupe(st.owner), .key = try self.dupe(st.key), .value = try self.dupe(st.value) };
+    for (kf.settings, settings) |st, *out| out.* = .{
+        .owner = try self.dupe(st.owner),
+        .key = try self.dupe(st.key),
+        .value = try self.dupe(st.value),
+    };
     const root = try self.dupe(kf.root);
-    try self.keyframes.append(a, .{ .root = root, .files = files, .open = open, .layout = kf.layout, .settings = settings });
+    try self.keyframes.append(
+        a,
+        .{ .root = root, .files = files, .open = open, .layout = kf.layout, .settings = settings },
+    );
     try self.push(.{ .at = self.t, .do = .{ .keyframe = @intCast(self.keyframes.items.len - 1) } });
     try self.push(.{ .at = self.t, .do = .{ .wait = .{ .until = .idle } } });
     self.root = root;
@@ -220,12 +227,18 @@ pub const WaitOptions = struct {
 
 /// Hold the demo until the tagged widget is drawn.
 pub fn waitFor(self: *Script, tag: []const u8, opts: WaitOptions) !void {
-    try self.push(.{ .at = self.t, .do = .{ .wait = .{ .until = .{ .shown = try self.dupe(tag) }, .timeout = opts.timeout } } });
+    try self.push(.{
+        .at = self.t,
+        .do = .{ .wait = .{ .until = .{ .shown = try self.dupe(tag) }, .timeout = opts.timeout } },
+    });
 }
 
 /// Hold the demo until the tagged widget is gone.
 pub fn waitGone(self: *Script, tag: []const u8, opts: WaitOptions) !void {
-    try self.push(.{ .at = self.t, .do = .{ .wait = .{ .until = .{ .gone = try self.dupe(tag) }, .timeout = opts.timeout } } });
+    try self.push(.{
+        .at = self.t,
+        .do = .{ .wait = .{ .until = .{ .gone = try self.dupe(tag) }, .timeout = opts.timeout } },
+    });
 }
 
 /// Hold the demo until the stage has nothing in flight.
@@ -559,7 +572,13 @@ test "a caption shows for a time per word, never under the floor" {
     try testing.expectEqual(@as(u32, 2000), readingMs("", "a b c d e f"));
     try testing.expectEqual(@as(u32, 2100), readingMs("", "a b c d e f g"));
     // Title and text both count, and a long caption is not cut short.
-    try testing.expectEqual(@as(u32, 300 * 30), readingMs("one two three four five", "a b c d e f g h i j k l m n o p q r s t u v w x y"));
+    try testing.expectEqual(
+        @as(u32, 300 * 30),
+        readingMs("one two three four five", "a b c d e f g h i j k l m n o p q r s t u v w x y"),
+    );
     // Past the ceiling a caption stops growing.
-    try testing.expectEqual(reading_max_ms, readingMs("", "w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w"));
+    try testing.expectEqual(
+        reading_max_ms,
+        readingMs("", "w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w"),
+    );
 }

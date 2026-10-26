@@ -153,7 +153,11 @@ fn apply(self: *Connection, msg: Message, from: Role) Error!void {
         .create_view => |m| {
             if (m.view == 0) return error.UnknownView;
             if (self.views.contains(m.view)) return error.DuplicateView;
-            try self.views.put(self.gpa, m.view, .{ .tier = m.tier, .width = m.width, .height = m.height, .scale = m.scale });
+            try self.views.put(
+                self.gpa,
+                m.view,
+                .{ .tier = m.tier, .width = m.width, .height = m.height, .scale = m.scale },
+            );
         },
         .view_created => |m| {
             const v = self.views.getPtr(m.view) orelse return error.UnknownView;
@@ -254,14 +258,23 @@ test "a view's life, and the frames that answer requests" {
     try say(&p.editor, &p.host, .{ .view_created = .{ .view = 7, .tier = .draw_list, .width = 100, .height = 50 } });
     try t.expect(p.host.view(7).?.focused);
 
-    try t.expectError(error.UnexpectedFrame, p.editor.sending(.{ .frame = .{ .view = 7, .seq = 1, .tier = .draw_list } }));
+    try t.expectError(
+        error.UnexpectedFrame,
+        p.editor.sending(.{ .frame = .{ .view = 7, .seq = 1, .tier = .draw_list } }),
+    );
     try say(&p.host, &p.editor, .{ .frame_request = .{ .view = 7, .seq = 1 } });
     try t.expectError(error.SeqNotIncreasing, p.host.sending(.{ .frame_request = .{ .view = 7, .seq = 1 } }));
     try say(&p.host, &p.editor, .{ .frame_request = .{ .view = 7, .seq = 3 } });
     // Fizzy may skip seq 1 and answer 3 only; 2 was never asked, and 3 cannot be answered twice.
     try say(&p.editor, &p.host, .{ .frame = .{ .view = 7, .seq = 3, .tier = .draw_list } });
-    try t.expectError(error.UnexpectedFrame, p.editor.sending(.{ .frame = .{ .view = 7, .seq = 3, .tier = .draw_list } }));
-    try t.expectError(error.UnexpectedFrame, p.editor.sending(.{ .frame = .{ .view = 7, .seq = 4, .tier = .draw_list } }));
+    try t.expectError(
+        error.UnexpectedFrame,
+        p.editor.sending(.{ .frame = .{ .view = 7, .seq = 3, .tier = .draw_list } }),
+    );
+    try t.expectError(
+        error.UnexpectedFrame,
+        p.editor.sending(.{ .frame = .{ .view = 7, .seq = 4, .tier = .draw_list } }),
+    );
 
     try say(&p.host, &p.editor, .{ .close_view = .{ .view = 7 } });
     try t.expectError(error.ViewClosing, p.host.sending(.{ .resize = .{ .view = 7, .width = 1, .height = 1 } }));
@@ -287,7 +300,10 @@ test "each side may send only its own messages" {
     defer p.editor.deinit();
     try open(&p);
     try t.expectError(error.WrongDirection, p.host.sending(.{ .cursor = .{ .view = 1, .shape = .arrow } }));
-    try t.expectError(error.WrongDirection, p.host.received(.{ .create_view = .{ .view = 1, .width = 1, .height = 1 } }));
+    try t.expectError(
+        error.WrongDirection,
+        p.host.received(.{ .create_view = .{ .view = 1, .width = 1, .height = 1 } }),
+    );
 }
 
 test "no common version closes, naming who updates" {
@@ -332,7 +348,13 @@ test "view 0 is no view, and a frame must match its view's tier" {
     try t.expectError(error.UnknownView, p.host.sending(.{ .create_view = .{ .view = 0, .width = 1, .height = 1 } }));
     try say(&p.host, &p.editor, .{ .create_view = .{ .view = 1, .width = 1, .height = 1 } });
     try say(&p.host, &p.editor, .{ .frame_request = .{ .view = 1, .seq = 1 } });
-    try t.expectError(error.UnexpectedFrame, p.editor.sending(.{ .frame = .{ .view = 1, .seq = 1, .tier = .draw_list } }));
+    try t.expectError(
+        error.UnexpectedFrame,
+        p.editor.sending(.{ .frame = .{ .view = 1, .seq = 1, .tier = .draw_list } }),
+    );
     try say(&p.editor, &p.host, .{ .view_created = .{ .view = 1, .tier = .draw_list, .width = 1, .height = 1 } });
-    try t.expectError(error.UnexpectedFrame, p.editor.sending(.{ .frame = .{ .view = 1, .seq = 1, .tier = .shared_texture } }));
+    try t.expectError(
+        error.UnexpectedFrame,
+        p.editor.sending(.{ .frame = .{ .view = 1, .seq = 1, .tier = .shared_texture } }),
+    );
 }

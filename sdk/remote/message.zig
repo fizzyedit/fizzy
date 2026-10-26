@@ -47,7 +47,16 @@ pub const Type = enum(u16) {
     /// know an optional type skips it by its length. Sent in the frame header.
     pub fn required(t: Type) bool {
         return switch (t) {
-            .hello, .bye, .create_view, .view_created, .close_view, .view_closed, .resize, .frame_request, .frame => true,
+            .hello,
+            .bye,
+            .create_view,
+            .view_created,
+            .close_view,
+            .view_closed,
+            .resize,
+            .frame_request,
+            .frame,
+            => true,
             else => false,
         };
     }
@@ -56,7 +65,18 @@ pub const Type = enum(u16) {
     pub fn sender(t: Type) Sender {
         return switch (t) {
             .hello, .bye => .either,
-            .view_created, .view_closed, .cursor, .ime_rect, .text_input_active, .clipboard_request, .wants_keys, .open_url, .drag_begin, .frame, .frame_ready => .editor,
+            .view_created,
+            .view_closed,
+            .cursor,
+            .ime_rect,
+            .text_input_active,
+            .clipboard_request,
+            .wants_keys,
+            .open_url,
+            .drag_begin,
+            .frame,
+            .frame_ready,
+            => .editor,
             else => .host,
         };
     }
