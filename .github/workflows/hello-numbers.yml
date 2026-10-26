@@ -3,6 +3,13 @@ name: Hello numbers
 on:
   push:
     branches: [main]
+  pull_request:
+    paths:
+      - .github/workflows/hello-numbers.yml
+      - scripts/hello-numbers.py
+      - scripts/test-hello-numbers.py
+      - docs/HELLO_NUMBERS.md
+      - src/Entry.zig
   workflow_dispatch:
 
 permissions:
@@ -47,8 +54,6 @@ jobs:
           echo "LIBGL_ALWAYS_SOFTWARE=1" >> "$GITHUB_ENV"
           echo "SDL_VIDEO_DRIVER=x11" >> "$GITHUB_ENV"
           echo "VK_DRIVER_FILES=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -n 1)" >> "$GITHUB_ENV"
-      - name: Test the measurement harness without windows
-        run: python3 scripts/test-hello-numbers.py
       - name: Measure both release modes
         run: |
           set -euo pipefail
@@ -58,9 +63,9 @@ jobs:
             --example-revision "$(git -C ../example-app rev-parse HEAD)"
             --plugin-revision "$(git -C ../example-plugin rev-parse HEAD)")
           if [[ "$RUNNER_OS" == Linux ]]; then
-            xvfb-run -a -s "-screen 0 1280x1024x24" scripts/hello-numbers.sh "${args[@]}"
+            xvfb-run -a -s "-screen 0 1280x1024x24" python3 scripts/hello-numbers.py "${args[@]}"
           else
-            scripts/hello-numbers.sh "${args[@]}"
+            python3 scripts/hello-numbers.py "${args[@]}"
           fi
       - uses: actions/upload-artifact@v4
         if: always()
