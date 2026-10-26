@@ -1201,10 +1201,10 @@ test "marks past the span's room widen its last rect" {
     try std.testing.expectEqual(@as(u8, 8), span.len);
     try std.testing.expect(span.hits(.{ .x = 905, .y = 0, .w = 2, .h = 2 }));
 }
-
-/// What `frostPane` hands to the replay. Lives in the data store under the owner's id, so the
-/// pointer is good until the frame ends.
-const FrostJob = struct {
+/// What `frostPane` hands to the replay. Lives in the data store under the owner's id (`_frost_job`),
+/// so the pointer is good until the frame ends. `pub` for the tests that check which glass a
+/// surface asked for: `field` set is the program's, null the rounded rect's.
+pub const FrostJob = struct {
     backdrop: *BlurBackdrop = undefined,
     corners: dvui.CornerRect = .{},
     scale: f32 = 1,
