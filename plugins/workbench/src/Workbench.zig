@@ -231,21 +231,32 @@ pub fn sideBeside(self: *const Workbench, anchor: u64) Panes.Side {
 }
 
 /// What opening beside the person's pane asks of `core.placement.place`: the other pane that is
-/// there, if any, and the answer over the person's room and that pane's. Null before the person's
+/// shown, if any, and the answer over the person's room and that pane's. Null before the person's
 /// pane has drawn, with no room to judge.
 const Beside = struct { other: ?u64, answer: ?core.placement.Result };
 
+/// A pane other than the person's that is not sliding shut.
+fn otherPane(self: *Workbench) ?u64 {
+    for (self.workspaces.values()) |ws| {
+        if (ws.grouping != self.open_workspace_grouping and !self.paneClosing(ws.grouping)) return ws.grouping;
+    }
+    return null;
+}
+
 fn besideAnswer(self: *Workbench) Beside {
-    const here = self.open_workspace_grouping;
-    const other = for (self.workspaces.values()) |ws| {
-        if (ws.grouping != here and !self.paneClosing(ws.grouping)) break ws.grouping;
-    } else null;
-    const room = self.paneSize(here) orelse return .{ .other = other, .answer = null };
+    const room = self.paneSize(self.open_workspace_grouping) orelse return .{ .other = self.otherPane(), .answer = null };
+    // `place` takes the first of these whatever its size, so a pane is a candidate only if the
+    // person can be sent to it: drawn, and in a place of the app's.
     var others: [1]core.placement.Size = undefined;
-    const places: []const core.placement.Size = if (other) |g| blk: {
-        others[0] = self.paneSize(g) orelse .{ .w = 0, .h = 0 };
-        break :blk &others;
-    } else &.{};
+    var other: ?u64 = null;
+    for (self.workspaces.values()) |ws| {
+        if (ws.grouping == self.open_workspace_grouping or self.paneClosing(ws.grouping)) continue;
+        if (self.places) |p| if (!p.placed(p.ctx, ws.grouping)) continue;
+        others[0] = self.paneSize(ws.grouping) orelse continue;
+        other = ws.grouping;
+        break;
+    }
+    const places: []const core.placement.Size = if (other != null) &others else &.{};
     return .{ .other = other, .answer = core.placement.place(room, places) };
 }
 

@@ -119,6 +119,7 @@ pub fn sync(self: *Workspaces) void {
         self.settle();
     }
     var first: ?u64 = null;
+    var l = layoutOf(editor);
     for (wb.workspaces.keys()) |g| {
         if (self.assigned(g)) continue;
         if (first == null) {
@@ -126,11 +127,10 @@ pub fn sync(self: *Workspaces) void {
             continue;
         }
         // The anchor's room asks the side, when it has one yet.
-        var l = layoutOf(editor);
         var abuf: [64]u8 = undefined;
         const room = if (Layout.ViewDrag.holderOf(&l, viewId(&abuf, first.?))) |holder| Layout.ViewDrag.placeSize(l.state, holder) else null;
         const side = if (room) |r| Workbench.sideFor(r.w, r.h) else .right;
-        _ = beside(self, g, first.?, side, true);
+        _ = besideIn(&l, g, first.?, side, true);
     }
 }
 
@@ -291,11 +291,14 @@ fn layoutOf(editor: *Editor) Layout {
 
 fn beside(ctx: *anyopaque, grouping: u64, anchor: u64, side: Workbench.Panes.Side, adaptive: bool) bool {
     const self: *Workspaces = @ptrCast(@alignCast(ctx));
-    const editor = self.editorOf();
-    var l = layoutOf(editor);
+    var l = layoutOf(self.editorOf());
+    return besideIn(&l, grouping, anchor, side, adaptive);
+}
+
+fn besideIn(l: *Layout, grouping: u64, anchor: u64, side: Workbench.Panes.Side, adaptive: bool) bool {
     var abuf: [64]u8 = undefined;
-    const place = Layout.ViewDrag.holderOf(&l, viewId(&abuf, anchor)) orelse return false;
-    const new = Layout.splitOn(&l, place, switch (side) {
+    const place = Layout.ViewDrag.holderOf(l, viewId(&abuf, anchor)) orelse return false;
+    const new = Layout.splitOn(l, place, switch (side) {
         .left => .left,
         .right => .right,
         .top => .top,
@@ -304,7 +307,7 @@ fn beside(ctx: *anyopaque, grouping: u64, anchor: u64, side: Workbench.Panes.Sid
     var buf: [64]u8 = undefined;
     const id = l.arena.dupe(u8, viewId(&buf, grouping)) catch return false;
     l.state.assign(l.gpa, new, &.{id}) catch return false;
-    if (adaptive) Layout.markAdaptive(&l, new);
+    if (adaptive) Layout.markAdaptive(l, new);
     l.state.markDirty();
     return true;
 }
