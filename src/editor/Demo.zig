@@ -285,11 +285,8 @@ pub fn frame(self: *Demo) void {
             .tape => |bytes| self.playTape(bytes) catch {},
         }
     }
-    // A drop beside is aimed at where the workbench would split, as the room is now.
-    self.editor.app.layout.beside = if (self.active())
-        if (self.editor.workbench.besideEdge()) |side| std.meta.stringToEnum(SplitTree.Side, @tagName(side)) else null
-    else
-        null;
+    // A drop beside is aimed at where the workbench would split the target place, as its room is now.
+    self.editor.app.layout.beside = if (self.active()) .{ .ctx = self, .edge = besideEdge } else null;
     self.snapshot.beginFrame();
     self.live.frame();
     self.player.frame();
@@ -870,6 +867,19 @@ fn chordFor(ctx: *anyopaque, id: []const u8) ?@import("app").keymap.chord.Stroke
 fn commandTitle(ctx: *anyopaque, id: []const u8) ?[]const u8 {
     const c = from(ctx).editor.app.host.command(id) orelse return null;
     return c.title;
+}
+
+/// The edge a drop beside aims at over place `name`: where the workbench would split the pane
+/// shown there (a pane of its own tree is named for its grouping). A pane the layout's keywords
+/// show is in no list, so Main is the person's pane.
+pub fn besideEdge(ctx: *anyopaque, name: []const u8) ?SplitTree.Side {
+    const editor = from(ctx).editor;
+    const wb = &editor.workbench;
+    const grouping = Editor.Workspace.groupingOfName(name) orelse editor.workspaces.groupingIn(name) orelse blk: {
+        const main = editor.regionFor(sdk.keywords.ide.main) orelse return null;
+        break :blk if (std.mem.eql(u8, main.name, name)) wb.open_workspace_grouping else return null;
+    };
+    return wb.besideEdge(grouping);
 }
 
 /// The place a role names, by what it is rather than what the person's layout calls it.

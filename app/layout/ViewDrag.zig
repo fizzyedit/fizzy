@@ -1329,7 +1329,7 @@ pub fn drawZones(l: *Layout, name: []const u8, key: dvui.Id) void {
         switch (z) {
             .edge => |side| {
                 core.anchor.markRect(key, r, true, "drop:{t}", .{side});
-                if (l.state.beside) |aimed_side| if (std.mem.eql(u8, @tagName(aimed_side), @tagName(side))) core.anchor.markRect(key, r, true, "drop:beside", .{});
+                if (l.state.beside) |aim_at| if (aim_at.edge(aim_at.ctx, name) == side) core.anchor.markRect(key, r, true, "drop:beside", .{});
             },
             else => core.anchor.markRect(key, r, true, "drop:{t}", .{z}),
         }

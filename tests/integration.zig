@@ -10898,6 +10898,26 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         // With another pane there, it takes the view; without, the person's own does.
         const taken = wb.besideGrouping();
         if (others > 0) try std.testing.expect(taken != here) else try std.testing.expectEqual(here, taken);
+        // A demo's `drop:beside` is the answer for the place it is aimed at, not the person's pane's
+        // for every place: Main's is the pane's edge in its own room, which turns with the room,
+        // and a place that holds no documents has none.
+        if (others == 0) {
+            const Side = fizzy.core.widgets.DockLayout.Side;
+            const main = (editor.regionFor(fizzy.sdk.keywords.ide.main) orelse return error.TestUnexpectedResult).name;
+            const sidebar = (editor.regionFor(fizzy.sdk.keywords.ide.sidebar) orelse return error.TestUnexpectedResult).name;
+            ws.pane_rect_physical = .{ .x = 0, .y = 0, .w = 1200 * s, .h = 800 * s };
+            try std.testing.expectEqual(@as(?Side, .right), fizzy.Editor.Demo.besideEdge(&editor.demo, main));
+            try std.testing.expectEqual(@as(?Side, null), fizzy.Editor.Demo.besideEdge(&editor.demo, sidebar));
+            ws.pane_rect_physical = .{ .x = 0, .y = 0, .w = 820 * s, .h = 1180 * s };
+            try std.testing.expectEqual(@as(?Side, .bottom), fizzy.Editor.Demo.besideEdge(&editor.demo, main));
+            var pane_buf: [32]u8 = undefined;
+            const pane = fizzy.Editor.Workspace.name(&pane_buf, here);
+            try std.testing.expectEqual(@as(?Side, .bottom), fizzy.Editor.Demo.besideEdge(&editor.demo, pane));
+            var other_buf: [32]u8 = undefined;
+            try std.testing.expectEqual(@as(?Side, null), fizzy.Editor.Demo.besideEdge(&editor.demo, fizzy.Editor.Workspace.name(&other_buf, here + 1000)));
+            try std.testing.expectEqual(@as(?Side, null), wb.besideEdge(here + 1000));
+            ws.pane_rect_physical = .{ .x = 0, .y = 0, .w = 390 * s, .h = 844 * s };
+        }
         try std.testing.expectEqual(fizzy.core.widgets.DockLayout.Side.right, workbench.Workbench.sideFor(1200, 800));
         try std.testing.expectEqual(fizzy.core.widgets.DockLayout.Side.bottom, workbench.Workbench.sideFor(820, 1180));
     }

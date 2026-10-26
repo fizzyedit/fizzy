@@ -6,8 +6,10 @@
 //! picker fills them. Closing an empty leaf collapses the branch.
 const std = @import("std");
 const dvui = @import("dvui");
+const core = @import("core");
 
-pub const Side = enum { left, right, top, bottom };
+/// The docking widget's: a pane tree and a place tree name an edge the same way.
+pub const Side = core.widgets.DockLayout.Side;
 
 pub fn axisOf(side: Side) dvui.enums.Direction {
     return switch (side) {
