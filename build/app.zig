@@ -1428,6 +1428,25 @@ fn addTests(
         test_integration_step.dependOn(&b.addRunArtifact(replay_tests).step);
         check_integration_step.dependOn(&replay_tests.step);
     }
+    // What a plugin does with `tape` and `replay` (`tests/fixtures/tape-plugin/play.zig`), as one
+    // linked into an app imports them: `core`'s own instances. The fixture's own build tests the
+    // same file as a dylib.
+    {
+        const play = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("tests/fixtures/tape-plugin/play.zig"),
+        });
+        play.addImport("tape", core_module_test.import_table.get("tape").?);
+        play.addImport("replay", core_module_test.import_table.get("replay").?);
+        const play_tests = b.addTest(.{
+            .name = "fizzy-tape-plugin-bundled-tests",
+            .root_module = play,
+            .filters = test_filters,
+        });
+        test_integration_step.dependOn(&b.addRunArtifact(play_tests).step);
+        check_integration_step.dependOn(&play_tests.step);
+    }
     // The native backend's health counters as SDL feeds them: its log counted, and passed on to
     // the output it had. Needs SDL, no window.
     if (main_fizzy.backend) |native_backend_module| {

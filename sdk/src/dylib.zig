@@ -13,6 +13,8 @@ const builtin = @import("builtin");
 const dvui = @import("dvui");
 const proxy_bridge = @import("proxy_bridge");
 const core = @import("core");
+const tape = @import("tape");
+const replay = @import("replay");
 const fingerprint = @import("fingerprint.zig");
 const dvui_context = @import("dvui_context.zig");
 const runtime = @import("runtime.zig");
@@ -189,6 +191,30 @@ const sdk_boundary_types = .{
     VersionTriplet,
 };
 
+/// A plugin's demo crosses the boundary as bytes (`Demo.tape`), so these are shared by what they
+/// spell, not by pointer: `tape.binary.version` is folded in `sdk_shape_fingerprint`, and the
+/// data types a tape is made of are hashed here. `Stage` is the seam a plugin's app fills in.
+const tape_boundary_types = .{
+    tape.Tape,
+    tape.Tape.Op,
+    tape.Tape.Action,
+    tape.Tape.Button,
+    tape.Tape.Command,
+    tape.Tape.Step,
+    tape.Tape.Scroll,
+    tape.Tape.Target,
+    tape.Tape.Wait,
+    tape.Tape.Skip,
+    tape.Tape.Until,
+    tape.Tape.Caption,
+    tape.Tape.Chapter,
+    tape.Tape.Keyframe,
+    tape.Tape.Setting,
+    tape.Tape.File,
+    replay.Stage,
+    replay.Stage.VTable,
+};
+
 const entry_symbol_types = .{
     RegisterFn,
     SetGlobalsFn,
@@ -280,6 +306,8 @@ pub const sdk_shape_fingerprint: u64 = blk: {
     h = fingerprint.hashAllShape(h, sdk_boundary_types, 6);
     h = fingerprint.hashAllShape(h, entry_symbol_types, 3);
     h = fingerprint.hashAllShape(h, dvui_shared_state_types, 6);
+    h = fingerprint.hashAllShape(h, tape_boundary_types, 6);
+    h = fingerprint.foldString(h, std.mem.asBytes(&tape.binary.version));
     break :blk h;
 };
 
