@@ -50,9 +50,18 @@ Download `hello-numbers-<OS>-<arch>` from a run for the exact JSON lines and sou
 | Idle RSS after 30 s | 144,674,816 B | 133,455,872 B |
 | Gzipped wasm | 4,145,339 B | 3,348,450 B |
 
-Source: [run 40195192369](https://github.com/fizzyedit/fizzy/actions/runs/40195192369) at
-`c4f0e401` (Xvfb with Mesa software rendering on a GitHub runner; one sample each). The macOS
-column is not yet recorded: that run's macOS job failed.
+| macOS arm64, example-app minimal | ReleaseFast | ReleaseSmall |
+| --- | --- | --- |
+| Stripped executable | 18,929,920 B | 13,117,696 B |
+| Installer (`.pkg`) | 13,751,314 B | 11,038,371 B |
+| First frame (`core.profile`) | 634 ms | 217 ms |
+| Idle RSS after 30 s | 76,890,112 B | 75,120,640 B |
+| Gzipped wasm | 3,946,752 B | 3,241,346 B |
+
+Sources: Linux from [run 40195192369](https://github.com/fizzyedit/fizzy/actions/runs/40195192369)
+at `c4f0e401`; macOS (macos-14 runner) from
+[run 40227072263](https://github.com/fizzyedit/fizzy/actions/runs/40227072263) at `f156c1e8`.
+One sample each; Linux uses Xvfb with Mesa software rendering on a GitHub runner.
 
 See the [method and manual Electron/Tauri comparison](docs/HELLO_NUMBERS.md) before comparing
 samples: runner hardware, OS caches, packaged resources and startup clocks affect the results.
