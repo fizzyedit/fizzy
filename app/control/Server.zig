@@ -759,11 +759,10 @@ test "a request reaches the UI thread and its answer goes back" {
     defer dog.disarm();
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const dir = try tmp.dir.realPathFileAlloc(io, ".", gpa);
-    defer gpa.free(dir);
     // In a folder of its own that `start` makes, as the app's is (`control/control.sock`).
-    const path = try std.fs.path.join(gpa, &.{ dir, "control", "c.sock" });
+    const path = try testSocket(gpa, &tmp);
     defer gpa.free(path);
+    defer removeTestSocket(path);
 
     var server: Server = .{ .gpa = gpa, .io = io, .socket_path = path, .wake = noWake };
     try server.start();
@@ -808,10 +807,24 @@ test "a request reaches the UI thread and its answer goes back" {
     try std.testing.expectEqual(@as(std.posix.mode_t, 0o700), folder.permissions.toMode() & 0o777);
 }
 
+/// A socket path for a test, in a folder of its own that `start` makes and `removeTestSocket`
+/// removes. Short: the tmp dir lives under the build's cache, which a deep checkout (a worker's
+/// sibling workspace) pushes past what the OS takes (`max_path`). Named by the tmp dir's random
+/// name so tests do not meet.
 fn testSocket(gpa: std.mem.Allocator, tmp: *std.testing.TmpDir) ![]u8 {
-    const dir = try tmp.dir.realPathFileAlloc(std.testing.io, ".", gpa);
-    defer gpa.free(dir);
-    return std.fs.path.join(gpa, &.{ dir, "c.sock" });
+    if (builtin.target.os.tag == .windows) {
+        const dir = try tmp.dir.realPathFileAlloc(std.testing.io, ".", gpa);
+        defer gpa.free(dir);
+        return std.fs.path.join(gpa, &.{ dir, "control", "c.sock" });
+    }
+    // `/tmp` itself is a link on macOS, which `start` refuses as a folder.
+    const root = if (builtin.target.os.tag.isDarwin()) "/private/tmp" else "/tmp";
+    return std.fmt.allocPrint(gpa, "{s}/fz-{s}/c.sock", .{ root, tmp.sub_path });
+}
+
+fn removeTestSocket(path: []const u8) void {
+    if (builtin.target.os.tag == .windows) return;
+    Io.Dir.cwd().deleteTree(std.testing.io, std.fs.path.dirname(path).?) catch {};
 }
 
 test "a request still queued at quit is answered: the server is stopping" {
@@ -825,6 +838,7 @@ test "a request still queued at quit is answered: the server is stopping" {
     defer tmp.cleanup();
     const path = try testSocket(gpa, &tmp);
     defer gpa.free(path);
+    defer removeTestSocket(path);
 
     var server: Server = .{ .gpa = gpa, .io = io, .socket_path = path, .wake = noWake };
     try server.start();
@@ -857,6 +871,7 @@ test "what cannot be served is refused before its body, and never reaches the ap
     defer tmp.cleanup();
     const path = try testSocket(gpa, &tmp);
     defer gpa.free(path);
+    defer removeTestSocket(path);
 
     var server: Server = .{ .gpa = gpa, .io = io, .socket_path = path, .wake = noWake };
     try server.start();
@@ -922,6 +937,7 @@ test "a server that took over the path keeps it when the old one stops" {
     defer tmp.cleanup();
     const path = try testSocket(gpa, &tmp);
     defer gpa.free(path);
+    defer removeTestSocket(path);
 
     // A restart's handover: the new fizzy listens on the profile's socket while the old runs.
     var old: Server = .{ .gpa = gpa, .io = io, .socket_path = path, .wake = noWake };
@@ -958,6 +974,7 @@ test "a stream gets the events it asked for, once each, until the server stops" 
     defer tmp.cleanup();
     const path = try testSocket(gpa, &tmp);
     defer gpa.free(path);
+    defer removeTestSocket(path);
 
     var server: Server = .{ .gpa = gpa, .io = io, .socket_path = path, .wake = noWake };
     try server.start();
@@ -1059,6 +1076,7 @@ test "a client that stops reading neither holds up the quit nor buffers without 
     defer tmp.cleanup();
     const path = try testSocket(gpa, &tmp);
     defer gpa.free(path);
+    defer removeTestSocket(path);
 
     var server: Server = .{ .gpa = gpa, .io = io, .socket_path = path, .wake = noWake };
     try server.start();
@@ -1103,6 +1121,7 @@ test "a stopped server ends a stream whose client stopped reading" {
     defer tmp.cleanup();
     const path = try testSocket(gpa, &tmp);
     defer gpa.free(path);
+    defer removeTestSocket(path);
 
     var server: Server = .{ .gpa = gpa, .io = io, .socket_path = path, .wake = noWake };
     try server.start();
@@ -1134,6 +1153,7 @@ test "an event published as the stream is answered is not lost" {
     defer tmp.cleanup();
     const path = try testSocket(gpa, &tmp);
     defer gpa.free(path);
+    defer removeTestSocket(path);
 
     var server: Server = .{ .gpa = gpa, .io = io, .socket_path = path, .wake = noWake };
     try server.start();
@@ -1167,6 +1187,7 @@ test "a stopped server ends a keep-alive connection waiting for its next request
     defer tmp.cleanup();
     const path = try testSocket(gpa, &tmp);
     defer gpa.free(path);
+    defer removeTestSocket(path);
 
     var server: Server = .{ .gpa = gpa, .io = io, .socket_path = path, .wake = noWake };
     try server.start();
@@ -1275,6 +1296,7 @@ test "an upgraded connection carries bytes both ways until the app closes it" {
     defer tmp.cleanup();
     const path = try testSocket(gpa, &tmp);
     defer gpa.free(path);
+    defer removeTestSocket(path);
     var server: Server = .{ .gpa = gpa, .io = io, .socket_path = path, .wake = noWake };
     try server.start();
     defer server.stop();
@@ -1322,6 +1344,7 @@ test "a client that leaves an upgraded connection finishes its link" {
     defer tmp.cleanup();
     const path = try testSocket(gpa, &tmp);
     defer gpa.free(path);
+    defer removeTestSocket(path);
     var server: Server = .{ .gpa = gpa, .io = io, .socket_path = path, .wake = noWake };
     try server.start();
     defer server.stop();
