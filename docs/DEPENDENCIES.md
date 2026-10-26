@@ -179,6 +179,14 @@ Fizzy builds dvui in its `custom` backend mode on every target and links its own
 backends are only built by `-Dnative-backend=sdl3`. A dvui change to those backends is not a
 change to fizzy: anything fizzy wants from one is merged into its own by hand.
 
+Local copies of dvui, kept in fizzy until upstream has them (diff these on every dvui bump):
+
+- `core/widgets/ScrollArea.zig`: the touch branch of `ScrollContainerWidget.processEvent`,
+  `processMotionScroll` and `processVelocityAfter`, copied from dvui-dev `3d90fdd` (the pin in
+  its header) so a touch fling uses the last 100 ms of motion and one decay per second. Delete it
+  when the fix lands upstream (after plans#51). Canary: the test "dvui's own area, given the same
+  flick, stops almost at once" fails once upstream changes the touch path; port or delete then.
+
 Fizzy adapts to two upstream behaviours rather than patching them:
 
 - **Long lines** (#992): `TextLayoutWidget.cacheLayoutNext` hands out the byte regions a layout

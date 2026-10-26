@@ -264,12 +264,12 @@ pub fn draw() !void {
     // anywhere a region accepts it — a split of the main area as readily as the sidebar rail —
     // and only the sidebar happened to wrap what it shows in a scroll area. Everywhere else the
     // tree simply expanded past the bottom edge with no way to reach the rest of it.
-    var scroll = dvui.scrollArea(@src(), .{ .vertical_bar = .auto_overlay }, .{
+    var scroll = core.widgets.ScrollArea.init(@src(), .{ .vertical_bar = .auto_overlay }, .{
         .expand = .both,
         .background = false,
     });
     defer scroll.deinit();
-    defer core.widgets.scrollShadows(scroll);
+    defer core.widgets.scrollShadows(scroll.area);
 
     // Cap the pane at that viewport's width.
     //

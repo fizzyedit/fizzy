@@ -12,6 +12,8 @@
 test {
     _ = @import("widgets/Split.zig");
     _ = @import("widgets/ContextWidget.zig");
+    // Touch drag and fling of a scroll area.
+    _ = @import("widgets/ScrollArea.zig");
     // A tab's hand beside a split's arrow, and a tapped tab's hover look.
     _ = @import("widgets/Tabs.zig");
     // The local copies of upstream's docking (see `widgets.zig`): referenced here so they

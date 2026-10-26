@@ -102,7 +102,7 @@ pub fn draw(
     // it was last given, a frame old — while the window shrank, every frame of it, last frame's
     // height overflowed this frame's, and a bar showed beside the pane's own until it stopped.
     const bar: dvui.ScrollInfo.ScrollBarMode = if (self_scrolling) .hide else .auto_overlay;
-    var scroll = dvui.scrollArea(@src(), .{ .scroll_info = &explorer.scroll_info, .horizontal_bar = bar, .vertical_bar = bar }, .{
+    var scroll = fizzy.core.widgets.ScrollArea.init(@src(), .{ .scroll_info = &explorer.scroll_info, .horizontal_bar = bar, .vertical_bar = bar }, .{
         .expand = .both,
         .background = false,
     });

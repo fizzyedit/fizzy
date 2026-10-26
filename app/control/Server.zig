@@ -676,6 +676,39 @@ fn topicsOf(arena: std.mem.Allocator, target: []const u8) ![]const []const u8 {
 
 fn noWake() void {}
 
+/// Ends the test binary, naming the test, when a test is still running after `limit_ms`: every
+/// test here that spawns a client blocks `join` on it, and a client whose connection the OS
+/// never closes (Windows' AF_UNIX, a connection still in the backlog at `stop`) would otherwise
+/// hold the whole `zig build test` until its runner is killed. `zig build` has no per-test limit
+/// of its own that a step can set.
+const Watchdog = struct {
+    const limit_ms = 60_000;
+
+    io: Io,
+    name: []const u8,
+    done: Io.Event = .unset,
+    thread: ?std.Thread = null,
+
+    fn arm(self: *Watchdog) !void {
+        self.thread = try std.Thread.spawn(.{}, watch, .{self});
+    }
+
+    fn disarm(self: *Watchdog) void {
+        self.done.set(self.io);
+        if (self.thread) |t| t.join();
+    }
+
+    fn watch(self: *Watchdog) void {
+        self.done.waitTimeout(self.io, .{ .duration = .{ .raw = .fromMilliseconds(limit_ms), .clock = .awake } }) catch |err| switch (err) {
+            error.Timeout => {
+                std.debug.print("\nfizzy-control-server-tests: {s} still running after {d} s: a client or the server is blocked; aborting\n", .{ self.name, limit_ms / 1000 });
+                std.process.abort();
+            },
+            else => {},
+        };
+    }
+};
+
 const TestClient = struct {
     io: Io,
     path: []const u8,
@@ -721,6 +754,9 @@ test "a request reaches the UI thread and its answer goes back" {
     if (!Io.net.has_unix_sockets) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const io = std.testing.io;
+    var dog: Watchdog = .{ .io = io, .name = @src().fn_name };
+    try dog.arm();
+    defer dog.disarm();
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const dir = try tmp.dir.realPathFileAlloc(io, ".", gpa);
@@ -782,6 +818,9 @@ test "a request still queued at quit is answered: the server is stopping" {
     if (!Io.net.has_unix_sockets) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const io = std.testing.io;
+    var dog: Watchdog = .{ .io = io, .name = @src().fn_name };
+    try dog.arm();
+    defer dog.disarm();
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const path = try testSocket(gpa, &tmp);
@@ -811,6 +850,9 @@ test "what cannot be served is refused before its body, and never reaches the ap
     if (!Io.net.has_unix_sockets) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const io = std.testing.io;
+    var dog: Watchdog = .{ .io = io, .name = @src().fn_name };
+    try dog.arm();
+    defer dog.disarm();
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const path = try testSocket(gpa, &tmp);
@@ -873,6 +915,9 @@ test "a server that took over the path keeps it when the old one stops" {
     if (!Io.net.has_unix_sockets) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const io = std.testing.io;
+    var dog: Watchdog = .{ .io = io, .name = @src().fn_name };
+    try dog.arm();
+    defer dog.disarm();
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const path = try testSocket(gpa, &tmp);
@@ -906,6 +951,9 @@ test "a stream gets the events it asked for, once each, until the server stops" 
     if (!Io.net.has_unix_sockets) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const io = std.testing.io;
+    var dog: Watchdog = .{ .io = io, .name = @src().fn_name };
+    try dog.arm();
+    defer dog.disarm();
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const path = try testSocket(gpa, &tmp);
@@ -1004,6 +1052,9 @@ test "a client that stops reading neither holds up the quit nor buffers without 
     if (!Io.net.has_unix_sockets) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const io = std.testing.io;
+    var dog: Watchdog = .{ .io = io, .name = @src().fn_name };
+    try dog.arm();
+    defer dog.disarm();
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const path = try testSocket(gpa, &tmp);
@@ -1045,6 +1096,9 @@ test "a stopped server ends a stream whose client stopped reading" {
     if (!Io.net.has_unix_sockets) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const io = std.testing.io;
+    var dog: Watchdog = .{ .io = io, .name = @src().fn_name };
+    try dog.arm();
+    defer dog.disarm();
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const path = try testSocket(gpa, &tmp);
@@ -1073,6 +1127,9 @@ test "an event published as the stream is answered is not lost" {
     if (!Io.net.has_unix_sockets) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const io = std.testing.io;
+    var dog: Watchdog = .{ .io = io, .name = @src().fn_name };
+    try dog.arm();
+    defer dog.disarm();
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const path = try testSocket(gpa, &tmp);
@@ -1103,6 +1160,9 @@ test "a stopped server ends a keep-alive connection waiting for its next request
     if (!Io.net.has_unix_sockets) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const io = std.testing.io;
+    var dog: Watchdog = .{ .io = io, .name = @src().fn_name };
+    try dog.arm();
+    defer dog.disarm();
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const path = try testSocket(gpa, &tmp);
@@ -1208,6 +1268,9 @@ test "an upgraded connection carries bytes both ways until the app closes it" {
     if (!Io.net.has_unix_sockets) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const io = std.testing.io;
+    var dog: Watchdog = .{ .io = io, .name = @src().fn_name };
+    try dog.arm();
+    defer dog.disarm();
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const path = try testSocket(gpa, &tmp);
@@ -1252,6 +1315,9 @@ test "a client that leaves an upgraded connection finishes its link" {
     if (!Io.net.has_unix_sockets) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const io = std.testing.io;
+    var dog: Watchdog = .{ .io = io, .name = @src().fn_name };
+    try dog.arm();
+    defer dog.disarm();
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const path = try testSocket(gpa, &tmp);

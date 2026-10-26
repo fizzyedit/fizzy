@@ -107,10 +107,10 @@ const Pending = union(enum) {
 
 const Saved = struct {
     folder: ?[]u8,
-    /// The panes of the documents as they were, and what holds them (`arena`): put back at the end
-    /// of the tape, while `Workbench.panes_held` keeps the demo's from `panes.zon`.
-    panes: ?Editor.Workbench.Arrangement,
-    panes_arena: std.heap.ArenaAllocator,
+    /// The window as the person had it (places, floats, seed tree, the documents' panes), put back
+    /// at the tape's end by closing what the tape made (`end`); the panes meanwhile are kept from
+    /// `panes.zon` (`Workbench.panes_held`). Null where it could not be noted.
+    arrangement: ?*Snapshot,
     /// The one they were in.
     active: ?u64,
     /// The explorer's open folders, and whether its root had opened (`Workbench.file_tree_root_opened`).
@@ -472,13 +472,17 @@ fn begin(ctx: *anyopaque, _: *const automation.Tape) void {
     // Their documents stay open where they are, and nothing of the demo's closes, saves or
     // restores them (`ownsDocument`).
     const gpa = editor.app.gpa;
-    var panes_arena: std.heap.ArenaAllocator = .init(gpa);
-    const panes: ?Editor.Workbench.Arrangement = editor.workbench.arrangement(panes_arena.allocator()) catch |err| blk: {
-        dvui.log.warn("demo: could not note the panes: {t}", .{err});
-        break :blk null;
+    const arrangement: ?*Snapshot = blk: {
+        const snap = newSnapshot(editor) orelse break :blk null;
+        fillArrangement(editor, snap) catch |err| {
+            dvui.log.warn("demo: could not note the window: {t}", .{err});
+            destroySnapshot(editor, snap);
+            break :blk null;
+        };
+        break :blk snap;
     };
     // Held only when there is something to put back: the panes would be saved as the person's.
-    editor.workbench.panes_held = panes != null;
+    editor.workbench.panes_held = arrangement != null;
     const branches: []const dvui.Id = if (gpa.alloc(dvui.Id, editor.workbench.open_branches.count())) |out| blk: {
         var it = editor.workbench.open_branches.keyIterator();
         for (out) |*b| b.* = it.next().?.*;
@@ -490,8 +494,7 @@ fn begin(ctx: *anyopaque, _: *const automation.Tape) void {
     const folder = editor.app.folder orelse "";
     self.saved = .{
         .folder = if (folder.len > 0 and !std.mem.startsWith(u8, folder, "demo://")) gpa.dupe(u8, folder) catch null else null,
-        .panes = panes,
-        .panes_arena = panes_arena,
+        .arrangement = arrangement,
         .active = in_front orelse blk: {
             var last: ?u64 = null;
             for (editor.app.open_files.values()) |doc| {
@@ -530,18 +533,19 @@ fn end(ctx: *anyopaque) void {
     self.closeDemoDocuments();
     self.unmountFiles();
 
-    // The layout as the person left it: `begin` flushed it, and nothing has been written since.
-    // What the tape opened (splits, floats, the explorer) goes with it, and none of it is saved.
-    // TODO(seam): the ledger of what a demo opened replaces this reload with closing just those.
-    editor.app.layout.resetLayout(editor.app.gpa);
-    editor.loadSavedLayout();
+    // The window as the person had it, by closing what the tape made: floats fly shut, splits and
+    // the explorer glide away. None of it is saved (`begin` flushed what was waiting), and the
+    // documents' panes are the workbench's own, kept from `panes.zon` while the tape played
+    // (`Workbench.panes_held`).
+    const saved = self.saved orelse return;
+    if (saved.arrangement) |snap| {
+        restoreArrangement(editor, snap, true) catch |err| dvui.log.warn("demo: could not put the window back: {t}", .{err});
+        if (snap.explorer_closed != editor.explorer.closed) {
+            if (snap.explorer_closed) editor.explorer.close(editor) else editor.explorer.open(editor);
+        }
+    }
     editor.app.layout.dirty = false;
     editor.command_palette.finishClose();
-
-    const saved = self.saved orelse return;
-    // The documents' panes are the workbench's own, kept from `panes.zon` while the tape played
-    // (`Workbench.panes_held`), so what is on screen goes back as noted at `begin`.
-    if (saved.panes) |a| editor.workbench.arrange(a) catch |err| dvui.log.warn("demo: could not put the panes back: {t}", .{err});
     editor.workbench.panes_held = false;
     editor.workbench.panes_dirty = false;
     if (saved.folder) |f| {
@@ -587,8 +591,7 @@ fn freeSaved(self: *Demo) void {
     self.entries.clearAndFree(gpa);
     const saved = self.saved orelse return;
     if (saved.folder) |f| gpa.free(f);
-    var panes_arena = saved.panes_arena;
-    panes_arena.deinit();
+    if (saved.arrangement) |snap| destroySnapshot(self.editor, snap);
     gpa.free(saved.branches);
     self.saved = null;
 }
@@ -634,41 +637,20 @@ fn enterScene(self: *Demo, kf: *const automation.Tape.Keyframe) void {
     const editor = self.editor;
     const gpa = editor.app.gpa;
     if (self.entries.get(kf)) |entry| {
-        restoreArrangement(editor, entry) catch |err|
+        restoreArrangement(editor, entry, false) catch |err|
             dvui.log.warn("demo: could not put the window back to where the scene began: {t}", .{err});
         if (entry.explorer_closed != editor.explorer.closed) {
             if (entry.explorer_closed) editor.explorer.close(editor) else editor.explorer.open(editor);
         }
         return;
     }
-    const entry = gpa.create(Snapshot) catch return;
-    entry.* = .{
-        .arena = .init(gpa),
-        .root = "",
-        .nodes = &.{},
-        .docs = &.{},
-        .active = null,
-        .explorer_closed = editor.explorer.closed,
-        .branches = &.{},
-        .root_opened = null,
-        .settings = &.{},
-        .material = editor.app.settings.window_material,
-        .focus = .zero,
-        .focus_subwindow = .zero,
-        .regions = "",
-        .tree = null,
-        .places = &.{},
-        .panes = undefined,
-    };
+    const entry = newSnapshot(editor) orelse return;
     const stored = blk: {
         fillArrangement(editor, entry) catch break :blk false;
         self.entries.put(gpa, kf, entry) catch break :blk false;
         break :blk true;
     };
-    if (!stored) {
-        entry.arena.deinit();
-        gpa.destroy(entry);
-    }
+    if (!stored) destroySnapshot(editor, entry);
 }
 
 // ---- settings --------------------------------------------------------------------------------
@@ -913,6 +895,36 @@ fn fastForward(ctx: *anyopaque, on: bool) void {
 // ---- snapshots ---------------------------------------------------------------------------------
 
 /// A moment of a scene, for a seek to come back to (see the file comment). Everything in `arena`.
+/// A snapshot of the app as it is now, less what `fill` and `fillArrangement` write.
+fn newSnapshot(editor: *Editor) ?*Snapshot {
+    const gpa = editor.app.gpa;
+    const snap = gpa.create(Snapshot) catch return null;
+    snap.* = .{
+        .arena = .init(gpa),
+        .root = "",
+        .nodes = &.{},
+        .docs = &.{},
+        .active = null,
+        .explorer_closed = editor.explorer.closed,
+        .branches = &.{},
+        .root_opened = editor.workbench.file_tree_root_opened,
+        .settings = &.{},
+        .material = editor.app.settings.window_material,
+        .focus = dvui.focusedWidgetId() orelse .zero,
+        .focus_subwindow = dvui.focusedSubwindowId(),
+        .regions = "",
+        .tree = null,
+        .places = &.{},
+        .panes = undefined,
+    };
+    return snap;
+}
+
+fn destroySnapshot(editor: *Editor, snap: *Snapshot) void {
+    snap.arena.deinit();
+    editor.app.gpa.destroy(snap);
+}
+
 const Snapshot = struct {
     arena: std.heap.ArenaAllocator,
     /// The scene's folder: a snapshot is restored only into the scene it came from.
@@ -992,30 +1004,12 @@ fn treeZon(editor: *Editor, gpa: std.mem.Allocator) !?[:0]u8 {
 fn capture(ctx: *anyopaque) ?*anyopaque {
     const self = from(ctx);
     const editor = self.editor;
-    const gpa = editor.app.gpa;
     if (!idle(ctx) or editor.command_palette.open or editor.app.layout.picker.is_open) return null;
     const root = self.mount orelse return null;
     const mem = self.mem orelse return null;
 
-    const snap = gpa.create(Snapshot) catch return null;
-    snap.* = .{
-        .arena = .init(gpa),
-        .root = undefined,
-        .nodes = &.{},
-        .docs = &.{},
-        .active = null,
-        .explorer_closed = editor.explorer.closed,
-        .branches = &.{},
-        .root_opened = editor.workbench.file_tree_root_opened,
-        .settings = &.{},
-        .material = editor.app.settings.window_material,
-        .focus = dvui.focusedWidgetId() orelse .zero,
-        .focus_subwindow = dvui.focusedSubwindowId(),
-        .regions = "",
-        .tree = null,
-        .places = &.{},
-        .panes = undefined,
-    };
+    const snap = newSnapshot(editor) orelse return null;
+    snap.root = root;
     const ok = fill(self, snap, root, mem) catch false;
     if (!ok) {
         release(ctx, snap);
@@ -1098,8 +1092,8 @@ fn fillArrangement(editor: *Editor, snap: *Snapshot) !void {
 /// floats, the seed tree, the documents' panes and each place's size and view. What is the same
 /// already is left alone, so a restore within one arrangement touches nothing of it. An error —
 /// having changed nothing — when it could not be read back: everything that can fail is done
-/// before anything changes.
-fn restoreArrangement(editor: *Editor, snap: *const Snapshot) !void {
+/// before anything changes. `graceful`: a float made since flies shut rather than going at once.
+fn restoreArrangement(editor: *Editor, snap: *const Snapshot, graceful: bool) !void {
     const gpa = editor.app.gpa;
     const state = &editor.app.layout;
     var arena: std.heap.ArenaAllocator = .init(gpa);
@@ -1151,7 +1145,18 @@ fn restoreArrangement(editor: *Editor, snap: *const Snapshot) !void {
             if (!std.mem.eql(u8, was.name, f.name) or at.x != f.rect.x or at.y != f.rect.y or at.w != f.rect.w or at.h != f.rect.h) break;
             kept += 1;
         }
-        while (state.floats.items.items.len > kept) state.floats.removeAt(state.floats.items.items.len - 1);
+        // Past `kept` they go: at once for a seek, flying shut for the tape's end (`graceful`),
+        // but only a float the snapshot lacks flies shut. One it has goes at once, or its closing
+        // self would still hold the name and `applySavedRegions` would not bring it back.
+        var i = state.floats.items.items.len;
+        while (i > kept) {
+            i -= 1;
+            const name = state.floats.items.items[i].name;
+            const saved_float = for (floats.items) |r| {
+                if (std.mem.eql(u8, r.name, name)) break true;
+            } else false;
+            if (graceful and !saved_float) @import("app").layout.Layout.Floats.flyShut(state, i) else state.floats.removeAt(i);
+        }
         editor.applySavedRegions(saved);
     }
     if (!same_tree) {
@@ -1206,7 +1211,7 @@ fn restore(ctx: *anyopaque, raw: *anyopaque) bool {
     for (snap.docs) |d| _ = openDoc(editor, d.path) orelse return false;
     // The window as it was, before anything else is put back: it can fail, and fails changing
     // nothing.
-    restoreArrangement(editor, snap) catch |err| {
+    restoreArrangement(editor, snap, false) catch |err| {
         dvui.log.warn("demo: could not put the window's layout back: {t}", .{err});
         return false;
     };
@@ -1260,8 +1265,7 @@ fn restore(ctx: *anyopaque, raw: *anyopaque) bool {
 
 fn release(ctx: *anyopaque, raw: *anyopaque) void {
     const snap: *Snapshot = @ptrCast(@alignCast(raw));
-    snap.arena.deinit();
-    from(ctx).editor.app.gpa.destroy(snap);
+    destroySnapshot(from(ctx).editor, snap);
 }
 
 /// The model a snapshot holds (the demo's own documents, never the person's), less what may differ between passes — scroll, focus, and which

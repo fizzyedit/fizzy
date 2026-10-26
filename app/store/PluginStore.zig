@@ -2284,7 +2284,7 @@ fn drawStoreSection(entries: []const StoreEntry, filter_text: []const u8, status
     var pane_box = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .background = false });
     defer pane_box.deinit();
 
-    var scroll = dvui.scrollArea(@src(), .{
+    var scroll = core.widgets.ScrollArea.init(@src(), .{
         .scroll_info = &store_scroll_info,
         .horizontal_bar = .auto_overlay,
         .vertical_bar = .auto_overlay,
@@ -2333,7 +2333,7 @@ fn drawInstalledSection(entries: []const StoreEntry, filter_text: []const u8) us
     var pane_box = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .background = false });
     defer pane_box.deinit();
 
-    var scroll = dvui.scrollArea(@src(), .{
+    var scroll = core.widgets.ScrollArea.init(@src(), .{
         .scroll_info = &installed_scroll_info,
         .horizontal_bar = .auto_overlay,
         .vertical_bar = .auto_overlay,
