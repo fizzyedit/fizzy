@@ -169,7 +169,9 @@ pub const Platform = @import("build/sdk.zig").Platform;
 /// const hello = b.dependency("hello", .{});
 /// try fizzy.buildApp(fizzy_dep, &.{
 ///     fizzy.plugins.workbench,
-///     .{ .name = "hello", .module = @import("hello").staticModule(hello.builder, fizzy.framework(fizzy_dep, .native)) },
+///     .{ .name = "hello", .module = @import("hello").staticModule(
+///         hello.builder, fizzy.framework(fizzy_dep, .native),
+///     ) },
 /// });
 /// ```
 pub fn framework(fizzy_dep: *std.Build.Dependency, platform: Platform) Framework {
@@ -179,11 +181,25 @@ pub fn framework(fizzy_dep: *std.Build.Dependency, platform: Platform) Framework
     switch (platform) {
         .native => {
             const fw = d.frameworks.getNative(b, d.target, d.optimize, d.cfg);
-            return .{ .target = d.target, .optimize = d.optimize, .dvui = fw.native.dvui, .core = fw.core, .sdk = fw.sdk, .icons = fw.icons };
+            return .{
+                .target = d.target,
+                .optimize = d.optimize,
+                .dvui = fw.native.dvui,
+                .core = fw.core,
+                .sdk = fw.sdk,
+                .icons = fw.icons,
+            };
         },
         .web => {
             const fw = d.frameworks.getWeb(b, d.optimize);
-            return .{ .target = @import("build/web.zig").target(b), .optimize = d.optimize, .dvui = fw.dvui, .core = fw.core, .sdk = fw.sdk, .icons = fw.icons };
+            return .{
+                .target = @import("build/web.zig").target(b),
+                .optimize = d.optimize,
+                .dvui = fw.dvui,
+                .core = fw.core,
+                .sdk = fw.sdk,
+                .icons = fw.icons,
+            };
         },
     }
 }
@@ -244,17 +260,29 @@ pub const App = struct {
 /// const app = try fizzy.addApp(fizzy_dep, &.{
 ///     fizzy.plugins.workbench,
 ///     .{ .name = "hello", .targets = &.{
-///         .{ .target = .native, .module = hello.staticModule(hello_dep.builder, fizzy.framework(fizzy_dep, .native)) },
-///         .{ .target = .web, .module = hello.staticModule(hello_dep.builder, fizzy.framework(fizzy_dep, .web)) },
+///         .{ .target = .native, .module = hello.staticModule(
+///             hello_dep.builder, fizzy.framework(fizzy_dep, .native),
+///         ) },
+///         .{ .target = .web, .module = hello.staticModule(
+///             hello_dep.builder, fizzy.framework(fizzy_dep, .web),
+///         ) },
 ///     } },
-///     .{ .name = "shell", .module = shell_dep.module("plugin"), .targets = &.{.{ .target = .native }} },
+///     .{ .name = "shell", .module = shell_dep.module("plugin"),
+///         .targets = &.{.{ .target = .native }} },
 /// });
 /// ```
 pub fn addApp(fizzy_dep: *std.Build.Dependency, linked: []const BundledPlugin) !App {
     const d = deferred orelse @panic("fizzy.addApp: pass `.@\"defer-app\" = true` to b.dependency(\"fizzy\", …) first");
     var opts = d.base;
     opts.app_plugins = try withFizzys(fizzy_dep.builder, linked);
-    const built = try @import("build/app.zig").construct(fizzy_dep.builder, d.target, d.optimize, opts, d.cfg, &deferred.?.frameworks);
+    const built = try @import("build/app.zig").construct(
+        fizzy_dep.builder,
+        d.target,
+        d.optimize,
+        opts,
+        d.cfg,
+        &deferred.?.frameworks,
+    );
     deferred.?.built = true;
     return .{
         .exe = built.native.main.exe,
@@ -354,7 +382,8 @@ pub fn addWebSteps(b: *std.Build, fizzy_dep: *std.Build.Dependency) !void {
         std.log.err("fizzy.addWebSteps: this build already has a `web` step", .{});
         return error.WebStepTaken;
     }
-    const d = deferred orelse @panic("fizzy.addWebSteps: pass `.@\"defer-app\" = true` to b.dependency(\"fizzy\", …) and call fizzy.buildApp first");
+    const d = deferred orelse @panic("fizzy.addWebSteps: pass `.@\"defer-app\" = true` to b.dependency(\"fizzy\"," ++
+        " …) and call fizzy.buildApp first");
     if (!d.built) @panic("fizzy.addWebSteps: call fizzy.buildApp first");
     b.step("web", "Build the web (wasm) app into zig-out/web/").dependOn(&b.addInstallDirectory(.{
         .source_dir = fizzy_dep.namedLazyPath("web"),

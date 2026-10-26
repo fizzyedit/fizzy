@@ -272,7 +272,10 @@ fn rawTransientSurfaces(
             try findings.append(allocator, .{
                 .rule = .@"raw-transient-surface",
                 .line = line,
-                .message = try allocator.print("dvui.{s} paints its own surface; use the core.widgets / core.dialogs wrapper", .{name}),
+                .message = try allocator.print(
+                    "dvui.{s} paints its own surface; use the core.widgets / core.dialogs wrapper",
+                    .{name},
+                ),
             });
             break;
         }
