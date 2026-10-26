@@ -112,6 +112,8 @@ jobs:
         run: sh scripts/test-zb.sh
       - name: scripts/check-kickoff
         run: python3 scripts/test-check-kickoff.py
+      - name: scripts/hello-numbers (harness, no windows)
+        run: python3 scripts/test-hello-numbers.py
       - name: scripts/agent-prepare, agent-finish
         run: bash scripts/test-agent-work.sh
       - name: superfans (fan-dedupe, fan-route, fan-lint on seeded input)
