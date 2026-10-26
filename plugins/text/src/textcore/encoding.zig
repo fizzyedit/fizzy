@@ -79,4 +79,9 @@ test appendLossy {
     list.clearRetainingCapacity();
     try appendLossy(&list, std.testing.allocator, "a\x00b\xffc");
     try std.testing.expectEqualStrings("a\u{FFFD}b\u{FFFD}c", list.items);
+    list.clearRetainingCapacity();
+    // Well-formed multi-byte sequences pass through; a bad continuation byte or a surrogate
+    // is replaced a byte at a time.
+    try appendLossy(&list, std.testing.allocator, "\xc3\xa9\xe2\x28\xa1\xed\xa0\x80");
+    try std.testing.expectEqualStrings("\u{e9}\u{FFFD}(\u{FFFD}\u{FFFD}\u{FFFD}\u{FFFD}", list.items);
 }
