@@ -358,12 +358,13 @@ pub fn readConfig(b: *std.Build, target: std.Build.ResolvedTarget, opts: Options
     // with `-Dfetch-msvc=false` — in which case Zig falls back to system Visual Studio
     // auto-detection, which we can't validate here.
     const velopack_required_fail: ?*std.Build.Step = if (cross_win_msvc and effective_win_libc == null)
-        &b.addFail("*-windows-msvc needs MSVC + Windows SDK headers/libs.\n" ++
-            "  One-shot install (macOS/Linux/Windows): zig build msvcup-setup\n" ++
-            "  Then: zig build package -Dtarget=x86_64-windows-msvc   (auto-uses .velopack-msvc/zig-libc-x64.ini)\n" ++
-            "  Or auto-download in this build: add -Dfetch-msvc       (default on " ++
-            "Windows hosts; forwards through packageall)\n" ++
-            "  Or pass: --libc path.ini  /  -Dwindows-msvc-libc=path.ini").step
+        &b.addFail(
+            \\*-windows-msvc needs MSVC + Windows SDK headers/libs.
+            \\  One-shot install (macOS/Linux/Windows): zig build msvcup-setup
+            \\  Then: zig build package -Dtarget=x86_64-windows-msvc   (auto-uses .velopack-msvc/zig-libc-x64.ini)
+            \\  Or auto-download in this build: add -Dfetch-msvc       (default on Windows hosts; forwards through packageall)
+            \\  Or pass: --libc path.ini  /  -Dwindows-msvc-libc=path.ini
+        ).step
     else
         null;
 
