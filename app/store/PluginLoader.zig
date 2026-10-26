@@ -179,7 +179,7 @@ fn lockOpenedPaths() void {
 /// once per plugin (~480ms for three plugins); loading the stable installed file in place pays
 /// it once, on the launch right after an install.
 ///
-/// Entries (and their duped keys) are intentionally kept for the process lifetime — the set is
+/// Entries (and their duped keys) are kept until the app quits (`deinitOpenedPaths`) — the set is
 /// bounded by the number of distinct plugin paths, and its whole purpose is to outlive
 /// individual load attempts.
 ///
@@ -195,6 +195,17 @@ fn markPathOpened(gpa: std.mem.Allocator, path: []const u8) bool {
         return true;
     };
     return false;
+}
+
+/// Frees the opened-path set. At shutdown, with the allocator every caller of `markPathOpened`
+/// passed.
+pub fn deinitOpenedPaths(gpa: std.mem.Allocator) void {
+    lockOpenedPaths();
+    defer opened_paths_lock.unlock();
+    var keys = opened_paths.keyIterator();
+    while (keys.next()) |key| gpa.free(key.*);
+    opened_paths.deinit(gpa);
+    opened_paths = .empty;
 }
 
 /// `{dirname(path)}/.load-tmp` — where fresh-copy load attempts land, beside the plugin itself.

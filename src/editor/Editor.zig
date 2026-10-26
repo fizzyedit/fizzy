@@ -7342,6 +7342,7 @@ pub fn deinit(editor: *Editor) !void {
     editor.checkpoint.deinit(editor);
     // Rebuilds still opening: their threads joined, what they opened dropped unregistered.
     editor.plugin_reloads.deinit(editor.app.gpa);
+    if (comptime builtin.target.cpu.arch != .wasm32) PluginLoader.deinitOpenedPaths(editor.app.gpa);
     if (editor.session) |*kept| kept.deinit();
     // Before the plugin `deinit` loop below: `tick` fans out into plugin vtables, and this
     // joins the thread that feeds it.
