@@ -67,6 +67,7 @@ const PluginManager = @import("app").store.Manager;
 pub const FilesService = @import("FilesService.zig");
 const SettingsTree = @import("SettingsTree.zig");
 const OutputPanel = @import("OutputPanel.zig");
+pub const Chrome = @import("Chrome.zig");
 const SettingsPluginsZon = @import("app").settings.PluginsZon;
 const file_glyphs = @import("file_glyphs.zig");
 const SettingsWatcher = @import("app").watch.SettingsWatcher;
@@ -199,6 +200,10 @@ last_titlebar_color: dvui.Color,
 sidebar: Sidebar,
 
 infobar: Infobar,
+
+/// The frame of fizzy's shape this build keeps. A field and not a `comptime` read so a test can
+/// draw the shape either way.
+chrome: Chrome = .configured,
 
 /// Whether a text-input widget held keyboard focus at the end of the last frame.
 ///
@@ -457,6 +462,7 @@ pub fn init(
         .explorer = try app.allocator.create(Explorer),
         .sidebar = try .init(),
         .infobar = try .init(),
+        .chrome = .configured,
         .last_titlebar_color = dvui.themeGet().color(.control, .fill),
         .themes = .empty,
         .workbench = .init(app.allocator),
@@ -2316,13 +2322,15 @@ pub fn postInit(editor: *Editor) !void {
     // even with no document open, since it's a diagnostic view, not a per-file one. Before the
     // plugins, so it is the bottom panel's first view and a plugin's (the dashboard, a terminal)
     // comes after it: a region shows its first view until someone picks another.
-    try editor.app.host.registerSurface(.{
-        .id = "fizzy.output",
-        .title = "Output",
-        .keywords = sdk.keywords.ide.panel,
-        .persistent = true,
-        .draw = OutputPanel.draw,
-    });
+    if (editor.chrome.panel) {
+        try editor.app.host.registerSurface(.{
+            .id = "fizzy.output",
+            .title = "Output",
+            .keywords = sdk.keywords.ide.panel,
+            .persistent = true,
+            .draw = OutputPanel.draw,
+        });
+    }
 
     inline for (bundled_plugins) |m| {
         const extra: ?*anyopaque = if (comptime std.mem.eql(u8, m.plugin_id, "workbench")) @ptrCast(&editor.workbench) else null;

@@ -30,6 +30,9 @@ pub const WebPluginDir = struct {
     };
 };
 
+/// `Chrome.Edge`, for the build option.
+const ChromeEdge = enum { left, right };
+
 pub const Options = struct {
     /// Every plugin the application links, fizzy's own among them, each in the executables its
     /// `targets` names — see `build.zig`'s `buildApp`.
@@ -98,6 +101,10 @@ pub const Config = struct {
     static_text: bool,
     static_image: bool,
     dynamic_plugins: bool,
+    chrome_sidebar_edge: ChromeEdge,
+    chrome_panel: bool,
+    chrome_menu_bar: bool,
+    chrome_infobar: bool,
     workbench_opts: *std.Build.Step.Options,
     /// Null on the configure pass that fetches Velopack (see `readConfig`).
     msvcup_before_compile: ?*std.Build.Step.Run,
@@ -503,6 +510,20 @@ pub fn readConfig(b: *std.Build, target: std.Build.ResolvedTarget, opts: Options
         "App-owned layout file (pub fn layout(?*anyopaque, *Layout))",
     );
     build_opts.addOption(bool, "has_app_layout", app_layout_path != null);
+    // The frame of fizzy's own shape an app keeps (`src/editor/Chrome.zig`); the defaults are
+    // fizzy's own.
+    const chrome_sidebar_edge = b.option(
+        ChromeEdge,
+        "chrome-sidebar-edge",
+        "Which end of the window the icon rail and Sidebar sit at: left (default) or right",
+    ) orelse .left;
+    const chrome_panel = b.option(bool, "chrome-panel", "Draw the bottom Panel and its Output view (default: true)") orelse true;
+    const chrome_menu_bar = b.option(bool, "chrome-menu-bar", "Draw the in-window menu bar (default: true)") orelse true;
+    const chrome_infobar = b.option(bool, "chrome-infobar", "Draw the infobar (default: true)") orelse true;
+    build_opts.addOption(ChromeEdge, "chrome_sidebar_edge", chrome_sidebar_edge);
+    build_opts.addOption(bool, "chrome_panel", chrome_panel);
+    build_opts.addOption(bool, "chrome_menu_bar", chrome_menu_bar);
+    build_opts.addOption(bool, "chrome_infobar", chrome_infobar);
     const static_workbench = b.option(
         bool,
         "static-workbench",
@@ -597,6 +618,10 @@ pub fn readConfig(b: *std.Build, target: std.Build.ResolvedTarget, opts: Options
         .static_text = static_text,
         .static_image = static_image,
         .dynamic_plugins = dynamic_plugins,
+        .chrome_sidebar_edge = chrome_sidebar_edge,
+        .chrome_panel = chrome_panel,
+        .chrome_menu_bar = chrome_menu_bar,
+        .chrome_infobar = chrome_infobar,
         .workbench_opts = workbench_opts,
         .msvcup_before_compile = msvcup_before_compile,
         .accesskit = accesskit,
@@ -788,6 +813,10 @@ fn native(
         pack_opts.addOption(bool, "static_image", static_image);
         pack_opts.addOption(bool, "dynamic_plugins", dynamic_plugins);
         pack_opts.addOption(bool, "has_app_layout", app_layout_path != null);
+        pack_opts.addOption(ChromeEdge, "chrome_sidebar_edge", cfg.chrome_sidebar_edge);
+        pack_opts.addOption(bool, "chrome_panel", cfg.chrome_panel);
+        pack_opts.addOption(bool, "chrome_menu_bar", cfg.chrome_menu_bar);
+        pack_opts.addOption(bool, "chrome_infobar", cfg.chrome_infobar);
         break :package_blk try fizzy_exe.addFizzyExecutableForTarget(
             b,
             vz,

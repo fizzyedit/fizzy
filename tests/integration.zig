@@ -2981,6 +2981,101 @@ test "a takeover surface appears only while its trigger is selected, and then an
     try std.testing.expectEqualStrings("test.workspace", layout.selected(main).?.id);
 }
 
+// -- the chrome option ---------------------------------------------------------------------------
+// `layout.zig` (fizzy's desktop shape) under each `Chrome`: which end the rail and Sidebar sit at,
+// and whether the Panel exists.
+
+const ChromeFrame = struct {
+    var editor: ?*fizzy.Editor = null;
+    var explorer: fizzy.Explorer = .{};
+    var chrome: fizzy.Editor.Chrome = .{};
+
+    fn frame() !dvui.App.Result {
+        const e = editor.?;
+        fizzy.core.anchor.want();
+        e.chrome = chrome;
+        // The shim's zeroed editor cannot draw the infobar or the menu bar.
+        e.chrome.infobar = false;
+        e.chrome.menu_bar = false;
+        var layout = fizzy.Editor.Layout.init(&e.app.host, &e.app.layout, e.app.gpa, dvui.currentWindow().arena());
+        const result = try fizzy.layout.layout(e, &layout);
+        e.app.layout.publishRegions();
+        return result;
+    }
+};
+
+fn chromeBounds(editor: *fizzy.Editor, name: []const u8) ?dvui.Rect.Physical {
+    for (editor.app.layout.regions.items) |r| if (std.mem.eql(u8, r.name, name)) return r.bounds;
+    return null;
+}
+
+/// Draw fizzy's shape under `chrome`, with a view in each of its places, and hand `check` the editor.
+// anytype: the checks have inferred error sets.
+fn withChrome(chrome: fizzy.Editor.Chrome, comptime check: anytype) !void {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+    const editor = ctx.editor;
+    editor.app.gpa = std.testing.allocator;
+    defer editor.app.layout.regions.deinit(editor.app.gpa);
+    defer editor.app.layout.regions_building.deinit(editor.app.gpa);
+    defer editor.app.layout.deinitExtents(editor.app.gpa);
+    defer editor.app.layout.deinitQualified(editor.app.gpa);
+    defer editor.app.layout.deinitAssignments(editor.app.gpa);
+
+    ChromeFrame.explorer = .{};
+    editor.explorer = &ChromeFrame.explorer;
+    ChromeFrame.editor = editor;
+    defer ChromeFrame.editor = null;
+    ChromeFrame.chrome = chrome;
+
+    const kw = fizzy.sdk.keywords.ide;
+    try editor.app.host.registerSurface(.{ .id = "test.files", .title = "Files", .keywords = kw.sidebar, .draw = TabsFrame.draw });
+    try editor.app.host.registerSurface(.{ .id = "test.workspace", .title = "Workspace", .keywords = kw.main, .draw = TabsFrame.draw });
+    try editor.app.host.registerSurface(.{ .id = "test.output", .title = "Output", .keywords = kw.panel, .draw = TabsFrame.draw });
+    try dvui.testing.settle(ChromeFrame.frame);
+    try check(editor);
+}
+
+fn expectSidebarLeft(editor: *fizzy.Editor) !void {
+    const side = chromeBounds(editor, "Sidebar") orelse return error.TestUnexpectedResult;
+    const main = chromeBounds(editor, "Main") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(side.x < main.x);
+    // The rail sits left of it.
+    try std.testing.expect(side.x > 0);
+    try std.testing.expect(chromeBounds(editor, "Panel") != null);
+}
+
+fn expectSidebarRight(editor: *fizzy.Editor) !void {
+    const side = chromeBounds(editor, "Sidebar") orelse return error.TestUnexpectedResult;
+    const main = chromeBounds(editor, "Main") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(side.x > main.x + main.w - 1);
+    // The rail takes the window's last stretch, so the Sidebar stops short of the edge.
+    try std.testing.expect(side.x + side.w < dvui.windowRectPixels().w - 20);
+    // And the left edge is Main's, with only the work area's gutter before it.
+    try std.testing.expect(main.x < 40);
+    try std.testing.expect(chromeBounds(editor, "Panel") != null);
+}
+
+fn expectNoPanel(editor: *fizzy.Editor) !void {
+    try std.testing.expect(chromeBounds(editor, "Main") != null);
+    try std.testing.expect(chromeBounds(editor, "Sidebar") != null);
+    try std.testing.expect(chromeBounds(editor, "Panel") == null);
+    try std.testing.expect(editor.regionFor(fizzy.sdk.keywords.ide.panel) == null);
+}
+
+test "chrome: the defaults are fizzy's own frame, Sidebar left of Main with a Panel" {
+    try std.testing.expectEqual(fizzy.Editor.Chrome{}, fizzy.Editor.Chrome.configured);
+    try withChrome(.{}, expectSidebarLeft);
+}
+
+test "chrome: sidebar_edge right puts the rail and Sidebar right of Main" {
+    try withChrome(.{ .sidebar_edge = .right }, expectSidebarRight);
+}
+
+test "chrome: panel false leaves no Panel place" {
+    try withChrome(.{ .panel = false }, expectNoPanel);
+}
+
 // -- the mobile shape ----------------------------------------------------------------------------
 // `layout_mobile.zig` under a forced `.mobile` form factor: which places it declares, what it
 // draws, and that mobile's arrangement is kept apart from a desktop's in `layout.zon`.
