@@ -5186,6 +5186,7 @@ pub fn collectSavedRegions(editor: *Editor, gpa: std.mem.Allocator) []fizzy.back
             gop.value_ptr.parent = l.parent;
             gop.value_ptr.from = @tagName(l.side);
             gop.value_ptr.adaptive = if (l.adaptive) true else null;
+            gop.value_ptr.share = l.share;
         }
     }
     {
@@ -5285,7 +5286,10 @@ fn loadRuntimeSplits(state: *Layout.State, gpa: std.mem.Allocator, saved: []cons
         const parent = r.parent orelse continue;
         const side = Layout.State.SplitTree.parseSide(r.from orelse continue) orelse continue;
         const made = state.splits.split(gpa, intern.go, parent, side, r.extent orelse 0, r.name);
-        if (made != null and (r.adaptive orelse false)) _ = state.splits.markAdaptive(r.name);
+        if (made != null and (r.adaptive orelse false)) {
+            _ = state.splits.markAdaptive(r.name);
+            if (r.share) |share| _ = state.splits.setShare(r.name, share);
+        }
     }
 }
 

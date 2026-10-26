@@ -3836,6 +3836,78 @@ test "an adaptive split turns with the window, keeps its share and writes nothin
     try std.testing.expect(!editor.app.layout.dirty);
 }
 
+// The half of an adaptive split that is itself split is an outer branch, not a leaf: its turn
+// waits for it to slide shut, and while drawn turned its extent is not the person's to save.
+test "an adaptive split whose new half is split again turns and writes nothing" {
+    var case = try NestedSplitCase.init();
+    defer case.deinit();
+    const ctx = &case.ctx;
+    const editor = ctx.editor;
+    {
+        var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+        layout.markAdaptive("Main/r1");
+    }
+    ctx.t.backend.size = .{ .w = 1180, .h = 820 };
+    ctx.t.backend.size_pixels = .{ .w = 1180, .h = 820 };
+    for (0..40) |_| _ = try dvui.testing.step(ColumnCardFrame.frame);
+    const left = try ColumnCardFrame.sizeOf(editor, "Main");
+    try std.testing.expect(left.w < left.h * 1.15);
+    const saved_extent = editor.app.layout.extent("Main/r1", 0);
+    editor.app.layout.dirty = false;
+
+    ctx.t.backend.size = .{ .w = 820, .h = 1180 };
+    ctx.t.backend.size_pixels = .{ .w = 820, .h = 1180 };
+    for (0..60) |_| _ = try dvui.testing.step(ColumnCardFrame.frame);
+    const top = try ColumnCardFrame.sizeOf(editor, "Main");
+    const column = try ColumnCardFrame.sizeOf(editor, "Main/r1");
+    try std.testing.expect(column.h > 40);
+    try std.testing.expectApproxEqAbs(top.w, column.w, 40);
+    try std.testing.expect(!editor.app.layout.dirty);
+    try std.testing.expectEqual(saved_extent, editor.app.layout.extent("Main/r1", 0));
+}
+
+// A half saved in landscape is a pixel extent along the width. Over a portrait box that number is
+// another share, so the share is saved beside it and the turn uses that one.
+test "an adaptive split saved beside comes back as the same share stacked" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const editor = ctx.editor;
+    editor.app.gpa = std.testing.allocator;
+    defer editor.app.layout.regions.deinit(editor.app.gpa);
+    defer editor.app.layout.regions_building.deinit(editor.app.gpa);
+    defer editor.app.layout.deinitExtents(editor.app.gpa);
+    defer editor.app.layout.deinitAssignments(editor.app.gpa);
+    defer editor.app.layout.deinitQualified(editor.app.gpa);
+
+    ColumnCardFrame.editor = editor;
+    defer ColumnCardFrame.editor = null;
+
+    // A restart in portrait: the layout as loaded (`loadRuntimeSplits`) has the landscape half,
+    // 590 across a 1180 box, and its share of a half.
+    ctx.t.backend.size = .{ .w = 820, .h = 1180 };
+    ctx.t.backend.size_pixels = .{ .w = 820, .h = 1180 };
+    try dvui.testing.settle(ColumnCardFrame.frame);
+    const state = &editor.app.layout;
+    const intern = struct {
+        var st: *fizzy.Editor.Layout.State = undefined;
+        fn go(a: std.mem.Allocator, name: []const u8) []const u8 {
+            return st.internName(a, name);
+        }
+    };
+    intern.st = state;
+    try std.testing.expect(state.splits.split(editor.app.gpa, intern.go, "Main", .right, 590, "Main/r1") != null);
+    try std.testing.expect(state.splits.markAdaptive("Main/r1"));
+    try std.testing.expect(state.splits.setShare("Main/r1", 0.5));
+    _ = state.setExtent(editor.app.gpa, "Main/r1", 590);
+
+    for (0..60) |_| _ = try dvui.testing.step(ColumnCardFrame.frame);
+    const top = try ColumnCardFrame.sizeOf(editor, "Main");
+    const bottom = try ColumnCardFrame.sizeOf(editor, "Main/r1");
+    // Not 590 over the 820 width, which is the share the pixels alone would say.
+    try std.testing.expectApproxEqAbs(0.5, bottom.h / (top.h + bottom.h), 0.03);
+}
+
 /// Main | (Main/r1 over Main/r1/b1) in fizzy's split forest, each holding one view. Main/r1 is two
 /// things at once: the half Main's split minted, and the half its own split kept.
 const NestedSplitCase = struct {
