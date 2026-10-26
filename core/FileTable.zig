@@ -25,8 +25,9 @@
 //! path, or whichever mount claims the path's prefix (`gdrive://<account>`). A cloud plugin
 //! registers a mount through `Host.mount`; nothing here knows what is behind it. The one thing
 //! a mount changes is *when* an answer arrives: `vfs.Fs` completes asynchronously, so a miss on
-//! a cloud directory returns null this frame and the listing appears (with `env.refresh`) when
-//! the response lands. The local mount answers inside the same call, exactly as before.
+//! a directory returns null this frame and the listing appears (with `env.refresh`) when the
+//! response lands. The local mount's listings run on the `Io` pool too: a small folder is waited
+//! for briefly and answered in the same call, a large one is pending like a cloud one.
 const std = @import("std");
 const fuzzy = @import("fuzzy.zig");
 const vfs = @import("vfs/vfs.zig");
