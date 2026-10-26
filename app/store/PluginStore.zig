@@ -111,7 +111,7 @@ const Job = struct {
     /// `std.Thread`. The worker writes `err_buf`/`err_len`/`status` back into the `Job`, so the
     /// `Job` must not be freed while it is alive — and a detached thread gave `freeJob` no way to
     /// know. Nothing in the native download path sets a network timeout (the web's fetches
-    /// have one, `web/index.html`'s `fetchPluginBytes`), so a stalled or
+    /// have one, `web/fizzy.js`'s `fetchPluginBytes`), so a stalled or
     /// blackholed release host keeps that worker running arbitrarily long: quitting mid-download
     /// left a live thread writing into freed memory. `Group.cancel` both interrupts the blocked
     /// syscall (the worker returns `error.Canceled`) *and* awaits the task, so `freeJob` is

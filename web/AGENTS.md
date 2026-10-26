@@ -1,17 +1,27 @@
 # web/: fizzy in a browser
 
-The page and its JavaScript (`index.html`, `web.js`, workers). The Zig half is
+The page and its JavaScript (`index.html`, the app's `fizzy.js`, workers). The Zig half is
 `src/backend/WebBackend.zig` and `src/web_main.zig`. `zig build web` builds into `zig-out/web`, and
 `scripts/serve-web.sh` serves it on :8765. `main` deploys to fizzyed.it/testapp; fizzyed.it/app is the live SDK release (`web.yml`).
 
-- **The web backend is fizzy's,** begun from dvui's `web.zig`/`web.js` and linked through dvui's
-  `custom` backend with dvui's web options passed explicitly (`build/web.zig`). A dvui bump that
-  touches dvui's own web backend is merged into these by hand.
+- **The web backend is fizzy's,** begun from dvui's `web.zig` and linked through dvui's `custom`
+  backend with dvui's web options passed explicitly (`build/web.zig`). A dvui bump that touches
+  dvui's own `web.zig` is merged into it by hand.
+- **`fizzy.js` is the app on a page,** `index.html` only the page it runs on.
+  `new Fizzy(opts).run()` runs the editor on `opts.canvas`, through dvui's `Dvui` (`web.js`), with
+  the wasm's `fizzy` and `env` imports, plus any of the caller's own (`opts.imports`, which keep it
+  on the page's thread). `Fizzy` never reads the URL or the page's other elements: `index.html`
+  turns its query (`?storage=`, `?persist=`, `?worker=`, `?form=`, `?plugin=`, ...) into options
+  and shows `onReady`/`onError` itself, and an app built on fizzy passes its own. Nothing wraps
+  `WebAssembly.instantiateStreaming`.
+- **`web.js` is dvui's,** with `patches/dvui` applied at build time (`docs/DEPENDENCIES.md`). A
+  change to it is a change to a patch: make it on the dvui branch the patches come from and export
+  them again, so it can go upstream. Never keep a copy of `web.js` here.
 - **One upload per frame where possible.** In Firefox (WebGL runs out of process) `bufferData`
   costs ~15–20 µs, about 100× any other GL call. The backend records a frame as one stream and
   flushes only at pixel reads, frame end, or a change to a texture a pending draw uses. Keep it
   that way; call count barely matters, uploads do.
-- **Plugins load at runtime as wasm side modules** (`index.html`'s `loadPlugin` →
+- **Plugins load at runtime as wasm side modules** (`fizzy.js`'s `loadPlugin` →
   `app/store/PluginLoader_web.zig`). To test one: build it with
   `-Dtarget=wasm32-freestanding -Doptimize=ReleaseSmall`, copy it to
   `zig-out/web/plugins/<id>/<id>.wasm`, and open `/?plugin=<id>&open=<url>`. `?open=` opens a file

@@ -532,7 +532,7 @@ pub fn create(b: *std.Build, opts: CreateOptions) PluginArtifact {
         // A wasm *side module* (Emscripten's term): position-independent, no entry, no
         // threads, loaded into the web host's memory and function table at runtime — the
         // dylib model with table indices for function pointers. See `plans/REVIEW_2026-09.md`
-        // §2 and `web/index.html`'s loader.
+        // §2 and `web/fizzy.js`'s loader.
         lib.root_module.pic = true;
         lib.root_module.single_threaded = true;
         lib.entry = .disabled;

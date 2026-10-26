@@ -641,8 +641,7 @@ pub fn construct(
         , .{cfg.branding.pixel_art})),
     });
 
-    // `zig build web` produces `zig-out/web/{web.wasm, web.js, index.html,
-    // NotoSansKR-Regular.ttf}`,
+    // `zig build web` produces `zig-out/web/{web.wasm, fizzy.js, web.js, index.html, …}`,
     // deployable as-is to a static host.
     const w = web.build(
         b,

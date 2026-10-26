@@ -38,7 +38,8 @@ paths, fuzzy matching, the LSP client, the profiler.
   A lifted finger hovers nothing: dvui puts the frame's `.position` event off every window, so a
   hover look needs no touch check of its own. The native backend gives only fingers on the screen
   touch buttons (`backend/src/touch_slots.zig`); a trackpad's fingers move the mouse.
-  The web backend does the same: a stylus touch (an Apple Pencil) is the mouse (`web/web.js`).
+  The web backend does the same: a stylus touch (an Apple Pencil) is the mouse (dvui's `web.js`,
+  `web/patches/dvui/0003`).
 - **A cursor that must win asks with a priority.** `dvui.cursorSet` keeps the first asked in a
   frame; `dvui.cursorSetPriority` the highest. Splits and a float's corner ask at `.resize`, a
   carried view at `.drag`, so a hover cursor (a tab's hand) never takes their arrow. The cursor

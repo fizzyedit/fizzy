@@ -11,11 +11,11 @@ pub const Web = struct {
     wasm: *std.Build.Step.Compile,
     /// The whole site, deployable as it is: `files` and `page`.
     site: std.Build.LazyPath,
-    /// Everything but the page: the wasm, `web.js`, the worker, the font, the OAuth page, the
+    /// Everything but the page: the wasm, `fizzy.js`, `web.js`, the worker, the font, the OAuth page, the
     /// hosted demo tapes under `demos/` (fizzy's own build) and each plugin's pages under
     /// `plugins/<id>/`.
     files: std.Build.LazyPath,
-    /// `index.html`, stamped with the wasm's hash and the storage name.
+    /// `index.html`, stamped with `fizzy.js`'s hash.
     page: std.Build.LazyPath,
     /// Fizzy's own build: a native-built plugin graph re-homed to wasm32 and compiled apart from
     /// the app, for `check-web`.
@@ -49,8 +49,8 @@ pub const Framework = struct {
 
 pub fn framework(b: *std.Build, optimize: std.lang.OptimizeMode) Framework {
     const web_target = target(b);
-    // The web backend is fizzy's own (`src/backend/WebBackend.zig` + `web/web.js`), started as a
-    // copy of dvui's: dvui is built in its `custom` mode and our backend linked to it, as dvui's
+    // The web backend is fizzy's own (`src/backend/WebBackend.zig` + dvui's `web.js`, patched:
+    // `patchedWebJs`), started as a copy of dvui's: dvui is built in its `custom` mode and our backend linked to it, as dvui's
     // build does for its own (`linkBackend`). Every option is the one dvui's `web` mode sets, so
     // dvui's shape — and with it the plugin fingerprint — is exactly what it was.
     const dvui_web_dep = sdk.dvuiDependency(b, .{
@@ -72,7 +72,7 @@ pub fn framework(b: *std.Build, optimize: std.lang.OptimizeMode) Framework {
         .optimize = optimize,
         .single_threaded = true,
     });
-    // What the page calls into (`web/web.js`): dvui's web exports.
+    // What the page calls into (`web.js`): dvui's web exports.
     web_backend.export_symbol_names = &.{
         "dvui_init",
         "dvui_deinit",
@@ -162,7 +162,7 @@ pub fn build(
     // Extra wasm exports beyond dvui's own (`dvui_init`/`dvui_update`/etc.). The wasm
     // linker only emits symbols listed here, so `export fn` in Zig isn't enough on its
     // own — without this line our trackpad pinch entry point would compile cleanly but
-    // be missing from `instance.exports`, and the JS bootstrap in `web/index.html`
+    // be missing from `instance.exports`, and the JS bootstrap in `web/fizzy.js`
     // would never be able to forward pinch deltas into the canvas widget. The image
     // trio is the other half of that seam: JS rasterizes a remote URL and writes the
     // pixels back through these.
@@ -183,7 +183,7 @@ pub fn build(
         "FizzyWebOAuthAlloc",
         "FizzyWebOAuthResult",
         "FizzyWebOAuthFailed",
-        // Plugins loaded at runtime (wasm side modules — `web/index.html`'s `loadPlugin`):
+        // Plugins loaded at runtime (wasm side modules — `web/fizzy.js`'s `loadPlugin`):
         // the host's side of the handshake, and what a side module links against — the
         // stack pointer it shares, dvui's C shims and stb, which it imports from `env`.
         "FizzyWebPluginAlloc",
@@ -352,7 +352,7 @@ pub fn build(
         web_exe.root_module,
     );
 
-    // Cache-buster: stamps a 64-char hash into the index.html / web.js placeholders so
+    // Cache-buster: stamps a 64-char hash into the index.html / fizzy.js placeholders so
     // the browser picks up new wasm builds without manual hard-reloads. Re-implements
     // upstream DVUI's `addWebExample` machinery so we don't have to invoke its step.
     const cb = b.addExecutable(.{
@@ -362,16 +362,23 @@ pub fn build(
             .target = b.graph.host,
         }),
     });
-    const cb_run = b.addRunArtifact(cb);
-    cb_run.addFileArg(stampStorage(b));
-    cb_run.addFileArg(b.path("web/web.js"));
-    cb_run.addFileArg(b.path("web/fizzy-worker.js"));
-    cb_run.addFileArg(web_exe.getEmittedBin());
-    const index_html_with_hash = cb_run.captureStdOut(.{});
+    const web_js = patchedWebJs(b, dvui_web_dep);
+    // `fizzy.js` names what it loads by their hash, and the page names `fizzy.js` by its own.
+    const cb_js = b.addRunArtifact(cb);
+    cb_js.addFileArg(stampStorage(b));
+    cb_js.addFileArg(web_js);
+    cb_js.addFileArg(b.path("web/fizzy-worker.js"));
+    cb_js.addFileArg(web_exe.getEmittedBin());
+    const fizzy_js = cb_js.captureStdOut(.{});
+    const cb_page = b.addRunArtifact(cb);
+    cb_page.addFileArg(b.path("web/index.html"));
+    cb_page.addFileArg(fizzy_js);
+    const index_html_with_hash = cb_page.captureStdOut(.{});
 
     const dir = b.addWriteFiles();
     _ = dir.addCopyFile(web_exe.getEmittedBin(), web_exe.out_filename);
-    _ = dir.addCopyFile(b.path("web/web.js"), "web.js");
+    _ = dir.addCopyFile(fizzy_js, "fizzy.js");
+    _ = dir.addCopyFile(web_js, "web.js");
     // Worker mode (`?worker=1`): the editor in a worker, drawing through an OffscreenCanvas.
     _ = dir.addCopyFile(b.path("web/fizzy-worker.js"), "fizzy-worker.js");
     _ = dir.addCopyFile(dvui_web_dep.path("src/fonts/NotoSansKR-Regular.ttf"), "NotoSansKR-Regular.ttf");
@@ -474,10 +481,34 @@ pub fn install(b: *std.Build, web: Web) void {
     ).dependOn(&serve_web_cmd.step);
 }
 
-/// A plugin package's `"plugin"` module as this web build's own: the same root file and the
-/// plugin's own imports (manifest options, its dependencies), with `dvui`/`core`/`fizzy_sdk`
-/// swapped for the web build's. A module cannot import two frameworks, so it must be a copy.
-/// `web/index.html` with the name the page files what it keeps in the browser under stamped in
+/// dvui's `web.js` with `web/patches/dvui/*.patch` applied, in name order, by zig-patch: what
+/// fizzy's web backend (`src/backend/WebBackend.zig`) needs of it, each patch a dvui commit
+/// written to go upstream. How they are made: docs/DEPENDENCIES.md.
+fn patchedWebJs(b: *std.Build, dvui_dep: *std.Build.Dependency) std.Build.LazyPath {
+    const io = b.graph.io;
+    const patches_dir = "web/patches/dvui";
+    b.dependOnDirectoryContents(b.path(patches_dir));
+    var names: std.ArrayList([]const u8) = .empty;
+    var dir = b.root.openDir(io, patches_dir, .{ .iterate = true }) catch |err|
+        std.debug.panic("fizzy web: open {s}: {t}", .{ patches_dir, err });
+    defer dir.close(io);
+    var it = dir.iterate();
+    while (it.next(io) catch |err| std.debug.panic("fizzy web: list {s}: {t}", .{ patches_dir, err })) |entry| {
+        if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".patch")) continue;
+        names.append(b.allocator, b.dupe(entry.name)) catch @panic("OOM");
+    }
+    std.mem.sort([]const u8, names.items, {}, struct {
+        fn lessThan(_: void, l: []const u8, r: []const u8) bool {
+            return std.mem.lessThan(u8, l, r);
+        }
+    }.lessThan);
+    const patches = b.allocator.alloc(std.Build.LazyPath, names.items.len) catch @panic("OOM");
+    for (patches, names.items) |*p, name| p.* = b.path(b.pathJoin(&.{ patches_dir, name }));
+    const patched = b.dependency("patch", .{ .source = dvui_dep.path(""), .patches = patches }).namedLazyPath("patched");
+    return patched.path(b, "src/backends/web.js");
+}
+
+/// `web/fizzy.js` with the name the app files what it keeps in the browser under stamped in
 /// (`storageName` there): `-Dweb-storage`, or "fizzy". Every copy of the app on one site shares
 /// the browser's storage for it, so a test build served beside the real one — fizzyed.it/testapp/
 /// beside /app/ — is built with a name of its own and keeps out of the real one's settings.
@@ -493,17 +524,17 @@ fn stampStorage(b: *std.Build) std.Build.LazyPath {
         else => std.debug.panic("-Dweb-storage={s}: only a-z, 0-9, '-' and '_'", .{name}),
     };
     const token = "__FIZZY_WEB_STORAGE__";
-    b.dependOnFileContents(b.path("web/index.html"));
-    const html = std.Io.Dir.cwd().readFileAlloc(
+    b.dependOnFileContents(b.path("web/fizzy.js"));
+    const js = std.Io.Dir.cwd().readFileAlloc(
         b.graph.io,
-        b.root.joinString(b.allocator, "web/index.html") catch @panic("OOM"),
+        b.root.joinString(b.allocator, "web/fizzy.js") catch @panic("OOM"),
         b.allocator,
         .unlimited,
     ) catch |err|
-        std.debug.panic("web/index.html: {t}", .{err});
-    if (std.mem.find(u8, html, token) == null) std.debug.panic("web/index.html: no {s} to stamp", .{token});
-    const stamped = std.mem.replaceOwned(u8, b.allocator, html, token, name) catch @panic("OOM");
-    return b.addWriteFiles().add("index.html", stamped);
+        std.debug.panic("web/fizzy.js: {t}", .{err});
+    if (std.mem.find(u8, js, token) == null) std.debug.panic("web/fizzy.js: no {s} to stamp", .{token});
+    const stamped = std.mem.replaceOwned(u8, b.allocator, js, token, name) catch @panic("OOM");
+    return b.addWriteFiles().add("fizzy.js", stamped);
 }
 
 /// Every tape fizzy hosts, built on the host (`scripts/demos.zig`): the bundled demos from their

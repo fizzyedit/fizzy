@@ -1,0 +1,100 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Michael Belousov <michael.belousov98@gmail.com>
+Date: Sat, 24 Oct 2026 16:09:37 -0400
+Subject: [PATCH] web: highp float in the shaders
+
+On GPUs where mediump is a real 16-bit float (Apple Silicon under ANGLE/Metal, most
+mobile), a texture coordinate across a 2048px texture has about 2 texels of resolution,
+and BlurBackdrop's kernels sample at sub-texel offsets, so blurs band and shimmer there.
+Vertex shaders always have highp; WebGL1 fragment shaders use it where the device has it.
+---
+ src/backends/web.js | 13 ++++++++++---
+ 1 file changed, 10 insertions(+), 3 deletions(-)
+
+diff --git a/src/backends/web.js b/src/backends/web.js
+index 92fbe96..27d22e9 100644
+--- a/src/backends/web.js
++++ b/src/backends/web.js
+@@ -41,18 +41,21 @@ async function dvui_open_file_picker(accept, multiple) {
+                 return;
+             }
+             res(file_input.files);
+         };
+         file_input.click();
+     });
+ }
+ 
++// highp, not mediump: on GPUs where mediump is a real 16-bit float (Apple Silicon under
++// ANGLE/Metal, most mobile) a texture coordinate at 2048px wide has ~2 texels of resolution,
++// and dvui's blur kernels are sub-texel offsets. Vertex shaders always have highp.
+ const vertexShaderSource_webgl = `
+-    precision mediump float;
++    precision highp float;
+ 
+     attribute vec4 aVertexPosition;
+     attribute vec4 aVertexColor;
+     attribute vec2 aTextureCoord;
+ 
+     uniform mat4 uMatrix;
+ 
+     varying vec4 vColor;
+@@ -62,17 +65,17 @@ const vertexShaderSource_webgl = `
+       gl_Position = uMatrix * aVertexPosition;
+       vColor = aVertexColor / 255.0;  // normalize u8 colors to 0-1
+       vTextureCoord = aTextureCoord;
+     }
+ `;
+ 
+ const vertexShaderSource_webgl2 = `# version 300 es
+ 
+-    precision mediump float;
++    precision highp float;
+ 
+     in vec4 aVertexPosition;
+     in vec4 aVertexColor;
+     in vec2 aTextureCoord;
+ 
+     uniform mat4 uMatrix;
+ 
+     out vec4 vColor;
+@@ -81,17 +84,21 @@ const vertexShaderSource_webgl2 = `# version 300 es
+     void main() {
+       gl_Position = uMatrix * aVertexPosition;
+       vColor = aVertexColor / 255.0;  // normalize u8 colors to 0-1
+       vTextureCoord = aTextureCoord;
+     }
+ `;
+ 
+ const fragmentShaderSource_webgl = `
++#ifdef GL_FRAGMENT_PRECISION_HIGH
++    precision highp float;
++#else
+     precision mediump float;
++#endif
+ 
+     varying vec4 vColor;
+     varying vec2 vTextureCoord;
+ 
+     uniform sampler2D uSampler;
+     uniform bool useTex;
+ 
+     void main() {
+@@ -101,17 +108,17 @@ const fragmentShaderSource_webgl = `
+         else {
+             gl_FragColor = vColor;
+         }
+     }
+ `;
+ 
+ const fragmentShaderSource_webgl2 = `# version 300 es
+ 
+-    precision mediump float;
++    precision highp float;
+ 
+     in vec4 vColor;
+     in vec2 vTextureCoord;
+ 
+     uniform sampler2D uSampler;
+     uniform bool useTex;
+ 
+     out vec4 fragColor;

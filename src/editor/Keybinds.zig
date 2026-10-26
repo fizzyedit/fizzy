@@ -1532,7 +1532,7 @@ pub var web_key_buf: [16]u8 = undefined;
 /// editor exists.
 var web_keys_ready = false;
 
-/// Asked by `web/index.html` from inside a `keydown` listener, before the browser acts on the key:
+/// Asked by `web/fizzy.js` from inside a `keydown` listener, before the browser acts on the key:
 /// true means "this key is the app's", and the page cancels the browser's default (⌘S saving the
 /// page, ⌘P printing it, ⌘O opening a file of the browser's own). It has to be answered here and
 /// synchronously — by the time dvui sees the event on the next frame the browser has already

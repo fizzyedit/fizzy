@@ -8,6 +8,7 @@ bump it; keep it current whenever a pin or a patch moves.
 | Dependency | Upstream | Fizzy's changes | Pinned in | Carries |
 |---|---|---|---|---|
 | [`foxnne/dvui-dev`](https://github.com/foxnne/dvui-dev) | [`david-vanderson/dvui`](https://github.com/david-vanderson/dvui) | branch `zig-0.17` (on 0.16, `fizzy-dev`) | `sdk/build.zig.zon` | dvui changes fizzy needs |
+| dvui's `web.js` | the dvui `sdk/build.zig.zon` pins | `web/patches/dvui` | `build.zig.zon` (`.patch`) | the web backend's JavaScript, patched by zig-patch for the web build (below) |
 | SDL | [`libsdl-org/SDL`](https://github.com/libsdl-org/SDL) `release-3.4.16` | `backend/patches/sdl` | `backend/build.zig.zon` (`.sdl_source`) | SDL C patches, applied by [zig-patch](https://github.com/marler8997/zig-patch) (below) |
 | [`fizzyedit/sdl_zig`](https://github.com/fizzyedit/sdl_zig) | [`Games-By-Mason/sdl_zig`](https://github.com/Games-By-Mason/sdl_zig) | branch `fizzy` | `backend/build.zig.zon` (`.sdl`) | the Zig build of SDL, taking the patched tree |
 | [`fizzyedit/nightwatch`](https://github.com/fizzyedit/nightwatch) | [`neurocyte/nightwatch`](https://github.com/neurocyte/nightwatch) | branch `fizzy` | `build.zig.zon` | a fix to its macOS FSEvents backend |
@@ -175,9 +176,10 @@ pinned); `fizzy-sdk-0.2.30-4` → `44010a3`; `fizzy-sdk-0.2.30-5` →
 `fizzy-sdk-0.2.30-8` → `3d90fdd` (item 14), what `sdk/build.zig.zon` pins now.
 
 Fizzy builds dvui in its `custom` backend mode on every target and links its own backends
-(`backend/`, `src/backend/WebBackend.zig` + `web/web.js`), so dvui's `sdl3` and `web`
-backends are only built by `-Dnative-backend=sdl3`. A dvui change to those backends is not a
-change to fizzy: anything fizzy wants from one is merged into its own by hand.
+(`backend/`, `src/backend/WebBackend.zig`), so dvui's `sdl3` and `web` backends are only built
+by `-Dnative-backend=sdl3`. A dvui change to those backends is not a change to fizzy: anything
+fizzy wants from one is merged into its own by hand. The exception is the web backend's
+JavaScript: fizzy's web build ships dvui's own `web.js`, with `web/patches/dvui` (below).
 
 Local copies of dvui, kept in fizzy until upstream has them (diff these on every dvui bump):
 
@@ -195,6 +197,39 @@ Fizzy adapts to two upstream behaviours rather than patching them:
 - **A text layout's first frame** (`f719b09`): a wrapping layout assumes it is 1000 wide on its
   first frame, whatever width it was given. The markdown preview treats a block holding one as
   not yet measured (`render_ast.Stats.fresh_text_layouts`).
+
+## dvui's `web.js`: `web/patches/dvui`
+
+The web build ships `src/backends/web.js` of the dvui `sdk/build.zig.zon` pins, patched at build
+time: `build/web.zig` (`patchedWebJs`) hands dvui and `web/patches/dvui/*.patch`, in name order,
+to zig-patch and takes `web.js` from the tree it writes. The page and `fizzy-worker.js` import it
+and drive its `Dvui` class. Each patch is a commit on dvui, `git format-patch` output whose header
+says what it does and why, written to go upstream: where dvui's own `web.zig` has a counterpart,
+the patch changes it too, and nothing dvui's own web backend uses is taken away
+(`wasm_renderGeometry` stays beside `wasm_renderStream`).
+
+- `0001` **highp float in the shaders.** mediump is a 16-bit float on Apple Silicon and most
+  mobile GPUs, too coarse for BlurBackdrop's sub-texel taps.
+- `0002` **Mouse events carry their own modifier state** (and `web.zig` reads it), so a lost keyup
+  no longer leaves a modifier held.
+- `0003` **A pencil is the mouse, and a cancelled touch ends** (`core/AGENTS.md`).
+- `0004` **Send only the GL state a draw changes**, and a framebuffer per render target.
+- `0005` **Clearing a target keeps the target that was bound.**
+- `0006` **`textureBlend`** (`dvui.Backend.textureBlend`), with `web.zig`'s.
+- `0007` **Precise render targets** (`dvui.Backend.support_precise_targets`), with `web.zig`'s.
+- `0008` **`wasm_renderStream`**, a flush's draws in one call: what `WebBackend.flushBatch` sends.
+- `0009` **Custom fragment programs in the draw stream** (`core.gfx.programs`).
+
+The patches are the commits of a dvui checkout's branch, from the pinned commit. To change one,
+or to carry them to a new dvui pin: rebase the branch (`git rebase <new pin>`), fix what
+conflicts, and export it again over the old files:
+
+```sh
+git -c diff.noprefix=false -c diff.mnemonicPrefix=false format-patch -U8 --zero-commit \
+    --no-signature --no-numbered --src-prefix=a/ --dst-prefix=b/ -o <fizzy>/web/patches/dvui <pin>..HEAD
+```
+
+A patch that dvui merges comes out empty at the rebase and is dropped.
 
 ## SDL: `backend/patches/sdl`
 
