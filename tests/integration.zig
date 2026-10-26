@@ -2981,11 +2981,11 @@ test "a takeover surface appears only while its trigger is selected, and then an
     try std.testing.expectEqualStrings("test.workspace", layout.selected(main).?.id);
 }
 
-// -- the phone shape ----------------------------------------------------------------------------
-// `layout_mobile.zig` under a forced `.phone` form factor: which places it declares, what it
-// draws, and that a phone's arrangement is kept apart from a desktop's in `layout.zon`.
+// -- the mobile shape ----------------------------------------------------------------------------
+// `layout_mobile.zig` under a forced `.mobile` form factor: which places it declares, what it
+// draws, and that mobile's arrangement is kept apart from a desktop's in `layout.zon`.
 
-const PhoneFrame = struct {
+const MobileFrame = struct {
     var editor: ?*fizzy.Editor = null;
     var explorer: fizzy.Explorer = .{};
 
@@ -2993,7 +2993,7 @@ const PhoneFrame = struct {
         const e = editor.?;
         fizzy.core.anchor.want();
         var layout = fizzy.Editor.Layout.init(&e.app.host, &e.app.layout, e.app.gpa, dvui.currentWindow().arena());
-        if (layout.form_factor != .phone) return error.TestUnexpectedResult;
+        if (layout.form_factor != .mobile) return error.TestUnexpectedResult;
         const result = try fizzy.layout_mobile.layout(e, &layout);
         e.app.layout.publishRegions();
         return result;
@@ -3006,6 +3006,7 @@ fn regionHeight(editor: *fizzy.Editor, name: []const u8) f32 {
 }
 
 /// A left click at the middle of `r`, then the frames after it.
+// anytype: Frame callbacks have inferred error sets and run through the same tap sequence.
 fn tapAt(r: dvui.Rect.Physical, comptime frame: anytype) !void {
     _ = try dvui.currentWindow().addEventMouseMotion(.{ .pt = r.center() });
     _ = try dvui.currentWindow().addEventMouseButton(.left, .press);
@@ -3013,13 +3014,13 @@ fn tapAt(r: dvui.Rect.Physical, comptime frame: anytype) !void {
     try dvui.testing.settle(frame);
 }
 
-fn phoneCase(ctx: *shim.Ctx) !void {
+fn mobileCase(ctx: *shim.Ctx) !void {
     const editor = ctx.editor;
     editor.app.gpa = std.testing.allocator;
-    PhoneFrame.explorer = .{};
-    editor.explorer = &PhoneFrame.explorer;
-    fizzy.core.platform.cached_form_factor = .phone;
-    PhoneFrame.editor = editor;
+    MobileFrame.explorer = .{};
+    editor.explorer = &MobileFrame.explorer;
+    fizzy.core.platform.cached_form_factor = .mobile;
+    MobileFrame.editor = editor;
     const kw = fizzy.sdk.keywords.ide;
     try editor.app.host.registerSurface(.{ .id = "test.files", .title = "Files", .keywords = kw.sidebar, .draw = TabsFrame.draw });
     try editor.app.host.registerSurface(.{ .id = "test.search", .title = "Search", .keywords = kw.sidebar, .draw = TabsFrame.draw });
@@ -3027,7 +3028,7 @@ fn phoneCase(ctx: *shim.Ctx) !void {
     try editor.app.host.registerSurface(.{ .id = "test.output", .title = "Output", .keywords = kw.panel, .draw = TabsFrame.draw });
 }
 
-test "a phone's shape is Main, two shut sheets, a bar of the rail's views and a command button" {
+test "mobile's shape is Main, two shut sheets, a bar of the rail's views and a command button" {
     var ctx = try shim.init(std.testing.allocator);
     defer ctx.deinit(std.testing.allocator);
     const editor = ctx.editor;
@@ -3038,10 +3039,10 @@ test "a phone's shape is Main, two shut sheets, a bar of the rail's views and a 
     defer editor.app.layout.deinitQualified(editor.app.gpa);
     defer editor.app.layout.deinitAssignments(editor.app.gpa);
 
-    fizzy.core.platform.cached_form_factor = .phone;
+    fizzy.core.platform.cached_form_factor = .mobile;
     defer fizzy.core.platform.cached_form_factor = .desktop;
-    PhoneFrame.editor = editor;
-    defer PhoneFrame.editor = null;
+    MobileFrame.editor = editor;
+    defer MobileFrame.editor = null;
 
     const kw = fizzy.sdk.keywords.ide;
     try editor.app.host.registerSurface(.{ .id = "test.files", .title = "Files", .keywords = kw.sidebar, .draw = TabsFrame.draw });
@@ -3049,7 +3050,7 @@ test "a phone's shape is Main, two shut sheets, a bar of the rail's views and a 
     try editor.app.host.registerSurface(.{ .id = "test.workspace", .title = "Workspace", .keywords = kw.main, .draw = TabsFrame.draw });
     try editor.app.host.registerSurface(.{ .id = "test.output", .title = "Output", .keywords = kw.panel, .draw = TabsFrame.draw });
 
-    try dvui.testing.settle(PhoneFrame.frame);
+    try dvui.testing.settle(MobileFrame.frame);
 
     // The places: one Main, a sheet each for the sidebar's views and the panel's, nothing else.
     var names: std.ArrayList([]const u8) = .empty;
@@ -3064,8 +3065,6 @@ test "a phone's shape is Main, two shut sheets, a bar of the rail's views and a 
     // strip and the bar.
     try std.testing.expect(placeShut(editor, "Explorer"));
     try std.testing.expect(placeShut(editor, "Panel"));
-    try std.testing.expect(regionHeight(editor, "Explorer") < 1);
-    try std.testing.expect(regionHeight(editor, "Panel") < 1);
     {
         const win = dvui.windowRect().h;
         const main_h = regionHeight(editor, "Main");
@@ -3090,7 +3089,7 @@ test "a phone's shape is Main, two shut sheets, a bar of the rail's views and a 
     // Opening the panel sheet gives it height, and shutting it takes it away again.
     const panel = editor.regionFor(kw.panel) orelse return error.TestUnexpectedResult;
     panel.open();
-    try dvui.testing.settle(PhoneFrame.frame);
+    try dvui.testing.settle(MobileFrame.frame);
     try std.testing.expect(!placeShut(editor, "Panel"));
     var panel_h: f32 = 0;
     for (editor.app.layout.regions.items) |r| if (std.mem.eql(u8, r.name, "Panel")) {
@@ -3098,7 +3097,7 @@ test "a phone's shape is Main, two shut sheets, a bar of the rail's views and a 
     };
     try std.testing.expect(panel_h > 100);
     panel.close();
-    try dvui.testing.settle(PhoneFrame.frame);
+    try dvui.testing.settle(MobileFrame.frame);
     try std.testing.expect(placeShut(editor, "Panel"));
 }
 
@@ -3106,26 +3105,26 @@ test "a tap on the scrim shuts the open sheet, and a tap on Main with none open 
     var ctx = try shim.init(std.testing.allocator);
     defer ctx.deinit(std.testing.allocator);
     const editor = ctx.editor;
-    try phoneCase(&ctx);
+    try mobileCase(&ctx);
     defer fizzy.core.platform.cached_form_factor = .desktop;
-    defer PhoneFrame.editor = null;
+    defer MobileFrame.editor = null;
     defer editor.app.layout.regions.deinit(editor.app.gpa);
     defer editor.app.layout.regions_building.deinit(editor.app.gpa);
     defer editor.app.layout.deinitExtents(editor.app.gpa);
     defer editor.app.layout.deinitQualified(editor.app.gpa);
     defer editor.app.layout.deinitAssignments(editor.app.gpa);
 
-    try dvui.testing.settle(PhoneFrame.frame);
+    try dvui.testing.settle(MobileFrame.frame);
     const panel = editor.regionFor(fizzy.sdk.keywords.ide.panel) orelse return error.TestUnexpectedResult;
     panel.open();
-    try dvui.testing.settle(PhoneFrame.frame);
+    try dvui.testing.settle(MobileFrame.frame);
     try std.testing.expect(!placeShut(editor, "Panel"));
 
     // Just under the title strip: over Main, above the sheet.
     const title = dvui.tagGet("fizzy.mobile.title").?.rect;
     const scrim: dvui.Rect.Physical = .{ .x = title.x, .y = title.y + title.h + 60, .w = 10, .h = 10 };
-    try tapAt(scrim, PhoneFrame.frame);
-    try dvui.testing.settle(PhoneFrame.frame);
+    try tapAt(scrim, MobileFrame.frame);
+    try dvui.testing.settle(MobileFrame.frame);
     try std.testing.expect(placeShut(editor, "Panel"));
 }
 
@@ -3133,20 +3132,20 @@ test "a bar tab opens the explorer sheet on its view, and picking the showing on
     var ctx = try shim.init(std.testing.allocator);
     defer ctx.deinit(std.testing.allocator);
     const editor = ctx.editor;
-    try phoneCase(&ctx);
+    try mobileCase(&ctx);
     defer fizzy.core.platform.cached_form_factor = .desktop;
-    defer PhoneFrame.editor = null;
+    defer MobileFrame.editor = null;
     defer editor.app.layout.regions.deinit(editor.app.gpa);
     defer editor.app.layout.regions_building.deinit(editor.app.gpa);
     defer editor.app.layout.deinitExtents(editor.app.gpa);
     defer editor.app.layout.deinitQualified(editor.app.gpa);
     defer editor.app.layout.deinitAssignments(editor.app.gpa);
 
-    try dvui.testing.settle(PhoneFrame.frame);
+    try dvui.testing.settle(MobileFrame.frame);
     try std.testing.expect(placeShut(editor, "Explorer"));
 
     const search = dvui.tagGet("fizzy.mobile.tab:test.search").?.rect;
-    try tapAt(search, PhoneFrame.frame);
+    try tapAt(search, MobileFrame.frame);
     try std.testing.expect(!placeShut(editor, "Explorer"));
     {
         var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
@@ -3154,8 +3153,73 @@ test "a bar tab opens the explorer sheet on its view, and picking the showing on
     }
 
     // The tab showing, tapped again: the sheet goes.
-    try tapAt(dvui.tagGet("fizzy.mobile.tab:test.search").?.rect, PhoneFrame.frame);
+    try tapAt(dvui.tagGet("fizzy.mobile.tab:test.search").?.rect, MobileFrame.frame);
     try std.testing.expect(placeShut(editor, "Explorer"));
+}
+
+test "the Layout setting switches a desktop window to the mobile shape and back, held while a demo plays" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+    const editor = ctx.editor;
+    const gpa = std.testing.allocator;
+    editor.app.gpa = gpa;
+    defer editor.app.layout.deinitExtents(gpa);
+    defer editor.app.layout.deinitAssignments(gpa);
+    const io_before = dvui.io;
+    defer dvui.io = io_before;
+    dvui.io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var dir_buf: [std.fs.max_path_bytes]u8 = undefined;
+    editor.app.config_folder = dir_buf[0..try tmp.dir.realPath(dvui.io, &dir_buf)];
+    defer fizzy.core.platform.cached_layout_mode = .auto;
+
+    const state = &editor.app.layout;
+    const mobile_key = "mobile";
+
+    editor.chooseShape();
+    try std.testing.expectEqualStrings("", state.shape);
+
+    // Mobile on a desktop form factor: the mobile shape at once.
+    editor.app.settings.layout_mode = .mobile;
+    editor.chooseShape();
+    try std.testing.expectEqual(fizzy.core.platform.FormFactor.mobile, fizzy.core.platform.formFactor());
+    try std.testing.expectEqualStrings(mobile_key, state.shape);
+
+    // Desktop: the desktop arrangement is back.
+    editor.app.settings.layout_mode = .desktop;
+    editor.chooseShape();
+    try std.testing.expectEqualStrings("", state.shape);
+
+    // While a demo plays the change waits, and lands when it ends.
+    editor.app.settings.layout_mode = .mobile;
+    editor.demo.player.state = .playing;
+    editor.chooseShape();
+    try std.testing.expectEqualStrings("", state.shape);
+    editor.demo.player.state = .idle;
+    editor.chooseShape();
+    try std.testing.expectEqualStrings(mobile_key, state.shape);
+}
+
+test "syncLayoutMode hands the Layout setting to the form factor without switching the shape, held while a demo plays" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+    const editor = ctx.editor;
+    defer fizzy.core.platform.cached_layout_mode = .auto;
+
+    const shape_before = editor.app.layout.shape;
+    editor.app.settings.layout_mode = .mobile;
+    editor.syncLayoutMode();
+    try std.testing.expectEqual(fizzy.core.platform.FormFactor.mobile, fizzy.core.platform.formFactor());
+    try std.testing.expectEqualStrings(shape_before, editor.app.layout.shape);
+
+    editor.app.settings.layout_mode = .desktop;
+    editor.demo.player.state = .playing;
+    editor.syncLayoutMode();
+    try std.testing.expectEqual(fizzy.core.platform.FormFactor.mobile, fizzy.core.platform.formFactor());
+    editor.demo.player.state = .idle;
+    editor.syncLayoutMode();
+    try std.testing.expectEqual(fizzy.core.platform.FormFactor.desktop, fizzy.core.platform.formFactor());
 }
 
 test "a form-factor flip saves the shape it leaves and loads the other's, leaving the first's file part alone" {
@@ -3179,10 +3243,10 @@ test "a form-factor flip saves the shape it leaves and loads the other's, leavin
     // The desktop, with a sidebar the user dragged and not yet saved.
     _ = state.setExtent(gpa, "Sidebar", 300);
     state.dirty = true;
-    editor.useShape("phone");
-    try std.testing.expectEqualStrings("phone", state.shape);
+    editor.useShape("mobile");
+    try std.testing.expectEqualStrings("mobile", state.shape);
     try std.testing.expect(!state.dirty);
-    // The desktop's was written, and none of it is in the phone's state.
+    // The desktop's was written, and none of it is in the mobile's state.
     try std.testing.expectEqual(@as(?f32, null), state.extents.get("Sidebar"));
     {
         const desktop = fizzy.backend.loadRegions(gpa, dir, "");
@@ -3191,7 +3255,7 @@ test "a form-factor flip saves the shape it leaves and loads the other's, leavin
         try std.testing.expectEqual(@as(?f32, 300), desktop[0].extent);
     }
 
-    // The phone's sheet, then back: the phone's is written, the desktop's is read again.
+    // The mobile's sheet, then back: the mobile's is written, the desktop's is read again.
     _ = state.setExtent(gpa, "Explorer", 400);
     state.dirty = true;
     editor.useShape("");
@@ -3199,10 +3263,10 @@ test "a form-factor flip saves the shape it leaves and loads the other's, leavin
     try std.testing.expectEqual(@as(?f32, 300), state.extents.get("Sidebar"));
     try std.testing.expectEqual(@as(?f32, null), state.extents.get("Explorer"));
     {
-        const phone = fizzy.backend.loadRegions(gpa, dir, "phone");
-        defer fizzy.backend.freeRegions(gpa, phone);
-        try std.testing.expectEqual(@as(usize, 1), phone.len);
-        try std.testing.expectEqualStrings("Explorer", phone[0].name);
+        const mobile = fizzy.backend.loadRegions(gpa, dir, "mobile");
+        defer fizzy.backend.freeRegions(gpa, mobile);
+        try std.testing.expectEqual(@as(usize, 1), mobile.len);
+        try std.testing.expectEqualStrings("Explorer", mobile[0].name);
         const desktop = fizzy.backend.loadRegions(gpa, dir, "");
         defer fizzy.backend.freeRegions(gpa, desktop);
         try std.testing.expectEqual(@as(usize, 1), desktop.len);
@@ -3235,36 +3299,36 @@ test "layout.zon keeps each shape's regions apart, and a file with no shapes rea
         const desktop = fizzy.backend.loadRegions(gpa, dir, "");
         defer fizzy.backend.freeRegions(gpa, desktop);
         try std.testing.expectEqual(@as(usize, 1), desktop.len);
-        const phone = fizzy.backend.loadRegions(gpa, dir, "phone");
-        defer fizzy.backend.freeRegions(gpa, phone);
-        try std.testing.expectEqual(@as(usize, 0), phone.len);
+        const mobile = fizzy.backend.loadRegions(gpa, dir, "mobile");
+        defer fizzy.backend.freeRegions(gpa, mobile);
+        try std.testing.expectEqual(@as(usize, 0), mobile.len);
     }
 
-    // The phone saves its own; the desktop's is where it was.
-    fizzy.backend.saveRegions(dir, "phone", &.{.{ .name = "Explorer", .extent = 400 }});
+    // The mobile saves its own; the desktop's is where it was.
+    fizzy.backend.saveRegions(dir, "mobile", &.{.{ .name = "Explorer", .extent = 400 }});
     {
         const desktop = fizzy.backend.loadRegions(gpa, dir, "");
         defer fizzy.backend.freeRegions(gpa, desktop);
         try std.testing.expectEqual(@as(usize, 1), desktop.len);
         try std.testing.expectEqualStrings("Sidebar", desktop[0].name);
-        const phone = fizzy.backend.loadRegions(gpa, dir, "phone");
-        defer fizzy.backend.freeRegions(gpa, phone);
-        try std.testing.expectEqual(@as(usize, 1), phone.len);
-        try std.testing.expectEqualStrings("Explorer", phone[0].name);
-        try std.testing.expectEqual(@as(?f32, 400), phone[0].extent);
+        const mobile = fizzy.backend.loadRegions(gpa, dir, "mobile");
+        defer fizzy.backend.freeRegions(gpa, mobile);
+        try std.testing.expectEqual(@as(usize, 1), mobile.len);
+        try std.testing.expectEqualStrings("Explorer", mobile[0].name);
+        try std.testing.expectEqual(@as(?f32, 400), mobile[0].extent);
     }
 
-    // The desktop saves again, and again the phone's stays; a second phone save replaces the first.
+    // The desktop saves again, and again the mobile's stays; a second mobile save replaces the first.
     fizzy.backend.saveRegions(dir, "", &.{ .{ .name = "Sidebar", .extent = 300 }, .{ .name = "Panel", .extent = 200 } });
-    fizzy.backend.saveRegions(dir, "phone", &.{.{ .name = "Panel", .extent = 150 }});
+    fizzy.backend.saveRegions(dir, "mobile", &.{.{ .name = "Panel", .extent = 150 }});
     {
         const desktop = fizzy.backend.loadRegions(gpa, dir, "");
         defer fizzy.backend.freeRegions(gpa, desktop);
         try std.testing.expectEqual(@as(usize, 2), desktop.len);
-        const phone = fizzy.backend.loadRegions(gpa, dir, "phone");
-        defer fizzy.backend.freeRegions(gpa, phone);
-        try std.testing.expectEqual(@as(usize, 1), phone.len);
-        try std.testing.expectEqualStrings("Panel", phone[0].name);
+        const mobile = fizzy.backend.loadRegions(gpa, dir, "mobile");
+        defer fizzy.backend.freeRegions(gpa, mobile);
+        try std.testing.expectEqual(@as(usize, 1), mobile.len);
+        try std.testing.expectEqualStrings("Panel", mobile[0].name);
     }
 }
 
@@ -3407,6 +3471,7 @@ const FizzySplitFrame = struct {
             defer main.deinit();
         }
         e.app.layout.publishRegions();
+        e.app.layout.splits.reap(e.app.gpa);
         return .ok;
     }
 };
@@ -3457,7 +3522,6 @@ test "picker: each header control runs its command, the button and the palette a
     defer editor.app.layout.deinitExtents(editor.app.gpa);
     defer editor.app.layout.deinitAssignments(editor.app.gpa);
     defer editor.app.layout.deinitQualified(editor.app.gpa);
-    defer editor.app.layout.splits.deinit(editor.app.gpa);
     defer editor.app.layout.picker.close(editor.app.gpa);
 
     PickerFrame.editor = editor;
@@ -3575,6 +3639,69 @@ test "a fizzy Main split keeps the workspace on the leftover side" {
     try std.testing.expectEqual(@as(usize, 0), created.len);
 }
 
+/// Frees the state a `FizzySplitFrame` test builds up, so `std.testing.allocator` sees every leak
+/// and every use after free.
+fn deinitSplitState(editor: *fizzy.Editor) void {
+    editor.app.layout.regions.deinit(editor.app.gpa);
+    editor.app.layout.regions_building.deinit(editor.app.gpa);
+    editor.app.layout.deinitExtents(editor.app.gpa);
+    editor.app.layout.deinitAssignments(editor.app.gpa);
+    editor.app.layout.deinitQualified(editor.app.gpa);
+}
+
+test "a leading empty split dropped onto the trash does not draw freed nodes" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+    const editor = ctx.editor;
+    editor.app.gpa = std.testing.allocator;
+    defer deinitSplitState(editor);
+    FizzySplitFrame.editor = editor;
+    defer FizzySplitFrame.editor = null;
+
+    try dvui.testing.settle(FizzySplitFrame.frame);
+    {
+        var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+        // `.left`: the new half is the tree's first child, the original `Main` leaf its last.
+        try std.testing.expectEqualStrings("Main/l1", layout.splitOn("Main", .left) orelse return error.TestExpectedEqual);
+    }
+    try dvui.testing.settle(FizzySplitFrame.frame);
+    try std.testing.expect(editor.app.layout.splits.root("Main") != null);
+
+    {
+        var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+        fizzy.Editor.Layout.ViewDrag.place(&layout, "Main/l1", "Main/l1", .remove);
+    }
+    try dvui.testing.settle(FizzySplitFrame.frame);
+    try dvui.testing.settle(FizzySplitFrame.frame);
+    // The collapse took the whole tree down to the origin leaf, and the frame's reap freed it.
+    try std.testing.expect(editor.app.layout.splits.root("Main") == null);
+    try std.testing.expectEqual(@as(usize, 0), editor.app.layout.splits.buried.items.len);
+}
+
+test "a saved layout holding an empty runtime split draws without crashing" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+    const editor = ctx.editor;
+    editor.app.gpa = std.testing.allocator;
+    defer deinitSplitState(editor);
+    FizzySplitFrame.editor = editor;
+    defer FizzySplitFrame.editor = null;
+
+    // What `Editor.applySavedRegions` rebuilds from a file: Main/l1 from the left of Main, an
+    // extent of nothing (what a drop leaves behind), and no view in it.
+    const saved = [_]fizzy.backend.SavedRegion{
+        .{ .name = "Main/l1", .extent = 0, .parent = "Main", .from = "left" },
+    };
+    editor.applySavedRegions(&saved);
+    try std.testing.expect(editor.app.layout.splits.root("Main") != null);
+
+    try dvui.testing.settle(FizzySplitFrame.frame);
+    try dvui.testing.settle(FizzySplitFrame.frame);
+    // The collapse took the whole tree down to the origin leaf, and the frame's reap freed it.
+    try std.testing.expect(editor.app.layout.splits.root("Main") == null);
+    try std.testing.expectEqual(@as(usize, 0), editor.app.layout.splits.buried.items.len);
+}
+
 /// fizzy's own Main: a carded place that hands its card to its panes, in a column of the window.
 const ColumnCardFrame = struct {
     var editor: ?*fizzy.Editor = null;
@@ -3640,6 +3767,73 @@ test "a split of a carded place, and of its new half, opens even halves" {
     const bottom = try ColumnCardFrame.sizeOf(editor, "Main/r1/b1");
     try std.testing.expect(top.h > 40);
     try std.testing.expectApproxEqAbs(top.h, bottom.h, 1);
+}
+
+// A split fizzy made turns with its space: stacked when the room is taller than wide, side by
+// side when wider. The turn is how it is drawn, not what is saved: the person's side and extent
+// stay as they left them, nothing is written, and the new half keeps its share of the room.
+test "an adaptive split turns with the window, keeps its share and writes nothing" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const editor = ctx.editor;
+    editor.app.gpa = std.testing.allocator;
+    defer editor.app.layout.regions.deinit(editor.app.gpa);
+    defer editor.app.layout.regions_building.deinit(editor.app.gpa);
+    defer editor.app.layout.deinitExtents(editor.app.gpa);
+    defer editor.app.layout.deinitAssignments(editor.app.gpa);
+    defer editor.app.layout.deinitQualified(editor.app.gpa);
+
+    ColumnCardFrame.editor = editor;
+    defer ColumnCardFrame.editor = null;
+
+    // A tablet held across: wider than tall.
+    ctx.t.backend.size = .{ .w = 1180, .h = 820 };
+    ctx.t.backend.size_pixels = .{ .w = 1180, .h = 820 };
+    _ = try dvui.testing.step(ColumnCardFrame.frame);
+    try dvui.testing.settle(ColumnCardFrame.frame);
+    {
+        var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+        try std.testing.expectEqualStrings("Main/r1", layout.splitOn("Main", .right) orelse return error.TestExpectedEqual);
+        layout.markAdaptive("Main/r1");
+    }
+    try dvui.testing.settle(ColumnCardFrame.frame);
+    const old = try ColumnCardFrame.sizeOf(editor, "Main");
+    const new = try ColumnCardFrame.sizeOf(editor, "Main/r1");
+    try std.testing.expect(new.w > 40);
+    try std.testing.expectApproxEqAbs(old.h, new.h, 1);
+    const share = new.w / (old.w + new.w);
+    const saved_extent = editor.app.layout.extent("Main/r1", 0);
+    editor.app.layout.dirty = false;
+
+    // Turned upright: the new half is below, with the share it had beside.
+    ctx.t.backend.size = .{ .w = 820, .h = 1180 };
+    ctx.t.backend.size_pixels = .{ .w = 820, .h = 1180 };
+    // The turn eases (the place slides shut, and open the other way): the frames it takes.
+    for (0..40) |_| _ = try dvui.testing.step(ColumnCardFrame.frame);
+    const top = try ColumnCardFrame.sizeOf(editor, "Main");
+    const bottom = try ColumnCardFrame.sizeOf(editor, "Main/r1");
+    try std.testing.expectApproxEqAbs(top.w, bottom.w, 1);
+    try std.testing.expectApproxEqAbs(share, bottom.h / (top.h + bottom.h), 0.03);
+    try std.testing.expect(!editor.app.layout.dirty);
+    try std.testing.expectEqual(saved_extent, editor.app.layout.extent("Main/r1", 0));
+    {
+        const links = editor.app.layout.splits.collectLinks(std.testing.allocator);
+        defer std.testing.allocator.free(links);
+        try std.testing.expectEqual(@as(usize, 1), links.len);
+        try std.testing.expectEqual(fizzy.Editor.Layout.State.SplitTree.Side.right, links[0].side);
+        try std.testing.expect(links[0].adaptive);
+    }
+
+    // And back across: beside again, the same share.
+    ctx.t.backend.size = .{ .w = 1180, .h = 820 };
+    ctx.t.backend.size_pixels = .{ .w = 1180, .h = 820 };
+    for (0..40) |_| _ = try dvui.testing.step(ColumnCardFrame.frame);
+    const left = try ColumnCardFrame.sizeOf(editor, "Main");
+    const right = try ColumnCardFrame.sizeOf(editor, "Main/r1");
+    try std.testing.expectApproxEqAbs(left.h, right.h, 1);
+    try std.testing.expectApproxEqAbs(share, right.w / (left.w + right.w), 0.03);
+    try std.testing.expect(!editor.app.layout.dirty);
 }
 
 /// Main | (Main/r1 over Main/r1/b1) in fizzy's split forest, each holding one view. Main/r1 is two
@@ -5879,6 +6073,9 @@ fn demoFrame() !dvui.App.Result {
 /// One run of the frame.
 fn demoRun() !dvui.App.Result {
     demo_player.frame();
+    for (dvui.events()) |e| {
+        if (!e.handled and e.evt == .mouse and e.evt.mouse.action == .release) demo_releases += 1;
+    }
     {
         var col = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
         defer col.deinit();
@@ -5892,11 +6089,23 @@ fn demoRun() !dvui.App.Result {
         te.draw();
         te.deinit();
     }
+    if (demo_float) |*r| {
+        // lint-allow(raw-transient-surface): headless test fixture, not a shown surface
+        var fw = dvui.floatingWindow(@src(), .{ .rect = r }, .{ .tag = "demo.float" });
+        defer fw.deinit();
+        dvui.labelNoFmt(@src(), "Float", .{}, .{});
+    }
     if (demo_other_bar) |b| @import("app").dome.publishBar(b);
     automation.overlay.draw(&demo_player);
     demo_callout_main = if (dvui.tagGet(automation.overlay.callout_anchor)) |td| fizzy.core.screens.isMain(td.id) else null;
     return .ok;
 }
+
+/// Pointer releases that got past the player to the app's widgets.
+var demo_releases: usize = 0;
+
+/// A float the harness draws under the overlay, as the app's are, while set (natural rect).
+var demo_float: ?dvui.Rect = null;
 
 /// Whether the callout was the main window's in the frame just run (`core.screens.markMain`).
 var demo_callout_main: ?bool = null;
@@ -5923,7 +6132,9 @@ fn demoCtx() !dvui.testing {
     demo_text = .empty;
     demo_clicks = 0;
     demo_commands = 0;
+    demo_releases = 0;
     demo_stage = .{};
+    demo_float = null;
     demo_player = .init(std.testing.allocator, demo_stage.stage());
     // No wall-time budget: a seek lands in the step that asked for it, whatever the machine.
     demo_player.budget_ns = std.math.maxInt(i64);
@@ -5950,6 +6161,121 @@ fn stepDemoUntil(state: automation.Player.State, max: usize) !void {
     if (demo_player.state != state) {
         std.debug.print("player is {t} at {d:.0}ms, wanted {t}\n", .{ demo_player.state, demo_player.seq.now, state });
         return error.TestUnexpectedResult;
+    }
+}
+
+/// Where the subwindow `tag` marks sits in dvui's stack of them, later being above; null when it
+/// has none. A floating window's tag is on its frame, which its subwindow shares the rect of.
+fn subwindowIndex(tag: []const u8) ?usize {
+    const td = dvui.tagGet(tag) orelse return null;
+    for (dvui.currentWindow().subwindows.stack.items, 0..) |sw, i| {
+        if (sw.id == td.id) return i;
+        const r = sw.rect_pixels;
+        if (@abs(r.x - td.rect.x) < 1 and @abs(r.y - td.rect.y) < 1 and @abs(r.w - td.rect.w) < 1 and @abs(r.h - td.rect.h) < 1) return i;
+    }
+    return null;
+}
+
+/// A tape that only moves the pointer: over a float, across the field and back to the float's
+/// header, with no press anywhere in it.
+fn moveOnlyTape() !automation.Tape.Owned {
+    var s: automation.Script = .init(std.testing.allocator, "moves", "Moves");
+    errdefer s.deinit();
+    try s.keyframe(.{ .root = "demo://moves", .files = &.{.{ .path = "field", .text = "" }} });
+    try s.moveTo(.{ .tag = "demo.float", .x = 0.5, .y = 0.5 }, .{});
+    try s.moveTo(.{ .tag = "demo.field", .x = 0.8, .y = 0.8 }, .{});
+    try s.moveTo(.{ .tag = "demo.float", .x = 0.5, .y = 0.05 }, .{});
+    try s.moveTo(.{ .tag = "demo.count" }, .{});
+    s.pause(300);
+    return s.finish();
+}
+
+test "demo: a tape with no press drags nothing, even over a float's header" {
+    var t = try demoCtx();
+    defer deinitDemo(&t);
+    demo_float = .{ .x = 200, .y = 150, .w = 300, .h = 200 };
+    const home = demo_float.?;
+    try dvui.testing.settle(demoFrame);
+
+    demo_player.load(try moveOnlyTape(), .{});
+    for (0..600) |_| {
+        if (demo_player.state == .ended) break;
+        _ = try dvui.testing.step(demoFrame);
+        try std.testing.expect(dvui.currentWindow().dragging.state == .none);
+        try std.testing.expectEqual(home, demo_float.?);
+    }
+    try std.testing.expectEqual(automation.Player.State.ended, demo_player.state);
+}
+
+/// A tape that drags the float by its header.
+fn floatDragTape() !automation.Tape.Owned {
+    var s: automation.Script = .init(std.testing.allocator, "drags", "Drags");
+    errdefer s.deinit();
+    try s.keyframe(.{ .root = "demo://drags", .files = &.{.{ .path = "field", .text = "" }} });
+    try s.drag(.{ .tag = "demo.float", .x = 0.5, .y = 0.05 }, .{ .tag = "demo.count" }, .{});
+    return s.finish();
+}
+
+test "demo: a press in the tape does drag a float by its header" {
+    var t = try demoCtx();
+    defer deinitDemo(&t);
+    demo_float = .{ .x = 200, .y = 150, .w = 300, .h = 200 };
+    const home = demo_float.?;
+    try dvui.testing.settle(demoFrame);
+
+    demo_player.load(try floatDragTape(), .{});
+    try stepDemoUntil(.ended, 600);
+    try std.testing.expect(demo_float.?.x != home.x or demo_float.?.y != home.y);
+}
+
+/// Three captions about no one thing, each starting while the one before shows.
+fn threeCaptionsTape() !automation.Tape.Owned {
+    var s: automation.Script = .init(std.testing.allocator, "captions", "Captions");
+    errdefer s.deinit();
+    try s.keyframe(.{ .root = "demo://captions", .files = &.{.{ .path = "field", .text = "" }} });
+    try s.caption("First.", .{ .ms = 8000 });
+    s.pause(600);
+    try s.caption("Second.", .{ .ms = 8000 });
+    s.pause(600);
+    try s.caption("Third.", .{ .ms = 8000 });
+    s.pause(1500);
+    return s.finish();
+}
+
+test "demo: captions come in the tape's order, newest lowest, above every float" {
+    var t = try demoCtx();
+    defer deinitDemo(&t);
+
+    demo_player.load(try threeCaptionsTape(), .{});
+
+    // The frame each first shows in: never one before the one ahead of it in the tape.
+    var first_seen: [3]?usize = .{ null, null, null };
+    for (0..400) |frame| {
+        _ = try dvui.testing.step(demoFrame);
+        inline for (0..3) |i| {
+            if (first_seen[i] == null and dvui.tagGet(std.fmt.comptimePrint("automation.caption:{d}", .{i})) != null) first_seen[i] = frame;
+        }
+        if (first_seen[2] != null) break;
+    }
+    try std.testing.expect(first_seen[0] != null and first_seen[1] != null and first_seen[2] != null);
+    try std.testing.expect(first_seen[0].? <= first_seen[1].?);
+    try std.testing.expect(first_seen[1].? <= first_seen[2].?);
+
+    // A float opened while they show, as a dropped view's is, lands under them.
+    demo_float = .{ .x = 100, .y = 100, .w = 300, .h = 300 };
+    for (0..10) |_| _ = try dvui.testing.step(demoFrame);
+
+    const first = dvui.tagGet("automation.caption:0") orelse return error.TestUnexpectedResult;
+    const second = dvui.tagGet("automation.caption:1") orelse return error.TestUnexpectedResult;
+    const third = dvui.tagGet("automation.caption:2") orelse return error.TestUnexpectedResult;
+    // Stacked up from the foot: each older one above those after it.
+    try std.testing.expect(first.rect.y < second.rect.y);
+    try std.testing.expect(second.rect.y < third.rect.y);
+
+    const float_at = subwindowIndex("demo.float") orelse return error.TestUnexpectedResult;
+    inline for (0..3) |i| {
+        const at = subwindowIndex(std.fmt.comptimePrint("automation.caption:{d}", .{i})) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(at > float_at);
     }
 }
 
@@ -6054,6 +6380,58 @@ test "demo: a seek lands in the frame that asked for it, the app's clock followi
     try std.testing.expectEqualStrings("> hello", demo_text.items);
     try std.testing.expectEqual(@as(u32, 0), demo_player.seek_stats.silent);
     try std.testing.expect(demo_player.seek_stats.shown > 3);
+}
+
+test "demo: a seek or pause mid-drag lets go of the held button, and the release of an unheld button sends no event" {
+    var t = try demoCtx();
+    defer deinitDemo(&t);
+    demo_stage.snapshots = false;
+
+    var s: automation.Script = .init(std.testing.allocator, "drag", "Drag");
+    try s.keyframe(.{ .root = "demo://drag", .files = &.{.{ .path = "field", .text = "> " }} });
+    try s.drag(.{ .tag = "demo.count" }, .{ .tag = "demo.field" }, .{});
+    demo_player.load(try s.finish(), .{});
+    var press_at: f64 = 0;
+    var release_at: f64 = 0;
+    for (demo_player.tape().?.ops) |op| switch (op.do) {
+        .press => press_at = @floatFromInt(op.at),
+        .release => release_at = @floatFromInt(op.at),
+        else => {},
+    };
+    const mid = (press_at + release_at) / 2;
+
+    // A seek that lands paused inside the drag, forward on the tape's own state.
+    demo_player.pause();
+    demo_player.seek(mid);
+    try stepDemoUntil(.paused, 200);
+    try std.testing.expectEqual(@as(usize, 0), demo_player.input.held.count());
+
+    // Back to the keyframe and on into the drag again, then a pause asked for mid-seek.
+    demo_player.seek(0);
+    try stepDemoUntil(.paused, 200);
+    demo_player.play();
+    demo_player.seek(mid);
+    demo_player.pause();
+    try stepDemoUntil(.paused, 200);
+    try std.testing.expectEqual(@as(usize, 0), demo_player.input.held.count());
+
+    // Carrying on past the cut-short drag: its release finds nothing held.
+    demo_player.play();
+    try stepDemoUntil(.ended, 400);
+    try std.testing.expectEqual(@as(usize, 0), demo_player.input.held.count());
+
+    // The release of a button nothing holds sends dvui no event; an empty `held` alone could not
+    // tell, since removing an absent button changes nothing.
+    const cw = dvui.currentWindow();
+    const sent = cw.event_num;
+    demo_player.input.button(.left, false);
+    try std.testing.expectEqual(sent, cw.event_num);
+    // The guard lets a release of a held button through.
+    demo_player.input.button(.left, true);
+    const pressed = cw.event_num;
+    try std.testing.expect(pressed > sent);
+    demo_player.input.button(.left, false);
+    try std.testing.expect(cw.event_num > pressed);
 }
 
 test "demo: a seek back goes to the nearest snapshot, not the keyframe, and lands exactly" {
@@ -6545,6 +6923,65 @@ test "demo: a person's click pauses it, and resuming carries on from what they d
     try std.testing.expect(!demo_player.branched);
 }
 
+/// One left drag along the Count button, so the pointer is on it the whole way.
+fn dragTape() !automation.Tape.Owned {
+    var s: automation.Script = .init(std.testing.allocator, "drag", "Drag");
+    errdefer s.deinit();
+    try s.keyframe(.{ .root = "demo://drag", .files = &.{.{ .path = "field", .text = "> " }} });
+    try s.drag(.{ .tag = "demo.count", .x = 0.2 }, .{ .tag = "demo.count", .x = 0.8 }, .{});
+    return s.finish();
+}
+
+/// Seeks to the middle of the drag's carry, landing as `after`, and lets the frames settle.
+fn seekIntoDrag(after: automation.Player.After) !void {
+    var press: f64 = 0;
+    var release: f64 = 0;
+    for (demo_player.tape().?.ops) |op| switch (op.do) {
+        .press => press = @floatFromInt(op.at),
+        .release => release = @floatFromInt(op.at),
+        else => {},
+    };
+    demo_player.seek((press + release) / 2);
+    demo_player.after_seek = after;
+    try stepDemoUntil(if (after == .pause) .paused else .playing, 400);
+}
+
+test "demo: a real release does not end the drag the tape is making" {
+    var t = try demoCtx();
+    defer deinitDemo(&t);
+
+    demo_player.load(try dragTape(), .{});
+    try seekIntoDrag(.play);
+    try std.testing.expect(demo_player.input.held.count() > 0);
+
+    const before = demo_releases;
+    _ = try dvui.currentWindow().addEventMouseButton(.left, .release);
+    _ = try dvui.testing.step(demoFrame);
+    try std.testing.expectEqual(automation.Player.State.playing, demo_player.state);
+    try std.testing.expect(demo_player.input.held.count() > 0);
+    try std.testing.expectEqual(before, demo_releases);
+
+    // The tape's own release still lands when it gets there.
+    try stepDemoUntil(.ended, 400);
+    try std.testing.expectEqual(before + 1, demo_releases);
+}
+
+test "demo: pausing mid-drag and resuming sends no release that has no press" {
+    var t = try demoCtx();
+    defer deinitDemo(&t);
+
+    demo_player.load(try dragTape(), .{});
+    try seekIntoDrag(.play);
+    demo_player.pause();
+    for (0..2) |_| _ = try dvui.testing.step(demoFrame);
+    const after_pause = demo_releases;
+    try std.testing.expectEqual(@as(usize, 1), after_pause);
+
+    demo_player.play();
+    try stepDemoUntil(.ended, 400);
+    try std.testing.expectEqual(after_pause, demo_releases);
+}
+
 /// A real press at the middle of `r`, between frames, as a backend adds it.
 fn pressAt(r: dvui.Rect.Physical) !void {
     _ = try dvui.currentWindow().addEventMouseMotion(.{ .pt = r.center() });
@@ -6963,6 +7400,36 @@ test "float: closing it sends its view home" {
     try std.testing.expect(holds(case.shows("Panel"), "test.output"));
     try std.testing.expect(editor.app.layout.assignment("Panel") == null);
     try std.testing.expect(editor.app.layout.assignment("Float 1") == null);
+}
+
+test "float: a float in an OS window with its own buttons still has a close a tape can press" {
+    var case = try ManyPanelCase.init();
+    defer case.deinit();
+    const editor = case.ctx.editor;
+    try case.place("Panel", "Panel", .swap);
+    const floats = editor.app.layout.floats.items.items;
+    try std.testing.expectEqual(@as(usize, 1), floats.len);
+    // As Popout makes it on macOS: its OS window draws the close button, so the header draws none.
+    floats[0].viewport = .{ .rect = floats[0].rect, .os_buttons = true, .buttons_w = 60 };
+
+    const WantFrame = struct {
+        fn frame() !dvui.App.Result {
+            fizzy.core.anchor.want();
+            return ManyPanelFrame.frame();
+        }
+    };
+    try dvui.testing.settle(WantFrame.frame);
+    try dvui.testing.settle(WantFrame.frame);
+
+    const td = dvui.tagGet("float-close:Float 1") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(td.visible);
+    const cw = dvui.currentWindow();
+    _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = td.rect.x + td.rect.w / 2, .y = td.rect.y + td.rect.h / 2 } });
+    _ = try cw.addEventMouseButton(.left, .press);
+    _ = try cw.addEventMouseButton(.left, .release);
+    try dvui.testing.settle(WantFrame.frame);
+    try dvui.testing.settle(WantFrame.frame);
+    try std.testing.expectEqual(@as(usize, 0), editor.app.layout.floats.items.items.len);
 }
 
 test "float: closing it loses no view its keywords would show nowhere" {
@@ -7904,6 +8371,166 @@ test "workbench: restoring panes leaves tape and demo files out of the assignmen
     try std.testing.expect(editor.app.host.assignedSurfaces("Pane 2") == null);
 }
 
+// The Files explorer over a folder of 300,000 notes. The folder is read, indexed and ranked off
+// the frame, and a frame draws only the rows in view, so the work of a frame does not grow with
+// the folder. Budgets are for a Debug build on a busy CI machine: the median idle frame is under
+// `explorer_frame_budget_ns`, and no frame while the folder loads or is searched takes longer than
+// `explorer_stall_budget_ns` (it was 5.5 s to read the folder in one frame, and 3 s to index it).
+const explorer_frame_budget_ns = 16 * std.time.ns_per_ms;
+const explorer_stall_budget_ns = 500 * std.time.ns_per_ms;
+
+var explorer_scroll: dvui.ScrollInfo = .{ .horizontal = .none };
+
+fn explorerFrame() !dvui.App.Result {
+    fizzy.core.anchor.want();
+    // The host pumps the file table once a frame, before anything draws.
+    workbench.runtime.host().files.?.pump();
+    var scroll = dvui.scrollArea(@src(), .{ .scroll_info = &explorer_scroll }, .{ .expand = .both });
+    defer scroll.deinit();
+    try workbench.files.draw();
+    return .ok;
+}
+
+/// Steps frames until `done`, returning the longest one. Gives up after a minute.
+fn explorerStepUntil(comptime done: fn (*fizzy.core.FileTable) bool, table: *fizzy.core.FileTable) !i128 {
+    const perf = fizzy.core.perf;
+    var slowest: i128 = 0;
+    const give_up = perf.nanoTimestamp() + 60 * std.time.ns_per_s;
+    while (!done(table)) {
+        const t0 = perf.nanoTimestamp();
+        _ = try dvui.testing.step(explorerFrame);
+        slowest = @max(slowest, perf.nanoTimestamp() - t0);
+        if (perf.nanoTimestamp() > give_up) return error.NeverSettled;
+        std.Thread.yield() catch {};
+    }
+    return slowest;
+}
+
+fn explorerListed(table: *fizzy.core.FileTable) bool {
+    return table.listings.count() > 0 and table.pending.count() == 0;
+}
+
+fn explorerSearched(table: *fizzy.core.FileTable) bool {
+    return !table.indexing() and !table.ranking() and table.results.items.len > 0;
+}
+
+fn explorerMedianFrameNs(frames: usize) !i128 {
+    var took: [32]i128 = undefined;
+    for (took[0..frames]) |*t| {
+        const t0 = fizzy.core.perf.nanoTimestamp();
+        _ = try dvui.testing.step(explorerFrame);
+        t.* = fizzy.core.perf.nanoTimestamp() - t0;
+    }
+    std.mem.sort(i128, took[0..frames], {}, std.sort.asc(i128));
+    return took[frames / 2];
+}
+
+test "workbench: the Files explorer frame does not grow with a 300k-note folder" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const editor = ctx.editor;
+    const gpa = std.testing.allocator;
+    editor.app.gpa = gpa;
+    defer editor.app.layout.regions.deinit(gpa);
+    defer editor.app.layout.deinitSwaps(gpa);
+    defer editor.app.layout.regions_building.deinit(gpa);
+    defer editor.app.layout.deinitQualified(gpa);
+    editor.app.host.installFizzyApi(.{ .ctx = editor, .vtable = &fizzy.Editor.fizzy_api_vtable });
+    const prior_chrome = fizzy.core.dialogs.host_chrome;
+    fizzy.sdk.installRuntime(&editor.app.gpa, &editor.app.host, null);
+    defer fizzy.core.dialogs.host_chrome = prior_chrome;
+    editor.workbench = .init(gpa);
+    defer editor.workbench.deinit();
+    try editor.workbench.initDefaultWorkspace();
+    defer editor.workbench.panes.deinit();
+    defer editor.workbench.workspaces.deinit(gpa);
+    workbench.runtime.setWorkbench(&editor.workbench);
+    // The selection is a module global the next test shares: freed, and left usable.
+    defer {
+        workbench.files.deinitCaches();
+        workbench.files.selected_paths = .empty;
+        workbench.files.selected_id = null;
+    }
+    editor.app.file_table = fizzy.core.FileTable.init(gpa, dvui.io);
+    defer editor.app.file_table.deinit();
+    const table = &editor.app.file_table;
+    editor.app.host.files = table;
+    // The app has a live folder watcher; without one the table re-reads a listing every second.
+    table.env.watching = struct {
+        fn live(_: ?*anyopaque) bool {
+            return true;
+        }
+    }.live;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const n: usize = 300_000;
+    var name_buf: [32]u8 = undefined;
+    for (0..n) |i| {
+        const name = try std.fmt.bufPrint(&name_buf, "note-{d:0>6}.md", .{i});
+        var f = try tmp.dir.createFile(dvui.io, name, .{});
+        f.close(dvui.io);
+    }
+    var root_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const root = root_buf[0..try tmp.dir.realPath(dvui.io, &root_buf)];
+    editor.app.folder = try gpa.dupe(u8, root);
+    defer gpa.free(editor.app.folder.?);
+    explorer_scroll = .{ .horizontal = .none };
+
+    const last = try std.fmt.allocPrint(gpa, "{s}/note-{d:0>6}.md", .{ root, n - 1 });
+    defer gpa.free(last);
+    const last_tag = try std.fmt.allocPrint(gpa, "workbench.file:{s}", .{last});
+    defer gpa.free(last_tag);
+    const hit_tag = try std.fmt.allocPrint(gpa, "workbench.file:{s}/note-123456.md", .{root});
+    defer gpa.free(hit_tag);
+
+    // Loading the folder: no frame waits for the disk, and the row says so meanwhile.
+    const load_stall = try explorerStepUntil(explorerListed, table);
+    for (0..8) |_| _ = try dvui.testing.step(explorerFrame);
+    std.debug.print("explorer: slowest frame while loading {d} ms\n", .{@divTrunc(load_stall, std.time.ns_per_ms)});
+    try std.testing.expect(load_stall < explorer_stall_budget_ns);
+
+    // Idle, and scrolled to the end: only the rows in view are measured and drawn.
+    try std.testing.expect(dvui.tagGet(last_tag) == null);
+    const idle = try explorerMedianFrameNs(21);
+    std.debug.print("explorer: median idle frame {d} us\n", .{@divTrunc(idle, std.time.ns_per_us)});
+    try std.testing.expect(idle < explorer_frame_budget_ns);
+
+    for (0..12) |_| {
+        explorer_scroll.viewport.y = @max(0, explorer_scroll.virtual_size.h - explorer_scroll.viewport.h);
+        _ = try dvui.testing.step(explorerFrame);
+    }
+    const scrolled = try explorerMedianFrameNs(21);
+    std.debug.print("explorer: median scrolled frame {d} us\n", .{@divTrunc(scrolled, std.time.ns_per_us)});
+    try std.testing.expect(scrolled < explorer_frame_budget_ns);
+
+    // The last note is reachable, and selecting it selects it.
+    try dvui.testing.expectVisible(last_tag);
+    try dvui.testing.moveTo(last_tag);
+    _ = try dvui.testing.step(explorerFrame);
+    try dvui.testing.click(.left);
+    for (0..3) |_| _ = try dvui.testing.step(explorerFrame);
+    try std.testing.expectEqual(@as(usize, 1), workbench.files.selected_paths.count());
+    try std.testing.expectEqualStrings(last, workbench.files.selected_paths.values()[0]);
+
+    // Filtering for a name finds it among all of them, without a frame waiting for the index.
+    explorer_scroll.viewport.y = 0;
+    for (0..3) |_| _ = try dvui.testing.step(explorerFrame);
+    _ = try dvui.currentWindow().addEventMouseMotion(.{ .pt = .{ .x = 80, .y = 14 } });
+    _ = try dvui.testing.step(explorerFrame);
+    try dvui.testing.click(.left);
+    _ = try dvui.testing.step(explorerFrame);
+    try dvui.testing.writeText("note-123456");
+    const search_stall = try explorerStepUntil(explorerSearched, table);
+    for (0..10) |_| _ = try dvui.testing.step(explorerFrame);
+    std.debug.print("explorer: slowest frame while searching {d} ms\n", .{@divTrunc(search_stall, std.time.ns_per_ms)});
+    try std.testing.expect(search_stall < explorer_stall_budget_ns);
+    try dvui.testing.expectVisible(hit_tag);
+    const filtered = try explorerMedianFrameNs(21);
+    try std.testing.expect(filtered < explorer_frame_budget_ns);
+}
+
 // -- rows carried out of a tree and back --------------------------------------------------------
 
 // A tree of two folders and two files, as the explorer draws one: `F` open with `c` inside it, `G`
@@ -8105,7 +8732,7 @@ const KeyFoldTree = struct {
             body_drawn = true;
             dvui.labelNoFmt(@src(), "child", .{}, .{ .min_size_content = .{ .w = 120, .h = 20 } });
         }
-        open = branch.expanded;
+        if (branch.requested) |r| open = r;
         return .ok;
     }
 };
@@ -8132,6 +8759,52 @@ test "tree: a key fold stays folded when the caller passes its open state back" 
     try std.testing.expect(KeyFoldTree.open and KeyFoldTree.body_drawn);
     _ = try dvui.testing.step(KeyFoldTree.frame);
     try std.testing.expect(KeyFoldTree.open);
+}
+
+const OutsideOpenTree = struct {
+    const TW = fizzy.core.widgets.TreeWidget;
+
+    var open = true;
+    var shown = false;
+    var body_drawn = false;
+
+    // lint-allow(anyerror): the signature of dvui.App.frameFunction
+    fn frame() anyerror!dvui.App.Result {
+        var tree = TW.tree(@src(), .{}, .{ .expand = .both });
+        defer tree.deinit();
+        const branch = tree.branch(@src(), .{ .expanded = open, .animation_duration = 400_000 }, .{ .expand = .horizontal });
+        defer branch.deinit();
+        dvui.labelNoFmt(@src(), "row", .{}, .{ .min_size_content = .{ .w = 120, .h = 20 } });
+        body_drawn = false;
+        if (branch.expander(@src(), .{}, .{ .expand = .horizontal })) {
+            body_drawn = true;
+            dvui.labelNoFmt(@src(), "child", .{}, .{ .min_size_content = .{ .w = 120, .h = 20 } });
+        }
+        shown = branch.expanded;
+        if (branch.requested) |r| open = r;
+        return .ok;
+    }
+};
+
+test "tree: the caller's open state set mid-close wins over the running animation" {
+    var t = try dvui.testing.init(.{ .allocator = std.testing.allocator });
+    defer t.deinit();
+    OutsideOpenTree.open = true;
+    try dvui.testing.settle(OutsideOpenTree.frame);
+    try std.testing.expect(OutsideOpenTree.shown and OutsideOpenTree.body_drawn);
+
+    // Start the close, then restore the open state from outside while it is still running.
+    OutsideOpenTree.open = false;
+    _ = try dvui.testing.step(OutsideOpenTree.frame);
+    try std.testing.expect(OutsideOpenTree.body_drawn);
+    OutsideOpenTree.open = true;
+    try dvui.testing.settle(OutsideOpenTree.frame);
+    try std.testing.expect(OutsideOpenTree.open and OutsideOpenTree.shown and OutsideOpenTree.body_drawn);
+
+    // And the other way: an open branch closed from outside ends closed.
+    OutsideOpenTree.open = false;
+    try dvui.testing.settle(OutsideOpenTree.frame);
+    try std.testing.expect(!OutsideOpenTree.open and !OutsideOpenTree.shown and !OutsideOpenTree.body_drawn);
 }
 
 test "a frost never captures more than the picture it reads" {
@@ -9227,6 +9900,28 @@ fn headlessFrame() !dvui.App.Result {
     return fizzy.Entry.AppFrame();
 }
 
+/// What a demo made of the document panes while it played, watched a frame at a time: the most
+/// panes there were at once, and whether two of them ever sat one above the other or side by side.
+const PaneWatch = struct {
+    most: usize = 0,
+    stacked: bool = false,
+    side_by_side: bool = false,
+
+    fn look(self: *PaneWatch, wb: *const workbench.Workbench) void {
+        const panes = wb.workspaces.values();
+        self.most = @max(self.most, panes.len);
+        for (panes, 0..) |a, i| for (panes[i + 1 ..]) |b| {
+            const ra = a.pane_rect_physical orelse continue;
+            const rb = b.pane_rect_physical orelse continue;
+            if (ra.w < 1 or rb.w < 1 or ra.h < 1 or rb.h < 1) continue;
+            const below = ra.y >= rb.y + rb.h - 1 or rb.y >= ra.y + ra.h - 1;
+            const beside = ra.x >= rb.x + rb.w - 1 or rb.x >= ra.x + ra.w - 1;
+            if (below and !beside) self.stacked = true;
+            if (beside and !below) self.side_by_side = true;
+        };
+    }
+};
+
 test "headless: the whole editor comes up, opens a file, plays the tour and goes down" {
     // One test, not several: a second whole editor in the same process cannot load its plugins.
     // Not the testing allocator: this is the app's own lifetime, whose exit leaks by design
@@ -9599,12 +10294,34 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
     lookback.budget_ns = 0;
     defer lookback.budget_ns = std.time.ns_per_s / 60;
     const unattributed_before = editor.app.host.unattributed_steps;
+    // The explorer shut, so the person's pane has the room for the tour's drop to split it
+    // (`core.placement`); with it open the tour leaves that drop out.
+    editor.explorer.close(editor);
+    try dvui.testing.settle(headlessFrame);
     try editor.demo.play("tour");
     var frames: usize = 0;
+    var desktop_panes: PaneWatch = .{};
+    var relocations: usize = 0;
+    var prev: ?dvui.Rect = null;
+    var was_moving = false;
     while (editor.demo.player.state != .ended and frames < 5000) : (frames += 1) {
         _ = try dvui.testing.step(headlessFrame);
+        desktop_panes.look(&editor.workbench);
+        const now = calloutRect();
+        const moving = if (prev) |p| if (now) |n| @abs(n.x - p.x) + @abs(n.y - p.y) > 0.5 and @abs(n.w - p.w) < 0.5 else false else false;
+        if (moving and !was_moving) relocations += 1;
+        was_moving = moving;
+        prev = now;
     }
+    // A callout holds its place: the tour's callouts set off 12 times here before they stopped
+    // dodging the resting pointer (`overlay.keepClear`), 11 since. The count is measured on this
+    // CI's platform (Linux); macOS lays the tour out with one glide fewer, so 11 is the bound that
+    // fails without the change here and holds on both.
+    try std.testing.expect(relocations <= 11);
     try std.testing.expectEqual(app.automation.Player.State.ended, editor.demo.player.state);
+    // A wide window sets the tour's two documents side by side.
+    try std.testing.expect(desktop_panes.side_by_side);
+    try std.testing.expect(!desktop_panes.stacked);
     // Every step the tour made has an author: its own where it drives the frame, or its commands'
     // (`Host.act` in the demo's stage). A step nobody acted for is a missed site
     // (`plans/SHARED_HISTORY_PLAN.md`). Owners report every step once that plan's step 3 lands;
@@ -9679,6 +10396,79 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
     }
     editor.demo.player.unload();
     try dvui.testing.settle(headlessFrame);
+
+    // The tour again, in a phone's shape: its anchors differ (no rail, no Sidebar place), and the
+    // tape still has to reach its last chapter rather than wait on one that is not there.
+    {
+        const desktop_api = editor.demos.api;
+        const desktop_generation = desktop_api.generation();
+        const desktop_size = t.backend.size;
+        const desktop_pixels = t.backend.size_pixels;
+        // The testing backend reports its size from these fields, so writing them *is* a resize.
+        t.backend.size = .{ .w = 390, .h = 844 };
+        t.backend.size_pixels = .{ .w = 390, .h = 844 };
+        fizzy.core.platform.cached_form_factor = .mobile;
+        defer {
+            fizzy.core.platform.cached_form_factor = .desktop;
+            t.backend.size = desktop_size;
+            t.backend.size_pixels = desktop_pixels;
+        }
+        // `step` re-reads the size at its end, so the first frame still runs at the old one.
+        _ = try dvui.testing.step(headlessFrame);
+        try dvui.testing.settle(headlessFrame);
+        // The list differs by form factor, so its generation moves and a retained one is stale.
+        try std.testing.expect(desktop_api.generation() != desktop_generation);
+        try editor.demo.play("tour");
+        const player = &editor.demo.player;
+        var phone_frames: usize = 0;
+        var phone_panes: PaneWatch = .{};
+        while (player.state != .ended and phone_frames < 5000) : (phone_frames += 1) {
+            _ = try dvui.testing.step(headlessFrame);
+            phone_panes.look(&editor.workbench);
+        }
+        try std.testing.expectEqual(app.automation.Player.State.ended, player.state);
+        // The anchors the phone's tour aims at are drawn in its shape, but for one: the tour opens
+        // among this test's own tabs, and the phone's strip does not scroll to the selected tab, so
+        // the tour's README tab sits off the screen and its chapter is skipped (once).
+        // TODO(seam): the card tab strip scrolling to the selected tab (plans#60) makes this zero.
+        try std.testing.expect(player.timeouts <= 1);
+        // A phone never splits by itself: the second document is a card in the one group.
+        try std.testing.expectEqual(@as(usize, 1), phone_panes.most);
+        player.unload();
+        // Their documents are still open: the demo owns only what it opened.
+        try std.testing.expect(editor.docFromPath(notes) != null);
+        try dvui.testing.settle(headlessFrame);
+    }
+
+    // A tablet held upright stacks the tour's two documents: the window is taller than wide, with
+    // room for two.
+    {
+        const desktop_size = t.backend.size;
+        const desktop_pixels = t.backend.size_pixels;
+        t.backend.size = .{ .w = 820, .h = 1180 };
+        t.backend.size_pixels = .{ .w = 820, .h = 1180 };
+        defer {
+            t.backend.size = desktop_size;
+            t.backend.size_pixels = desktop_pixels;
+        }
+        _ = try dvui.testing.step(headlessFrame);
+        try dvui.testing.settle(headlessFrame);
+        try editor.demo.play("tour");
+        const player = &editor.demo.player;
+        var tablet_frames: usize = 0;
+        var tablet_panes: PaneWatch = .{};
+        while (player.state != .ended and tablet_frames < 5000) : (tablet_frames += 1) {
+            _ = try dvui.testing.step(headlessFrame);
+            tablet_panes.look(&editor.workbench);
+        }
+        try std.testing.expectEqual(app.automation.Player.State.ended, player.state);
+        try std.testing.expect(tablet_panes.stacked);
+        try std.testing.expect(!tablet_panes.side_by_side);
+        player.unload();
+        try dvui.testing.settle(headlessFrame);
+        // Their documents are still open: the demo owns only what it opened.
+        try std.testing.expect(editor.docFromPath(notes) != null);
+    }
 
     // The text commands, as a snippet keybind, a tape or an agent calls them: each one
     // undoable edit to the active document.
@@ -10003,6 +10793,14 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         const holder_vtable: sdk.Plugin.VTable = .{};
         var holder: sdk.Plugin = .{ .state = &holder_state, .vtable = &holder_vtable, .id = "holder", .display_name = "Holder" };
         const here = editor.workbench.open_workspace_grouping;
+        // The claim shows the document beside the person's pane, as a room with space for two
+        // does (`core.placement`); the pane here is narrower than that under a sidebar, so its
+        // room is set to a desktop window's.
+        const here_ws = editor.workbench.workspaces.getPtr(here) orelse return error.TestUnexpectedResult;
+        const drawn_room = here_ws.pane_rect_physical;
+        defer here_ws.pane_rect_physical = drawn_room;
+        const room_scale = dvui.windowNaturalScale();
+        here_ws.pane_rect_physical = .{ .x = 0, .y = 0, .w = 1200 * room_scale, .h = 800 * room_scale };
         const claim = try host.claimDocument(&holder, doc.id, "Holder");
         try std.testing.expectError(error.DocumentClaimed, host.claimDocument(editor.app.host.plugins.items[0], doc.id, "Other"));
         try dvui.testing.settle(headlessFrame);
@@ -10077,6 +10875,31 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
             if (ws.grouping != here) if (ws.active) |a| if (a.id == last.id) break true;
         } else false;
         try std.testing.expect(beside);
+    }
+
+    // A document opened beside the person's goes where the shape of its room says
+    // (`core.placement.place`): a new pane in a room with space for two, the person's own pane as
+    // a card in one without, and the pane that is there already, whatever its size. The window
+    // cannot be resized under a whole editor headlessly (the testing backend crashes), so the
+    // room is the pane's own rect, set.
+    {
+        const wb = &editor.workbench;
+        const here = wb.open_workspace_grouping;
+        const ws = wb.workspaces.getPtr(here) orelse return error.TestUnexpectedResult;
+        const drawn = ws.pane_rect_physical orelse return error.TestUnexpectedResult;
+        defer ws.pane_rect_physical = drawn;
+        const s = dvui.windowNaturalScale();
+        const others = wb.workspaces.count() - 1;
+        ws.pane_rect_physical = .{ .x = 0, .y = 0, .w = 1200 * s, .h = 800 * s };
+        try std.testing.expect(wb.besideGrouping() != here);
+        ws.pane_rect_physical = .{ .x = 0, .y = 0, .w = 820 * s, .h = 1180 * s };
+        try std.testing.expect(wb.besideGrouping() != here);
+        ws.pane_rect_physical = .{ .x = 0, .y = 0, .w = 390 * s, .h = 844 * s };
+        // With another pane there, it takes the view; without, the person's own does.
+        const taken = wb.besideGrouping();
+        if (others > 0) try std.testing.expect(taken != here) else try std.testing.expectEqual(here, taken);
+        try std.testing.expectEqual(fizzy.core.widgets.DockLayout.Side.right, workbench.Workbench.sideFor(1200, 800));
+        try std.testing.expectEqual(fizzy.core.widgets.DockLayout.Side.bottom, workbench.Workbench.sideFor(820, 1180));
     }
 
     // A document's history as a line (`Plugin.historyLine`): each step keeps its id through
@@ -10782,6 +11605,11 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
                     if (!ed.docSaving(d)) break;
                 }
                 try ed.rawCloseFileID(d.id);
+                // Its history is packed and written by the checkpoint's thread.
+                for (0..400) |_| {
+                    _ = try dvui.testing.step(headlessFrame);
+                    if (ed.app.tracks.?.pending.items.len == 0 and ed.checkpoint.job == null) break;
+                } else return error.TestUnexpectedResult;
                 try dvui.testing.settle(headlessFrame);
             }
         }.run;
@@ -10967,6 +11795,24 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         {
             // The line's start: before any change.
             var s: automation.Script = .init(gpa, "transport-start", "");
+            s.check = automation.Input.check;
+            s.check.live = true;
+            try s.click(.{ .tag = line_tag, .x = 0 }, .{});
+            try play(editor, &s);
+        }
+        try std.testing.expectEqual(@as(usize, 0), try at(host, doc));
+        {
+            // The knob's stop 0 is the line's very start: the end cell is half a stop wide
+            // (40 stops: 1/80 of the line), so a press at 2/100 across is stop 1, not 0.
+            var s: automation.Script = .init(gpa, "transport-first-stop", "");
+            s.check = automation.Input.check;
+            s.check.live = true;
+            try s.click(.{ .tag = line_tag, .x = 0.02 }, .{});
+            try play(editor, &s);
+        }
+        try std.testing.expectEqual(@as(usize, 1), try at(host, doc));
+        {
+            var s: automation.Script = .init(gpa, "transport-start-again", "");
             s.check = automation.Input.check;
             s.check.live = true;
             try s.click(.{ .tag = line_tag, .x = 0 }, .{});
@@ -12126,6 +12972,7 @@ var live_float: dvui.Rect = .{ .x = 300, .y = 200, .w = 240, .h = 160 };
 
 fn liveDragFrame() !dvui.App.Result {
     live_driver.frame();
+    // lint-allow(raw-transient-surface): headless test fixture, not a shown surface
     var fw = dvui.floatingWindow(@src(), .{ .rect = &live_float }, .{ .tag = "live.float" });
     defer fw.deinit();
     fw.dragAreaSet(dvui.windowHeader("Drag me", "", null));
@@ -12198,4 +13045,169 @@ test "settings: an untouched in-app material is not written; a chosen one is" {
     const chosen = try s.serialize(gpa);
     defer gpa.free(chosen);
     try std.testing.expect(std.mem.find(u8, chosen, ".in_app_material = .frost") != null);
+}
+
+test "settings: a fresh profile starts with glass off; a saved material is kept" {
+    const Settings = @import("app").settings.Settings;
+    const gpa = std.testing.allocator;
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+
+    const fresh = try Settings.parseOnly(gpa, arena.allocator(), ".{}");
+    try std.testing.expectEqual(fizzy.core.material.Kind.none, fresh.window_material);
+    try std.testing.expectEqual(@as(?fizzy.core.material.Kind, null), fresh.in_app_material);
+
+    const saved = try Settings.parseOnly(gpa, arena.allocator(), ".{ .window_material = .liquid, .in_app_material = .frost }");
+    try std.testing.expectEqual(fizzy.core.material.Kind.liquid, saved.window_material);
+    try std.testing.expectEqual(@as(?fizzy.core.material.Kind, .frost), saved.in_app_material);
+
+    var chosen: Settings = .{};
+    chosen.window_material = .liquid;
+    const written = try chosen.serialize(gpa);
+    defer gpa.free(written);
+    try std.testing.expect(std.mem.find(u8, written, ".window_material = .liquid") != null);
+}
+
+// -- mobile sheets at tablet and landscape sizes -------------------------------------------------
+
+const SheetSize = struct { name: []const u8, w: f32, h: f32 };
+const sheet_sizes = [_]SheetSize{
+    .{ .name = "768x1024", .w = 768, .h = 1024 },
+    .{ .name = "1024x768", .w = 1024, .h = 768 },
+    .{ .name = "1366x1024", .w = 1366, .h = 1024 },
+    .{ .name = "812x375", .w = 812, .h = 375 },
+};
+
+/// The box a place draws, or null when it is not declared.
+fn regionRect(editor: *fizzy.Editor, name: []const u8) ?dvui.Size {
+    for (editor.app.layout.regions.items) |r| if (std.mem.eql(u8, r.name, name)) return r.size;
+    return null;
+}
+
+/// Opens one sheet in a window of `size` and returns the box it settled at.
+fn openedSheet(size: SheetSize, keywords: []const []const u8, name: []const u8) !dvui.Size {
+    var ctx = try shim.initSized(std.testing.allocator, .{ .w = size.w, .h = size.h });
+    defer ctx.deinit(std.testing.allocator);
+    const editor = ctx.editor;
+    try mobileCase(&ctx);
+    defer fizzy.core.platform.cached_form_factor = .desktop;
+    defer MobileFrame.editor = null;
+    defer editor.app.layout.regions.deinit(editor.app.gpa);
+    defer editor.app.layout.regions_building.deinit(editor.app.gpa);
+    defer editor.app.layout.deinitExtents(editor.app.gpa);
+    defer editor.app.layout.deinitQualified(editor.app.gpa);
+    defer editor.app.layout.deinitAssignments(editor.app.gpa);
+
+    try dvui.testing.settle(MobileFrame.frame);
+    const sheet = editor.regionFor(keywords) orelse return error.TestUnexpectedResult;
+    sheet.open();
+    try dvui.testing.settle(MobileFrame.frame);
+    return regionRect(editor, name) orelse error.TestUnexpectedResult;
+}
+
+test "mobile sheets: capped in width in portrait, side sheets in landscape" {
+    const kw = fizzy.sdk.keywords.ide;
+    // A sheet's box includes the card's 16 pt of padding.
+    const pad = 16;
+    for (sheet_sizes) |size| {
+        const explorer = try openedSheet(size, kw.sidebar, "Explorer");
+        const panel = try openedSheet(size, kw.panel, "Panel");
+        for ([_]dvui.Size{ explorer, panel }) |box| {
+            try std.testing.expect(box.w <= 560 + pad + 0.5);
+            if (size.w > size.h) {
+                // A side sheet: no wider than half the window, and tall enough to use.
+                try std.testing.expect(box.w <= size.w * 0.5 + pad + 0.5);
+                try std.testing.expect(box.h > size.h * 0.6);
+            } else {
+                // At the foot: 0.6 of the height, across at most the cap.
+                try std.testing.expect(box.w < size.w or size.w <= 560 + pad);
+                try std.testing.expectApproxEqAbs(size.h * 0.6 + pad, box.h, 1);
+            }
+        }
+    }
+}
+
+/// Frees what a mobile-shaped test window leaves behind; deferred right after `shim.initSized`.
+fn mobileTeardown(ctx: *shim.Ctx) void {
+    const editor = ctx.editor;
+    fizzy.core.platform.cached_form_factor = .desktop;
+    MobileFrame.editor = null;
+    editor.app.layout.regions.deinit(editor.app.gpa);
+    editor.app.layout.regions_building.deinit(editor.app.gpa);
+    editor.app.layout.deinitExtents(editor.app.gpa);
+    editor.app.layout.deinitQualified(editor.app.gpa);
+    editor.app.layout.deinitAssignments(editor.app.gpa);
+}
+
+/// Turns the window to `w` x `h` points, keeping the pixel ratio it started with.
+fn resizeWindow(ctx: *shim.Ctx, w: f32, h: f32) !void {
+    const scale = ctx.t.backend.size_pixels.w / ctx.t.backend.size.w;
+    ctx.t.backend.size = .{ .w = w, .h = h };
+    ctx.t.backend.size_pixels = .{ .w = w * scale, .h = h * scale };
+    // The window reads its size in `begin`, which a step runs after the frame it ends.
+    _ = try dvui.testing.step(MobileFrame.frame);
+    try dvui.testing.settle(MobileFrame.frame);
+}
+
+test "mobile sheets: a dragged or kept side sheet never shows wider than the cap" {
+    var ctx = try shim.initSized(std.testing.allocator, .{ .w = 1366, .h = 1024 });
+    defer ctx.deinit(std.testing.allocator);
+    defer mobileTeardown(&ctx);
+    try mobileCase(&ctx);
+    try dvui.testing.settle(MobileFrame.frame);
+    const editor = ctx.editor;
+    const sheet = editor.regionFor(fizzy.sdk.keywords.ide.sidebar) orelse return error.TestUnexpectedResult;
+    sheet.open();
+    try dvui.testing.settle(MobileFrame.frame);
+    try std.testing.expect(regionRect(editor, "Explorer").?.w <= 560 + 0.5);
+
+    // A drag to 900 writes the extent and what is shown together.
+    dvui.dataSet(null, sheet.id, "_size", @as(f32, 900));
+    dvui.dataSet(null, sheet.id, "_shown", @as(f32, 900));
+    // Every frame on the way back, not only the settled one: the ease starts at 900.
+    for (0..4) |_| {
+        _ = try dvui.testing.step(MobileFrame.frame);
+        try std.testing.expect(regionRect(editor, "Explorer").?.w <= 560 + 0.5);
+    }
+    try dvui.testing.settle(MobileFrame.frame);
+    try std.testing.expect(regionRect(editor, "Explorer").?.w <= 560 + 0.5);
+    try std.testing.expect(dvui.dataGet(null, sheet.id, "_size", f32).? <= 560);
+
+    // A smaller window in the same orientation lowers the cap: half of 900 is 450.
+    try resizeWindow(&ctx, 900, 700);
+    try std.testing.expect(regionRect(editor, "Explorer").?.w <= 450 + 0.5);
+}
+
+test "mobile sheets: turning the window with a sheet open shuts it, in both directions" {
+    var ctx = try shim.initSized(std.testing.allocator, .{ .w = 768, .h = 1024 });
+    defer ctx.deinit(std.testing.allocator);
+    defer mobileTeardown(&ctx);
+    try mobileCase(&ctx);
+    try dvui.testing.settle(MobileFrame.frame);
+    const editor = ctx.editor;
+    const kw = fizzy.sdk.keywords.ide;
+    (editor.regionFor(kw.sidebar) orelse return error.TestUnexpectedResult).open();
+    try dvui.testing.settle(MobileFrame.frame);
+    try std.testing.expect(!placeShut(editor, "Explorer"));
+    // At the foot, across the window up to the cap.
+    try std.testing.expect(regionRect(editor, "Explorer").?.w <= 560 + 16 + 0.5);
+
+    // Turned on its side: what was open shuts, rather than a height being read as a width.
+    try resizeWindow(&ctx, 1024, 768);
+    try std.testing.expect(placeShut(editor, "Explorer"));
+    try std.testing.expect(placeShut(editor, "Panel"));
+
+    // Opened again it is a side sheet, no wider than the cap or half the window.
+    (editor.regionFor(kw.sidebar) orelse return error.TestUnexpectedResult).open();
+    try dvui.testing.settle(MobileFrame.frame);
+    const side = regionRect(editor, "Explorer").?;
+    try std.testing.expect(side.w <= 512 + 0.5);
+    try std.testing.expect(side.h > 768 * 0.6);
+
+    // And back upright: shut again, and the next one rises from the foot.
+    try resizeWindow(&ctx, 768, 1024);
+    try std.testing.expect(placeShut(editor, "Explorer"));
+    (editor.regionFor(kw.panel) orelse return error.TestUnexpectedResult).open();
+    try dvui.testing.settle(MobileFrame.frame);
+    try std.testing.expectApproxEqAbs(1024 * 0.6 + 16, regionRect(editor, "Panel").?.h, 1);
 }

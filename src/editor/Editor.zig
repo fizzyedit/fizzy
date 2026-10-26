@@ -526,8 +526,12 @@ pub fn init(
             .text = fizzy_dark.window.fill,
         };
 
+        // Bright enough to read on the window and control fills (5.4:1 fill, 6.6:1 text on the
+        // window; an icon needs 3:1, text 4.5:1). `.text` is named because the fallback is the
+        // content text, which is not red.
         fizzy_dark.err = .{
-            .fill = .{ .r = 109, .g = 35, .b = 54, .a = 255 },
+            .fill = .{ .r = 255, .g = 85, .b = 95, .a = 255 },
+            .text = .{ .r = 255, .g = 120, .b = 125, .a = 255 },
         };
 
         // theme.content
@@ -564,8 +568,10 @@ pub fn init(
             .border = .{ .r = 47, .g = 179, .b = 135, .a = 255 },
             .text = .{ .r = 58, .g = 10, .b = 26, .a = 255 },
         };
+        // Pale enough to read as red on red: the fill is 6.9:1 on the window and 3.9:1 on the
+        // content fill; the text colour is 11.8:1 on the window.
         strawberry.err = .{
-            .fill = .{ .r = 199, .g = 17, .b = 20, .a = 255 },
+            .fill = .{ .r = 255, .g = 160, .b = 165, .a = 255 },
             .text = .{ .r = 255, .g = 238, .b = 228, .a = 255 },
         };
 
@@ -598,8 +604,10 @@ pub fn init(
             .text = fizzy_light.window.fill,
         };
 
+        // Darker than the dark theme's, against the light window (5.5:1 fill, 6.6:1 text).
         fizzy_light.err = .{
-            .fill = .{ .r = 109, .g = 35, .b = 54, .a = 255 },
+            .fill = .{ .r = 190, .g = 25, .b = 45, .a = 255 },
+            .text = .{ .r = 170, .g = 15, .b = 35, .a = 255 },
         };
 
         // theme.content
@@ -1814,7 +1822,7 @@ export fn FizzyWebShowInRoot(path_ptr: [*]const u8, path_len: usize) void {
     if (relative.len == 0) return;
     const full = editor.app.gpa.print("{s}/{s}", .{ std.mem.trimEnd(u8, root, "/"), relative }) catch return;
     // Not opened here: the page can call before the app has drawn a frame (a tab opened in the
-    // background, a phone slow to its first frame), when there are no places yet to open it in
+    // background, a mobile device slow to its first frame), when there are no places yet to open it in
     // or to close round it. The first frame that has them does it (`processPendingShow`).
     if (editor.pending_show) |old_path| editor.app.gpa.free(old_path);
     editor.pending_show = full;
@@ -2964,7 +2972,7 @@ pub fn insertOpenDoc(editor: *Editor, doc_buf: *anyopaque, owner: *sdk.Plugin, i
 /// How many steps `doc`'s owner keeps of its history, for its grip's fill: the history limit
 /// counts its entries, not the track's steps (each undo, redo and joined step its own). Asked of the
 /// owner only when the track moved; 0 for a document not recorded, whose grip is plain.
-fn keptSteps(ds: *DocSurface, doc: sdk.DocHandle, recorded: anytype) usize {
+fn keptSteps(ds: *DocSurface, doc: sdk.DocHandle, recorded: ?*const @import("app").Tracks.Track) usize {
     const track_steps = if (recorded) |tr| tr.steps.items.len else return 0;
     if (ds.kept_at != track_steps) {
         ds.kept_at = track_steps;
@@ -3000,9 +3008,6 @@ fn registerDocSurface(editor: *Editor, doc: sdk.DocHandle) !void {
     });
     // The owner's own name for it, when it has one, copied in (`Host.documentTitleChanged`).
     editor.app.host.documentTitleChanged(doc);
-    // One of the person's, set aside while a demo plays (made again by a rename, or landing in a
-    // pane of theirs): hidden too.
-    if (!editor.demo.ownsDocument(doc)) editor.app.host.setSurfaceHidden(ds.id, true);
 }
 
 fn unregisterDocSurface(editor: *Editor, doc_id: u64) void {
@@ -3193,9 +3198,9 @@ fn drawDocSurface(ctx: ?*anyopaque) anyerror!dvui.App.Result {
     const recorded = if (editor.app.tracks) |*t| t.trackOf(doc.id) else null;
     if (recorded != null) {
         const pane = canvas.data().borderRectScale().r;
-        // Above the bar as it stands, its strip and the feed over it included.
-        const under = if (ds.transport.place(pane, dvui.frameTimeNS())) |bar| pane.y + pane.h - bar.y + 40 * dvui.windowRectScale().s else 0;
-        ds.frames.take(editor.app.gpa, pane, @max(76 * dvui.windowRectScale().s, under), @import("app").HistoryTransport.stripPixels(pane));
+        // Above where the bar can reach, whether or not it shows or its strip is open: a
+        // size that followed the bar would make each kept picture another view of the pane.
+        ds.frames.take(editor.app.gpa, pane, @import("app").HistoryTransport.cover * dvui.windowRectScale().s, @import("app").HistoryTransport.stripPixels(pane));
     }
 
     const focus_before = dvui.lastFocusedIdInFrame();
@@ -3639,13 +3644,13 @@ pub fn markWindowRatiosDirty(editor: *Editor) void {
 }
 
 /// Switch to the arrangement `shape` keeps in `layout.zon` (`Layout.State.shape`), when the shape
-/// drawing the window changed: a rotation or a resize across the phone threshold. The one being
+/// drawing the window changed: a rotation or a resize across the mobile threshold. The one being
 /// left is written first if it has unsaved changes. A no-op while the shape is the same.
 ///
 /// Limit: it replaces the in-memory arrangement outright, floats included, whatever else is
-/// happening, a demo playing among it. The phone form factor comes from the screen's short side,
-/// not the window, so it changes with the device and not with a resize, and nothing guards
-/// against a flip mid-demo; none is expected.
+/// happening. `chooseShape` is the caller that holds a Layout setting change while a demo plays;
+/// the detected form factor comes from the screen's short side, so it changes with the device and
+/// not with a resize.
 pub fn useShape(editor: *Editor, shape: []const u8) void {
     const state = &editor.app.layout;
     if (std.mem.eql(u8, state.shape, shape)) return;
@@ -3660,6 +3665,21 @@ pub fn useShape(editor: *Editor, shape: []const u8) void {
     dvui.refresh(null, @src(), null);
 }
 
+/// Hand the Layout setting to `core.platform`, where `formFactor()` (and so `Layout.form_factor`,
+/// whatever shape an app draws) reads it. Held while a demo plays: a form-factor flip replaces
+/// floats and the in-memory arrangement, which a demo's stage depends on, so it waits for the demo.
+pub fn syncLayoutMode(editor: *Editor) void {
+    if (!editor.demo.active()) fizzy.core.platform.cached_layout_mode = editor.app.settings.layout_mode;
+}
+
+/// Draw with the shape the Layout setting and the device call for. fizzy's own shapes only: an app
+/// supplying its layout chooses for itself and gets the setting through `syncLayoutMode`.
+pub fn chooseShape(editor: *Editor) void {
+    editor.syncLayoutMode();
+    const mobile = fizzy.core.platform.formFactor() == .mobile;
+    editor.useShape(if (mobile) mobile_layout.shape_key else "");
+}
+
 /// Forget extents, assignments and runtime splits, write an empty region list,
 /// and redraw. Window geometry in `layout.zon` is left alone.
 pub fn resetLayout(editor: *Editor) void {
@@ -3669,7 +3689,7 @@ pub fn resetLayout(editor: *Editor) void {
     dvui.refresh(null, @src(), null);
 }
 
-/// Hand the center region the whole viewport on a collapsed (phone / narrow web) layout: close
+/// Hand the center region the whole viewport on a collapsed (mobile / narrow web) layout: close
 /// the explorer peek and swing the bottom panel shut. Call it right after a tap has put
 /// something worth reading in the center — e.g. selecting a plugin in the store, whose detail
 /// page renders as a center provider behind the peeked-open explorer.
@@ -3926,6 +3946,7 @@ pub fn reconcileExternalSettingsChange(editor: *Editor) void {
     editor.app.settings.kept_history_gb = parsed.kept_history_gb;
     editor.app.settings.control_server = parsed.control_server;
     editor.app.settings.input_scheme = parsed.input_scheme;
+    editor.app.settings.layout_mode = parsed.layout_mode;
     editor.app.settings.plugin_update_mode = parsed.plugin_update_mode;
 
     // Re-apply the existing idempotent appliers unconditionally — cheap, and each already
@@ -4454,6 +4475,8 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     if (editor.app.tracks) |*t| {
         t.kept_cap = @intFromFloat(@max(0, editor.app.settings.kept_history_gb) * (1 << 30));
         t.tick();
+        // A checkpoint's diff not done is carried on at the next frame's top, asleep or not.
+        if (t.due) dvui.refresh(null, @src(), null);
     }
     if (editor.share_pending) |p| {
         editor.share_pending = null;
@@ -4822,13 +4845,12 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             editor.processPendingSaveAs();
             editor.processPendingShow();
 
-            // fizzy's own shapes: a phone gets the mobile one (`Layout.form_factor` is this same
+            // fizzy's own shapes: a mobile device gets the mobile one (`Layout.form_factor` is this same
             // value). An app supplying its own layout chooses for itself, and keeps
             // `layout.zon`'s first arrangement. Before the `Layout` is made over the state, since
             // switching replaces what is in it.
             const own_shapes = comptime !build_opts.has_app_layout;
-            const mobile = own_shapes and fizzy.core.platform.formFactor() == .phone;
-            if (own_shapes) editor.useShape(if (mobile) mobile_layout.shape_key else "");
+            if (own_shapes) editor.chooseShape() else editor.syncLayoutMode();
             var layout: Layout = .init(&editor.app.host, &editor.app.layout, editor.app.gpa, editor.app.arena.allocator());
             // Published for the duration of the shape, so a plugin drawing inside a region can
             // declare one of its own through `Host.region`. Cleared below: a `*Layout` that
@@ -4844,7 +4866,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             layout.ctx = ctx;
             const shell_result = if (comptime build_opts.has_app_layout)
                 @import("app_layout").layout(ctx, &layout)
-            else if (mobile)
+            else if (fizzy.core.platform.formFactor() == .mobile)
                 mobile_layout.layout(ctx, &layout)
             else
                 fizzy_layout.layout(ctx, &layout);
@@ -4856,6 +4878,9 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             // `regionFor` answered from the previous frame, which is what lets a command
             // dispatched between frames drive a region (see `Layout.State.regions`).
             editor.app.layout.publishRegions();
+            // The shape's walk of the split trees is over (only `Region` holds their nodes, and
+            // nothing after this does): places dropped during it are freed now, not under the walk.
+            editor.app.layout.splits.reap(editor.app.gpa);
             // Over every place: a drag's join spans two of them.
             layout.drawDragOverlay();
             // The picker photographs surfaces that drew nowhere this frame, and floats above
@@ -5160,6 +5185,7 @@ pub fn collectSavedRegions(editor: *Editor, gpa: std.mem.Allocator) []fizzy.back
             if (!gop.found_existing) gop.value_ptr.* = .{ .name = l.name };
             gop.value_ptr.parent = l.parent;
             gop.value_ptr.from = @tagName(l.side);
+            gop.value_ptr.adaptive = if (l.adaptive) true else null;
         }
     }
     {
@@ -5258,7 +5284,8 @@ fn loadRuntimeSplits(state: *Layout.State, gpa: std.mem.Allocator, saved: []cons
     for (order) |r| {
         const parent = r.parent orelse continue;
         const side = Layout.State.SplitTree.parseSide(r.from orelse continue) orelse continue;
-        _ = state.splits.split(gpa, intern.go, parent, side, r.extent orelse 0, r.name);
+        const made = state.splits.split(gpa, intern.go, parent, side, r.extent orelse 0, r.name);
+        if (made != null and (r.adaptive orelse false)) _ = state.splits.markAdaptive(r.name);
     }
 }
 
@@ -7502,6 +7529,22 @@ fn pmSelf(ctx: *anyopaque) *Editor {
     return @ptrCast(@alignCast(ctx));
 }
 
+/// The store's `PluginManager.Error` for what fizzy's own code raised; the cause of `Failed` is logged.
+fn pmError(err: anyerror) PluginManager.Error {
+    return PluginManager.preserved(err) orelse {
+        dvui.log.err("plugin action failed: {s}", .{@errorName(err)});
+        return error.Failed;
+    };
+}
+
+/// The call sites return different `void` error unions (the loader's, the installer's,
+/// `Allocator.Error`), and a named type for them would be `anyerror!void`, which says less;
+/// each is only `catch`ed and translated by `pmError`.
+// anytype: differing void error unions, each only caught and translated
+fn pmResult(result: anytype) PluginManager.Error!void {
+    result catch |err| return pmError(err);
+}
+
 const plugin_manager_vtable: PluginManager.VTable = .{
     .isDisabled = struct {
         fn f(ctx: *anyopaque, id: []const u8) bool {
@@ -7519,8 +7562,8 @@ const plugin_manager_vtable: PluginManager.VTable = .{
         }
     }.f,
     .setAutoUpdate = struct {
-        fn f(ctx: *anyopaque, id: []const u8, on: bool) anyerror!void {
-            return pmSelf(ctx).setPluginAutoUpdate(id, on);
+        fn f(ctx: *anyopaque, id: []const u8, on: bool) PluginManager.Error!void {
+            return pmResult(pmSelf(ctx).setPluginAutoUpdate(id, on));
         }
     }.f,
     .updateMode = struct {
@@ -7566,49 +7609,49 @@ const plugin_manager_vtable: PluginManager.VTable = .{
         }
     }.f,
     .install = struct {
-        fn f(ctx: *anyopaque, id: []const u8) anyerror!void {
-            return pmSelf(ctx).installAndLoadPlugin(id);
+        fn f(ctx: *anyopaque, id: []const u8) PluginManager.Error!void {
+            return pmResult(pmSelf(ctx).installAndLoadPlugin(id));
         }
     }.f,
     .installFromUrl = struct {
-        fn f(ctx: *anyopaque, id: []const u8, url: []const u8, sha256: []const u8) anyerror!void {
+        fn f(ctx: *anyopaque, id: []const u8, url: []const u8, sha256: []const u8) PluginManager.Error!void {
             const editor = pmSelf(ctx);
             // Installing is choosing it, as on the desktop (`installAndLoadPlugin`) — and, as
             // there, an install is an arrival, so fizzy asks about its file types once it has
             // loaded. Not `isPluginUndecided`: that is a drop-in found on disk and never
             // decided, which a plugin coming from the store never is, so the web never asked.
             editor.app.untrackDisabledPlugin(id);
-            try editor.setPluginEnabledPersisted(id, true);
+            editor.setPluginEnabledPersisted(id, true) catch |err| return pmError(err);
             queueWebFileTypePrompt(editor.app.gpa, id);
-            return editor.loadWebPlugin(id, url, sha256);
+            return pmResult(editor.loadWebPlugin(id, url, sha256));
         }
     }.f,
     .loadFromUrl = struct {
-        fn f(ctx: *anyopaque, id: []const u8, url: []const u8, sha256: []const u8) anyerror!void {
+        fn f(ctx: *anyopaque, id: []const u8, url: []const u8, sha256: []const u8) PluginManager.Error!void {
             const editor = pmSelf(ctx);
             // For the visit: the arrival neither remembers it nor asks about its file types.
-            if (!web_visit_only.contains(id)) web_visit_only.put(editor.app.gpa, try editor.app.gpa.dupe(u8, id), {}) catch {};
-            return editor.loadWebPlugin(id, url, sha256);
+            if (!web_visit_only.contains(id)) web_visit_only.put(editor.app.gpa, editor.app.gpa.dupe(u8, id) catch return error.OutOfMemory, {}) catch {};
+            return pmResult(editor.loadWebPlugin(id, url, sha256));
         }
     }.f,
     .updateFromUrl = struct {
-        fn f(ctx: *anyopaque, id: []const u8, url: []const u8, sha256: []const u8) anyerror!void {
-            return pmSelf(ctx).updateWebPlugin(id, url, sha256);
+        fn f(ctx: *anyopaque, id: []const u8, url: []const u8, sha256: []const u8) PluginManager.Error!void {
+            return pmResult(pmSelf(ctx).updateWebPlugin(id, url, sha256));
         }
     }.f,
     .update = struct {
-        fn f(ctx: *anyopaque, id: []const u8, force: bool) anyerror!void {
-            return pmSelf(ctx).updatePlugin(id, force);
+        fn f(ctx: *anyopaque, id: []const u8, force: bool) PluginManager.Error!void {
+            return pmResult(pmSelf(ctx).updatePlugin(id, force));
         }
     }.f,
     .uninstall = struct {
-        fn f(ctx: *anyopaque, id: []const u8, force: bool) anyerror!void {
-            return pmSelf(ctx).uninstallPlugin(id, force);
+        fn f(ctx: *anyopaque, id: []const u8, force: bool) PluginManager.Error!void {
+            return pmResult(pmSelf(ctx).uninstallPlugin(id, force));
         }
     }.f,
     .setEnabled = struct {
-        fn f(ctx: *anyopaque, id: []const u8, enabled: bool, force: bool) anyerror!void {
-            return pmSelf(ctx).setPluginEnabled(id, enabled, force);
+        fn f(ctx: *anyopaque, id: []const u8, enabled: bool, force: bool) PluginManager.Error!void {
+            return pmResult(pmSelf(ctx).setPluginEnabled(id, enabled, force));
         }
     }.f,
     .reconcileDiscovered = struct {

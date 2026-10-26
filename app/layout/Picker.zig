@@ -357,7 +357,7 @@ pub fn draw(self: *Picker, f: *Layout) void {
         // already in. Not the last view out of the place, though: a lit card that is all the
         // place shows only says so (Clear empties a place on purpose).
         if (on and contents.len == 1) continue;
-        var ids = std.ArrayListUnmanaged([]const u8).initCapacity(f.arena, contents.len + 1) catch return;
+        var ids = std.ArrayList([]const u8).initCapacity(f.arena, contents.len + 1) catch return;
         for (contents) |c| if (!std.mem.eql(u8, c.id, s.id)) ids.appendAssumeCapacity(c.id);
         if (!on) ids.appendAssumeCapacity(s.id);
         state.assign(gpa, region.name, ids.items) catch |err| {
@@ -376,7 +376,7 @@ pub fn draw(self: *Picker, f: *Layout) void {
 /// no document in a plain place, only documents in a document pane) — that match `query`, best
 /// first. In registry order while the query is empty. Indices into `host.surfaces`.
 fn offered(f: *Layout, region: *const Layout.Region, query: *const core.fuzzy.Query) []core.fuzzy.Ranked(usize) {
-    var out: std.ArrayListUnmanaged(core.fuzzy.Ranked(usize)) = .empty;
+    var out: std.ArrayList(core.fuzzy.Ranked(usize)) = .empty;
     for (f.host.surfaces.items, 0..) |*s, i| {
         if (s.hidden) continue;
         if (!f.offers(region, s)) continue;
@@ -400,7 +400,7 @@ const Place = struct {
 /// resolved by keywords are one per keyword group (the icon rail and the explorer it chooses for
 /// are one place); a place resolved by name (a split's leaf, a float) is its own.
 fn placesFor(f: *Layout, region: *const Layout.Region) []const Place {
-    var out: std.ArrayListUnmanaged(Place) = .empty;
+    var out: std.ArrayList(Place) = .empty;
     out.append(f.arena, .{ .name = region.name, .keywords = region.keywords, .holds = f.matchingIn(region) }) catch return &.{};
     for (f.state.regions.items) |*r| {
         if (r.name.len == 0 or r.kind_slot) continue;
@@ -429,6 +429,27 @@ fn sectionOf(places: []const Place, id: []const u8, keywords: []const []const u8
         }
     }
     return best;
+}
+
+test "a disabled control icon is an opaque blend of its tint and the button's fill" {
+    const fills = [_]dvui.Color{ .{ .r = 30, .g = 30, .b = 34 }, .{ .r = 235, .g = 235, .b = 240 } }; // dark, light
+    const tints = [_]dvui.Color{ .{ .r = 220, .g = 220, .b = 225 }, .{ .r = 40, .g = 40, .b = 45 } };
+    for (fills, tints) |fill, tint| {
+        for ([_]f32{ 0.4, 0.65 }) |t| {
+            const got = disabledTint(tint, fill, t);
+            try std.testing.expectEqual(@as(u8, 255), got.a);
+            const want = tint.lerp(fill, t);
+            try std.testing.expectEqual(want.r, got.r);
+            try std.testing.expectEqual(want.g, got.g);
+            try std.testing.expectEqual(want.b, got.b);
+            // Dimmer than enabled, never past the fill.
+            const lo = @min(tint.r, fill.r);
+            const hi = @max(tint.r, fill.r);
+            try std.testing.expect(got.r >= lo and got.r <= hi and got.r != tint.r);
+        }
+    }
+    // A translucent theme fill does not leak alpha into the stroke.
+    try std.testing.expectEqual(@as(u8, 255), disabledTint(tints[0], .{ .r = 0, .g = 0, .b = 0, .a = 40 }, 0.5).a);
 }
 
 test "a view is listed under the place its keywords are for, the edited place first" {
@@ -498,7 +519,7 @@ fn ownerName(s: *const sdk.Surface) []const u8 {
 /// finds Files through its title and its plugin together, where scoring each field on its own
 /// would need both words in one of them.
 fn searchText(f: *Layout, s: *const sdk.Surface) []const u8 {
-    var text: std.ArrayListUnmanaged(u8) = .empty;
+    var text: std.ArrayList(u8) = .empty;
     const a = f.arena;
     text.appendSlice(a, s.title) catch return s.title;
     text.print(a, " {s}", .{ownerName(s)}) catch {};
@@ -755,26 +776,27 @@ fn drawLifted(self: *Picker, f: *Layout) void {
 fn controlButton(src: std.lang.SourceLocation, c: place_commands.Command, place: []const u8, enabled: bool, id_extra: usize) bool {
     const theme = dvui.themeGet();
     const destructive = c.action == .delete;
-    // Destructive controls wear the error fill lightened as `core.dialogs`' close does; `.err`'s
-    // text colour is not red in every theme.
-    const tint = if (destructive) theme.color(.err, .fill).lighten(if (theme.dark) -10 else 10) else theme.color(.control, .text);
+    // Destructive controls wear the error fill as it is (lightening it in dark darkened it);
+    // `.err`'s text colour is not red in every theme.
+    const tint = if (destructive) theme.color(.err, .fill) else theme.color(.control, .text);
     // Disabled keeps the place's slot but dimmer; delete stays red enough to read as delete.
-    const dim: f32 = if (destructive) 0.6 else 0.35;
+    const toward_fill: f32 = if (destructive) 0.4 else 0.65;
+    const fill = theme.color(.control, .fill);
     var bw: dvui.ButtonWidget = undefined;
     bw.init(src, .{}, .{
         .id_extra = id_extra,
         .padding = dvui.Rect.all(5),
         .margin = .{ .x = 2 },
         .gravity_y = 0.5,
-        .color_fill_hover = if (enabled) null else .{ .color = theme.color(.control, .fill) },
-        .color_fill_press = if (enabled) null else .{ .color = theme.color(.control, .fill) },
+        .color_fill_hover = if (enabled) null else .{ .color = fill },
+        .color_fill_press = if (enabled) null else .{ .color = fill },
     });
     defer bw.deinit();
     if (enabled) core.anchor.mark(bw.data(), "region.menu.{f}:{s}", .{ c.action, place });
     bw.processEvents();
     bw.drawBackground();
     core.icon.icon(@src(), c.id, c.icon, .{
-        .stroke_color = .{ .color = if (enabled) tint else tint.opacity(dim) },
+        .stroke_color = .{ .color = if (enabled) tint else disabledTint(tint, fill, toward_fill) },
         // Clear fill takes the single-colour path, so the stroke shows in the tint as given.
         .fill_color = if (destructive) .{ .color = .transparent } else .white,
     }, .{
@@ -787,6 +809,15 @@ fn controlButton(src: std.lang.SourceLocation, c: place_commands.Command, place:
     const title = if (std.mem.find(u8, c.title, ": ")) |at| c.title[at + 2 ..] else c.title;
     core.widgets.tooltip(@src(), .{ .active_rect = bw.data().borderRectScale().r }, "{s}", .{title}, .{});
     return enabled and bw.clicked();
+}
+
+/// A disabled control icon's colour: `tint` part of the way (`toward_fill`) to the button's `fill`,
+/// opaque. A translucent stroke double-blends where its caps and joins overlap, which shows as
+/// darker dots; a solid mix reads as dimmed and draws clean.
+fn disabledTint(tint: dvui.Color, fill: dvui.Color, toward_fill: f32) dvui.Color {
+    var c = tint.lerp(fill, toward_fill);
+    c.a = 255;
+    return c;
 }
 
 fn contains(list: []const *sdk.Surface, id: []const u8) bool {
@@ -854,7 +885,7 @@ fn flushPendingStore(f: *Layout, region: *const Layout.Region) void {
 
     // Beside what the place holds, as a card picked there goes.
     const held = f.matchingIn(region);
-    var ids: std.ArrayListUnmanaged([]const u8) = .empty;
+    var ids: std.ArrayList([]const u8) = .empty;
     for (held) |h| ids.append(f.arena, h.id) catch return;
     var first: ?[]const u8 = null;
     for (f.host.surfaces.items) |*s| {
@@ -884,7 +915,7 @@ fn drawStoreSection(
     col: *usize,
     query: *const core.fuzzy.Query,
 ) void {
-    var offers: std.ArrayListUnmanaged(State.StoreOffer) = .empty;
+    var offers: std.ArrayList(State.StoreOffer) = .empty;
     for (store.uninstalled(f.arena)) |offer| {
         const fields = [_][]const u8{ offer.title, offer.id };
         if (core.fuzzy.scoreBest(&fields, query, .{}) == null) continue;

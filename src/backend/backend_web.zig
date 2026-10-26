@@ -177,10 +177,14 @@ export fn FizzyWebTrackpadMagnification(delta: f32) void {
 
 /// Called by the page (through the worker) on load, resize and rotation: whether the primary
 /// pointer is a finger with no hover, and the screen in CSS px. `core.platform.formFactor()`
-/// is the answer; the page never sniffs the user agent.
-export fn FizzyWebSetFormFactor(coarse: bool, w_css: f32, h_css: f32) void {
+/// is the answer; the page never sniffs the user agent. `override` is the visit's `?form=`
+/// (`form_factor.overrideFromCode`; -1 for none). Returns the form factor chosen, as its
+/// `FormFactor` number, for the page's console readout.
+export fn FizzyWebSetFormFactor(coarse: bool, w_css: f32, h_css: f32, override: i32) u8 {
     const platform = fizzy.core.platform;
     platform.cached_form_factor = platform.form_factor.classify(coarse, w_css, h_css);
+    platform.cached_form_override = platform.form_factor.overrideFromCode(override);
+    return @backingInt(platform.formFactor());
 }
 
 /// Symmetric with the native API: nothing to install on web because the JS bootstrap wires

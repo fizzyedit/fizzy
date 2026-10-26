@@ -62,19 +62,19 @@ accept_task: ?Io.Future(void) = null,
 /// Set by `start` before the accept task exists, so the task and `stop` only ever read it.
 listener: ?Io.net.Server = null,
 /// The connections being served, under `lock`, so `stop` can end their reads and wait for them.
-conns: std.ArrayListUnmanaged(*Conn) = .empty,
+conns: std.ArrayList(*Conn) = .empty,
 stopping: std.atomic.Value(bool) = .init(false),
 /// The socket file this server made, by inode: `stop` removes the path only while it is still
 /// this one, not the socket a fizzy taking over has made there since.
 socket_inode: ?Io.File.INode = null,
 /// Requests waiting for the UI thread, under `lock`.
 lock: Io.Mutex = .init,
-pending: std.ArrayListUnmanaged(*Request) = .empty,
+pending: std.ArrayList(*Request) = .empty,
 /// Requests the UI thread took and has not answered yet (a command answering in a later frame),
 /// under `lock`: `stop` answers them too.
-outstanding: std.ArrayListUnmanaged(*Request) = .empty,
+outstanding: std.ArrayList(*Request) = .empty,
 /// Connections streaming events (`publish`), under `lock`.
-streams: std.ArrayListUnmanaged(*Stream) = .empty,
+streams: std.ArrayList(*Stream) = .empty,
 /// How many: read without the lock, so a frame with no stream takes none (`streamsNaming`'s
 /// callers ask this first).
 stream_count: std.atomic.Value(usize) = .init(0),
@@ -86,7 +86,7 @@ pub const Stream = struct {
     topics: []const []const u8,
     /// Under the server's `lock`: whole SSE messages, appended by `publish`, written and emptied
     /// by the connection's thread. `gpa`-owned.
-    backlog: std.ArrayListUnmanaged(u8) = .empty,
+    backlog: std.ArrayList(u8) = .empty,
     /// It fell more than `max_backlog` behind: nothing more is buffered for it, and it ends once its
     /// write returns (at once on POSIX, where `publish` shuts the socket down) or at `stop`.
     overrun: bool = false,
@@ -274,7 +274,7 @@ pub fn start(self: *Server) !void {
 
 /// Requests the UI thread should answer now, each of which must be answered, and how many
 /// connections stream events. On the UI thread, each frame.
-pub fn take(self: *Server, out: *std.ArrayListUnmanaged(*Request)) usize {
+pub fn take(self: *Server, out: *std.ArrayList(*Request)) usize {
     self.lock.lockUncancelable(self.io);
     defer self.lock.unlock(self.io);
     // Out of memory: left queued for the next frame, never dropped unanswered.
@@ -360,19 +360,19 @@ pub fn stop(self: *Server) void {
     self.stopping.store(true, .release);
     // The connections whose requests this answers ("fizzy is closing"): each writes it and ends.
     // Queued, or taken and still to be answered (a command answering later).
-    var answered: std.ArrayListUnmanaged(*Conn) = .empty;
+    var answered: std.ArrayList(*Conn) = .empty;
     defer answered.deinit(self.gpa);
     // Moved out whole, not copied: running out of memory here must not drop one unanswered, whose
     // task would then wait for good.
-    var queued: std.ArrayListUnmanaged(*Request) = .empty;
+    var queued: std.ArrayList(*Request) = .empty;
     defer queued.deinit(self.gpa);
-    var taken: std.ArrayListUnmanaged(*Request) = .empty;
+    var taken: std.ArrayList(*Request) = .empty;
     defer taken.deinit(self.gpa);
     {
         self.lock.lockUncancelable(self.io);
         defer self.lock.unlock(self.io);
-        std.mem.swap(std.ArrayListUnmanaged(*Request), &queued, &self.pending);
-        std.mem.swap(std.ArrayListUnmanaged(*Request), &taken, &self.outstanding);
+        std.mem.swap(std.ArrayList(*Request), &queued, &self.pending);
+        std.mem.swap(std.ArrayList(*Request), &taken, &self.outstanding);
     }
     for ([_][]const *Request{ queued.items, taken.items }) |owed| for (owed) |r| {
         answered.append(self.gpa, r.conn) catch {};
@@ -624,7 +624,7 @@ fn serveStream(self: *Server, head: *std.http.Server.Request, stream: *Stream) v
         },
     } }) catch return;
     body.flush() catch return;
-    var out: std.ArrayListUnmanaged(u8) = .empty;
+    var out: std.ArrayList(u8) = .empty;
     defer out.deinit(self.gpa);
     while (true) {
         const quiet = if (stream.ready.waitTimeout(self.io, .{ .duration = .{ .raw = .fromMilliseconds(keep_alive_ms), .clock = .awake } })) |_| false else |err| switch (err) {
@@ -636,7 +636,7 @@ fn serveStream(self: *Server, head: *std.http.Server.Request, stream: *Stream) v
             defer self.lock.unlock(self.io);
             if (self.stopping.load(.acquire) or stream.overrun) return;
             // Taken whole: `publish` goes on appending to an empty list while this one is written.
-            std.mem.swap(std.ArrayListUnmanaged(u8), &out, &stream.backlog);
+            std.mem.swap(std.ArrayList(u8), &out, &stream.backlog);
             stream.ready.reset();
         }
         if (out.items.len > 0) {
@@ -660,7 +660,7 @@ fn wantsDiff(target: []const u8) bool {
 /// `?topics=a,b` as a list; everything when absent or empty.
 fn topicsOf(arena: std.mem.Allocator, target: []const u8) ![]const []const u8 {
     const query = target[(std.mem.findScalar(u8, target, '?') orelse return &.{"*"}) + 1 ..];
-    var list: std.ArrayListUnmanaged([]const u8) = .empty;
+    var list: std.ArrayList([]const u8) = .empty;
     var params = std.mem.tokenizeScalar(u8, query, '&');
     while (params.next()) |param| {
         const eq = std.mem.findScalar(u8, param, '=') orelse continue;
@@ -675,6 +675,39 @@ fn topicsOf(arena: std.mem.Allocator, target: []const u8) ![]const []const u8 {
 // ---- tests ---------------------------------------------------------------------------------
 
 fn noWake() void {}
+
+/// Ends the test binary, naming the test, when a test is still running after `limit_ms`: every
+/// test here that spawns a client blocks `join` on it, and a client whose connection the OS
+/// never closes (Windows' AF_UNIX, a connection still in the backlog at `stop`) would otherwise
+/// hold the whole `zig build test` until its runner is killed. `zig build` has no per-test limit
+/// of its own that a step can set.
+const Watchdog = struct {
+    const limit_ms = 60_000;
+
+    io: Io,
+    name: []const u8,
+    done: Io.Event = .unset,
+    thread: ?std.Thread = null,
+
+    fn arm(self: *Watchdog) !void {
+        self.thread = try std.Thread.spawn(.{}, watch, .{self});
+    }
+
+    fn disarm(self: *Watchdog) void {
+        self.done.set(self.io);
+        if (self.thread) |t| t.join();
+    }
+
+    fn watch(self: *Watchdog) void {
+        self.done.waitTimeout(self.io, .{ .duration = .{ .raw = .fromMilliseconds(limit_ms), .clock = .awake } }) catch |err| switch (err) {
+            error.Timeout => {
+                std.debug.print("\nfizzy-control-server-tests: {s} still running after {d} s: a client or the server is blocked; aborting\n", .{ self.name, limit_ms / 1000 });
+                std.process.abort();
+            },
+            else => {},
+        };
+    }
+};
 
 const TestClient = struct {
     io: Io,
@@ -721,6 +754,9 @@ test "a request reaches the UI thread and its answer goes back" {
     if (!Io.net.has_unix_sockets) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const io = std.testing.io;
+    var dog: Watchdog = .{ .io = io, .name = @src().fn_name };
+    try dog.arm();
+    defer dog.disarm();
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const dir = try tmp.dir.realPathFileAlloc(io, ".", gpa);
@@ -742,7 +778,7 @@ test "a request reaches the UI thread and its answer goes back" {
     const thread = try std.Thread.spawn(.{}, TestClient.run, .{&client});
 
     // The UI thread's side: take what came, answer it.
-    var taken: std.ArrayListUnmanaged(*Request) = .empty;
+    var taken: std.ArrayList(*Request) = .empty;
     defer taken.deinit(gpa);
     var waited: usize = 0;
     while (taken.items.len == 0 and waited < 2000) : (waited += 1) {
@@ -782,6 +818,9 @@ test "a request still queued at quit is answered: the server is stopping" {
     if (!Io.net.has_unix_sockets) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const io = std.testing.io;
+    var dog: Watchdog = .{ .io = io, .name = @src().fn_name };
+    try dog.arm();
+    defer dog.disarm();
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const path = try testSocket(gpa, &tmp);
@@ -811,6 +850,9 @@ test "what cannot be served is refused before its body, and never reaches the ap
     if (!Io.net.has_unix_sockets) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const io = std.testing.io;
+    var dog: Watchdog = .{ .io = io, .name = @src().fn_name };
+    try dog.arm();
+    defer dog.disarm();
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const path = try testSocket(gpa, &tmp);
@@ -833,7 +875,7 @@ test "what cannot be served is refused before its body, and never reaches the ap
         try std.testing.expect(std.mem.startsWith(u8, reply, case.status));
         try std.testing.expect(std.mem.find(u8, reply, "100 Continue") == null);
     }
-    var taken: std.ArrayListUnmanaged(*Request) = .empty;
+    var taken: std.ArrayList(*Request) = .empty;
     defer taken.deinit(gpa);
     _ = server.take(&taken);
     try std.testing.expectEqual(@as(usize, 0), taken.items.len);
@@ -873,6 +915,9 @@ test "a server that took over the path keeps it when the old one stops" {
     if (!Io.net.has_unix_sockets) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const io = std.testing.io;
+    var dog: Watchdog = .{ .io = io, .name = @src().fn_name };
+    try dog.arm();
+    defer dog.disarm();
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const path = try testSocket(gpa, &tmp);
@@ -889,7 +934,7 @@ test "a server that took over the path keeps it when the old one stops" {
 
     var client: TestClient = .{ .io = io, .path = path, .request = "GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n" };
     const thread = try std.Thread.spawn(.{}, TestClient.run, .{&client});
-    var taken: std.ArrayListUnmanaged(*Request) = .empty;
+    var taken: std.ArrayList(*Request) = .empty;
     defer taken.deinit(gpa);
     var waited: usize = 0;
     while (taken.items.len == 0 and waited < 2000) : (waited += 1) {
@@ -906,6 +951,9 @@ test "a stream gets the events it asked for, once each, until the server stops" 
     if (!Io.net.has_unix_sockets) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const io = std.testing.io;
+    var dog: Watchdog = .{ .io = io, .name = @src().fn_name };
+    try dog.arm();
+    defer dog.disarm();
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const path = try testSocket(gpa, &tmp);
@@ -917,7 +965,7 @@ test "a stream gets the events it asked for, once each, until the server stops" 
     var client: TestClient = .{ .io = io, .path = path, .request = "GET /events?topics=fizzy.document.*,chat.turn_ended HTTP/1.1\r\nHost: x\r\n\r\n" };
     const thread = try std.Thread.spawn(.{}, TestClient.run, .{&client});
 
-    var taken: std.ArrayListUnmanaged(*Request) = .empty;
+    var taken: std.ArrayList(*Request) = .empty;
     defer taken.deinit(gpa);
     var streams: usize = 0;
     var waited: usize = 0;
@@ -988,7 +1036,7 @@ fn openStreams(server: *Server) usize {
 }
 
 fn answerStreams(server: *Server, want: usize) !void {
-    var taken: std.ArrayListUnmanaged(*Request) = .empty;
+    var taken: std.ArrayList(*Request) = .empty;
     defer taken.deinit(server.gpa);
     var waited: usize = 0;
     while (openStreams(server) < want and waited < 2000) : (waited += 1) {
@@ -1004,6 +1052,9 @@ test "a client that stops reading neither holds up the quit nor buffers without 
     if (!Io.net.has_unix_sockets) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const io = std.testing.io;
+    var dog: Watchdog = .{ .io = io, .name = @src().fn_name };
+    try dog.arm();
+    defer dog.disarm();
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const path = try testSocket(gpa, &tmp);
@@ -1045,6 +1096,9 @@ test "a stopped server ends a stream whose client stopped reading" {
     if (!Io.net.has_unix_sockets) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const io = std.testing.io;
+    var dog: Watchdog = .{ .io = io, .name = @src().fn_name };
+    try dog.arm();
+    defer dog.disarm();
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const path = try testSocket(gpa, &tmp);
@@ -1073,6 +1127,9 @@ test "an event published as the stream is answered is not lost" {
     if (!Io.net.has_unix_sockets) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const io = std.testing.io;
+    var dog: Watchdog = .{ .io = io, .name = @src().fn_name };
+    try dog.arm();
+    defer dog.disarm();
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const path = try testSocket(gpa, &tmp);
@@ -1082,7 +1139,7 @@ test "an event published as the stream is answered is not lost" {
     try server.start();
     var client: TestClient = .{ .io = io, .path = path, .request = "GET /events HTTP/1.1\r\nHost: x\r\n\r\n" };
     const thread = try std.Thread.spawn(.{}, TestClient.run, .{&client});
-    var taken: std.ArrayListUnmanaged(*Request) = .empty;
+    var taken: std.ArrayList(*Request) = .empty;
     defer taken.deinit(gpa);
     var waited: usize = 0;
     while (taken.items.len == 0 and waited < 2000) : (waited += 1) {
@@ -1103,6 +1160,9 @@ test "a stopped server ends a keep-alive connection waiting for its next request
     if (!Io.net.has_unix_sockets) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const io = std.testing.io;
+    var dog: Watchdog = .{ .io = io, .name = @src().fn_name };
+    try dog.arm();
+    defer dog.disarm();
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const path = try testSocket(gpa, &tmp);
@@ -1144,7 +1204,7 @@ test "a stopped server ends a keep-alive connection waiting for its next request
         client.release.set(io);
         thread.join();
     }
-    var taken: std.ArrayListUnmanaged(*Request) = .empty;
+    var taken: std.ArrayList(*Request) = .empty;
     defer taken.deinit(gpa);
     var waited: usize = 0;
     while (taken.items.len == 0 and waited < 2000) : (waited += 1) {
@@ -1194,7 +1254,7 @@ const UpgradePeer = struct {
 };
 
 /// Frames, as the UI thread's, until `taken` holds a request.
-fn takeOne(server: *Server, taken: *std.ArrayListUnmanaged(*Request)) !*Request {
+fn takeOne(server: *Server, taken: *std.ArrayList(*Request)) !*Request {
     var waited: usize = 0;
     while (taken.items.len == 0 and waited < 2000) : (waited += 1) {
         _ = server.take(taken);
@@ -1208,6 +1268,9 @@ test "an upgraded connection carries bytes both ways until the app closes it" {
     if (!Io.net.has_unix_sockets) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const io = std.testing.io;
+    var dog: Watchdog = .{ .io = io, .name = @src().fn_name };
+    try dog.arm();
+    defer dog.disarm();
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const path = try testSocket(gpa, &tmp);
@@ -1218,7 +1281,7 @@ test "an upgraded connection carries bytes both ways until the app closes it" {
 
     var peer: UpgradePeer = .{ .io = io, .path = path };
     const thread = try std.Thread.spawn(.{}, UpgradePeer.run, .{&peer});
-    var taken: std.ArrayListUnmanaged(*Request) = .empty;
+    var taken: std.ArrayList(*Request) = .empty;
     defer taken.deinit(gpa);
     const req = try takeOne(&server, &taken);
     try std.testing.expectEqualStrings("fizzy-remote-view/1", req.upgrade.?);
@@ -1227,7 +1290,7 @@ test "an upgraded connection carries bytes both ways until the app closes it" {
     req.answerUpgrade(&server, &link);
 
     // What the client wrote behind its request is the link's.
-    var got: std.ArrayListUnmanaged(u8) = .empty;
+    var got: std.ArrayList(u8) = .empty;
     defer got.deinit(gpa);
     var waited: usize = 0;
     while (got.items.len < 4 and waited < 2000) : (waited += 1) {
@@ -1252,6 +1315,9 @@ test "a client that leaves an upgraded connection finishes its link" {
     if (!Io.net.has_unix_sockets) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const io = std.testing.io;
+    var dog: Watchdog = .{ .io = io, .name = @src().fn_name };
+    try dog.arm();
+    defer dog.disarm();
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const path = try testSocket(gpa, &tmp);
@@ -1262,7 +1328,7 @@ test "a client that leaves an upgraded connection finishes its link" {
 
     var peer: UpgradePeer = .{ .io = io, .path = path, .leave = true };
     const thread = try std.Thread.spawn(.{}, UpgradePeer.run, .{&peer});
-    var taken: std.ArrayListUnmanaged(*Request) = .empty;
+    var taken: std.ArrayList(*Request) = .empty;
     defer taken.deinit(gpa);
     const req = try takeOne(&server, &taken);
     var link: Link = .init(gpa, io, noWake);

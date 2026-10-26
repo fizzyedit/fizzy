@@ -21,6 +21,10 @@ pub const Options = struct {
     velopack_required_fail: ?*std.Build.Step,
     exe_for_package: *std.Build.Step.Compile,
     package_fizzy: exe.FizzyExecutable,
+    /// Directories whose files go beside the executable, after it and the plugin dylibs.
+    package_dirs: []const std.Build.LazyPath,
+    /// Passed to `vpk pack` after fizzy's own arguments.
+    vpk_args: []const []const u8,
     macos_sign_app_identity: ?[]const u8,
     macos_sign_install_identity: ?[]const u8,
     macos_notary_profile: ?[]const u8,
@@ -51,7 +55,9 @@ pub fn addSteps(opts: Options) *std.Build.Step {
     // installer, but the install hook never runs: Setup.exe hangs with "the
     // application install hook failed". Fail loudly instead of shipping that trap.
     const windows_non_msvc = target.result.os.tag == .windows and target.result.abi != .msvc;
-    const failure: ?*std.Build.Step = if (velopack_required_fail) |fail_step| fail_step else if (windows_non_msvc) &b.addFail(
+    const failure: ?*std.Build.Step = if (velopack_required_fail) |fail_step|
+        fail_step
+    else if (windows_non_msvc) &b.addFail(
         \\`zig build package` for Windows requires the MSVC ABI so Velopack is linked.
         \\The default native target resolves to x86_64-windows-gnu, which builds a binary
         \\WITHOUT the Velopack runtime. vpk would still wrap it as a Velopack installer, but
@@ -133,7 +139,7 @@ pub fn addSteps(opts: Options) *std.Build.Step {
         // so vpk ships plugins/ next to the main binary.
         const pack_input_subdir = b.fmt("{s}/.pack-input", .{zig_out_subdir});
         const pack_plugins_subdir = b.fmt("{s}/.pack-input/plugins", .{zig_out_subdir});
-        const pack_stage_tail = exe.addVelopackPackDirInstall(
+        var pack_stage_tail = exe.addVelopackPackDirInstall(
             b,
             exe_for_package,
             package_fizzy,
@@ -141,6 +147,15 @@ pub fn addSteps(opts: Options) *std.Build.Step {
             pack_plugins_subdir,
             &strip_release_sh.step,
         );
+        for (opts.package_dirs) |dir| {
+            const install_dir = b.addInstallDirectory(.{
+                .source_dir = dir,
+                .install_dir = .{ .custom = pack_input_subdir },
+                .install_subdir = "",
+            });
+            install_dir.step.dependOn(pack_stage_tail);
+            pack_stage_tail = &install_dir.step;
+        }
         vpk_pkg_sh.addArg("--packDir");
         vpk_pkg_sh.addDirectoryArg(build_common.installDirPath(.{ .custom = pack_input_subdir }));
         switch (target.result.os.tag) {
@@ -177,7 +192,9 @@ pub fn addSteps(opts: Options) *std.Build.Step {
                     // Without this, Apple's notary service rejects with "signature does not
                     // include a secure timestamp" / "hardened runtime not enabled".
                     vpk_pkg_sh.addArg("--signEntitlements");
-                    const entitlements_path = b.root.joinString(b.allocator, "assets/macos/Fizzy.entitlements") catch |e| std.debug.panic("entitlements path: {}", .{e});
+                    const entitlements_path =
+                        b.root.joinString(b.allocator, "assets/macos/Fizzy.entitlements") catch |e|
+                            std.debug.panic("entitlements path: {}", .{e});
                     vpk_pkg_sh.addArg(entitlements_path);
                 }
                 if (macos_sign_install_identity) |id| {
@@ -196,6 +213,7 @@ pub fn addSteps(opts: Options) *std.Build.Step {
             },
             else => unreachable,
         }
+        vpk_pkg_sh.addArgs(opts.vpk_args);
         // Stream vpk's stdout/stderr live so failures surface their actual
         // diagnostic instead of just an exit-code-N message from the build
         // runner. With `addOutputDirectoryArg` in play, `infer_from_args`
@@ -243,7 +261,12 @@ pub fn addSteps(opts: Options) *std.Build.Step {
 /// fizzy's own (`build.zig`), or an app's built on fizzy (`fizzy.addPackageSteps`), whose
 /// `build.zig` passes fizzy its options again in each run.
 pub fn addPackageAllStep(b: *std.Build, no_emit: bool) void {
-    const packageall_step = b.step("packageall", "zig build package for each of the six release targets, with this build's -D options but the target's; -Dwindows-msvc-libc= and -Dfetch-msvc reach the *-windows-msvc runs only");
+    const packageall_step = b.step(
+        "packageall",
+        "zig build package for each of the six release targets, with this build's -D " ++
+            "options but the target's; -Dwindows-msvc-libc= and -Dfetch-msvc reach the " ++
+            "*-windows-msvc runs only",
+    );
     if (no_emit) {
         packageall_step.dependOn(&b.addFail("cannot run `packageall` with -Dno-emit").step);
         return;
@@ -269,7 +292,8 @@ pub fn addPackageAllStep(b: *std.Build, no_emit: bool) void {
         switch (entry.value_ptr.*) {
             .flag => list.append(b.allocator, b.fmt("-D{s}", .{name})) catch @panic("OOM"),
             .scalar => |v| list.append(b.allocator, b.fmt("-D{s}={s}", .{ name, v })) catch @panic("OOM"),
-            .list => |l| for (l.items) |v| list.append(b.allocator, b.fmt("-D{s}={s}", .{ name, v })) catch @panic("OOM"),
+            .list => |l| for (l.items) |v|
+                list.append(b.allocator, b.fmt("-D{s}={s}", .{ name, v })) catch @panic("OOM"),
             // Only a `b.dependency` call passes these, never a command line.
             .map, .lazy_path, .lazy_path_list => {},
         }
@@ -297,7 +321,9 @@ pub fn addPackageAllStep(b: *std.Build, no_emit: bool) void {
 
     var prev_step: ?*std.Build.Step = null;
     for (packageall_triples) |triple| {
-        const zig_pkg_run = b.addSystemCommand(&.{ b.graph.zig_exe, "build", "package", b.fmt("-Dtarget={s}", .{triple}) });
+        const zig_pkg_run = b.addSystemCommand(
+            &.{ b.graph.zig_exe, "build", "package", b.fmt("-Dtarget={s}", .{triple}) },
+        );
         zig_pkg_run.addArgs(common.items);
         if (std.mem.endsWith(u8, triple, "-windows-msvc")) zig_pkg_run.addArgs(msvc_only.items);
         // This build's own build file, from the cwd this build was run in (inherited): a

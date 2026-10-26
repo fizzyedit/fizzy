@@ -16,9 +16,9 @@
 //! checkpoint kept whole because its delta had come to half the document. Older
 //! checkpoints are thinned (`thin`), and past `cap` the oldest ended tracks go, then all but each
 //! open track's newest checkpoint (`shed`); steps and bases stay, since undo will walk them.
-//! Taking and diffing a checkpoint happen on the frame that takes it, on every target (the web has
-//! no threads); were that ever too long, the diff would be spread over the frames after, a slice
-//! each, the copy being immutable once taken. They record while `on`: in fizzy by default, as its
+//! A checkpoint's capture happens on the frame that takes it; its diff is spread over that frame
+//! and the ones after, `encode_slice` bytes a frame (`Track.pending`), on every target (the web has
+//! no threads), the copy being immutable once taken. They record while `on`: in fizzy by default, as its
 //! setting says (`record_history`, `FIZZY_TRACKS` over it). `zig build bench-tracks` measures what
 //! a step, a checkpoint and a replay cost.
 //!
@@ -57,9 +57,9 @@ on: bool = false,
 /// The tracks of open documents, by document id.
 open: std.AutoArrayHashMapUnmanaged(u64, *Track) = .empty,
 /// Tracks that ended this session: their document closed, or its history started over.
-ended: std.ArrayListUnmanaged(*Track) = .empty,
+ended: std.ArrayList(*Track) = .empty,
 /// Which document the person was working in, each time it changed, as steps landed.
-focus: std.ArrayListUnmanaged(Focus) = .empty,
+focus: std.ArrayList(Focus) = .empty,
 /// Some track wants its document's state taken at the next frame's top.
 due: bool = false,
 /// A document being replayed into: its own steps are not recorded meanwhile.
@@ -82,6 +82,9 @@ swept_gone: bool = false,
 /// Checkpoint writes of kept tracks in flight on another thread (`takeChanged`, `doneWriting`):
 /// `keep` waits them out, so an older history is never renamed over a newer one.
 writing: std.atomic.Value(u32) = .init(0),
+/// The kept files of tracks whose documents closed, waiting for the checkpoint's writer thread
+/// (`takeChanged`) to pack and write them, so closing a big document costs its frame a copy.
+pending: std.ArrayList(KeptFile) = .empty,
 
 pub const default_cap = 256 << 20;
 pub const default_kept_cap: u64 = 2 << 30;
@@ -98,6 +101,14 @@ pub const checkpoint_steps = 256;
 pub const checkpoint_max_steps = 8192;
 pub const checkpoint_gap_ms = 30_000;
 pub const state_share = 1;
+/// And a checkpoint is a capture of the whole document (`take`, on a frame) whatever it keeps, so
+/// the steps since must also be worth a `capture_share`th of the document's state: a seek then
+/// replays at most that much step data to be spared a restore of the whole, and a big document is
+/// not captured again for the first step after a pause.
+pub const capture_share = 64;
+/// Bytes of a pending checkpoint compared in one frame's top: about 1 ms, which a debug build
+/// takes 30 times as long to compare.
+pub const encode_slice: usize = if (builtin.mode == .debug) 256 << 10 else 8 << 20;
 
 pub const Focus = struct {
     /// ms since the session's start.
@@ -117,11 +128,15 @@ pub const Track = struct {
     /// Where the document's history stood when the base was taken (`HistoryLine`'s step id, 0
     /// before any): what an export rewinds the document to for its file (`exportTape`).
     base_top: u64 = 0,
-    steps: std.ArrayListUnmanaged(Rec) = .empty,
+    steps: std.ArrayList(Rec) = .empty,
     /// Every step's effect and motion, one after another.
-    bytes: std.ArrayListUnmanaged(u8) = .empty,
-    checkpoints: std.ArrayListUnmanaged(State) = .empty,
+    bytes: std.ArrayList(u8) = .empty,
+    checkpoints: std.ArrayList(State) = .empty,
     checkpoint_due: bool = false,
+    /// The checkpoint being diffed, a slice a frame (`tick`). Its encoder borrows the latest whole
+    /// state, so that must stay until it is done (`settle`, `cancel`). While one is pending no
+    /// other is taken: `checkpoint_due` waits, and the next is late, never skipped.
+    pending: ?Pending = null,
     /// The size of the last checkpoint kept as a delta: about what the next will cost. 0 after a
     /// whole state, whose next delta starts small.
     state_len: usize = 0,
@@ -130,6 +145,11 @@ pub const Track = struct {
     since_bytes: usize = 0,
     /// How many steps its kept file holds (`keep`, `pickUp`): one written since, it moved on from.
     kept_steps: usize = 0,
+
+    /// What taking a state costs: the size of the document's state (the base's).
+    fn captureLen(t: *const Track) usize {
+        return if (t.base) |b| b.bytes.len else 0;
+    }
 
     pub const Rec = struct {
         kind: sdk.Step.Kind,
@@ -140,6 +160,12 @@ pub const Track = struct {
         ms: u32,
         effect: Span,
         motion: Span,
+    };
+
+    pub const Pending = struct {
+        /// The capture: whole until the encoder is done.
+        state: State,
+        encoder: state_delta.Encoder,
     };
 
     pub const Span = struct { start: usize, len: usize };
@@ -193,15 +219,25 @@ pub const Track = struct {
         return .{ .bytes = try state_delta.apply(gpa, self.wholeBefore(i), s.bytes), .owned = true };
     }
 
+    /// Drop the pending checkpoint, if any.
+    fn cancel(self: *Track, gpa: std.mem.Allocator) void {
+        var p = self.pending orelse return;
+        p.encoder.deinit();
+        gpa.free(p.state.bytes);
+        self.pending = null;
+    }
+
     /// Bytes this track holds.
     pub fn size(self: *const Track) usize {
         var n = self.bytes.items.len + self.steps.items.len * @sizeOf(Rec);
         if (self.base) |b| n += b.bytes.len;
         for (self.checkpoints.items) |c| n += c.bytes.len;
+        if (self.pending) |p| n += p.state.bytes.len;
         return n;
     }
 
     fn deinit(self: *Track, gpa: std.mem.Allocator) void {
+        self.cancel(gpa);
         if (self.base) |b| gpa.free(b.bytes);
         for (self.checkpoints.items) |c| gpa.free(c.bytes);
         self.checkpoints.deinit(gpa);
@@ -232,6 +268,7 @@ pub fn handOff(self: *Tracks) void {
 
 /// The app is quitting: keep every open document's track, while its document can still be read.
 pub fn keepOpen(self: *Tracks) void {
+    self.flushPending();
     for (self.open.values()) |t| self.keep(t);
     self.sweep();
 }
@@ -240,10 +277,14 @@ pub fn keepOpen(self: *Tracks) void {
 /// moved since it was last kept, as its file holds it, for the checkpoint's thread to write
 /// (`writeKept`), so a document the checkpoint brings back after a crash picks its history up, as
 /// a restart's does. Taken on the frame the documents' states are, so each ends where its state
-/// does. A saved document opens from its file after a crash, with nothing to recover. Owned.
-pub fn takeChanged(self: *Tracks) []KeptFile {
-    var out: std.ArrayListUnmanaged(KeptFile) = .empty;
-    for (self.open.values()) |t| {
+/// does (`with_open`; a write of only the closed documents' tracks has no states to end at). A saved
+/// document opens from its file after a crash, with nothing to recover. Also hands over the tracks
+/// of documents that closed (`keepLater`). Owned.
+pub fn takeChanged(self: *Tracks, with_open: bool) []KeptFile {
+    // The closed documents' first: one reopened and changed since is then written after its old.
+    var out = self.pending;
+    self.pending = .empty;
+    if (with_open) for (self.open.values()) |t| {
         if (t.steps.items.len == t.kept_steps or !t.owner.isDirty(t.doc)) continue;
         const k = self.encodeKept(t) orelse continue;
         out.append(self.gpa, k) catch {
@@ -252,7 +293,7 @@ pub fn takeChanged(self: *Tracks) []KeptFile {
         };
         // Written on another thread: one that fails is kept again only once it moves again.
         t.kept_steps = t.steps.items.len;
-    }
+    };
     const taken = out.toOwnedSlice(self.gpa) catch {
         for (out.items) |k| k.deinit(self.gpa);
         out.deinit(self.gpa);
@@ -270,6 +311,8 @@ pub fn doneWriting(self: *Tracks) void {
 pub fn deinit(self: *Tracks) void {
     const dir = self.dir;
     defer self.dir = dir;
+    for (self.pending.items) |k| k.deinit(self.gpa);
+    self.pending.deinit(self.gpa);
     for (self.open.values()) |t| t.deinit(self.gpa);
     self.open.deinit(self.gpa);
     for (self.ended.items) |t| t.deinit(self.gpa);
@@ -308,9 +351,10 @@ pub fn opened(self: *Tracks, doc: sdk.DocHandle) void {
 /// holds nothing and goes.
 pub fn closed(self: *Tracks, doc_id: u64) void {
     const kv = self.open.fetchSwapRemove(doc_id) orelse return;
-    self.keep(kv.value);
+    const queued = self.keepLater(kv.value);
     self.end(kv.value);
-    self.sweep();
+    // A queued file is swept once written (`Checkpoint.tick`).
+    if (!queued) self.sweep();
 }
 
 /// The file `path`'s document's track is kept in, under `dir`: named by a hash of the path, so any
@@ -346,7 +390,7 @@ pub fn sweep(self: *Tracks) void {
     var dir = std.Io.Dir.cwd().openDir(dvui.io, dir_path, .{ .iterate = true }) catch return;
     defer dir.close(dvui.io);
     const Kept = struct { name: []const u8, size: u64, written: i96 };
-    var files: std.ArrayListUnmanaged(Kept) = .empty;
+    var files: std.ArrayList(Kept) = .empty;
     var total: u64 = 0;
     var it = dir.iterate();
     while (it.next(dvui.io) catch null) |e| {
@@ -411,6 +455,7 @@ pub fn forget(self: *Tracks, doc: sdk.DocHandle) bool {
     };
     if (self.open.get(doc.id)) |t| {
         self.held -|= t.size();
+        t.cancel(self.gpa);
         if (t.base) |b| self.gpa.free(b.bytes);
         t.base = null;
         for (t.checkpoints.items) |c| self.gpa.free(c.bytes);
@@ -478,14 +523,46 @@ fn keepable(path: []const u8) bool {
 fn keep(self: *Tracks, t: *Track) void {
     // The web has no profile folder to keep them in (nor threads to wait out).
     if (comptime !can_keep) return;
+    self.settle(t);
     const k = self.encodeKept(t) orelse return;
     defer k.deinit(self.gpa);
     // A checkpoint's older copy, still being written, would land over this one.
     while (self.writing.load(.acquire) != 0) std.Thread.yield() catch {};
-    if (writeKept(k, "part")) t.kept_steps = t.steps.items.len;
+    if (writeKept(self.gpa, k, "part")) t.kept_steps = t.steps.items.len;
 }
 
-/// A track as its kept file holds it, to write (`writeKept`): owned.
+/// `keep` for a document that closed: the copy of its steps is taken now, while it can be read, and
+/// left for the checkpoint's thread to pack and write (`takeChanged`), so closing costs no scan or
+/// deflate on the frame. Returns whether the copy waits for that thread.
+fn keepLater(self: *Tracks, t: *Track) bool {
+    if (comptime !can_keep) return false;
+    const k = self.encodeKept(t) orelse return false;
+    self.pending.append(self.gpa, k) catch {
+        defer k.deinit(self.gpa);
+        while (self.writing.load(.acquire) != 0) std.Thread.yield() catch {};
+        _ = writeKept(self.gpa, k, "part");
+        return false;
+    };
+    // The checkpoint looks for these on a frame of its own.
+    if (dvui.current_window != null) dvui.refresh(null, @src(), null);
+    return true;
+}
+
+/// Write what `keepLater` left, here: for a read of a kept file (`pickUp`) or the app quitting,
+/// neither of which can wait for the checkpoint.
+fn flushPending(self: *Tracks) void {
+    if (comptime !can_keep) return;
+    // The checkpoint's thread may hold older copies of the same files.
+    while (self.writing.load(.acquire) != 0) std.Thread.yield() catch {};
+    for (self.pending.items) |k| {
+        _ = writeKept(self.gpa, k, "part");
+        k.deinit(self.gpa);
+    }
+    self.pending.clearRetainingCapacity();
+}
+
+/// A track as its kept file holds it, to write (`writeKept`): owned. Its bytes are the version 1
+/// file, unpacked (`track_file.compact`), so taking one costs a copy; `writeKept` packs them.
 pub const KeptFile = struct {
     file: []u8,
     bytes: []u8,
@@ -508,22 +585,27 @@ fn encodeKept(self: *Tracks, t: *const Track) ?KeptFile {
     defer prof.end();
     const file = self.keptFile(self.gpa, path) orelse return null;
     const ends: track_file.End = .{ .fingerprint = fingerprint, .file_hash = if (t.owner.isDirty(t.doc)) null else fileHashOf(self.gpa, path) };
-    const bytes = track_file.write(self.gpa, t, t.owner.id, path, ends) catch {
+    const bytes = track_file.write(self.gpa, t, t.owner.id, path, ends, 1) catch {
         self.gpa.free(file);
         return null;
     };
     return .{ .file = file, .bytes = bytes };
 }
 
-/// Write `k` beside its file as `<file>.<part>`, then rename it over: any thread. Each writer names
-/// its own `part`, so two never write into one.
-pub fn writeKept(k: KeptFile, part: []const u8) bool {
+/// Pack `k` and write it beside its file as `<file>.<part>`, then rename it over: any thread, with
+/// `gpa` safe to use there. Each writer names its own `part`, so two never write into one.
+pub fn writeKept(gpa: std.mem.Allocator, k: KeptFile, part: []const u8) bool {
     if (comptime !can_keep) return false;
+    const packed_bytes = track_file.compact(gpa, k.bytes) catch |err| {
+        dvui.log.warn("tracks: could not pack {s}: {t}", .{ k.file, err });
+        return false;
+    };
+    defer gpa.free(packed_bytes);
     var buf: [std.fs.max_path_bytes]u8 = undefined;
     const beside = std.mem.print(&buf, "{s}.{s}", .{ k.file, part }) catch return false;
     const cwd = std.Io.Dir.cwd();
     cwd.createDirPath(dvui.io, std.fs.path.dirname(k.file).?) catch {};
-    cwd.writeFile(dvui.io, .{ .sub_path = beside, .data = k.bytes }) catch |err| {
+    cwd.writeFile(dvui.io, .{ .sub_path = beside, .data = packed_bytes }) catch |err| {
         dvui.log.warn("tracks: could not keep {s}: {t}", .{ k.file, err });
         return false;
     };
@@ -543,6 +625,7 @@ fn pickUp(self: *Tracks, t: *Track) bool {
     if (!keepable(path)) return false;
     const file = self.keptFile(self.gpa, path) orelse return false;
     defer self.gpa.free(file);
+    self.flushPending();
     const bytes = std.Io.Dir.cwd().readFileAlloc(dvui.io, file, self.gpa, .unlimited) catch return false;
     defer self.gpa.free(bytes);
     const prof = core.profile.begin("fizzy", "tracks.pickUp");
@@ -597,6 +680,7 @@ fn pickUp(self: *Tracks, t: *Track) bool {
 }
 
 fn end(self: *Tracks, t: *Track) void {
+    self.settle(t);
     if (t.base == null) return self.drop(t);
     self.ended.append(self.gpa, t) catch self.drop(t);
 }
@@ -606,14 +690,16 @@ fn drop(self: *Tracks, t: *Track) void {
     t.deinit(self.gpa);
 }
 
-/// At the top of a frame, before anything draws: take each state a track asked for. Returns at
-/// once when none did.
+/// At the top of a frame, before anything draws: take each state a track asked for, and carry
+/// on the diff of each checkpoint taken, `encode_slice` bytes in all. Returns at once when none
+/// did.
 pub fn tick(self: *Tracks) void {
     if (!self.due) return;
     self.due = false;
     self.worked += 1;
     const prof = core.profile.begin("fizzy", "tracks.tick");
     defer prof.end();
+    var budget: usize = encode_slice;
     for (self.open.values()) |t| {
         const before = t.size();
         if (t.base == null) {
@@ -628,30 +714,77 @@ pub fn tick(self: *Tracks) void {
             }
             t.base = self.take(t.doc, 0) orelse continue;
             t.base_top = historyTop(t.doc, self.gpa) orelse 0;
+            t.checkpoint_due = false;
+            t.since_steps = 0;
+            t.since_bytes = 0;
+            t.state_len = 0;
+        } else if (t.pending != null) {
+            self.advance(t, &budget);
         } else if (t.checkpoint_due) {
-            var s = self.take(t.doc, t.steps.items.len) orelse continue;
-            // As what differs from the latest whole state, unless that is half the document or
-            // more: then whole, and the next ones differ from it.
-            if (state_delta.encode(self.gpa, t.wholeBefore(t.checkpoints.items.len), s.bytes)) |delta| {
-                if (delta.len * 2 < s.bytes.len) {
-                    self.gpa.free(s.bytes);
-                    s.bytes = delta;
-                    s.whole = false;
-                } else self.gpa.free(delta);
-            } else |_| {}
-            t.checkpoints.append(self.gpa, s) catch {
-                self.gpa.free(s.bytes);
-                continue;
-            };
-            self.thin(t);
+            self.startCheckpoint(t, &budget);
         } else continue;
-        t.checkpoint_due = false;
-        t.since_steps = 0;
-        t.since_bytes = 0;
-        t.state_len = if (t.checkpoints.getLastOrNull()) |c| (if (c.whole) 0 else c.bytes.len) else 0;
+        // A diff not done carries on next frame (`due`, which the caller sees and asks a frame for).
+        if (t.pending != null) self.due = true;
         self.held = self.held - @min(self.held, before) + t.size();
     }
     if (self.held > self.cap) self.shed();
+}
+
+/// Take the checkpoint `t` asked for and start its diff.
+fn startCheckpoint(self: *Tracks, t: *Track, budget: *usize) void {
+    const s = self.take(t.doc, t.steps.items.len) orelse return;
+    t.pending = .{ .state = s, .encoder = .init(self.gpa, t.wholeBefore(t.checkpoints.items.len), s.bytes) };
+    t.checkpoint_due = false;
+    t.since_steps = 0;
+    t.since_bytes = 0;
+    self.advance(t, budget);
+}
+
+/// Compare on within `budget`, and keep the checkpoint once its diff is done.
+fn advance(self: *Tracks, t: *Track, budget: *usize) void {
+    const p = &t.pending.?;
+    const prof_delta = core.profile.begin("fizzy", "tracks.delta");
+    const done = p.encoder.step(budget) catch {
+        // Out of memory: kept whole, as when the diff cannot be made.
+        prof_delta.end();
+        return self.keepPending(t, null);
+    };
+    if (!done) return prof_delta.end();
+    const encoded = p.encoder.finish();
+    prof_delta.end();
+    self.keepPending(t, encoded);
+}
+
+/// Put `t`'s pending checkpoint among its checkpoints: as `delta`, the diff from the latest whole
+/// state, unless that is half the document or more (or null): then whole, and the next ones differ
+/// from it.
+fn keepPending(self: *Tracks, t: *Track, delta: ?[]u8) void {
+    var s = t.pending.?.state;
+    t.pending.?.encoder.deinit();
+    t.pending = null;
+    if (delta) |d| {
+        if (d.len * 2 < s.bytes.len) {
+            self.gpa.free(s.bytes);
+            s.bytes = d;
+            s.whole = false;
+        } else self.gpa.free(d);
+    }
+    t.checkpoints.append(self.gpa, s) catch {
+        self.gpa.free(s.bytes);
+        return;
+    };
+    self.thin(t);
+    t.state_len = if (t.checkpoints.getLastOrNull()) |c| (if (c.whole) 0 else c.bytes.len) else 0;
+    if (t.checkpoint_due) self.due = true;
+}
+
+/// Finish `t`'s pending checkpoint now, for what must read or free all of its states.
+fn settle(self: *Tracks, t: *Track) void {
+    if (t.pending == null) return;
+    const before = t.size();
+    var budget: usize = std.math.maxInt(usize);
+    self.advance(t, &budget);
+    self.held = self.held - @min(self.held, before) + t.size();
 }
 
 /// Thin `t`'s checkpoints older than `dense_ms` to one per `sparse_steps` steps: a seek that far
@@ -726,6 +859,8 @@ fn historyTop(doc: sdk.DocHandle, gpa: std.mem.Allocator) ?u64 {
 }
 
 fn take(self: *Tracks, doc: sdk.DocHandle, count: usize) ?Track.State {
+    const prof = core.profile.begin("fizzy", "tracks.take");
+    defer prof.end();
     const bytes = doc.owner.captureDocumentState(doc, self.gpa) orelse return null;
     return .{ .at = self.now(), .step = count, .bytes = bytes, .fingerprint = doc.owner.documentFingerprint(doc) };
 }
@@ -784,7 +919,7 @@ fn step(ctx: *anyopaque, doc_id: u64, st: sdk.Step) void {
     if (self.held > self.cap) self.shed();
     // After a pause the state is taken just after the step that ended it: near enough the
     // pause's start for a seek, and taken where nothing is half applied.
-    const worth = t.since_bytes * state_share >= t.state_len;
+    const worth = t.since_bytes * state_share >= @max(t.state_len, t.captureLen() / capture_share);
     if (t.since_steps >= checkpoint_max_steps or (worth and (t.since_steps >= checkpoint_steps or at -| last_at >= checkpoint_gap_ms))) {
         t.checkpoint_due = true;
         self.due = true;
@@ -862,7 +997,7 @@ pub const ExportError = error{
 /// known: an undo or redo reached an entry from before the track began.
 pub fn topAfter(t: *const Track, gpa: std.mem.Allocator, count: usize) error{OutOfMemory}!?u64 {
     // The entries added since the track began, and how many of them are done.
-    var line: std.ArrayListUnmanaged(u64) = .empty;
+    var line: std.ArrayList(u64) = .empty;
     defer line.deinit(gpa);
     var at: usize = 0;
     for (t.steps.items[0..@min(count, t.steps.items.len)]) |r| switch (r.kind) {
@@ -886,8 +1021,8 @@ pub fn topAfter(t: *const Track, gpa: std.mem.Allocator, count: usize) error{Out
 /// known (an undo or redo reaching an entry from before the track began, or a restart), or where
 /// a step's effect was not kept. The parts are `t`'s bytes: they last as long as it does.
 pub fn historyOf(t: *const Track, arena: std.mem.Allocator) error{OutOfMemory}!?sdk.Plugin.RestoredHistory {
-    const Building = struct { id: u64, parts: std.ArrayListUnmanaged([]const u8) = .empty };
-    var line: std.ArrayListUnmanaged(Building) = .empty;
+    const Building = struct { id: u64, parts: std.ArrayList([]const u8) = .empty };
+    var line: std.ArrayList(Building) = .empty;
     var at: usize = 0;
     for (t.steps.items) |r| switch (r.kind) {
         .added => {
@@ -947,7 +1082,7 @@ pub fn summarize(self: *Tracks, host: *const sdk.Host, doc: sdk.DocHandle, arena
     };
 
     var timing: Timing = .init(t, base, first, opts.real_time);
-    var authors: std.ArrayListUnmanaged(sdk.Author) = .empty;
+    var authors: std.ArrayList(sdk.Author) = .empty;
     for (t.steps.items[first..to]) |r| {
         out.played_ms = timing.place(r) + r.ms;
         const who = host.stepAuthor(doc.id, r.id);
@@ -1085,7 +1220,7 @@ fn fileAt(self: *Tracks, host: *sdk.Host, doc: sdk.DocHandle, arena: std.mem.All
 fn lineSteps(t: *const Track, arena: std.mem.Allocator, line: sdk.Plugin.HistoryLine, lo: usize, hi: usize) ExportError![]Track.Rec {
     var want: std.AutoHashMapUnmanaged(u64, bool) = .empty;
     for (line.entries[lo..hi]) |e| try want.put(arena, e.id, false);
-    var out: std.ArrayListUnmanaged(Track.Rec) = .empty;
+    var out: std.ArrayList(Track.Rec) = .empty;
     for (t.steps.items) |r| switch (r.kind) {
         .added, .joined => if (want.getPtr(r.id)) |seen| {
             if (r.kind == .added) seen.* = true;
@@ -1108,7 +1243,7 @@ pub fn lineSummary(self: *Tracks, host: *const sdk.Host, doc: sdk.DocHandle, are
     if (recs.len == 0) return null;
     var timing: Timing = .{ .recorded_end = recs[0].at, .real_time = false };
     var out: Summary = .{ .from = lo, .to = hi, .steps = hi - lo, .recorded_ms = 0, .played_ms = 0, .authors = &.{} };
-    var authors: std.ArrayListUnmanaged(sdk.Author) = .empty;
+    var authors: std.ArrayList(sdk.Author) = .empty;
     for (recs) |r| {
         out.played_ms = timing.place(r) + r.ms;
         const who = host.stepAuthor(doc.id, r.id);
@@ -1200,15 +1335,18 @@ const Stand = struct {
     fn clock() i128 {
         return clock_ns;
     }
+    // lint-allow(anyerror): the vtable's signature
     fn capture(_: *anyopaque, _: sdk.DocHandle, allocator: std.mem.Allocator) anyerror![]u8 {
         return allocator.dupe(u8, &bytes);
     }
+    // lint-allow(anyerror): the vtable's signature
     fn restore(_: *anyopaque, _: sdk.DocHandle, saved: []const u8) anyerror!void {
         @memcpy(&bytes, saved);
     }
     fn fingerprint(_: *anyopaque, _: sdk.DocHandle) u64 {
         return std.hash.Wyhash.hash(0, &bytes);
     }
+    // lint-allow(anyerror): the vtable's signature
     fn apply(_: *anyopaque, _: sdk.DocHandle, effect: []const u8, _: []const u8, _: u32) anyerror!void {
         @memcpy(bytes[0..effect.len], effect);
     }
@@ -1238,6 +1376,104 @@ const Stand = struct {
         rec.vtable.step(rec.ctx, id, .{ .kind = .added, .id = 1, .effect = effect });
     }
 };
+
+/// `Stand`, its document an unsaved file at `KeptStand.path`: what a track is kept for.
+const KeptStand = struct {
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var path: []const u8 = "";
+
+    fn documentPath(_: *anyopaque, _: sdk.DocHandle) []const u8 {
+        return path;
+    }
+    fn isDirty(_: *anyopaque, _: sdk.DocHandle) bool {
+        return true;
+    }
+
+    const vtable: sdk.Plugin.VTable = v: {
+        var v = Stand.vtable;
+        v.documentPath = documentPath;
+        v.isDirty = isDirty;
+        break :v v;
+    };
+    var plugin: sdk.Plugin = .{ .state = &Stand.state, .vtable = &vtable, .id = "kept", .display_name = "Kept", .step_format = 1 };
+
+    /// A track of one step on a document at `file` in `tmp`, kept in its `tracks` folder.
+    fn tracks(tmp: *std.testing.TmpDir) !Tracks {
+        dvui.io = testing.io;
+        const root = try tmp.dir.realPathFileAlloc(dvui.io, ".", testing.allocator);
+        defer testing.allocator.free(root);
+        path = try std.fmt.bufPrint(&path_buf, "{s}/doc", .{root});
+        var t = Stand.tracks();
+        errdefer t.deinit();
+        const dir = try std.fs.path.join(testing.allocator, &.{ root, "tracks" });
+        defer testing.allocator.free(dir);
+        try t.keepIn(dir);
+        const doc: sdk.DocHandle = .{ .ptr = &Stand.state, .owner = &plugin, .id = 1 };
+        t.opened(doc);
+        t.tick();
+        Stand.step(&t, 1, "ab", 10);
+        return t;
+    }
+
+    fn keptFileSize(t: *Tracks, tmp: *std.testing.TmpDir) !?u64 {
+        const file = t.keptFile(testing.allocator, path).?;
+        defer testing.allocator.free(file);
+        const stat = tmp.dir.statFile(dvui.io, file[std.fs.path.dirname(std.fs.path.dirname(file).?).?.len + 1 ..], .{}) catch return null;
+        return stat.size;
+    }
+};
+
+test "a checkpoint's track is taken unpacked on the frame, and packed when its thread writes it" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var t = try KeptStand.tracks(&tmp);
+    defer t.deinitAll();
+    const taken = t.takeChanged(true);
+    defer testing.allocator.free(taken);
+    try testing.expectEqual(@as(usize, 1), taken.len);
+    defer taken[0].deinit(testing.allocator);
+    // The frame's share is a copy: the base still whole, nothing on disk.
+    try testing.expect(taken[0].bytes.len > Stand.bytes.len);
+    try testing.expectEqual(@as(?u64, null), try KeptStand.keptFileSize(&t, &tmp));
+    // What the thread does with it.
+    try testing.expect(writeKept(testing.allocator, taken[0], "checkpoint"));
+    t.doneWriting();
+    const size = (try KeptStand.keptFileSize(&t, &tmp)).?;
+    try testing.expect(size < taken[0].bytes.len / 2);
+}
+
+test "a closed document's track waits unpacked for the checkpoint's thread" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var t = try KeptStand.tracks(&tmp);
+    defer t.deinitAll();
+    t.closed(1);
+    // Closing took a copy and wrote nothing.
+    try testing.expectEqual(@as(usize, 1), t.pending.items.len);
+    try testing.expectEqual(@as(?u64, null), try KeptStand.keptFileSize(&t, &tmp));
+    const taken = t.takeChanged(false);
+    defer testing.allocator.free(taken);
+    try testing.expectEqual(@as(usize, 0), t.pending.items.len);
+    try testing.expectEqual(@as(usize, 1), taken.len);
+    defer taken[0].deinit(testing.allocator);
+    try testing.expect(taken[0].bytes.len > Stand.bytes.len);
+    // The thread packs and writes it.
+    try testing.expect(writeKept(testing.allocator, taken[0], "checkpoint"));
+    t.doneWriting();
+    const size = (try KeptStand.keptFileSize(&t, &tmp)).?;
+    try testing.expect(size < Stand.bytes.len / 2);
+}
+
+test "a read of a kept file writes the closed documents' tracks first" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var t = try KeptStand.tracks(&tmp);
+    defer t.deinitAll();
+    t.closed(1);
+    t.flushPending();
+    try testing.expectEqual(@as(usize, 0), t.pending.items.len);
+    try testing.expect((try KeptStand.keptFileSize(&t, &tmp)) != null);
+}
 
 test "a frame's top does work only when a track asked for some" {
     var t = Stand.tracks();
@@ -1300,6 +1536,171 @@ test "a checkpoint is what differs from the whole state, taken once the steps si
     try testing.expectEqualSlices(u8, &want, &Stand.bytes);
     // And through the one before the whole state.
     try t.replayInto(1, Stand.doc(2), track.checkpoints.items[1].step);
+}
+
+/// A stand-in whose document is a big buffer, counting the states taken from it.
+const BigStand = struct {
+    const size = 32 << 20;
+    var bytes: [size]u8 = @splat(0);
+    var captures: usize = 0;
+
+    // lint-allow(anyerror): the vtable's signature
+    fn capture(_: *anyopaque, _: sdk.DocHandle, allocator: std.mem.Allocator) anyerror![]u8 {
+        captures += 1;
+        return allocator.dupe(u8, &bytes);
+    }
+    fn fingerprint(_: *anyopaque, _: sdk.DocHandle) u64 {
+        return 0;
+    }
+    var state: u8 = 0;
+    const vtable: sdk.Plugin.VTable = .{ .captureDocumentState = capture, .documentFingerprint = fingerprint };
+    var plugin: sdk.Plugin = .{ .state = &state, .vtable = &vtable, .id = "bigstand", .display_name = "BigStand", .step_format = 1 };
+
+    fn doc(id: u64) sdk.DocHandle {
+        return .{ .ptr = &state, .owner = &plugin, .id = id };
+    }
+};
+
+test "a big document is not captured again for a step after a pause, but still checkpoints in a long session" {
+    BigStand.captures = 0;
+    var t: Tracks = .init(testing.allocator);
+    defer t.deinit();
+    t.clock = Stand.clock;
+    Stand.clock_ns = 0;
+    t.on = true;
+    t.opened(BigStand.doc(1));
+    t.tick();
+    try testing.expectEqual(@as(usize, 1), BigStand.captures); // the base
+    const rec = t.recorder();
+    // One small step after a pause of a minute: nothing taken, no work on the frame.
+    Stand.clock_ns += 60 * std.time.ns_per_s;
+    const small: [100]u8 = @splat(1);
+    rec.vtable.step(rec.ctx, 1, .{ .kind = .added, .id = 1, .effect = &small });
+    t.tick();
+    try testing.expectEqual(@as(usize, 1), BigStand.captures);
+    try testing.expectEqual(@as(usize, 0), t.trackOf(1).?.checkpoints.items.len);
+    // Steps worth a share of the document, then a pause: one is taken.
+    const chunk: [64 << 10]u8 = @splat(2);
+    for (0..BigStand.size / capture_share / chunk.len + 1) |i| rec.vtable.step(rec.ctx, 1, .{ .kind = .added, .id = 2 + i, .effect = &chunk });
+    Stand.clock_ns += 60 * std.time.ns_per_s;
+    rec.vtable.step(rec.ctx, 1, .{ .kind = .added, .id = 1000, .effect = &small });
+    while (t.due) t.tick();
+    try testing.expectEqual(@as(usize, 2), BigStand.captures);
+    try testing.expectEqual(@as(usize, 1), t.trackOf(1).?.checkpoints.items.len);
+}
+
+/// A `BigStand` track with its checkpoint asked for, `BigStand.bytes` changed in a few places
+/// since the base. The caller restores the bytes.
+fn bigAsked(t: *Tracks) *Track {
+    BigStand.captures = 0;
+    t.clock = Stand.clock;
+    Stand.clock_ns = 0;
+    t.on = true;
+    t.opened(BigStand.doc(1));
+    t.tick();
+    for ([_]usize{ 1000, BigStand.size / 3, BigStand.size - 5000 }) |at| @memset(BigStand.bytes[at..][0..300], 0xee);
+    const rec = t.recorder();
+    const small: [8]u8 = @splat(1);
+    for (0..checkpoint_max_steps) |i| rec.vtable.step(rec.ctx, 1, .{ .kind = .added, .id = i + 1, .effect = &small });
+    return t.trackOf(1).?;
+}
+
+test "a big document's checkpoint is diffed a slice a frame, and is the one a whole diff makes" {
+    defer @memset(&BigStand.bytes, 0);
+    var t: Tracks = .init(testing.allocator);
+    defer t.deinit();
+    const track = bigAsked(&t);
+    const base = track.base.?.bytes;
+    var frames: usize = 0;
+    var progress: usize = 0;
+    while (t.due) : (frames += 1) {
+        t.tick();
+        // No frame compares or writes more than its slice, a block over for where it stopped and
+        // a run's counts for the header; the one that finishes it hands the delta over, which
+        // moves no bytes.
+        if (track.pending) |p| {
+            const worked = p.encoder.prefix + p.encoder.suffix + p.encoder.it.at + p.encoder.out.items.len;
+            try testing.expect(worked - progress <= encode_slice + 2 * state_delta.block + 64);
+            progress = worked;
+        } else try testing.expect(track.checkpoints.items[0].bytes.len < 1024);
+        // The first frame took the capture and one slice; nothing is kept until the diff is done.
+        if (frames == 0) {
+            try testing.expect(track.pending != null);
+            try testing.expectEqual(@as(usize, 0), track.checkpoints.items.len);
+            // A seek meanwhile starts from the base, not the pending one.
+            try testing.expect(track.stateBefore(track.steps.items.len) == &track.base.?);
+        }
+    }
+    try testing.expect(frames >= BigStand.size / encode_slice);
+    try testing.expect(frames <= BigStand.size / encode_slice + 4);
+    try testing.expectEqual(@as(usize, 1), track.checkpoints.items.len);
+    try testing.expect(track.pending == null and !track.checkpoint_due);
+    const c = track.checkpoints.items[0];
+    try testing.expectEqual(@as(usize, checkpoint_max_steps), c.step);
+    const want = try state_delta.encode(testing.allocator, base, &BigStand.bytes);
+    defer testing.allocator.free(want);
+    try testing.expect(!c.whole);
+    try testing.expectEqualSlices(u8, want, c.bytes);
+    const whole = try track.wholeState(testing.allocator, &track.checkpoints.items[0]);
+    defer if (whole.owned) testing.allocator.free(whole.bytes);
+    try testing.expectEqualSlices(u8, &BigStand.bytes, whole.bytes);
+}
+
+test "a step asked for a checkpoint while one is pending waits, and is taken after" {
+    defer @memset(&BigStand.bytes, 0);
+    var t: Tracks = .init(testing.allocator);
+    defer t.deinit();
+    const track = bigAsked(&t);
+    t.tick();
+    try testing.expect(track.pending != null);
+    const rec = t.recorder();
+    const small: [8]u8 = @splat(1);
+    for (0..checkpoint_max_steps) |i| rec.vtable.step(rec.ctx, 1, .{ .kind = .added, .id = 10_000 + i, .effect = &small });
+    try testing.expect(track.checkpoint_due);
+    while (t.due) t.tick();
+    try testing.expectEqual(@as(usize, 2), track.checkpoints.items.len);
+    try testing.expectEqual(@as(usize, 2 * checkpoint_max_steps), track.checkpoints.items[1].step);
+    try testing.expectEqual(t.held, track.size());
+}
+
+test "a pending checkpoint is kept when its track ends or sheds, and freed when its track goes" {
+    defer @memset(&BigStand.bytes, 0);
+    // Closed: the diff is finished first.
+    {
+        var t: Tracks = .init(testing.allocator);
+        defer t.deinit();
+        _ = bigAsked(&t);
+        t.tick();
+        t.closed(1);
+        try testing.expectEqual(@as(usize, 1), t.trackOf(1).?.checkpoints.items.len);
+        try testing.expectEqual(t.held, t.trackOf(1).?.size());
+    }
+    // Deinit with one pending: nothing leaks (the testing allocator).
+    {
+        var t: Tracks = .init(testing.allocator);
+        defer t.deinit();
+        _ = bigAsked(&t);
+        t.tick();
+    }
+    // Shed over the cap: the pending diff and its reference stay, and it finishes. Even with a
+    // cap below one track's base, the ticks end.
+    {
+        var t: Tracks = .init(testing.allocator);
+        defer t.deinit();
+        const track = bigAsked(&t);
+        t.tick();
+        t.cap = 0;
+        t.shed();
+        try testing.expect(track.pending != null and !track.checkpoint_due);
+        try testing.expectEqual(t.held, track.size());
+        var frames: usize = 0;
+        while (t.due) : (frames += 1) {
+            try testing.expect(frames < 2 * BigStand.size / encode_slice + 8);
+            t.tick();
+        }
+        try testing.expect(track.pending == null and !track.checkpoint_due);
+        try testing.expectEqual(@as(usize, 1), track.checkpoints.items.len);
+    }
 }
 
 test "checkpoints older than an hour thin to one per sparse_steps" {

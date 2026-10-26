@@ -41,6 +41,8 @@ pub const BlurBackdrop = @import("glass").BlurBackdrop;
 pub const LiquidField = @import("glass").LiquidField;
 pub const Popover = @import("widgets/Popover.zig");
 pub const ContextWidget = @import("widgets/ContextWidget.zig");
+/// `dvui.scrollArea` with a phone's touch drag and fling (see the file for what differs).
+pub const ScrollArea = @import("widgets/ScrollArea.zig");
 
 /// The menu chain, copied from dvui so a menu can be frosted and so its rows are the same rows
 /// the command palette and the flyouts draw — see `widgets/menu/FloatingMenu.zig`'s header for

@@ -51,9 +51,24 @@ pub const Branch = struct {
     /// The leaf minted on this split. Kept even after that side is split again,
     /// so a nested tree still writes every link to disk.
     created: []const u8,
+    /// Fizzy made this split, not the person: it runs the way its space's shape asks and turns
+    /// with it (`turn`). `dir` and `side` are how it runs now.
+    adaptive: bool = false,
     a: *Node,
     b: *Node,
 };
+
+/// Turn an adaptive `branch` a quarter: right becomes bottom, left top, and the other way. The
+/// new half stays the trailing (or leading) one, and `created` keeps the name its letter gave.
+pub fn turn(branch: *Branch) void {
+    branch.side = switch (branch.side) {
+        .right => .bottom,
+        .bottom => .right,
+        .left => .top,
+        .top => .left,
+    };
+    branch.dir = axisOf(branch.side);
+}
 
 pub fn newNameOf(branch: Branch) []const u8 {
     return branch.created;
@@ -68,8 +83,33 @@ pub fn leafName(node: Node) ?[]const u8 {
 
 pub const Forest = struct {
     roots: std.StringHashMapUnmanaged(*Node) = .empty,
+    /// Nodes `collapse` and `forget` took out of the tree during a frame. The draw walk holds
+    /// pointers into the tree it is drawing, and a place dropped mid-walk (a bubble dropped on
+    /// the trash, an emptied place closing) must not free them under it: they are freed by `reap`
+    /// once the frame's walk is done.
+    buried: std.ArrayList(Buried) = .empty,
+
+    const Buried = struct { node: *Node, deep: bool };
+
+    /// Free the nodes buried since the last call. Call when no walk of the tree is under way: a
+    /// frame loop that collapses places must call it once per frame after its shape's walk, or the
+    /// nodes wait (bounded, nothing freed early) until `deinit`.
+    pub fn reap(self: *Forest, gpa: std.mem.Allocator) void {
+        for (self.buried.items) |b| if (b.deep) freeNode(gpa, b.node) else gpa.destroy(b.node);
+        self.buried.clearRetainingCapacity();
+    }
+
+    /// `node` and what hangs under it, out of the tree but still readable until `reap`.
+    /// `deep` frees the children too; a branch whose children live on is buried shallow.
+    fn bury(self: *Forest, gpa: std.mem.Allocator, node: *Node, deep: bool) void {
+        // Out of memory: leak the node rather than free it. A walk may still hold it, and a
+        // leaked node costs bytes where a freed one is a use after free.
+        self.buried.append(gpa, .{ .node = node, .deep = deep }) catch {};
+    }
 
     pub fn deinit(self: *Forest, gpa: std.mem.Allocator) void {
+        self.reap(gpa);
+        self.buried.deinit(gpa);
         var it = self.roots.iterator();
         while (it.next()) |e| {
             gpa.free(e.key_ptr.*);
@@ -148,14 +188,14 @@ pub const Forest = struct {
     pub fn collapse(self: *Forest, gpa: std.mem.Allocator, name: []const u8) bool {
         var it = self.roots.iterator();
         while (it.next()) |e| {
-            if (!tryCollapse(gpa, e.value_ptr, name)) continue;
+            if (!tryCollapse(self, gpa, e.value_ptr, name)) continue;
             if (leafName(e.value_ptr.*.*)) |n| {
                 if (std.mem.eql(u8, n, e.key_ptr.*)) {
                     const key = e.key_ptr.*;
                     const node = e.value_ptr.*;
                     _ = self.roots.fetchRemove(key);
                     gpa.free(key);
-                    freeNode(gpa, node);
+                    self.bury(gpa, node, true);
                 }
             }
             return true;
@@ -167,10 +207,31 @@ pub const Forest = struct {
         name: []const u8,
         parent: []const u8,
         side: Side,
+        adaptive: bool = false,
     };
 
+    /// The split that minted `created` is fizzy's own (`Branch.adaptive`). False when no split did.
+    pub fn markAdaptive(self: *Forest, created: []const u8) bool {
+        var it = self.roots.valueIterator();
+        while (it.next()) |n| if (markIn(n.*, created)) return true;
+        return false;
+    }
+
+    fn markIn(node: *Node, created: []const u8) bool {
+        switch (node.kind) {
+            .leaf => return false,
+            .branch => |*b| {
+                if (std.mem.eql(u8, b.created, created)) {
+                    b.adaptive = true;
+                    return true;
+                }
+                return markIn(b.a, created) or markIn(b.b, created);
+            },
+        }
+    }
+
     pub fn collectLinks(self: *const Forest, gpa: std.mem.Allocator) []const SavedLink {
-        var out: std.ArrayListUnmanaged(SavedLink) = .empty;
+        var out: std.ArrayList(SavedLink) = .empty;
         var it = self.roots.valueIterator();
         while (it.next()) |n| collectFrom(n.*, gpa, &out);
         return out.toOwnedSlice(gpa) catch {
@@ -179,11 +240,11 @@ pub const Forest = struct {
         };
     }
 
-    fn collectFrom(node: *const Node, gpa: std.mem.Allocator, out: *std.ArrayListUnmanaged(SavedLink)) void {
+    fn collectFrom(node: *const Node, gpa: std.mem.Allocator, out: *std.ArrayList(SavedLink)) void {
         switch (node.kind) {
             .leaf => {},
             .branch => |b| {
-                out.append(gpa, .{ .name = b.created, .parent = b.origin, .side = b.side }) catch {};
+                out.append(gpa, .{ .name = b.created, .parent = b.origin, .side = b.side, .adaptive = b.adaptive }) catch {};
                 collectFrom(b.a, gpa, out);
                 collectFrom(b.b, gpa, out);
             },
@@ -289,12 +350,12 @@ pub const Forest = struct {
             one[0] = root_name;
             return one;
         };
-        var out: std.ArrayListUnmanaged([]const u8) = .empty;
+        var out: std.ArrayList([]const u8) = .empty;
         leavesIn(node, arena, &out);
         return out.items;
     }
 
-    fn leavesIn(node: *const Node, arena: std.mem.Allocator, out: *std.ArrayListUnmanaged([]const u8)) void {
+    fn leavesIn(node: *const Node, arena: std.mem.Allocator, out: *std.ArrayList([]const u8)) void {
         switch (node.kind) {
             .leaf => |n| out.append(arena, n) catch {},
             .branch => |b| {
@@ -309,7 +370,7 @@ pub const Forest = struct {
     pub fn forget(self: *Forest, gpa: std.mem.Allocator, root_name: []const u8) void {
         const kv = self.roots.fetchRemove(root_name) orelse return;
         gpa.free(kv.key);
-        freeNode(gpa, kv.value);
+        self.bury(gpa, kv.value, true);
     }
 
     /// Whether `name` was split again: the origin of a split, so the place under that name is
@@ -330,7 +391,7 @@ pub const Forest = struct {
             one[0] = name;
             return one;
         };
-        var out: std.ArrayListUnmanaged([]const u8) = .empty;
+        var out: std.ArrayList([]const u8) = .empty;
         leavesIn(node, arena, &out);
         return out.items;
     }
@@ -412,25 +473,26 @@ fn isPlaceNamed(node: *Node, name: []const u8) bool {
     };
 }
 
-fn tryCollapse(gpa: std.mem.Allocator, slot: **Node, name: []const u8) bool {
+fn tryCollapse(forest: *Forest, gpa: std.mem.Allocator, slot: **Node, name: []const u8) bool {
     const node = slot.*;
     switch (node.kind) {
         .leaf => return false,
         .branch => |*b| {
             // Children before descending: the outermost node carrying the name is the place.
+            // Dropped nodes are buried, not freed: a walk drawing this tree may still hold them.
             if (isPlaceNamed(b.a, name)) {
                 slot.* = b.b;
-                freeNode(gpa, b.a);
-                gpa.destroy(node);
+                forest.bury(gpa, b.a, true);
+                forest.bury(gpa, node, false);
                 return true;
             }
             if (isPlaceNamed(b.b, name)) {
                 slot.* = b.a;
-                freeNode(gpa, b.b);
-                gpa.destroy(node);
+                forest.bury(gpa, b.b, true);
+                forest.bury(gpa, node, false);
                 return true;
             }
-            return tryCollapse(gpa, &b.a, name) or tryCollapse(gpa, &b.b, name);
+            return tryCollapse(forest, gpa, &b.a, name) or tryCollapse(forest, gpa, &b.b, name);
         },
     }
 }
@@ -448,6 +510,24 @@ fn freeNode(gpa: std.mem.Allocator, node: *Node) void {
 
 fn internLiteral(_: std.mem.Allocator, name: []const u8) []const u8 {
     return name;
+}
+
+test "a place collapsed mid-walk leaves the tree being walked readable until reap" {
+    const gpa = std.testing.allocator;
+    var f: Forest = .{};
+    defer f.deinit(gpa);
+    _ = f.split(gpa, internLiteral, "Main", .left, 80, "Main/l1").?;
+    const root = f.root("Main").?;
+    const branch = root.kind.branch;
+    // The walk holds `branch` and its children; dropping the minted half closes the whole tree
+    // down to the origin leaf, and the root itself goes with it.
+    try std.testing.expect(f.collapse(gpa, "Main/l1"));
+    try std.testing.expect(f.root("Main") == null);
+    // Still readable: freed here, the debug allocator's poison would make these reads fail.
+    try std.testing.expectEqualStrings("Main", branch.origin);
+    try std.testing.expectEqualStrings("Main", leafName(branch.b.*).?);
+    f.reap(gpa);
+    try std.testing.expectEqual(@as(usize, 0), f.buried.items.len);
 }
 
 test "opposite flips each edge" {
@@ -606,4 +686,26 @@ test "collapsing the minted half of a nested split leaves its origin in the oute
     defer gpa.free(links);
     try std.testing.expectEqual(@as(usize, 1), links.len);
     try std.testing.expectEqualStrings("Center/r1", links[0].name);
+}
+
+test "an adaptive split turns a quarter, keeps its half and its name, and is saved so" {
+    const gpa = std.testing.allocator;
+    var f: Forest = .{};
+    defer f.deinit(gpa);
+    _ = f.split(gpa, internLiteral, "Main", .right, 80, "Main/r1").?;
+    try std.testing.expect(!f.markAdaptive("Nowhere/r1"));
+    try std.testing.expect(f.markAdaptive("Main/r1"));
+
+    const links = f.collectLinks(gpa);
+    defer gpa.free(links);
+    for (links) |l| try std.testing.expectEqual(std.mem.eql(u8, l.name, "Main/r1"), l.adaptive);
+
+    const b = &f.root("Main").?.kind.branch;
+    try std.testing.expectEqual(dvui.enums.Direction.horizontal, b.dir);
+    turn(b);
+    try std.testing.expectEqual(Side.bottom, b.side);
+    try std.testing.expectEqual(dvui.enums.Direction.vertical, b.dir);
+    try std.testing.expectEqualStrings("Main/r1", b.created);
+    turn(b);
+    try std.testing.expectEqual(Side.right, b.side);
 }

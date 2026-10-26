@@ -106,7 +106,7 @@ fn startOptions() dvui.App.StartOptions {
         const pref: ?[:0]const u8 = if (@import("app").profile.root) |root|
             std.mem.printSentinel(&pref_path_buf, "{s}", .{root}, 0) catch null
         else
-            paths.configFolderZ(&pref_path_buf, main_init.io, fizzy.core.platform.processEnviron(), ".", AppInfo.current.config_dir);
+            paths.configFolderZ(appAllocator(), &pref_path_buf, main_init.io, fizzy.core.platform.processEnviron(), ".", AppInfo.current.config_dir);
         if (pref) |pref_path| {
             pref_path_len = pref_path.len;
             opts.pref_path = pref_path_buf[0..pref_path_len :0];
@@ -430,6 +430,17 @@ pub fn AppInit(win: *dvui.Window) !void {
     fizzy.backend.showWindowUndrawn(win);
 }
 
+/// `FIZZY_STARTUP_REPORT=1` prints the time from `main` to the first frame on stderr, for
+/// `scripts/hello-numbers.py`. It bypasses `std.log`, which a release build compiles out below
+/// `err`, and the Output panel; unset, a shipped build prints nothing.
+fn reportFirstFrame() void {
+    if (comptime @import("builtin").target.cpu.arch == .wasm32) return;
+    const raw = std.c.getenv("FIZZY_STARTUP_REPORT") orelse return;
+    if (std.mem.eql(u8, std.mem.span(raw), "0")) return;
+    const ph = fizzy.core.profile.phases() orelse return;
+    std.debug.print("startup: first frame {d:.3} ms after main\n", .{ph.ms(ph.len - 1)});
+}
+
 /// Where the window's reveal is (`revealOnceDrawn`): drawing its first frame, then seen.
 var reveal: enum { first_frame, next_frame, done } = .first_frame;
 
@@ -442,6 +453,7 @@ fn revealOnceDrawn(at_end: bool) void {
     switch (reveal) {
         .first_frame => if (at_end) {
             fizzy.core.profile.phase(dvui.io, "first frame");
+            reportFirstFrame();
             reveal = .next_frame;
             dvui.refresh(null, @src(), null);
         },
@@ -479,6 +491,7 @@ pub fn AppDeinit(_: *dvui.Window) void {
     // currently in flight finishes before we free state it touches.
     singleton.deinit();
     // The instances themselves, last: nothing that could reach them is left running.
+    fizzy.core.profile.hostDeinit();
     const allocator = appAllocator();
     allocator.destroy(fizzy.editor());
     allocator.free(fizzy.entry().root_path);
@@ -492,7 +505,7 @@ pub fn AppFrame() !dvui.App.Result {
     // dvui's refresh records, while someone reads them: the profiler, as frame causes, or a
     // `FIZZY_LOG_REFRESH` run.
     _ = dvui.debug.logRefresh(refresh_log_active or fizzy.core.profile.recordingCauses());
-    fizzy.core.profile.hostFrameBegin(lastSubmitNs(), gpuTotals());
+    fizzy.core.profile.hostFrameBegin(appAllocator(), lastSubmitNs(), gpuTotals());
     defer fizzy.core.profile.hostFrameEnd();
     revealOnceDrawn(false);
     defer revealOnceDrawn(true);

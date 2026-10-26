@@ -60,7 +60,7 @@ pub fn request() void {
     mutex.mutex.unlock(dvui.io);
 }
 
-pub fn dialog(id: dvui.Id) anyerror!bool {
+pub fn dialog(id: dvui.Id) fizzy.core.dialogs.Error!bool {
     const theme = dvui.themeGet();
     const body = dvui.Font.theme(.body);
 

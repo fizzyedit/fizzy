@@ -66,7 +66,7 @@ fn request(_: *anyopaque, allocator: std.mem.Allocator, req: vfs.http.Request, c
 
     // Headers as lines; the JS side splits them back out. Built here so the import takes one
     // buffer rather than a table of pointers.
-    var lines: std.ArrayListUnmanaged(u8) = .empty;
+    var lines: std.ArrayList(u8) = .empty;
     defer lines.deinit(a);
     for (req.headers) |h| {
         // The line format is the protocol between Zig and JS; a CR/LF in a value would end
@@ -103,7 +103,7 @@ fn pump(_: *anyopaque) void {
     const a = gpa orelse return;
     // Collect first: a callback may start another request, which must not land in the list
     // being walked — and may cancel a later one, which is then skipped and freed here.
-    var done: std.ArrayListUnmanaged(*Pending) = .empty;
+    var done: std.ArrayList(*Pending) = .empty;
     defer done.deinit(a);
     for (pending.values()) |p| {
         if (p.result != null) {

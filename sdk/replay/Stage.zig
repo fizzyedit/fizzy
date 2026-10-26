@@ -49,6 +49,11 @@ pub const VTable = struct {
     chordFor: ?*const fn (ctx: *anyopaque, id: []const u8) ?chord.Stroke = null,
     /// What a person would call a command ("Format Document"), for the keystroke display.
     commandTitle: ?*const fn (ctx: *anyopaque, id: []const u8) ?[]const u8 = null,
+    /// The live name of the place `role` stands for (`documents`, `explorer`, `panel`), written into
+    /// `buf`, for a tag like `region:role:documents`: a demo aims at what a place is, not at the
+    /// name the person's layout gave it. Null when the app has no such place now. Null hook: no
+    /// roles.
+    resolveRole: ?*const fn (ctx: *anyopaque, role: []const u8, buf: []u8) ?[]const u8 = null,
     /// Replaying fast (a seek): turn animation off so every replayed frame lands where it is
     /// going, and back on after.
     fastForward: ?*const fn (ctx: *anyopaque, on: bool) void = null,
@@ -101,6 +106,10 @@ pub fn chordFor(self: Stage, id: []const u8) ?chord.Stroke {
 pub fn commandTitle(self: Stage, id: []const u8) ?[]const u8 {
     const f = self.vtable.commandTitle orelse return null;
     return f(self.ctx, id);
+}
+pub fn resolveRole(self: Stage, role: []const u8, buf: []u8) ?[]const u8 {
+    const f = self.vtable.resolveRole orelse return null;
+    return f(self.ctx, role, buf);
 }
 pub fn fastForward(self: Stage, on: bool) void {
     if (self.vtable.fastForward) |f| f(self.ctx, on);

@@ -14,7 +14,7 @@ const is_windows = builtin.target.os.tag == .windows;
 /// port=<garbage>`, which is what sent zls (the first server built on this client) into
 /// `error.InvalidPort` on Windows.
 pub fn pathToUri(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
-    var out: std.ArrayListUnmanaged(u8) = .empty;
+    var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(allocator);
     try out.appendSlice(allocator, "file://");
 
@@ -44,7 +44,7 @@ pub fn uriToPath(allocator: std.mem.Allocator, uri: []const u8) ![]u8 {
     if (!std.mem.startsWith(u8, uri, prefix)) return error.UnsupportedScheme;
     const encoded = uri[prefix.len..];
 
-    var out: std.ArrayListUnmanaged(u8) = .empty;
+    var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(allocator);
     var i: usize = 0;
     while (i < encoded.len) {

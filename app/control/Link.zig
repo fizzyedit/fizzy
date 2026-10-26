@@ -24,9 +24,9 @@ io: Io,
 wake: *const fn () void,
 lock: Io.Mutex = .init,
 /// From the peer, under `lock`.
-inbox: std.ArrayListUnmanaged(u8) = .empty,
+inbox: std.ArrayList(u8) = .empty,
 /// To the peer, under `lock`.
-outbox: std.ArrayListUnmanaged(u8) = .empty,
+outbox: std.ArrayList(u8) = .empty,
 out_ready: Io.Event = .unset,
 /// When `close` was first called (awake-clock ns + 1), 0 before: `reapStuck` measures from it.
 closed_at: std.atomic.Value(u64) = .init(0),
@@ -49,7 +49,7 @@ pub fn deinit(self: *Link) void {
 }
 
 /// Move what the peer has sent so far onto the end of `out`. UI thread.
-pub fn take(self: *Link, out: *std.ArrayListUnmanaged(u8)) error{OutOfMemory}!void {
+pub fn take(self: *Link, out: *std.ArrayList(u8)) error{OutOfMemory}!void {
     self.lock.lockUncancelable(self.io);
     defer self.lock.unlock(self.io);
     try out.appendSlice(self.gpa, self.inbox.items);
@@ -143,7 +143,7 @@ test "bytes cross in both directions, and a link too far behind is closed" {
     defer link.deinit();
     try link.push("ab");
     try link.push("cd");
-    var got: std.ArrayListUnmanaged(u8) = .empty;
+    var got: std.ArrayList(u8) = .empty;
     defer got.deinit(gpa);
     try link.take(&got);
     try std.testing.expectEqualStrings("abcd", got.items);
@@ -154,7 +154,7 @@ test "bytes cross in both directions, and a link too far behind is closed" {
     defer gpa.free(out);
     try std.testing.expectEqualStrings("xy", out);
 
-    var big: std.ArrayListUnmanaged(u8) = .empty;
+    var big: std.ArrayList(u8) = .empty;
     defer big.deinit(gpa);
     try big.appendNTimes(gpa, 0, max_backlog);
     try link.send(big.items);
@@ -171,7 +171,7 @@ test "a frame between 8 and 32 MiB crosses in both directions" {
     defer gpa.free(frame);
     @memset(frame, 7);
     try link.push(frame);
-    var got: std.ArrayListUnmanaged(u8) = .empty;
+    var got: std.ArrayList(u8) = .empty;
     defer got.deinit(gpa);
     try link.take(&got);
     try std.testing.expectEqual(frame.len, got.items.len);

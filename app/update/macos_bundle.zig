@@ -110,16 +110,16 @@ pub fn moveToApplications(gpa: std.mem.Allocator, io: std.Io, bundle: *const Bun
 
     const dest = install_location.destination(dest_buf, bundle.path()) catch return error.NameTooLong;
     var dest_z_buf: [max_path]u8 = undefined;
-    const dest_z = std.fmt.bufPrintSentinel(&dest_z_buf, "{s}", .{dest}, 0) catch return error.NameTooLong;
+    const dest_z = std.mem.printSentinel(&dest_z_buf, "{s}", .{dest}, 0) catch return error.NameTooLong;
     var staging_buf: [max_path]u8 = undefined;
-    const staging = std.fmt.bufPrintSentinel(&staging_buf, "/Applications/.{s}.moving", .{std.fs.path.basename(dest)}, 0) catch return error.NameTooLong;
+    const staging = std.mem.printSentinel(&staging_buf, "/Applications/.{s}.moving", .{std.fs.path.basename(dest)}, 0) catch return error.NameTooLong;
 
     if (!try copyAsUser(gpa, io, bundle.path(), dest_z, staging)) try copyAsAdmin(gpa, io, bundle.path(), dest_z, staging);
     if (std.c.access(dest_z.ptr, std.c.F_OK) != 0) return error.CopyFailed;
 
     if (install_location.leftover(bundle.original_place) == .trash) {
         var orig_z_buf: [max_path]u8 = undefined;
-        if (std.fmt.bufPrintSentinel(&orig_z_buf, "{s}", .{bundle.original()}, 0)) |orig_z| {
+        if (std.mem.printSentinel(&orig_z_buf, "{s}", .{bundle.original()}, 0)) |orig_z| {
             if (!trash(orig_z)) std.log.warn("move to Applications: {s} could not go to the Trash", .{orig_z});
         } else |_| {}
     }
@@ -158,7 +158,7 @@ fn copyAsAdmin(gpa: std.mem.Allocator, io: std.Io, src: []const u8, dest: [:0]co
     const home = std.mem.span(std.c.getenv("HOME") orelse return error.CopyFailed);
     var old_buf: [max_path]u8 = undefined;
     const name = std.fs.path.stem(dest);
-    const old = std.fmt.bufPrint(&old_buf, "{s}/.Trash/{s} {d}.app", .{ home, name, std.c.getpid() }) catch return error.NameTooLong;
+    const old = std.mem.print(&old_buf, "{s}/.Trash/{s} {d}.app", .{ home, name, std.c.getpid() }) catch return error.NameTooLong;
     // The paths are the script's arguments, quoted by AppleScript itself, so no path is ever read
     // as shell. Dismissing the prompt (-128) is an answer, not a failure: it says so.
     const script =
@@ -187,7 +187,7 @@ pub fn openAfterExit(gpa: std.mem.Allocator, path: []const u8) core.darwin_spawn
     if (comptime !supported) return;
     var pid_buf: [16]u8 = undefined;
     // 16 bytes hold any pid_t, which is 32 bits.
-    const pid = std.fmt.bufPrint(&pid_buf, "{d}", .{std.c.getpid()}) catch unreachable;
+    const pid = std.mem.print(&pid_buf, "{d}", .{std.c.getpid()}) catch unreachable;
     const wait_then_open = "while /bin/kill -0 \"$1\" 2>/dev/null; do /bin/sleep 0.2; done; /usr/bin/open \"$2\"";
     _ = try core.darwin_spawn.spawn(gpa, .{
         .argv = &.{ "/bin/sh", "-c", wait_then_open, "sh", pid, path },

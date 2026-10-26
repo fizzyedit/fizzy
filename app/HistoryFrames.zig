@@ -124,9 +124,10 @@ pub fn moved(self: *HistoryFrames, gpa: std.mem.Allocator, top: u64, below: ?u64
 
 /// Before the document draws: take the picture asked for (`moved`) from what the last frame drew of
 /// `pane` (physical), above `bar_h` (physical) of its bottom, where the transport and the feed
-/// are drawn over it: the bar's height as it stands, its strip included, so a picture never holds
-/// the strip itself. `strip` is the strip's size in physical pixels (`HistoryTransport.stripPixels`):
-/// the crop's; null where the pane has no room for the bar, and no picture is taken.
+/// are drawn over it: `HistoryTransport.cover`, a size that holds however open the strip is, so a
+/// picture never holds the strip itself and every picture is of the same part of the pane.
+/// `strip` is the strip's size in physical pixels (`HistoryTransport.stripPixels`): the crop's;
+/// null where the pane has no room for the bar, and no picture is taken.
 pub fn take(self: *HistoryFrames, gpa: std.mem.Allocator, pane: dvui.Rect.Physical, bar_h: f32, strip: ?[2]u32) void {
     self.land(gpa);
     // On whole pixels, so the copy at its own size is the pane's pixels, not a blend of two.

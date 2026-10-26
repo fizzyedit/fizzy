@@ -10,7 +10,7 @@ pub const max: usize = 8;
 
 /// Oldest first, like `Recents.folders`; owned. Ids, not titles: a command whose plugin is gone
 /// simply is not shown, and comes back with the plugin.
-ids: std.ArrayListUnmanaged([]const u8) = .empty,
+ids: std.ArrayList([]const u8) = .empty,
 
 /// Copies of `ids` (as read from disk), empty entries dropped, at most `max`.
 pub fn fromIds(gpa: std.mem.Allocator, ids: []const []const u8) RecentCommands {

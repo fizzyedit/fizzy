@@ -39,7 +39,7 @@ fn dirtyCount() usize {
     return n;
 }
 
-pub fn dialog(id: dvui.Id) anyerror!bool {
+pub fn dialog(id: dvui.Id) fizzy.core.dialogs.Error!bool {
     const n = dirtyCount();
 
     var outer = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .padding = .all(8) });
@@ -61,11 +61,11 @@ pub fn dialog(id: dvui.Id) anyerror!bool {
     defer btn_row.deinit();
 
     if (fizzy.core.dialogs.bodyButton(@src(), id, "Quit without saving", .control, 1, 0)) {
-        try onQuitWithoutSaving();
+        onQuitWithoutSaving() catch |err| return fizzy.core.dialogs.failed("quit without saving", err);
     }
     _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 10, .h = 1 } });
     if (fizzy.core.dialogs.bodyButton(@src(), id, "Save all and quit", .highlight, 2, 1)) {
-        try onSaveAllAndQuit();
+        onSaveAllAndQuit() catch |err| return fizzy.core.dialogs.failed("save all and quit", err);
     }
     _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 10, .h = 1 } });
     if (fizzy.core.dialogs.bodyButton(@src(), id, "Cancel", .control, 3, 2)) {

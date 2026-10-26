@@ -127,7 +127,7 @@ const sdk_boundary_types = .{
     language_mod.CompletionKind,
     language_mod.SignatureHelpResult,
     Host.FileRowFillColor,
-    // Everything `Host` keeps in an `ArrayListUnmanaged` and both sides read out of: the list's
+    // Everything `Host` keeps in an `ArrayList` and both sides read out of: the list's
     // backing slice is a *data* pointer `hashType` never follows, so without an entry here a
     // field added to one of these changes the real cross-plugin layout while the fingerprint
     // says nothing moved. `Surface` is the one that matters most — a plugin registers them and

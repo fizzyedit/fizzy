@@ -142,7 +142,7 @@ followed_caret: ?usize = null,
 /// is a copy (`sdk.language.CompletionItem` fields from `sdk.host().completionFor(...)` are
 /// only valid for the duration of that call, same convention as `HoverResult.text`) made by
 /// `TextEditor.drawCompletion`. Empty exactly when `completion_anchor == null`.
-completion_items: std.ArrayListUnmanaged(TextEntryWidget.CompletionCandidate) = .empty,
+completion_items: std.ArrayList(TextEntryWidget.CompletionCandidate) = .empty,
 /// Which candidate is "current" — shown as ghost text and highlighted in the dropdown list.
 /// Moved by Up/Down in `TextEntryWidget.processEvents()`.
 completion_selected: usize = 0,

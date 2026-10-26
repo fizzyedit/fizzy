@@ -559,6 +559,67 @@ pub fn create(b: *std.Build, opts: CreateOptions) PluginArtifact {
     return .{ .lib = lib, .module = plugin_module, .static = static_module };
 }
 
+/// One of an application's executables, as a plugin it links statically sees it: the target and
+/// the framework modules (`fizzy.framework` in the application's build). A plugin package whose
+/// build has dependencies of its own builds them against these, so the application links the
+/// module it is given as it is, without copying anything for each executable.
+///
+/// A plugin package that pins its own SDK has its own copy of this type, so its build takes the
+/// application's by field: `anytype`, as `staticModule` does.
+pub const Framework = struct {
+    target: std.Build.ResolvedTarget,
+    optimize: std.lang.OptimizeMode,
+    dvui: *std.Build.Module,
+    core: *std.Build.Module,
+    /// Imported as `fizzy_sdk`.
+    sdk: *std.Build.Module,
+    icons: ?*std.Build.Module,
+};
+
+pub const StaticModuleOptions = struct {
+    /// Defaults to `b.path("plugin.zig")`, as in `create`.
+    root_source_file: ?std.Build.LazyPath = null,
+    link_libc: bool = true,
+};
+
+/// The plugin's static module for one executable (`framework`, a `Framework` by field): its
+/// `plugin.zig` with its manifest, importing that executable's `dvui`, `core`, `fizzy_sdk`,
+/// `icons`, and `core`'s `tape` and `replay`. The plugin's own dependencies are the caller's to
+/// add, built for `framework.target` and against `framework.dvui` where they draw. One that
+/// `core` imports as well (zf) is `core`'s module, `framework.core.import_table.get("zf")`: a
+/// file belongs to one module of a compilation.
+///
+///     pub fn staticModule(b: *std.Build, framework: anytype) *std.Build.Module {
+///         const m = fizzy.plugin.staticModule(b, framework, .{});
+///         m.addImport("my_lib", myLib(b, framework.target, framework.optimize, framework.dvui));
+///         return m;
+///     }
+///
+/// The application calls it with the plugin's builder (`dep.builder`) for each kind of
+/// executable it builds, and lists the result in `fizzy.buildApp`.
+// anytype: the Framework of fizzy's build, a build-time duck type
+pub fn staticModule(b: *std.Build, framework: anytype, opts: StaticModuleOptions) *std.Build.Module {
+    const wasm = framework.target.result.cpu.arch == .wasm32;
+    const m = readManifest(b);
+    const mod = b.createModule(.{
+        .target = framework.target,
+        .optimize = framework.optimize,
+        .root_source_file = opts.root_source_file orelse b.path("plugin.zig"),
+        .link_libc = opts.link_libc and !wasm,
+        .single_threaded = if (wasm) true else null,
+    });
+    mod.addAnonymousImport("plugin_zon", .{ .root_source_file = b.path("plugin.zig.zon") });
+    mod.addOptions(plugin_options_import, pluginOptions(b, m.id, m.name, m.version, m.min_sdk_version, m.raw));
+    mod.addImport("dvui", framework.dvui);
+    mod.addImport("core", framework.core);
+    mod.addImport("fizzy_sdk", framework.sdk);
+    if (framework.icons) |icons| mod.addImport("icons", icons);
+    for ([_][]const u8{ "tape", "replay" }) |name| {
+        if (framework.core.import_table.get(name)) |dep| mod.addImport(name, dep);
+    }
+    return mod;
+}
+
 pub fn exportModules(
     b: *std.Build,
     target: std.Build.ResolvedTarget,

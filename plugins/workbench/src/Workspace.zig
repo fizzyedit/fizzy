@@ -155,6 +155,10 @@ pub fn draw(self: *Workspace) !dvui.App.Result {
     self.active = if (selected) |s| documentOf(s) else null;
     const pane_r = pane_box.rectScale().r;
     self.pane_rect_physical = pane_r;
+    // The person's pane, when it has the room for an open beside to split it: a tape that drops a
+    // tab on the edge asks for this first, or skips the drop (`core.placement`).
+    if (core.anchor.wanted() and runtime.workbench().open_workspace_grouping == self.grouping and
+        runtime.workbench().besideEdge() != null) core.anchor.mark(pane_box, "workbench.beside-room", .{});
 
     if (tabs.len > 0) {
         self.dropSnapshot();
@@ -565,7 +569,7 @@ pub fn addTab(self: *Workspace, id: []const u8, focus: bool) void {
     self.expecting = false;
     var buf: [32]u8 = undefined;
     const arena = runtime.host().arena();
-    var ids: std.ArrayListUnmanaged([]const u8) = .empty;
+    var ids: std.ArrayList([]const u8) = .empty;
     if (runtime.host().assignedSurfaces(name(&buf, self.grouping))) |existing| {
         for (existing) |e| {
             if (std.mem.eql(u8, e, id)) {
@@ -584,7 +588,7 @@ pub fn removeTab(self: *Workspace, id: []const u8) void {
     var buf: [32]u8 = undefined;
     const existing = runtime.host().assignedSurfaces(name(&buf, self.grouping)) orelse return;
     const arena = runtime.host().arena();
-    var ids: std.ArrayListUnmanaged([]const u8) = .empty;
+    var ids: std.ArrayList([]const u8) = .empty;
     var found = false;
     for (existing) |e| {
         if (std.mem.eql(u8, e, id)) {
@@ -601,7 +605,7 @@ pub fn removeTabsForPath(self: *Workspace, path: []const u8) bool {
     var buf: [32]u8 = undefined;
     const existing = runtime.host().assignedSurfaces(name(&buf, self.grouping)) orelse return false;
     const arena = runtime.host().arena();
-    var ids: std.ArrayListUnmanaged([]const u8) = .empty;
+    var ids: std.ArrayList([]const u8) = .empty;
     var found = false;
     for (existing) |e| {
         if (sdk.document.pathOfSurfaceId(e)) |p| if (std.mem.eql(u8, p, path)) {
@@ -708,7 +712,7 @@ pub fn insertTab(self: *Workspace, id: []const u8, index: usize) void {
     self.expecting = false;
     var buf: [32]u8 = undefined;
     const arena = runtime.host().arena();
-    var ids: std.ArrayListUnmanaged([]const u8) = .empty;
+    var ids: std.ArrayList([]const u8) = .empty;
     var at = index;
     if (runtime.host().assignedSurfaces(name(&buf, self.grouping))) |existing| {
         for (existing, 0..) |e, k| {
@@ -745,7 +749,7 @@ pub fn paneDrop(ctx: ?*anyopaque, drop: sdk.RegionSpec.Drop) bool {
         .center => grouping,
         .edge => |side| blk: {
             const g = wb.newGroupingID();
-            wb.paneBeside(g, grouping, paneSide(side)) catch return false;
+            wb.paneBeside(g, grouping, paneSide(side), false) catch return false;
             break :blk g;
         },
     };
@@ -1174,7 +1178,7 @@ fn drawTabMenu(tabs: []const *const sdk.Surface, index: usize, doc: sdk.DocHandl
     menu.close();
 
     // Collected before any close runs: closing edits the list these indices point into.
-    var ids: std.ArrayListUnmanaged(u64) = .empty;
+    var ids: std.ArrayList(u64) = .empty;
     const arena = host.arena();
     for (tabs, 0..) |surface, i| {
         const other = documentOf(surface) orelse continue;
