@@ -21,7 +21,7 @@ pub fn looksBinary(bytes: []const u8) bool {
     while (i < sample.len) {
         const n = std.unicode.utf8ByteSequenceLength(sample[i]) catch return true;
         if (i + n > sample.len) break;
-        _ = std.unicode.utf8Decode(sample[i..][0..n]) catch return true;
+        if (!std.unicode.utf8ValidateSlice(sample[i..][0..n])) return true;
         i += n;
     }
     return false;
@@ -61,10 +61,10 @@ pub fn appendLossy(list: *std.ArrayList(u8), gpa: std.mem.Allocator, bytes: []co
             try list.appendSlice(gpa, replacement);
             break;
         }
-        if (std.unicode.utf8Decode(bytes[i..][0..n])) |_| {
+        if (std.unicode.utf8ValidateSlice(bytes[i..][0..n])) {
             try list.appendSlice(gpa, bytes[i .. i + n]);
             i += n;
-        } else |_| {
+        } else {
             try list.appendSlice(gpa, replacement);
             i += 1;
         }
@@ -79,4 +79,9 @@ test appendLossy {
     list.clearRetainingCapacity();
     try appendLossy(&list, std.testing.allocator, "a\x00b\xffc");
     try std.testing.expectEqualStrings("a\u{FFFD}b\u{FFFD}c", list.items);
+    list.clearRetainingCapacity();
+    // Well-formed multi-byte sequences pass through; a bad continuation byte or a surrogate
+    // is replaced a byte at a time.
+    try appendLossy(&list, std.testing.allocator, "\xc3\xa9\xe2\x28\xa1\xed\xa0\x80");
+    try std.testing.expectEqualStrings("\u{e9}\u{FFFD}(\u{FFFD}\u{FFFD}\u{FFFD}\u{FFFD}", list.items);
 }
