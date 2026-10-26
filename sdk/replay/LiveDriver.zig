@@ -2,12 +2,12 @@
 //! landed. The other way to play a tape besides a demo, and a driver of its own rather than a
 //! mode of the `Player` (`plans/AGENTS_PLAN.md`, "Driving a live tape"):
 //!
-//! |                       | a demo (`Player`)                   | a live tape (this)                |
-//! |-----------------------|-------------------------------------|-----------------------------------|
-//! | starts from           | a keyframe; the session set aside   | the app as it is (`Check.live`)   |
-//! | pacing                | the tape's authored times           | each op once the app has settled  |
-//! | a person steps in     | pause, and replay on resume         | stop, and say before which op     |
-//! | going back            | seek: snapshots, keyframes          | none — undo, through commands     |
+//! |  | a demo (`Player`) | a live tape (this) |
+//! | --- | --- | --- |
+//! | starts from | a keyframe; the session set aside | the app as it is (`Check.live`) |
+//! | pacing | the tape's authored times | each op once the app has settled |
+//! | a person steps in | pause, and replay on resume | stop, and say before which op |
+//! | going back | seek: snapshots, keyframes | none — undo, through commands |
 //!
 //! Consumers: a plugin's tests, a macro, a scripted tutorial, anything driving fizzy the way a
 //! person does. Plugins reach it through the `automation` service (`Service`).
@@ -18,13 +18,13 @@
 //! live tape while a demo is loaded, and fizzy's `Demo` a demo while a live tape plays).
 //!
 //! **Pacing.** Authored times are ignored: each frame the driver asks the sequencer for the next
-//! moment anything happens (`Sequencer.nextAt`) and applies it, and goes on only while the stage
-//! is idle — nothing it was asked to load still loading. Except a drag: a glide with a button
-//! held plays at its authored pace, a frame at a time, as a hand moves (`drag_step_ms`). The sequencer still yields after
-//! everything the app has to draw before the next op can land (a press, a key, the end of a
-//! glide), so a click on a menu the last click opened finds it open. A tape's own waits hold as
-//! they do in a demo, and one that gives up stops the tape: a live tape that has lost its place
-//! is better stopped and reported than carried on blind.
+//! moment anything happens (`Sequencer.nextAt`) and applies it, and goes on only while the stage is
+//! idle — nothing it was asked to load still loading. Except a drag: a glide with a button held
+//! plays at its authored pace, a frame at a time, as a hand moves (`drag_step_ms`). The sequencer
+//! still yields after everything the app has to draw before the next op can land (a press, a key,
+//! the end of a glide), so a click on a menu the last click opened finds it open. A tape's own
+//! waits hold as they do in a demo, and one that gives up stops the tape: a live tape that has lost
+//! its place is better stopped and reported than carried on blind.
 //!
 //! **Interruption.** A real click, tap, scroll, key or typed text stops it, and the person's
 //! input goes on to do what they meant. Real pointer motion is held off while it plays, as a

@@ -12,8 +12,8 @@
 //! and every window at once, laid out as they lie on the desktop round the main one, by `all`.
 //!
 //! Asked for like a `Snapshot` (`request`, then `get` once taken): the next frame the app draws
-//! is read back at its end (`endFrame`) and kept, as the raw premultiplied pixels it drew, until the
-//! next is taken. Nothing is encoded here: the frame pays for one read back and one copy, and
+//! is read back at its end (`endFrame`) and kept, as the raw premultiplied pixels it drew, until
+//! the next is taken. Nothing is encoded here: the frame pays for one read back and one copy, and
 //! whoever wants an image file (the agent's bridge, in its own process) scales and encodes it.
 const Capture = @This();
 
@@ -148,7 +148,12 @@ const max_side: f32 = 8192;
 /// Every window, each where it lies round the main window, a later one over an earlier.
 fn everyWindow(arena: std.mem.Allocator, sources: []const Source) !Pixels {
     var span: dvui.Rect.Physical = .{ .w = @floatFromInt(sources[0].w), .h = @floatFromInt(sources[0].h) };
-    for (sources[1..]) |s| span = span.unionWith(.{ .x = s.at.x, .y = s.at.y, .w = @floatFromInt(s.w), .h = @floatFromInt(s.h) });
+    for (sources[1..]) |s| span = span.unionWith(.{
+        .x = s.at.x,
+        .y = s.at.y,
+        .w = @floatFromInt(s.w),
+        .h = @floatFromInt(s.h),
+    });
     const w: u32 = @intFromFloat(@min(@round(span.w), max_side));
     const h: u32 = @intFromFloat(@min(@round(span.h), max_side));
     const out = try arena.alloc(u8, @as(usize, w) * h * 4);
