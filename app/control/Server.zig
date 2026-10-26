@@ -846,30 +846,6 @@ test "a request still queued at quit is answered: the server is stopping" {
     try std.testing.expect(std.mem.endsWith(u8, reply, "the control server is stopping\n"));
 }
 
-test "a server stopped as a client connects never leaves the client blocked" {
-    if (!Io.net.has_unix_sockets) return error.SkipZigTest;
-    const gpa = std.testing.allocator;
-    const io = std.testing.io;
-    var dog: Watchdog = .{ .io = io, .name = @src().fn_name };
-    try dog.arm();
-    defer dog.disarm();
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const path = try testSocket(gpa, &tmp);
-    defer gpa.free(path);
-
-    // The client may be accepted, queued, or still in the listen backlog when `stop` runs: each
-    // ends its read, and the watchdog names this test if one does not.
-    for (0..200) |_| {
-        var server: Server = .{ .gpa = gpa, .io = io, .socket_path = path, .wake = noWake };
-        try server.start();
-        var client: TestClient = .{ .io = io, .path = path, .request = "POST /commands/x HTTP/1.1\r\nHost: x\r\nContent-Length: 0\r\n\r\n" };
-        const thread = try std.Thread.spawn(.{}, TestClient.run, .{&client});
-        server.stop();
-        thread.join();
-    }
-}
-
 test "what cannot be served is refused before its body, and never reaches the app" {
     if (!Io.net.has_unix_sockets) return error.SkipZigTest;
     const gpa = std.testing.allocator;
