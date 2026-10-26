@@ -673,7 +673,7 @@ fn tourOnARearrangedLayout(app: *BundledApp) !void {
 }
 
 /// The one float the person made is still theirs, where they put it.
-fn expectMovedPanelStayed(state: anytype, at: dvui.Rect) !void {
+fn expectMovedPanelStayed(state: *@import("app").layout.State, at: dvui.Rect) !void {
     try std.testing.expectEqual(@as(usize, 1), state.floats.items.items.len);
     const f = state.floats.items.items[state.floats.find("Float 2") orelse return error.TestUnexpectedResult];
     try std.testing.expect(!f.closing);
