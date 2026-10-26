@@ -350,7 +350,6 @@ one.
         .root = "demo://hello",
         .files = .{ .{ .path = "hello.md", .text = "# Hello\n" } },
         .open = .{"hello.md"},       // the last one is active
-        .layout = .keep,             // fizzy leaves the window as it is whatever this says
         .settings = .{ .{ .owner = "markdown", .key = "default_md_view", .value = ".split" } },
     } },
     .chapters = .{ .{ .at = 0, .title = "Hello" } },
