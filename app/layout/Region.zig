@@ -931,7 +931,7 @@ fn cornerButton(self: *Layout, opts: InitOptions, keywords: []const []const u8, 
                 ViewDrag.apply(self, opts.name, me.p);
                 dragged = true;
             }
-            self.state.view_drag.discard();
+            self.state.view_drag.discard(self.gpa);
             dvui.dataRemove(null, box.data().id, "_chooser_press");
             dvui.captureMouse(null, e.num);
             dvui.dragEnd();

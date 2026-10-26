@@ -843,7 +843,7 @@ pub fn loadUserPlugins(editor: *Editor, config_folder: []const u8) void {
                 dvui.log.info("user plugin '{s}': already loaded as a built-in; skipped", .{plugin_id});
             } else {
                 dvui.log.err("user plugin '{s}': id already registered by a built-in; skipped", .{plugin_id});
-                const probe = PluginLoader.probeVersionInfo(path);
+                const probe = PluginLoader.probeVersionInfo(editor.app.gpa, path);
                 editor.app.recordPluginFailure(plugin_id, "id already registered by a built-in plugin", null, if (probe) |info| info.plugin_version else null, .of(path));
             }
             editor.app.gpa.free(path);
@@ -7302,7 +7302,7 @@ pub fn deinit(editor: *Editor) !void {
     // Owned outright rather than cached by dvui, so it has to be released explicitly.
     editor.app.layout.center_transition.discard();
     editor.app.layout.center_prev_id = null;
-    editor.app.layout.view_drag.discard();
+    editor.app.layout.view_drag.discard(editor.app.gpa);
     editor.app.layout.deinitSwaps(editor.app.gpa);
     editor.app.layout.regions.deinit(editor.app.gpa);
     editor.preview_docs.deinit(editor.app.gpa);

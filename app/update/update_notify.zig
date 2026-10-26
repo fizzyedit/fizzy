@@ -94,16 +94,21 @@ fn startCheck() void {
         return;
     }
 
-    const thread = std.Thread.spawn(.{}, worker, .{io}) catch {
+    // `setAllocator` runs before the launch check; without it there is nothing to run on.
+    const gpa = install_gpa orelse {
+        phase.store(@backingInt(Phase.done_no), .release);
+        return;
+    };
+    const thread = std.Thread.spawn(.{}, worker, .{ io, gpa }) catch {
         phase.store(@backingInt(Phase.done_no), .release);
         return;
     };
     thread.detach();
 }
 
-fn worker(io: std.Io) void {
+fn worker(io: std.Io, gpa: std.mem.Allocator) void {
     var ver_buf: [128]u8 = undefined;
-    const summary = auto_update.checkRemoteVersionSummary(io, std.heap.page_allocator, &ver_buf) catch {
+    const summary = auto_update.checkRemoteVersionSummary(io, gpa, &ver_buf) catch {
         phase.store(@backingInt(Phase.done_no), .release);
         return;
     };

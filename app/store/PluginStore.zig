@@ -424,7 +424,7 @@ fn probeOnDiskInfo() void {
             }
         }
         if (!have_version) {
-            if (PluginLoader.probeVersionInfo(path)) |info| {
+            if (PluginLoader.probeVersionInfo(a, path)) |info| {
                 rememberVersion(id, info.plugin_version);
             }
         }
