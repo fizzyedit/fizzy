@@ -241,7 +241,15 @@ pub fn loadRegions(gpa: std.mem.Allocator, dir: []const u8, shape: []const u8) [
         // A float whose home fails to copy floats still; closed, its view goes to its keywords.
         var floating = r.floating;
         if (floating) |*fl| fl.home = gpa.dupe(u8, fl.home) catch "";
-        out[n] = .{ .name = name, .extent = r.extent, .surfaces = surfaces, .parent = parent, .from = from, .order = order, .floating = floating };
+        out[n] = .{
+            .name = name,
+            .extent = r.extent,
+            .surfaces = surfaces,
+            .parent = parent,
+            .from = from,
+            .order = order,
+            .floating = floating,
+        };
         n += 1;
     }
     return out[0..n];
