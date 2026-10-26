@@ -17,6 +17,8 @@
 #                                        # uses checkouts of your own (example-app/ and
 #                                        # example-plugin/ in that directory), as they are on
 #                                        # disk, copied so they are left untouched
+#   EXAMPLES_BUILDS="" scripts/check-examples.sh
+#                                        # builds none of their apps: the build API fixture alone
 #
 # CI: the examples job of .github/workflows/ci.yml.
 set -euo pipefail
@@ -104,7 +106,7 @@ build_one() {
 }
 export -f build_args build_one
 
-builds="plugin minimal studio endless studio-zon replay dvui dvui-sdl3"
+builds="${EXAMPLES_BUILDS-plugin minimal studio endless studio-zon replay dvui dvui-sdl3}"
 
 # Each build is one compile of an app that mostly keeps one core busy, so they run side by side,
 # EXAMPLES_JOBS at once (3: CI's runner has 4 cores and 16 GB). First each configuration is
@@ -116,5 +118,59 @@ for b in $builds; do
   for a in "${args[@]:1}"; do [[ $a == -* ]] && opts+=("$a"); done
   (cd "$work/${args[0]}" && zig build -l ${opts[@]+"${opts[@]}"} > /dev/null)
 done
-echo "== example-plugin and example-app, against this tree"
-printf '%s\n' $builds | xargs -P "${EXAMPLES_JOBS:-3}" -n 1 bash -c 'build_one "$1"' _
+if [[ -n $builds ]]; then
+  echo "== example-plugin and example-app, against this tree"
+  printf '%s\n' $builds | xargs -P "${EXAMPLES_JOBS:-3}" -n 1 bash -c 'build_one "$1"' _
+fi
+
+# The build API an app and a plugin package call (`fizzy.framework`, `staticModule`, `addApp`,
+# `addWebSteps`, `addPackageSteps`; design/build-api.md), on a fixture app of its own: two plugin
+# packages, one for both kinds of executable and one `.native` only, which fails to compile if it
+# reaches the wasm.
+fixtures="scripts/fixtures/build-api"
+for id in fixture_both fixture_native; do
+  mkdir -p "$work/$id"
+  cp "$fixtures"/plugin/{build.zig,build.zig.zon,plugin.zig,lib.zig} "$work/$id/"
+  sed "s/@ID@/$id/g" "$fixtures/plugin/plugin.zig.zon.tmpl" > "$work/$id/plugin.zig.zon"
+  (cd "$work/$id" && zig fetch --save=fizzy "$sdk_tarball" >/dev/null)
+done
+mkdir -p "$work/fixture-app"
+cp "$fixtures"/app/{build.zig,build.zig.zon} "$work/fixture-app/"
+(cd "$work/fixture-app" && zig fetch --save=fizzy "$work/fizzy.tar.gz" >/dev/null \
+  && zig build -l > /dev/null)
+
+echo "== build API fixture app"
+fixture_fail=0
+# step <label> <ok|fail|any> <expected text in the output> <zig build arguments…>
+step() {
+  local label=$1 want=$2 text=$3 got=0
+  shift 3
+  (cd "$work/fixture-app" && zig build "$@") > "$work/log-fixture.txt" 2>&1 || got=$?
+  if { [[ $want == ok && $got -eq 0 ]] || [[ $want == fail && $got -ne 0 ]] || [[ $want == any ]]; } \
+    && { [[ -z $text ]] || grep -q -- "$text" "$work/log-fixture.txt"; }; then
+    echo "ok    $label"
+  else
+    echo "FAIL  $label (wanted $want, exit $got, output containing '$text')"
+    tail -n 30 "$work/log-fixture.txt" | cut -c1-300 | sed "s/^/      /"
+    fixture_fail=1
+  fi
+}
+step "native executable, both plugins linked" ok "" --prefix "$work/out/fixture"
+# The step list holds what the API adds: `web`, and `package`, `desktop` and `packageall`.
+step "web, package and packageall steps added" ok "packageall" -l
+for name in web package desktop; do
+  grep -q "^  $name " "$work/log-fixture.txt" || { echo "FAIL  step '$name' missing"; fixture_fail=1; }
+done
+step "web build leaves the native-only plugin out" ok "" web --prefix "$work/out/fixture-web"
+[[ -f "$work/out/fixture-web/web/index.html" ]] \
+  || { echo "FAIL  addWebSteps installed no web/index.html"; fixture_fail=1; }
+# `package` runs vpk, which needs dotnet; `--verbose` prints its command line, `vpk-args` on it.
+# Whether vpk then packs the fixture is not the question, so the status is not read.
+if command -v dotnet > /dev/null; then
+  step "vpk-args reach vpk pack" any "--fixture-vpk-arg" package --verbose --prefix "$work/out/fixture-pkg"
+else
+  echo "skip  vpk-args reach vpk pack (no dotnet)"
+fi
+step "a plugin listed twice is an error" fail "listed twice" -Dfixture-fail=twice
+step "an app's own web step is an error" fail "already has a \`web\` step" -Dfixture-fail=web-taken
+[[ $fixture_fail -eq 0 ]]
