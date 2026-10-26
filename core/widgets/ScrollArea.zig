@@ -27,6 +27,8 @@ const ScrollArea = @This();
 area: *dvui.ScrollAreaWidget,
 si: *dvui.ScrollInfo,
 touch: *Touch,
+/// dvui's `snap_to_pixels` as the area found it, put back by `deinit`.
+snap: bool,
 
 /// Per-area state that outlives a frame: a fling per axis and whether a finger is dragging.
 const Touch = struct {
@@ -58,7 +60,13 @@ pub fn init(src: std.builtin.SourceLocation, init_opts: dvui.ScrollAreaWidget.In
         .area = area,
         .si = area.si,
         .touch = dvui.dataGetPtrDefault(null, c.data().id, "_touch", Touch, .{}),
+        .snap = dvui.snapToPixels(),
     };
+
+    // A coast's last stretch moves a fraction of a pixel a frame: drawn at whole pixels it
+    // steps instead of gliding. Content is drawn at the fractional offset until the coast
+    // ends, and `deinit` snaps it again so text is crisp at rest.
+    if (self.touch.x.coasting or self.touch.y.coasting) _ = dvui.snapToPixelsSet(false);
 
     // A press while coasting only stops the coast: eat it so it doesn't also tap what is under it.
     for (dvui.events()) |*e| {
@@ -125,6 +133,7 @@ pub fn deinit(self: *ScrollArea) void {
     // `processMotionScroll`; clear it so dvui's coast never runs beside ours.
     self.si.velocity = .{};
     self.area.deinit();
+    _ = dvui.snapToPixelsSet(self.snap);
 }
 
 /// Scroll by one touch motion, as dvui's `processMotionScroll` does but without setting
@@ -200,6 +209,10 @@ fn scrollBy(self: *ScrollArea, by: dvui.Point) void {
 
 var t_viewport_y: f32 = 0;
 var t_use_dvui: bool = false;
+/// Where a child of the area is drawn this frame (physical y, as the renderer would place it),
+/// and whether the renderer snaps there.
+var t_drawn_y: f32 = 0;
+var t_snapping: bool = false;
 
 fn testFrame() !dvui.App.Result {
     var root = dvui.box(@src(), .{}, .{ .expand = .both });
@@ -215,7 +228,10 @@ fn testFrame() !dvui.App.Result {
         const si = scroll.si;
         defer t_viewport_y = si.viewport.y;
         defer scroll.deinit();
-        _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 100, .h = 20000 } });
+        const child = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 100, .h = 20000 } });
+        t_snapping = dvui.snapToPixels();
+        const y = child.rectScale().r.y;
+        t_drawn_y = if (t_snapping) @round(y) else y;
     }
     return .ok;
 }
@@ -279,6 +295,32 @@ test "the coast is a function of time, not of how the frames cut it" {
     var jittery: [15]f32 = undefined;
     try coastTrace(&.{ 25, 8 }, &jittery);
     for (steady, jittery) |a, b| try std.testing.expectApproxEqAbs(a, b, 0.01);
+}
+
+test "a slow coast draws at a new place every frame, then snaps at rest" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    t_use_dvui = false;
+    _ = try swipe();
+    // 120 fps until the coast is slow: under 60 points a second is under half a point a frame.
+    var prev: f32 = t_drawn_y;
+    var slow_frames: usize = 0;
+    var last = t_viewport_y;
+    for (0..600) |_| {
+        try frameAfter(8);
+        const speed = (t_viewport_y - last) / 0.008;
+        last = t_viewport_y;
+        if (t_snapping) break;
+        if (speed < 60 and speed > 25) {
+            slow_frames += 1;
+            try std.testing.expect(t_drawn_y != prev);
+        }
+        prev = t_drawn_y;
+    }
+    try std.testing.expect(slow_frames > 20);
+    // At rest the area snaps again.
+    for (0..30) |_| try frameAfter(8);
+    try std.testing.expect(t_snapping);
 }
 
 test "a fling coasts at the speed of the last 100 ms, not of the last move" {
