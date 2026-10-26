@@ -666,6 +666,7 @@ fn drawPluginUpdateMode() void {
 /// A dropdown over every value of enum `E`: `choices` are the menu's labels in the enum's
 /// declaration order, and the closed button shows the current one unless `label_text` says
 /// otherwise. A pick marks the settings dirty.
+// anytype: a pointer to any settings enum; `E` is read off its type
 fn drawEnumDropdown(value: anytype, label_text: ?[]const u8, comptime choices: []const []const u8) void {
     const E = @typeInfo(@TypeOf(value)).pointer.child;
     comptime std.debug.assert(choices.len == std.enums.values(E).len);
