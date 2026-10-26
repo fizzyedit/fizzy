@@ -150,14 +150,17 @@ pub fn releaseWindowed(self: *Fling, t: Tuning, window_s: f32) bool {
     return self.coasting;
 }
 
-/// Advance the coast one frame and return the position delta to apply, or null when
+/// Advance the coast by the last frame's duration and return the position delta to apply, or null when
 /// not coasting. On the frame the coast finishes it still returns the final delta
 /// but leaves `coasting` false, so check `coasting` afterward to detect the stop.
 pub fn step(self: *Fling, t: Tuning) ?f32 {
     if (!self.coasting) return null;
     const dt = dvui.secondsSinceLastFrame();
-    const delta = self.vel * dt;
-    self.vel *= @exp(-t.decay * dt);
+    // The integral of the decaying speed over this frame, not speed times the frame: the
+    // position then depends on the elapsed time alone, however it was cut into frames.
+    const keep = @exp(-t.decay * dt);
+    const delta = self.vel * (1.0 - keep) / t.decay;
+    self.vel *= keep;
     if (@abs(self.vel) < t.stop) self.coasting = false;
     return delta;
 }

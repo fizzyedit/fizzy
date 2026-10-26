@@ -211,9 +211,11 @@ fn testFrame() !dvui.App.Result {
         t_viewport_y = scroll.si.viewport.y;
     } else {
         var scroll = ScrollArea.init(@src(), .{ .horizontal = .none, .vertical_bar = .hide }, .{ .expand = .both });
+        // After the area's `deinit`, which is where the coast moves it: the frame's final place.
+        const si = scroll.si;
+        defer t_viewport_y = si.viewport.y;
         defer scroll.deinit();
         _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 100, .h = 20000 } });
-        t_viewport_y = scroll.si.viewport.y;
     }
     return .ok;
 }
@@ -253,6 +255,30 @@ fn flick() !f32 {
     const at_release = try swipe();
     for (0..60) |_| try frameAfter(16);
     return t_viewport_y - at_release;
+}
+
+/// How far the viewport has coasted from the release at each of 15 steps of 33 ms, the clock
+/// cut into frames by `gaps_ms` (summing to 33), so different cuts meet at equal timestamps.
+fn coastTrace(gaps_ms: []const u64, out: *[15]f32) !void {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    t_use_dvui = false;
+    const at_release = try swipe();
+    // A frame's step spans the gap before it, so end on the last gap and the frames after
+    // it span `gaps_ms` rotated, summing to 33 each step.
+    try frameAfter(gaps_ms[gaps_ms.len - 1]);
+    for (out) |*slot| {
+        for (gaps_ms) |g| try frameAfter(g);
+        slot.* = t_viewport_y - at_release;
+    }
+}
+
+test "the coast is a function of time, not of how the frames cut it" {
+    var steady: [15]f32 = undefined;
+    try coastTrace(&.{33}, &steady);
+    var jittery: [15]f32 = undefined;
+    try coastTrace(&.{ 25, 8 }, &jittery);
+    for (steady, jittery) |a, b| try std.testing.expectApproxEqAbs(a, b, 0.01);
 }
 
 test "a fling coasts at the speed of the last 100 ms, not of the last move" {
