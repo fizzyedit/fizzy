@@ -677,8 +677,8 @@ fn fillBackdrop(rect: dvui.Rect.Physical, backdrop: ?Backdrop) void {
     base.a = 255;
     // Both rounded like the region: beyond its corners the snapshot stays transparent, so the
     // live frame shows there as it does on screen, not a square of window colour.
-    rect.fill(b.corners, .{ .color = .{ .color = base } });
-    rect.fill(b.corners, .{ .color = .{ .color = b.fill } });
+    rect.fill(b.corners, .{ .color = .{ .color = base }, .fade = 1 });
+    rect.fill(b.corners, .{ .color = .{ .color = b.fill }, .fade = 1 });
 }
 
 /// Per-frame handle from `transition`. `defer` its `deinit` so the snapshot is blitted after

@@ -28,6 +28,7 @@ pub const resolveArgs = impl.resolveArgs;
 /// so the web layer has nothing to forward.
 pub const setSink = if (builtin.target.cpu.arch == .wasm32) noopSetSink else impl.setSink;
 
+// anytype: The web stub accepts the native sink contract without importing native socket code.
 fn noopSetSink(_: anytype) void {}
 
 /// The application's own identity: the bundle id the lock is named for, and the executable name

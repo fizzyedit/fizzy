@@ -76,9 +76,26 @@ all decided at comptime (`App.loads_plugins`). What is fizzy's own (bundle id, u
 `VERSION`, its plist and resource script) only fizzy's root `build.zig` passes (`Options.own`);
 an app sets its identity through fizzy's options (`app-name`, `app-bundle-id`, `app_version`,
 `repo-url`, `app-package-title`, `app-icon`, `app-icon-ico`, `app-icon-icns`, …), and
-`try fizzy.addPackageSteps(b, fizzy_dep)` gives its own build `package` and `packageall`. See
+`try fizzy.addPackageSteps(b, fizzy_dep)` gives its own build `package` and `packageall`, which
+ship the files of each directory in `package-dirs` beside the executable and pass `vpk-args` to
+`vpk pack`. See
 [`fizzyedit/example-app`](https://github.com/fizzyedit/example-app), which bundles
 `fizzyedit/example-plugin`.
+
+A plugin package with dependencies of its own builds its static module against the executables
+that link it: it exposes a function over `fizzy.plugin.staticModule(b, framework, .{})`, and the
+app lists what that returns for `fizzy.framework(fizzy_dep, .native)`. Such a module is linked as
+it is, its dependencies with the targets, modules and C sources its build gave them. An unwired
+`"plugin"` module is copied for each executable instead (`build/plugins.zig`'s `rehome`), and
+gets each of what the SDK exports a plugin (`dvui`, `core`, `fizzy_sdk`, `icons`, `tape`,
+`replay`) that its build did not wire, the executable's own.
+`fizzy.addApp` is `buildApp` returning the executables, for steps of the app's own. An entry's
+`targets` names the kinds of executable that link it, each with the module built against that
+kind's framework (`.{ .target = .web, .module = ... }`); one the browser cannot run names only
+`.native`.
+It returns the web build too, one directory (`web`; the page and the rest apart, `web_page` and
+`web_files`), and `fizzy.addWebSteps(b, fizzy_dep)` gives an app built with `buildApp` a `web`
+step that installs it.
 
 **The example repos move with fizzy.** `fizzyedit/example-app` (fizzy as a library, in every
 shape) and `fizzyedit/example-plugin` (the plugin template) live outside this repo, and CI builds
@@ -199,8 +216,11 @@ CI builds plugins for all 6 host targets by cross-compiling with `-Dtarget=` (se
 
 ## When you need more than this file
 
-New and changed code and comments follow [`docs/STYLE.md`](docs/STYLE.md): Zig names, file layout,
-memory, errors, `anytype`, invariants, tests, comments.
+New and changed code and comments follow [`docs/STYLE.md`](docs/STYLE.md) (Zig names, file layout,
+memory, errors, `anytype`, invariants, tests, comments) and [`docs/ZIG.md`](docs/ZIG.md) (writing Zig
+on purpose: ownership, errors, cost per frame, tests that prove the fix).
+
+Reviews and PR self-checks answer the four questions in [`docs/REVIEW.md`](docs/REVIEW.md).
 
 **Plans live in a private repo, [`fizzyedit/plans`](https://github.com/fizzyedit/plans)**, open to
 the `fizzyedit` organization. A path written `plans/X.md` — here, in the code's comments, in

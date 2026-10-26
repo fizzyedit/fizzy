@@ -26,7 +26,7 @@ mounted: bool = false,
 saved_once: bool = false,
 /// Each file's content hash when the archive was last read or written, by path inside it: what
 /// "changed" means file by file. `Mem` keeps one counter for the whole tree.
-clean_hashes: std.StringArrayHashMapUnmanaged(u64) = .empty,
+clean_hashes: std.array_hash_map.String(u64) = .empty,
 /// The tab's list, rebuilt only when `mem.generation` moves.
 listing: std.ArrayList(Entry) = .empty,
 listing_generation: u64 = std.math.maxInt(u64),

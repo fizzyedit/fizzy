@@ -210,7 +210,7 @@ pub fn composeMergedText(
 
     var order: std.ArrayList([]const u8) = .empty;
     defer order.deinit(gpa);
-    var by_id: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var by_id: std.array_hash_map.String([]const u8) = .empty;
     defer by_id.deinit(gpa);
 
     for (existing) |e| {

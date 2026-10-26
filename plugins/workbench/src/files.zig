@@ -257,7 +257,7 @@ fn rootLabel(path: []const u8) []const u8 {
     // period instead of the folder's name.
     const base = std.fs.path.basename(path);
     if (base.len > 0 and !std.mem.eql(u8, base, ".") and !std.mem.eql(u8, base, "..")) return base;
-    const resolved = std.fs.path.resolve(dvui.currentWindow().arena(), &.{path}) catch return base;
+    const resolved = std.fs.path.resolveAlloc(dvui.currentWindow().arena(), &.{path}) catch return base;
     const resolved_base = std.fs.path.basename(resolved);
     return if (resolved_base.len > 0) resolved_base else base;
 }
@@ -328,7 +328,7 @@ fn rowMenu(
                     side_grouping = if (runtime.host().openDocCount() == 0)
                         runtime.workbench().currentGroupingID()
                     else
-                        runtime.workbench().newGroupingID();
+                        runtime.workbench().besideGrouping();
                     have_grouping = true;
                 }
                 _ = runtime.host().openFile(.{ .path = p, .grouping = side_grouping }) catch {
@@ -420,14 +420,23 @@ fn rowMenu(
     }, true);
 }
 
-/// The row an expanded folder shows while its listing is on the way (a mount: see
-/// `FileTable.listingPending`). Dim, where the first child will be.
-fn drawLoadingRow(id_extra: usize) void {
-    dvui.labelNoFmt(@src(), "Loading\u{2026}", .{}, .{
+/// The row an expanded folder shows while its listing is on the way (a mount, or a folder too big
+/// for the disk to answer in a moment: see `FileTable.listingPending`). Dim, where the first child
+/// will be; `read` is how many entries the disk has given so far, when it says.
+fn drawLoadingRow(id_extra: usize, read: ?usize) void {
+    const opts: dvui.Options = .{
         .id_extra = id_extra,
         .padding = .{ .x = 6, .y = 2, .w = 4, .h = 2 },
         .color_text = .{ .color = dvui.themeGet().color(.window, .text).opacity(0.45) },
-    });
+    };
+    if (read) |count| {
+        dvui.label(@src(), "Loading\u{2026} {d} entries", .{count}, opts);
+        // The count moves on the pool's thread, which wakes no frame: ask for the next one.
+        const timer_id = dvui.parentGet().extendId(@src(), id_extra);
+        if (dvui.timerDoneOrNone(timer_id)) dvui.timer(timer_id, 100_000);
+    } else {
+        dvui.labelNoFmt(@src(), "Loading\u{2026}", .{}, opts);
+    }
 }
 
 fn pointerReleaseInRectWithoutSelectionModifier(r: dvui.Rect.Physical) bool {
@@ -694,7 +703,7 @@ pub fn recurseFiles(root_directory: []const u8, root_label: []const u8, outer_tr
                 break :blk t.listDir(directory) orelse {
                     // A mount answers later: say so in the folder rather than leave it open and
                     // empty, which reads as "nothing here" until everything appears at once.
-                    if (t.listingPending(directory)) drawLoadingRow(inner_id_extra.*);
+                    if (t.listingPending(directory)) drawLoadingRow(inner_id_extra.*, t.listingProgress(directory));
                     return;
                 };
             } else null;
@@ -1161,7 +1170,6 @@ pub fn recurseFiles(root_directory: []const u8, root_label: []const u8, outer_tr
                             //     .alpha = 0.15 * t,
                             // },
                         })) {
-                            runtime.workbench().setBranchOpen(branch_id, true);
                             try search(
                                 abs_path,
                                 tree,
@@ -1172,15 +1180,9 @@ pub fn recurseFiles(root_directory: []const u8, root_label: []const u8, outer_tr
                                 branch,
                                 if (root) |r| r.ranked else null,
                             );
-                        } else {
-                            if (runtime.workbench().open_branches.contains(branch_id)) {
-                                runtime.workbench().setBranchOpen(branch_id, false);
-                            }
                         }
-                        // Keep open_branches in sync so hover-expand and drop-into expand persist next frame
-                        if (branch.expanded) {
-                            runtime.workbench().setBranchOpen(branch_id, true);
-                        }
+                        // The host's open state is the only one; the tree reports what the user asked for.
+                        if (branch.requested) |open| runtime.workbench().setBranchOpen(branch_id, open);
                         color_id.* = color_id.* + 1;
                     },
                     else => {},
@@ -1191,7 +1193,7 @@ pub fn recurseFiles(root_directory: []const u8, root_label: []const u8, outer_tr
     };
 
     const ranked: ?[]const FileTable.Entry = if (outer_filter_text.len > 0)
-        (table() orelse return).search(root_directory, outer_filter_text, dvui.currentWindow().arena())
+        (table() orelse return).search(root_directory, outer_filter_text)
     else
         null;
     const root_entry: FileTable.Entry = .{ .name = root_label, .kind = .directory };
@@ -1697,24 +1699,71 @@ pub fn createFolderInteractive(parent: []const u8) void {
     };
 }
 
+const extensions = std.StaticStringMapWithEql(Extension, std.ascii.eqlIgnoreCase).initComptime(.{
+    .{ ".fiz", .fizzy },
+    .{ ".pixi", .fizzy },
+    .{ ".atlas", .atlas },
+    .{ ".png", .png },
+    .{ ".gif", .gif },
+    .{ ".jpg", .jpg },
+    .{ ".jpeg", .jpg },
+    .{ ".pdf", .pdf },
+    .{ ".psd", .psd },
+    .{ ".aseprite", .aseprite },
+    .{ ".pyxel", .pyxel },
+    .{ ".json", .json },
+    .{ ".zig", .zig },
+    .{ ".zip", .zip },
+    .{ ".7z", ._7z },
+    .{ ".tar", .tar },
+    .{ ".txt", .txt },
+});
+
 pub fn extension(file: []const u8) Extension {
     const ext = std.fs.path.extension(file);
-    if (std.mem.eql(u8, ext, "")) return .hidden;
-    if (std.ascii.eqlIgnoreCase(ext, ".fiz")) return .fizzy;
-    if (std.ascii.eqlIgnoreCase(ext, ".pixi")) return .fizzy;
-    if (std.ascii.eqlIgnoreCase(ext, ".atlas")) return .atlas;
-    if (std.ascii.eqlIgnoreCase(ext, ".png")) return .png;
-    if (std.ascii.eqlIgnoreCase(ext, ".gif")) return .gif;
-    if (std.ascii.eqlIgnoreCase(ext, ".jpg") or std.ascii.eqlIgnoreCase(ext, ".jpeg")) return .jpg;
-    if (std.ascii.eqlIgnoreCase(ext, ".pdf")) return .pdf;
-    if (std.ascii.eqlIgnoreCase(ext, ".psd")) return .psd;
-    if (std.ascii.eqlIgnoreCase(ext, ".aseprite")) return .aseprite;
-    if (std.ascii.eqlIgnoreCase(ext, ".pyxel")) return .pyxel;
-    if (std.ascii.eqlIgnoreCase(ext, ".json")) return .json;
-    if (std.ascii.eqlIgnoreCase(ext, ".zig")) return .zig;
-    if (std.ascii.eqlIgnoreCase(ext, ".zip")) return .zip;
-    if (std.ascii.eqlIgnoreCase(ext, ".7z")) return ._7z;
-    if (std.ascii.eqlIgnoreCase(ext, ".tar")) return .tar;
-    if (std.ascii.eqlIgnoreCase(ext, ".txt")) return .txt;
-    return .unsupported;
+    if (ext.len == 0) return .hidden;
+    return extensions.get(ext) orelse .unsupported;
+}
+
+test "extension mappings are case insensitive" {
+    const cases = .{
+        .{ "file.fiz", Extension.fizzy },
+        .{ "file.pixi", Extension.fizzy },
+        .{ "file.atlas", Extension.atlas },
+        .{ "file.png", Extension.png },
+        .{ "file.gif", Extension.gif },
+        .{ "file.jpg", Extension.jpg },
+        .{ "file.jpeg", Extension.jpg },
+        .{ "file.pdf", Extension.pdf },
+        .{ "file.psd", Extension.psd },
+        .{ "file.aseprite", Extension.aseprite },
+        .{ "file.pyxel", Extension.pyxel },
+        .{ "file.json", Extension.json },
+        .{ "file.zig", Extension.zig },
+        .{ "file.zip", Extension.zip },
+        .{ "file.7z", Extension._7z },
+        .{ "file.tar", Extension.tar },
+        .{ "file.txt", Extension.txt },
+        .{ "dir.with.dots/file.jpeg", Extension.jpg },
+        .{ "dir.with.dots/file", Extension.hidden },
+        .{ "dir.with.dots/.hidden", Extension.hidden },
+        .{ "file.tar.zip", Extension.zip },
+        .{ "", Extension.hidden },
+        .{ "file", Extension.hidden },
+        .{ ".hidden", Extension.hidden },
+        .{ "file.fizzy", Extension.unsupported },
+        .{ "file.xyz", Extension.unsupported },
+        .{ "file.unknown", Extension.unsupported },
+        .{ "file.", Extension.unsupported },
+    };
+    inline for (cases) |case| {
+        try std.testing.expectEqual(case[1], extension(case[0]));
+        var upper: [case[0].len]u8 = undefined;
+        _ = std.ascii.upperString(&upper, case[0]);
+        try std.testing.expectEqual(case[1], extension(&upper));
+        for (&upper, 0..) |*char, i| {
+            if (i % 2 == 0) char.* = std.ascii.toLower(char.*);
+        }
+        try std.testing.expectEqual(case[1], extension(&upper));
+    }
 }

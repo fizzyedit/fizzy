@@ -155,8 +155,8 @@ splits: SplitTree.Forest = .{},
 /// declare regions by call order.
 dock: ?core.widgets.DockLayout = null,
 /// Which shape's arrangement this state holds, and so which part of `layout.zon` it is saved to
-/// and loaded from: a phone's one place and a desktop's rail and splits name different places,
-/// and one overwriting the other would lose both. Empty is the app's first shape, whose
+/// and loaded from: the mobile shape's one place and a desktop's rail and splits name different
+/// places, and one overwriting the other would lose both. Empty is the app's first shape, whose
 /// arrangement keeps the file's top level (so an existing file reads as it always did). Set by
 /// whoever chooses the shape (`Editor.useShape`); a literal, never freed.
 shape: []const u8 = "",
@@ -169,6 +169,10 @@ tree_cleared: bool = false,
 slide_open: []const u8 = "",
 /// A place's view being dragged to another place. Empty `name` when idle.
 view_drag: ViewDrag = .{},
+/// The edge an open beside splits the documents' place on right now, set each frame by the app
+/// while a demo plays: that edge's drop zone is also published as the anchor `drop:beside`, so a
+/// tape aims at the place's answer, not at an edge it chose when it was written.
+beside: ?SplitTree.Side = null,
 /// Floats are OS windows of their own (the application says so each frame, where it has them): a
 /// view let go over no window of the app's opens one there (`ViewDrag.apply`).
 floats_windowed: bool = false,

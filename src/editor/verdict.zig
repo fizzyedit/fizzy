@@ -168,7 +168,7 @@ pub fn init(gpa: std.mem.Allocator, process_io: std.Io, profile: ?[]const u8) ?u
     }
     var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
     const cwd_len = std.process.currentPath(io, &cwd_buf) catch 0;
-    const resolved = std.fs.path.resolve(gpa, &.{ cwd_buf[0..cwd_len], std.mem.span(out) }) catch return 2;
+    const resolved = std.fs.path.resolveAlloc(gpa, &.{ cwd_buf[0..cwd_len], std.mem.span(out) }) catch return 2;
     defer gpa.free(resolved);
     if (resolved.len > path_buf.len) return 2;
     @memcpy(path_buf[0..resolved.len], resolved);

@@ -21,7 +21,11 @@ pub fn main(init: std.process.Init) !void {
             // Held: a running app. Renamed, the install's path is free.
             const aside = try arena.print("{s}.{d}.old", .{ path, std.Io.Clock.real.now(io).nanoseconds });
             std.Io.Dir.rename(cwd, path, cwd, aside, io) catch |rename_err| {
-                std.log.warn("{s} is in use and could not be set aside ({t}); the install will fail until it quits", .{ path, rename_err });
+                std.log.warn(
+                    "{s} is in use and could not be set aside ({t}); the install will fail until it " ++
+                        "quits",
+                    .{ path, rename_err },
+                );
                 return;
             };
             std.log.info("{s} is running: set aside as {s}", .{ path, std.fs.path.basename(aside) });

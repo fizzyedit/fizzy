@@ -224,7 +224,7 @@ const edit_items = [_]Item{
 };
 
 const view_items = [_]Item{
-    // The palette and quick open from the menu, not only their shortcuts: on a phone or tablet
+    // The palette and quick open from the menu, not only their shortcuts: on mobile or tablet
     // there is no keyboard to press them with. Both open with the search entry focused.
     .{ .command = .{ .id = "fizzy.commandPalette", .title = .{ .static = "Command Palette…" }, .sf_symbol = "command" } },
     .{ .command = .{ .id = "fizzy.quickOpen", .title = .{ .static = "Go to File…" }, .sf_symbol = "magnifyingglass" } },

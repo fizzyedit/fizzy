@@ -299,6 +299,7 @@ fn input(subject: u64, near: dvui.Rect, keep: []const dvui.Rect, now: f64) In {
 }
 
 /// Frames of 16 ms from `t0` to `t1`, `f` giving each frame's input; the spots it went to.
+// anytype: Test scenarios provide distinct frame input generators through in(t).
 fn run(c: *Calm, t0: f64, t1: f64, f: anytype) !struct { moves: usize, last: dvui.Point } {
     var moves: usize = 0;
     var spot = c.spot;

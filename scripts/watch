@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# watch: the default edit loop. Rebuilds on every save with Zig's incremental compiler.
+#
+#   scripts/watch                 # the app: src/, core/, sdk/ and the bundled plugins
+#   scripts/watch plugins/text    # one plugin, standalone (installs into the plugins directory,
+#                                 # or into $FIZZY_PROFILE/plugins; docs/PERF.md)
+#   scripts/watch . -Doptimize=ReleaseFast   # anything after the directory goes to `zig build`
+#
+# A save of a Zig file rebuilds in well under a second; a save of a build.zig or build.zig.zon
+# costs a rebuild of the whole graph (docs/PERF.md, "Which edits stay incremental"). This
+# runs `zig build` directly, not through scripts/zb: it never exits, so it would hold a build
+# slot for the whole session.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+dir=${1:-.}
+[ $# -eq 0 ] || shift
+[ -f "$dir/build.zig" ] || { echo "watch: no build.zig in $dir" >&2; exit 2; }
+cd "$dir"
+exec zig build --summary line -fincremental --watch "$@"

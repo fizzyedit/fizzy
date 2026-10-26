@@ -1,0 +1,112 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Michael Belousov <michael.belousov98@gmail.com>
+Date: Sat, 24 Oct 2026 16:10:14 -0400
+Subject: [PATCH] web: mouse events carry their own modifier state
+
+A mouse event's modifiers came from the last key event, so a modifier whose keyup was
+lost (cmd-tab away, a popup taking focus) stayed held for every click until the next
+key event. web.js passes each mouse event's own metaKey/altKey/ctrlKey/shiftKey, and
+web.zig sets the window's modifiers from them before adding the event.
+---
+ src/backends/web.js  | 14 +++++++++++---
+ src/backends/web.zig | 17 ++++++++++++++---
+ 2 files changed, 25 insertions(+), 6 deletions(-)
+
+diff --git a/src/backends/web.js b/src/backends/web.js
+index 27d22e9..3285a64 100644
+--- a/src/backends/web.js
++++ b/src/backends/web.js
+@@ -174,16 +174,21 @@ export class Dvui {
+         };
+     }} */
+     programInfo;
+     /** @type {Map<number, [WebGLTexture, number, number, number]>} */
+     // texture, width, height, interp
+     textures = new Map();
+     newTextureId = 1;
+ 
++    // The modifier bits dvui reads (web_mod_code_to_dvui), from any keyboard or mouse event.
++    modCode(ev) {
++        return (ev.metaKey << 3) + (ev.altKey << 2) + (ev.ctrlKey << 1) + (ev.shiftKey << 0);
++    }
++
+     /** @returns {[WebGLTexture, number, number, number] | null} */
+     textureEntry(id) {
+         if (id === 0) return null;
+         return this.textures.get(id) ?? null;
+     }
+     using_fb = false;
+     /** @type {WebGLFramebuffer | null} */
+     frame_buffer = null;
+@@ -1376,27 +1381,30 @@ export class Dvui {
+         }
+         this.gl.canvas.addEventListener("mousemove", (ev) => {
+             if (this.stopped) return;
+             let rect = this.gl.canvas.getBoundingClientRect();
+             let x = (ev.clientX - rect.left) / (rect.right - rect.left) *
+                 this.gl.drawingBufferWidth;
+             let y = (ev.clientY - rect.top) / (rect.bottom - rect.top) *
+                 this.gl.drawingBufferHeight;
+-            this.instance.exports.add_event(1, 0, 0, x, y);
++            // The event's own modifier state, not the last key event's: a modifier whose keyup
++            // was lost (cmd-tab away, a popup taking focus) would otherwise stick to every
++            // click until the next key event.
++            this.instance.exports.add_event(1, this.modCode(ev), 0, x, y);
+             this.requestRender();
+         });
+         this.gl.canvas.addEventListener("mousedown", (ev) => {
+             if (this.stopped) return;
+-            this.instance.exports.add_event(2, ev.button, 0, 0, 0);
++            this.instance.exports.add_event(2, ev.button, this.modCode(ev), 0, 0);
+             this.requestRender();
+         });
+         this.gl.canvas.addEventListener("mouseup", (ev) => {
+             if (this.stopped) return;
+-            this.instance.exports.add_event(3, ev.button, 0, 0, 0);
++            this.instance.exports.add_event(3, ev.button, this.modCode(ev), 0, 0);
+             this.requestRender();
+         });
+         this.gl.canvas.addEventListener("wheel", (ev) => {
+             if (this.stopped) return;
+             ev.preventDefault();
+ 
+             // If we haven't gotten a wheel event in a second, reset our first
+             // because the user might have switched between mouse and touchpad.
+diff --git a/src/backends/web.zig b/src/backends/web.zig
+index d860ae7..b019009 100644
+--- a/src/backends/web.zig
++++ b/src/backends/web.zig
+@@ -293,19 +293,30 @@ fn add_event_raw(w: *dvui.Window, which: u8, int1: u32, int2: u32, float1: f32,
+     //    .int2 = int2,
+     //    .float1 = float1,
+     //    .float2 = float2,
+     //}) catch |err| {
+     //    const msg = std.fmt.allocPrint(gpa, "{any}", .{err}) catch "allocPrint OOM";
+     //    wasm.wasm_panic(msg.ptr, msg.len);
+     //};
+     switch (which) {
+-        1 => _ = try w.addEventMouseMotion(.{ .pt = .{ .x = float1, .y = float2 } }),
+-        2 => _ = try w.addEventMouseButton(buttonFromJS(int1), .press),
+-        3 => _ = try w.addEventMouseButton(buttonFromJS(int1), .release),
++        // Mouse events carry the browser's own modifier state (see web.js): the modifiers
++        // dvui remembers from the last key event go stale when a keyup is lost.
++        1 => {
++            w.modifiers = web_mod_code_to_dvui(@intCast(int1));
++            _ = try w.addEventMouseMotion(.{ .pt = .{ .x = float1, .y = float2 } });
++        },
++        2 => {
++            w.modifiers = web_mod_code_to_dvui(@intCast(int2));
++            _ = try w.addEventMouseButton(buttonFromJS(int1), .press);
++        },
++        3 => {
++            w.modifiers = web_mod_code_to_dvui(@intCast(int2));
++            _ = try w.addEventMouseButton(buttonFromJS(int1), .release);
++        },
+         4 => _ = try w.addEventMouseWheel(float1 * dvui.scroll_speed, if (int1 > 0) .vertical else .horizontal, if (int2 == 0) .mouse else .trackpad),
+         5 => {
+             const str = @as([*]u8, @ptrFromInt(int1))[0..int2];
+             _ = try w.addEventKey(.{
+                 .action = if (float1 > 0) .repeat else .down,
+                 .code = web_key_code_to_dvui(str),
+                 .mod = web_mod_code_to_dvui(@trunc(float2)),
+             });

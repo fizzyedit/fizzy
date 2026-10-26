@@ -37,6 +37,11 @@ root: []const u8 = "",
 /// Where the demo's popups gather when they are about no one thing (`Tape.home`), by anchor: an
 /// app's documents, say, so they sit over the work rather than at the window's foot.
 home: []const u8 = "",
+/// The window the script is built for is a phone's: a script that aims at the desktop's anchors
+/// (a rail, a sidebar place, floats) aims at the phone's shape instead, or leaves that step out.
+/// Set by the app that builds it; a tape built where there is no window (`zig build demos`) is the
+/// desktop's.
+compact: bool = false,
 /// What the app says about a tape (`Tape.Check`): its spelling of key chords, checked as each is
 /// written and again when the tape is finished.
 check: Tape.Check = .{},
@@ -137,9 +142,16 @@ pub fn keyframe(self: *Script, kf: Tape.Keyframe) !void {
     const open = try a.alloc([]const u8, kf.open.len);
     for (kf.open, open) |p, *out| out.* = try self.dupe(p);
     const settings = try a.alloc(Tape.Setting, kf.settings.len);
-    for (kf.settings, settings) |st, *out| out.* = .{ .owner = try self.dupe(st.owner), .key = try self.dupe(st.key), .value = try self.dupe(st.value) };
+    for (kf.settings, settings) |st, *out| out.* = .{
+        .owner = try self.dupe(st.owner),
+        .key = try self.dupe(st.key),
+        .value = try self.dupe(st.value),
+    };
     const root = try self.dupe(kf.root);
-    try self.keyframes.append(a, .{ .root = root, .files = files, .open = open, .layout = kf.layout, .settings = settings });
+    try self.keyframes.append(
+        a,
+        .{ .root = root, .files = files, .open = open, .layout = kf.layout, .settings = settings },
+    );
     try self.push(.{ .at = self.t, .do = .{ .keyframe = @intCast(self.keyframes.items.len - 1) } });
     try self.push(.{ .at = self.t, .do = .{ .wait = .{ .until = .idle } } });
     self.root = root;
@@ -215,17 +227,46 @@ pub const WaitOptions = struct {
 
 /// Hold the demo until the tagged widget is drawn.
 pub fn waitFor(self: *Script, tag: []const u8, opts: WaitOptions) !void {
-    try self.push(.{ .at = self.t, .do = .{ .wait = .{ .until = .{ .shown = try self.dupe(tag) }, .timeout = opts.timeout } } });
+    try self.push(.{
+        .at = self.t,
+        .do = .{ .wait = .{ .until = .{ .shown = try self.dupe(tag) }, .timeout = opts.timeout } },
+    });
 }
 
 /// Hold the demo until the tagged widget is gone.
 pub fn waitGone(self: *Script, tag: []const u8, opts: WaitOptions) !void {
-    try self.push(.{ .at = self.t, .do = .{ .wait = .{ .until = .{ .gone = try self.dupe(tag) }, .timeout = opts.timeout } } });
+    try self.push(.{
+        .at = self.t,
+        .do = .{ .wait = .{ .until = .{ .gone = try self.dupe(tag) }, .timeout = opts.timeout } },
+    });
 }
 
 /// Hold the demo until the stage has nothing in flight.
 pub fn waitIdle(self: *Script, opts: WaitOptions) !void {
     try self.push(.{ .at = self.t, .do = .{ .wait = .{ .until = .idle, .timeout = opts.timeout } } });
+}
+
+/// A `skipIfShown` op, by index into the ops, for `endSkip` to close.
+pub const Skip = usize;
+
+/// Leave out everything up to `endSkip` when `tag` is drawn already. The gesture to bring it up
+/// goes between, so a person's layout that has it open is left as it is.
+pub fn skipIfShown(self: *Script, tag: []const u8) !Skip {
+    try self.push(.{ .at = self.t, .do = .{ .skip = .{ .when = .{ .shown = try self.dupe(tag) }, .count = 0 } } });
+    return self.ops.items.len - 1;
+}
+
+/// `skipIfShown`'s other half: leave out everything up to `endSkip` when `tag` is not drawn. The
+/// steps for a layout that has `tag` open go between, after those of a `skipIfShown` for one that
+/// has not, so exactly one of the two plays.
+pub fn skipIfGone(self: *Script, tag: []const u8) !Skip {
+    try self.push(.{ .at = self.t, .do = .{ .skip = .{ .when = .{ .gone = try self.dupe(tag) }, .count = 0 } } });
+    return self.ops.items.len - 1;
+}
+
+/// The ops pushed since `skipIfShown` returned `mark` are what it leaves out.
+pub fn endSkip(self: *Script, mark: Skip) void {
+    self.ops.items[mark].do.skip.count = @intCast(self.ops.items.len - mark - 1);
 }
 
 // ---- the pointer ---------------------------------------------------------------------------
@@ -360,6 +401,7 @@ pub fn command(self: *Script, id: []const u8) !void {
 /// Run a command with arguments: `args` is any value `std.zon.stringify` can write, keyed by the
 /// command's parameters — `try s.commandWith("text.goToLine", .{ .line = 12 })`. Whether they fit
 /// is the command's to say when it runs, as it is for a person's.
+// anytype: Command arguments have command-specific shapes serialized to ZON.
 pub fn commandWith(self: *Script, id: []const u8, args: anytype) !void {
     var out: std.Io.Writer.Allocating = .init(self.arena.allocator());
     std.zon.stringify.serialize(args, .{}, &out.writer) catch return error.OutOfMemory;
@@ -370,6 +412,36 @@ pub fn commandWith(self: *Script, id: []const u8, args: anytype) !void {
 // ---- tests ---------------------------------------------------------------------------------
 
 const testing = std.testing;
+
+test "a skip counts the ops pushed between it and its end" {
+    var s: Script = .init(testing.allocator, "t", "T");
+    try s.keyframe(.{ .root = "demo://t" });
+    const mark = try s.skipIfShown("rail");
+    try s.click(.{ .tag = "button" }, .{});
+    s.endSkip(mark);
+    try s.key("enter");
+    var owned = try s.finish();
+    defer owned.deinit();
+    const ops = owned.tape.ops;
+    const skip = ops[mark].do.skip;
+    try testing.expectEqualStrings("rail", skip.when.shown);
+    // The wait for the button, the aim, the press and the release; the key after is not left out.
+    try testing.expectEqual(@as(u32, 4), skip.count);
+    try testing.expectEqualStrings("enter", ops[mark + 1 + skip.count].do.key);
+}
+
+test "skipIfGone leaves its ops out when the tag is not drawn" {
+    var s: Script = .init(testing.allocator, "t", "T");
+    try s.keyframe(.{ .root = "demo://t" });
+    const mark = try s.skipIfGone("sheet");
+    try s.key("enter");
+    s.endSkip(mark);
+    var owned = try s.finish();
+    defer owned.deinit();
+    const skip = owned.tape.ops[mark].do.skip;
+    try testing.expectEqualStrings("sheet", skip.when.gone);
+    try testing.expectEqual(@as(u32, 1), skip.count);
+}
 
 test "a script paces a person's actions and waits for what it aims at" {
     var s: Script = .init(testing.allocator, "t", "Test");
@@ -500,7 +572,13 @@ test "a caption shows for a time per word, never under the floor" {
     try testing.expectEqual(@as(u32, 2000), readingMs("", "a b c d e f"));
     try testing.expectEqual(@as(u32, 2100), readingMs("", "a b c d e f g"));
     // Title and text both count, and a long caption is not cut short.
-    try testing.expectEqual(@as(u32, 300 * 30), readingMs("one two three four five", "a b c d e f g h i j k l m n o p q r s t u v w x y"));
+    try testing.expectEqual(
+        @as(u32, 300 * 30),
+        readingMs("one two three four five", "a b c d e f g h i j k l m n o p q r s t u v w x y"),
+    );
     // Past the ceiling a caption stops growing.
-    try testing.expectEqual(reading_max_ms, readingMs("", "w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w"));
+    try testing.expectEqual(
+        reading_max_ms,
+        readingMs("", "w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w"),
+    );
 }

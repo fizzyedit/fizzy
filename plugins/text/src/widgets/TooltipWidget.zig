@@ -214,7 +214,7 @@ pub fn shown(self: *TooltipWidget) bool {
     var r: dvui.Rect.Natural = undefined;
     if (dvui.dataGet(null, self.data().id, "_sticky_anchor", dvui.Rect.Natural)) |anchor| {
         const size: dvui.Size = self.data().rect.size();
-        const window_rect = core.screens.screenFor(anchor);
+        const window_rect = core.widgets.FloatingTooltipWidget.innerOf(core.screens.screenFor(anchor));
         // Prefer directly above the anchor, left edges flush, sitting right against its top
         // edge so the mouse never has to leave the term's span to reach the tooltip.
         const above = dvui.Rect.Natural{ .x = anchor.x, .y = anchor.y - size.h, .w = size.w, .h = size.h };
@@ -232,7 +232,7 @@ pub fn shown(self: *TooltipWidget) bool {
         r.y -= r.h + 10;
     }
     // On the screen it opens on (`core.screens`): a float's own window, when that is out.
-    self.data().rect = .cast(dvui.placeOnScreen(core.screens.screenFor(r), .{}, .none, r));
+    self.data().rect = .cast(dvui.placeOnScreen(core.widgets.FloatingTooltipWidget.innerOf(core.screens.screenFor(r)), .{}, .none, r));
 
     self.install();
 

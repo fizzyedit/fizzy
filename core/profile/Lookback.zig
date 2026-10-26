@@ -123,6 +123,7 @@ pub fn reset(self: *Lookback) void {
 
 /// Keep a half-second window as it closes. `per_entry` is the profiler's entries, each with the
 /// window's totals (`win_ns`, `win_child_ns`, `win_calls`, `win_max_ns`) not yet cleared.
+// anytype: Profiler entries and test records share counters without importing the profiler.
 pub fn foldWindow(self: *Lookback, w: Window, per_entry: anytype) void {
     const at = self.win_head * self.entries;
     const n = @min(per_entry.len, self.entries);

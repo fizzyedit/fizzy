@@ -41,6 +41,9 @@ pub const SavedRegion = struct {
     /// Runtime split: this leaf was dragged out of `parent` from `from` (left/right/top/bottom).
     parent: ?[]const u8 = null,
     from: ?[]const u8 = null,
+    /// That split is fizzy's own, not the person's (`Branch.adaptive`): it follows its space's
+    /// shape and turns with it. Absent is the person's, as every split of an older file is.
+    adaptive: ?bool = null,
     /// What a fizzy before tabs-when-many wrote: whether the place showed one view or several.
     /// Read only to migrate (`loadRegions`), never written: a place now shows tabs exactly when
     /// it holds more than one view.
@@ -238,7 +241,15 @@ pub fn loadRegions(gpa: std.mem.Allocator, dir: []const u8, shape: []const u8) [
         // A float whose home fails to copy floats still; closed, its view goes to its keywords.
         var floating = r.floating;
         if (floating) |*fl| fl.home = gpa.dupe(u8, fl.home) catch "";
-        out[n] = .{ .name = name, .extent = r.extent, .surfaces = surfaces, .parent = parent, .from = from, .order = order, .floating = floating };
+        out[n] = .{
+            .name = name,
+            .extent = r.extent,
+            .surfaces = surfaces,
+            .parent = parent,
+            .from = from,
+            .order = order,
+            .floating = floating,
+        };
         n += 1;
     }
     return out[0..n];

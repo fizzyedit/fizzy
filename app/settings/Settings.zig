@@ -33,6 +33,10 @@ pub const Compatibility = enum { none, ldtk };
 /// (macOS defaults to trackpad when still unknown).
 pub const InputScheme = enum { auto, mouse, trackpad };
 
+/// Which layout the window is drawn with. `auto` follows the detected device; `mobile` and
+/// `desktop` force a shape on any device, so a desktop window can try mobile.
+pub const LayoutMode = core.platform.form_factor.LayoutMode;
+
 /// Resolved zoom/pan style after applying `input_scheme`.
 pub const ResolvedPanZoomScheme = enum { mouse, trackpad };
 
@@ -85,8 +89,8 @@ motion_speed: f32 = core.motion.default_speed,
 /// What the app's windows are made of (`core.material`): opaque (`none`), clear (`transparent`),
 /// blurred, frosted, or Liquid Glass. A kind the platform cannot draw is drawn as the richest glass
 /// below it that it can, else opaque (`Material.effective`), and stays saved for a machine that
-/// can. Applied at once; `FIZZY_GLASS` overrides it.
-window_material: core.material.Kind = .liquid,
+/// can. Opaque until a person turns glass on. Applied at once; `FIZZY_GLASS` overrides it.
+window_material: core.material.Kind = .none,
 
 /// What the glass the app draws itself is made of (`core.material.inApp`): dialogs, menus, toasts
 /// and floats drawn in the window. Null, the window's (`window_material`), as drawn; a kind, that one wherever the
@@ -146,6 +150,10 @@ control_server: bool = true,
 /// Canvas zoom/pan control scheme shared by the image viewer, pixi, and any other
 /// `CanvasWidget` consumer. `auto` picks mouse vs trackpad from `dvui.mouseType()`.
 input_scheme: InputScheme = .auto,
+
+/// Mobile or desktop layout, or whichever fits the device. A web visit's `?form=` still wins for
+/// that visit and is never stored here.
+layout_mode: LayoutMode = .auto,
 
 /// How updates found by `PluginStore`'s post-launch pass are applied — prompted, or silent.
 /// Only covers plugins that haven't individually opted out via `.plugins.<id>.auto_update`.
@@ -288,4 +296,14 @@ pub fn serialize(settings: *const Settings, allocator: std.mem.Allocator) ![]u8 
 
 pub fn deinit(settings: *Settings, allocator: std.mem.Allocator) void {
     allocator.free(settings.theme);
+}
+
+test "layout_mode defaults to auto and reads back from settings.zon" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const empty = try parseOnly(std.testing.allocator, arena, ".{}");
+    try std.testing.expectEqual(LayoutMode.auto, empty.layout_mode);
+    const mobile = try parseOnly(std.testing.allocator, arena, ".{ .layout_mode = .mobile }");
+    try std.testing.expectEqual(LayoutMode.mobile, mobile.layout_mode);
 }

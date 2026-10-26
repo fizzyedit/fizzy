@@ -28,7 +28,15 @@ pub const entries = struct {
     pub const guides: BundledPlugin = .{ .name = "guides" };
 
     /// What fizzy itself links, in its sidebar order.
-    pub const all = [_]BundledPlugin{ @This().workbench, @This().text, @This().image, @This().archive, @This().markdown, @This().devtools, @This().guides };
+    pub const all = [_]BundledPlugin{
+        @This().workbench,
+        @This().text,
+        @This().image,
+        @This().archive,
+        @This().markdown,
+        @This().devtools,
+        @This().guides,
+    };
 };
 
 /// Whether `plugins` links fizzy's own `name`, rather than leaving it out or bringing a module of
@@ -69,7 +77,11 @@ pub const Linked = struct {
 /// re-homed onto it. workbench must be listed, because the editor still holds its state
 /// (fizzyedit/plans#13).
 pub fn link(b: *std.Build, w: Wiring, plugins: []const BundledPlugin) Linked {
-    if (!linksFizzys(plugins, "workbench")) std.debug.panic("fizzy: the plugin list must include `fizzy.plugins.workbench`; the editor still holds its state (fizzyedit/plans#13)", .{});
+    if (!linksFizzys(plugins, "workbench")) std.debug.panic(
+        "fizzy: the plugin list must include `fizzy.plugins.workbench`; the editor " ++
+            "still holds its state (fizzyedit/plans#13)",
+        .{},
+    );
 
     const workbench_mod = workbench.addStaticModule(b, w.target, w.optimize, .{
         .dvui = w.dvui,
@@ -78,28 +90,69 @@ pub fn link(b: *std.Build, w: Wiring, plugins: []const BundledPlugin) Linked {
         .icons = w.icons,
         .backend = w.backend,
     }, w.workbench_opts, w.consumer);
-    const markdown_mod: ?*std.Build.Module = if (w.markdown) markdown.addStaticModule(b, w.target, w.optimize, .{ .dvui = w.dvui, .core = w.core, .sdk = w.sdk }, w.consumer) else null;
+    const markdown_mod: ?*std.Build.Module = if (w.markdown) markdown.addStaticModule(
+        b,
+        w.target,
+        w.optimize,
+        .{ .dvui = w.dvui, .core = w.core, .sdk = w.sdk },
+        w.consumer,
+    ) else null;
 
     var graph: Rehome = .{ .b = b, .w = w };
     defer graph.deinit();
     var out: std.ArrayList(BundledPlugin) = .empty;
     for (plugins) |p| {
-        const m: ?*std.Build.Module = if (p.module) |src| graph.copy(p.name, src) else if (std.mem.eql(u8, p.name, "workbench"))
+        const m: ?*std.Build.Module = if (p.module) |src|
+            graph.copy(p.name, src)
+        else if (std.mem.eql(u8, p.name, "workbench"))
             workbench_mod
         else if (std.mem.eql(u8, p.name, "markdown"))
             markdown_mod
         else if (std.mem.eql(u8, p.name, "text"))
-            text.addStaticModule(b, w.target, w.optimize, .{ .dvui = w.dvui, .core = w.core, .sdk = w.sdk, .icons = w.icons }, w.consumer)
+            text.addStaticModule(
+                b,
+                w.target,
+                w.optimize,
+                .{ .dvui = w.dvui, .core = w.core, .sdk = w.sdk, .icons = w.icons },
+                w.consumer,
+            )
         else if (std.mem.eql(u8, p.name, "image"))
-            image.addStaticModule(b, w.target, w.optimize, .{ .dvui = w.dvui, .core = w.core, .sdk = w.sdk, .icons = w.icons }, w.consumer)
+            image.addStaticModule(
+                b,
+                w.target,
+                w.optimize,
+                .{ .dvui = w.dvui, .core = w.core, .sdk = w.sdk, .icons = w.icons },
+                w.consumer,
+            )
         else if (std.mem.eql(u8, p.name, "archive"))
-            archive.addStaticModule(b, w.target, w.optimize, .{ .dvui = w.dvui, .core = w.core, .sdk = w.sdk }, w.consumer)
+            archive.addStaticModule(
+                b,
+                w.target,
+                w.optimize,
+                .{ .dvui = w.dvui, .core = w.core, .sdk = w.sdk },
+                w.consumer,
+            )
         else if (std.mem.eql(u8, p.name, "devtools"))
-            devtools.addStaticModule(b, w.target, w.optimize, .{ .dvui = w.dvui, .core = w.core, .sdk = w.sdk }, w.consumer)
+            devtools.addStaticModule(
+                b,
+                w.target,
+                w.optimize,
+                .{ .dvui = w.dvui, .core = w.core, .sdk = w.sdk },
+                w.consumer,
+            )
         else if (std.mem.eql(u8, p.name, "guides"))
-            guides.addStaticModule(b, w.target, w.optimize, .{ .dvui = w.dvui, .core = w.core, .sdk = w.sdk }, w.consumer)
+            guides.addStaticModule(
+                b,
+                w.target,
+                w.optimize,
+                .{ .dvui = w.dvui, .core = w.core, .sdk = w.sdk },
+                w.consumer,
+            )
         else
-            std.debug.panic("fizzy: plugin '{s}' has no module and is not one of fizzy's own (`fizzy.plugins`)", .{p.name});
+            std.debug.panic(
+                "fizzy: plugin '{s}' has no module and is not one of fizzy's own (`fizzy.plugins`)",
+                .{p.name},
+            );
         // A plugin this target does not build (markdown for the native exe on wasm) is left out.
         if (m) |module| {
             // Only an application's re-homed module is imported here, as `rehome` always did;
@@ -141,16 +194,22 @@ const Rehome = struct {
         self.stale.deinit(self.b.allocator);
     }
 
+    /// What the SDK package exports a plugin (`sdk/plugin_sdk.zig`'s `exportModules`), as this
+    /// consumer has it. `tape` and `replay` are the ones `core` was built with, so a `Tape` the
+    /// plugin makes is the one fizzy plays.
+    const framework_names = [_][]const u8{ "dvui", "core", "fizzy_sdk", "icons", "tape", "replay" };
+
     fn framework(self: *const Rehome, name: []const u8) ?*std.Build.Module {
         if (std.mem.eql(u8, name, "dvui")) return self.w.dvui;
         if (std.mem.eql(u8, name, "core")) return self.w.core;
         if (std.mem.eql(u8, name, "fizzy_sdk")) return self.w.sdk;
         if (std.mem.eql(u8, name, "icons")) return self.w.icons;
+        if (std.mem.eql(u8, name, "tape") or std.mem.eql(u8, name, "replay")) return self.w.core.import_table.get(name);
         return null;
     }
 
     fn isFrameworkName(name: []const u8) bool {
-        for ([_][]const u8{ "dvui", "core", "fizzy_sdk", "icons" }) |n| if (std.mem.eql(u8, name, n)) return true;
+        for (framework_names) |n| if (std.mem.eql(u8, name, n)) return true;
         return false;
     }
 
@@ -159,7 +218,8 @@ const Rehome = struct {
     fn pinnedElsewhere(self: *const Rehome, m: *const std.Build.Module) bool {
         if (m.resolved_target) |t| {
             const mine = self.w.target.result;
-            if (t.result.cpu.arch != mine.cpu.arch or t.result.os.tag != mine.os.tag or t.result.abi != mine.abi) return true;
+            if (t.result.cpu.arch != mine.cpu.arch or
+                t.result.os.tag != mine.os.tag or t.result.abi != mine.abi) return true;
         }
         if (m.optimize) |o| if (o != self.w.optimize) return true;
         return false;
@@ -183,7 +243,12 @@ const Rehome = struct {
         }
         for (fresh.items) |m| {
             var direct = self.pinnedElsewhere(m);
-            for (m.import_table.keys()) |name| direct = direct or isFrameworkName(name);
+            // A module already built against this consumer's framework (`fizzy.framework`) is
+            // not stale for importing it.
+            var it = m.import_table.iterator();
+            while (it.next()) |kv| if (isFrameworkName(kv.key_ptr.*)) {
+                direct = direct or self.framework(kv.key_ptr.*) != kv.value_ptr.*;
+            };
             if (direct) self.stale.put(gpa, m, {}) catch @panic("OOM");
         }
         var changed = true;
@@ -209,7 +274,12 @@ const Rehome = struct {
             .root_source_file = src.root_source_file,
             .target = self.w.target,
             .optimize = self.w.optimize,
-            .link_libc = if (wasm) false else if (src == self.root) true else (src.link_libc orelse self.w.consumer.link_libc),
+            .link_libc = if (wasm)
+                false
+            else if (src == self.root)
+                true
+            else
+                (src.link_libc orelse self.w.consumer.link_libc),
             .link_libcpp = src.link_libcpp,
             .single_threaded = self.w.consumer.single_threaded,
             .strip = src.strip,
@@ -232,11 +302,13 @@ const Rehome = struct {
         m.export_symbol_names = src.export_symbol_names;
         for (src.link_objects.items) |object| switch (object) {
             .c_source_file => |f| {
-                if (wasm and src.link_libc == true) std.debug.panic("fizzy: web module '{s}' has C sources requiring libc", .{name});
+                if (wasm and src.link_libc == true)
+                    std.debug.panic("fizzy: web module '{s}' has C sources requiring libc", .{name});
                 m.addCSourceFile(f.*);
             },
             .c_source_files => |f| {
-                if (wasm and src.link_libc == true) std.debug.panic("fizzy: web module '{s}' has C sources requiring libc", .{name});
+                if (wasm and src.link_libc == true)
+                    std.debug.panic("fizzy: web module '{s}' has C sources requiring libc", .{name});
                 m.addCSourceFiles(.{ .root = f.root, .files = f.files, .flags = f.flags, .language = f.language });
             },
             .static_path => |p| m.addObjectFile(p),
@@ -250,7 +322,11 @@ const Rehome = struct {
             }),
             .win32_resource_file => |f| m.addWin32ResourceFile(f.*),
             // A compile step is built for one target and cannot follow the module to another.
-            .other_step => std.debug.panic("fizzy: module '{s}' links a compile step, which cannot be re-homed to another target", .{name}),
+            .other_step => std.debug.panic(
+                "fizzy: module '{s}' links a compile step, which cannot be re-homed to another " ++
+                    "target",
+                .{name},
+            ),
         };
         for (src.include_dirs.items) |dir| switch (dir) {
             .path => |p| m.addIncludePath(p),
@@ -279,15 +355,20 @@ const Rehome = struct {
         return m;
     }
 
-    /// A plugin's root module is always copied and always gets this consumer's framework modules,
-    /// whether or not its own table named them: its build need not wire what its source imports.
+    /// A plugin's root module always gets this consumer's framework modules, whether or not its
+    /// own table named them: its build need not wire what its source imports. It is copied unless
+    /// it was built against this consumer's framework (it imports this `dvui`), along with all it
+    /// imports; only then are the missing ones added to it in place, as they are this framework's.
     fn copy(self: *Rehome, name: []const u8, src: *std.Build.Module) *std.Build.Module {
         self.analyze(src);
-        self.stale.put(self.b.allocator, src, {}) catch @panic("OOM");
+        const own = src.import_table.get("dvui") == self.w.dvui and !self.stale.contains(src);
+        if (!own) self.stale.put(self.b.allocator, src, {}) catch @panic("OOM");
         self.root = src;
         const m = self.copyAnalyzed(name, src);
-        inline for (.{ "dvui", "core", "fizzy_sdk", "icons" }) |import_name| {
-            if (m.import_table.get(import_name) == null) if (self.framework(import_name)) |fw| m.addImport(import_name, fw);
+        for (framework_names) |import_name| {
+            if (m.import_table.get(import_name) == null) {
+                if (self.framework(import_name)) |fw| m.addImport(import_name, fw);
+            }
         }
         return m;
     }

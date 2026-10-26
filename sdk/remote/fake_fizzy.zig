@@ -48,7 +48,12 @@ pub fn main(init: std.process.Init) !void {
     }
     if (quiet) try appendLaunch(gpa, io, dir);
 
-    const text = try Io.Dir.cwd().readFileAlloc(io, try std.fmt.allocPrint(gpa, "{s}/mode", .{dir}), gpa, .limited(256));
+    const text = try Io.Dir.cwd().readFileAlloc(
+        io,
+        try std.fmt.allocPrint(gpa, "{s}/mode", .{dir}),
+        gpa,
+        .limited(256),
+    );
     var words = std.mem.tokenizeAny(u8, text, " \r\n");
     const mode = std.meta.stringToEnum(Mode, words.next() orelse "serve") orelse .serve;
     switch (mode) {
@@ -91,9 +96,23 @@ fn talk(gpa: std.mem.Allocator, io: Io, stream: Io.net.Stream, mode: Mode, n: us
         len += got;
     };
     if (mode == .noremote) return Client.writeAll(io, stream, "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n");
-    try Client.writeAll(io, stream, "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: " ++ Client.upgrade_token ++ "\r\n\r\n");
+    try Client.writeAll(
+        io,
+        stream,
+        "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: " ++ Client.upgrade_token ++ "\r\n\r\n",
+    );
 
-    var ep: Endpoint = .init(gpa, .editor, .{ .app_id = "fizzy-fake", .mode = .shared, .tiers_offered = .{ .draw_list = true }, .version_min = if (mode == .old) 9 else message.min_version, .version_max = if (mode == .old) 9 else message.max_version });
+    var ep: Endpoint = .init(
+        gpa,
+        .editor,
+        .{
+            .app_id = "fizzy-fake",
+            .mode = .shared,
+            .tiers_offered = .{ .draw_list = true },
+            .version_min = if (mode == .old) 9 else message.min_version,
+            .version_max = if (mode == .old) 9 else message.max_version,
+        },
+    );
     defer ep.deinit();
     try ep.start();
     try ep.feed(head[body_at..len]);
@@ -107,7 +126,15 @@ fn talk(gpa: std.mem.Allocator, io: Io, stream: Io.net.Stream, mode: Mode, n: us
                 try Client.writeAll(io, stream, ep.pending());
                 return;
             },
-            .create_view => |cv| if (mode == .bye) try ep.send(.{ .bye = .{ .reason = .shutdown, .text = "going away" } }) else try ep.send(.{ .view_created = .{ .view = cv.view, .tier = .draw_list, .width = cv.width, .height = cv.height } }),
+            .create_view => |cv| if (mode == .bye)
+                try ep.send(.{ .bye = .{ .reason = .shutdown, .text = "going away" } })
+            else
+                try ep.send(.{ .view_created = .{
+                    .view = cv.view,
+                    .tier = .draw_list,
+                    .width = cv.width,
+                    .height = cv.height,
+                } }),
             .bye => return,
             else => {},
         };

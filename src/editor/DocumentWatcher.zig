@@ -416,11 +416,11 @@ const NativeFs = if (have_impl) struct {
     fn normalizePath(gpa: Allocator, path: []const u8) ![]u8 {
         // Match nightwatch's watch() normalization so event paths key the same map entries.
         if (std.fs.path.isAbsolute(path)) {
-            return std.fs.path.resolve(gpa, &.{path});
+            return std.fs.path.resolveAlloc(gpa, &.{path});
         }
         var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
         const cwd_len = try std.Io.Dir.cwd().realPath(dvui.io, &cwd_buf);
-        return std.fs.path.resolve(gpa, &.{ cwd_buf[0..cwd_len], path });
+        return std.fs.path.resolveAlloc(gpa, &.{ cwd_buf[0..cwd_len], path });
     }
 
     fn hashFile(gpa: Allocator, path: []const u8) ?u64 {

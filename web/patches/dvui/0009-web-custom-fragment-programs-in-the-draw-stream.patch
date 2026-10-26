@@ -1,0 +1,369 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Michael Belousov <michael.belousov98@gmail.com>
+Date: Sat, 24 Oct 2026 16:15:44 -0400
+Subject: [PATCH] web: custom fragment programs in the draw stream
+
+A backend can compile a fragment shader of its own (wasm_programCreate) and draw parts
+of a stream through it: a -3 step switches to it, with its vec4 uniforms (uData) from
+the stream's uniform buffer and up to two more textures at units 1 and 2 (uTex1,
+uTex2). It runs on dvui's own vertex shader and vertex layout, so dvui's geometry
+feeds it unchanged. A source is written against a short prelude that builds it as
+GLSL ES 3.00 or 1.00 (VARYING, TEX, FRAG_COLOR, MAX_VEC4); one starting #version is
+taken as it is, on WebGL2 only.
+
+Programs link while frames go on where the context has KHR_parallel_shader_compile;
+wasm_programStatus says when one is ready. wasm_programMaxVec4 says how many uniform
+vec4s a program may use, asked of the context once. A punch blend (dst * (1 - src.a))
+joins the texture blends for a program to cut out what it covers.
+---
+ src/backends/web.js | 181 ++++++++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 175 insertions(+), 6 deletions(-)
+
+diff --git a/src/backends/web.js b/src/backends/web.js
+index afc813b..cecf29a 100644
+--- a/src/backends/web.js
++++ b/src/backends/web.js
+@@ -203,16 +203,27 @@ export class Dvui {
+     /// `undefined` is unknown, and sends it.
+     gls = {};
+     /// One framebuffer per render-target texture, attached once (texture id -> framebuffer):
+     /// re-attaching a texture to the one shared framebuffer on every switch made the driver
+     /// check the framebuffer again each time.
+     targetFramebuffers = new Map();
+     /// The matrix uniform's storage, filled in place.
+     matrix = new Float32Array(16);
++    /// Custom programs (`wasm_programCreate`), by id: `{ prog, loc, status, mw, mh, mfb }`.
++    /// Id 0 is dvui's own (`stock`). The program draws go through is `cur`; each keeps its own
++    /// matrix as last set, since a uniform belongs to its program.
++    programs = new Map();
++    stock = null;
++    cur = null;
++    newProgramId = 1;
++    /// KHR_parallel_shader_compile, where there is one: a program compiles while frames go on.
++    parallelCompile = null;
++    /// The most uniform vec4s a program may have, asked of the context once.
++    programMaxVec4 = undefined;
+ 
+     // The modifier bits dvui reads (web_mod_code_to_dvui), from any keyboard or mouse event.
+     modCode(ev) {
+         return (ev.metaKey << 3) + (ev.altKey << 2) + (ev.ctrlKey << 1) + (ev.shiftKey << 0);
+     }
+ 
+     // The cached setters (`gls`): each sends its state only when it differs from what is set.
+     bindTex(texture) {
+@@ -231,51 +242,136 @@ export class Dvui {
+         this.gl.scissor(x, y, w, h);
+         g.sx = x; g.sy = y; g.sw = w; g.sh = h;
+     }
+     setViewport(w, h) {
+         if (this.gls.vw === w && this.gls.vh === h) return;
+         this.gl.viewport(0, 0, w, h);
+         this.gls.vw = w; this.gls.vh = h;
+     }
+-    /// 0 source-over, 1 add, 2 copy (`wasm_textureBlend`).
++    /// 0 source-over, 1 add, 2 copy (`wasm_textureBlend`), 3 punch — `dst · (1 − src.a)`, a
++    /// program's.
+     setBlend(mode) {
+         if (this.gls.blend === mode) return;
+         if (mode === 2) {
+             this.gl.disable(this.gl.BLEND);
+         } else {
+             if (this.gls.blend === 2 || this.gls.blend === undefined) this.gl.enable(this.gl.BLEND);
+             if (mode === 1) this.gl.blendFunc(this.gl.ONE, this.gl.ONE);
++            else if (mode === 3) this.gl.blendFunc(this.gl.ZERO, this.gl.ONE_MINUS_SRC_ALPHA);
+             else this.gl.blendFunc(this.gl.ONE, this.gl.ONE_MINUS_SRC_ALPHA);
+         }
+         this.gls.blend = mode;
+     }
+     setUseTex(on) {
+         if (this.gls.useTex === on) return;
+         this.gl.uniform1i(this.programInfo.uniformLocations.useTex, on);
+         this.gls.useTex = on;
+     }
++    /// Draw through program `id` (0 dvui's own): its uniforms `data`, and `tex1`, `tex2` (texture
++    /// ids, 0 none) at units 1 and 2. Leaving a program unbinds what it read there: a texture
++    /// still bound to a unit while it is the target being drawn into is a feedback loop to some
++    /// drivers.
++    useProgram(id, data, tex1, tex2) {
++        const p = id === 0 ? this.stock : this.programs.get(id);
++        if (p === undefined || p === null || p.status !== 2) return false;
++        const gl = this.gl;
++        if (this.cur !== p) {
++            if (this.cur !== this.stock && this.cur !== null) {
++                for (const unit of [1, 2]) {
++                    gl.activeTexture(gl.TEXTURE0 + unit);
++                    gl.bindTexture(gl.TEXTURE_2D, null);
++                }
++                gl.activeTexture(gl.TEXTURE0);
++            }
++            gl.useProgram(p.prog);
++            this.cur = p;
++        }
++        if (p === this.stock) return true;
++        if (data !== null && data.length > 0 && p.loc.data !== null) gl.uniform4fv(p.loc.data, data);
++        const units = [tex1, tex2];
++        for (let u = 0; u < 2; u += 1) {
++            if (units[u] === 0) continue;
++            const entry = this.textureEntry(units[u]);
++            gl.activeTexture(gl.TEXTURE1 + u);
++            gl.bindTexture(gl.TEXTURE_2D, entry === null ? null : entry[0]);
++        }
++        gl.activeTexture(gl.TEXTURE0);
++        return true;
++    }
+     /// The projection for the current render target: its size, and flipped for the screen.
+     setMatrix() {
+         const w = this.renderTargetSize[0], h = this.renderTargetSize[1], fb = this.using_fb;
++        const p = this.cur;
++        if (p !== this.stock && p !== null) {
++            if (p.mw === w && p.mh === h && p.mfb === fb) return;
++            this.fillMatrix(w, h, fb);
++            this.gl.uniformMatrix4fv(p.loc.matrix, false, this.matrix);
++            p.mw = w; p.mh = h; p.mfb = fb;
++            return;
++        }
+         if (this.gls.mw === w && this.gls.mh === h && this.gls.mfb === fb) return;
+         this.fillMatrix(w, h, fb);
+         this.gl.uniformMatrix4fv(this.programInfo.uniformLocations.matrix, false, this.matrix);
+         this.gls.mw = w; this.gls.mh = h; this.gls.mfb = fb;
+     }
+     fillMatrix(w, h, fb) {
+         const m = this.matrix;
+         m.fill(0);
+         m[0] = 2.0 / w;
+         m[5] = (fb ? 2.0 : -2.0) / h;
+         m[10] = 1.0;
+         m[12] = -1.0;
+         m[13] = fb ? -1.0 : 1.0;
+         m[15] = 1.0;
+     }
++    queryProgramMaxVec4() {
++        if (!this.webgl2) {
++            // Pixel positions need a full float: no program where the fragment
++            // shader has no highp.
++            const hp = this.gl.getShaderPrecisionFormat(this.gl.FRAGMENT_SHADER, this.gl.HIGH_FLOAT);
++            if (hp === null || hp.precision < 23) return 0;
++        }
++        // What dvui's own uniforms leave of the guaranteed fragment budget.
++        return Math.max(0, this.gl.getParameter(this.gl.MAX_FRAGMENT_UNIFORM_VECTORS) - 8);
++    }
++    /// The prelude a program's source is written against: one source, built as GLSL ES 3.00 or
++    /// 1.00.
++    programPrelude(uniform_vec4s) {
++        if (this.webgl2) {
++            return "#version 300 es\nprecision highp float;\n#define VARYING in\n#define TEX texture\n" +
++                "out vec4 dvui_frag_color;\n#define FRAG_COLOR dvui_frag_color\n#define MAX_VEC4 " + uniform_vec4s + "\n";
++        }
++        return "precision highp float;\n#define VARYING varying\n#define TEX texture2D\n" +
++            "#define FRAG_COLOR gl_FragColor\n#define MAX_VEC4 " + uniform_vec4s + "\n";
++    }
++    /// A program's link has finished (or there is no way to ask, and it is done): look up what it
++    /// needs, or log why it failed.
++    programLinked(p) {
++        const gl = this.gl;
++        if (!gl.getProgramParameter(p.prog, gl.LINK_STATUS)) {
++            console.error("dvui: program failed: " + gl.getProgramInfoLog(p.prog) + "\n" +
++                (gl.getShaderInfoLog(p.fs) || ""));
++            p.status = 0;
++            return;
++        }
++        p.loc = {
++            matrix: gl.getUniformLocation(p.prog, "uMatrix"),
++            data: gl.getUniformLocation(p.prog, "uData"),
++        };
++        const prev = this.cur;
++        gl.useProgram(p.prog);
++        const units = ["uSampler", "uTex1", "uTex2"];
++        for (let u = 0; u < units.length; u += 1) {
++            const l = gl.getUniformLocation(p.prog, units[u]);
++            if (l !== null) gl.uniform1i(l, u);
++        }
++        gl.useProgram(prev === null ? this.stock.prog : prev.prog);
++        p.status = 2;
++    }
+     /// The vertex layout, which only changes if the vertex type does.
+     setLayout(sizeof_vertex, offset_pos, offset_col, offset_uv) {
+         const g = this.gls;
+         if (g.ls === sizeof_vertex && g.lp === offset_pos && g.lc === offset_col && g.lu === offset_uv) return;
+         const a = this.programInfo.attribLocations;
+         this.gl.vertexAttribPointer(a.vertexPosition, 2, this.gl.FLOAT, false, sizeof_vertex, offset_pos);
+         this.gl.enableVertexAttribArray(a.vertexPosition);
+         this.gl.vertexAttribPointer(a.vertexColor, 4, this.gl.UNSIGNED_BYTE, false, sizeof_vertex, offset_col);
+@@ -585,16 +681,70 @@ export class Dvui {
+         this.hidden_input.style.padding = 0;
+         this.hidden_input.style.border = 0;
+         this.hidden_input.style.margin = 0;
+         this.hidden_input.style.opacity = 0;
+         this.hidden_input.style.zIndex = -1;
+         document.body.prepend(this.hidden_input);
+ 
+         this.imports = {
++            // Custom programs: a fragment shader drawn with dvui's own vertex shader and
++            // vertex layout, and up to `wasm_programMaxVec4` vec4s of uniforms (`uData`).
++            // Asked once: `getParameter` is a synchronous trip to the GPU process in Firefox,
++            // some 3.5 ms a call on a phone — asked every frame, it was the frame's worst cost.
++            wasm_programMaxVec4: () => {
++                if (this.programMaxVec4 !== undefined) return this.programMaxVec4;
++                this.programMaxVec4 = this.queryProgramMaxVec4();
++                return this.programMaxVec4;
++            },
++            wasm_programCreate: (ptr, len, textures, uniform_vec4s) => {
++                const gl = this.gl;
++                const body = this.stringFromPointer(ptr, len);
++                // A complete source (one starting `#version`, GLSL ES 3.00) is compiled as it is,
++                // on WebGL2 only. On WebGL1 it fails, and whoever drew with it falls back.
++                const complete = body.startsWith("#version");
++                if (complete && !this.webgl2) {
++                    const id = this.newProgramId;
++                    this.newProgramId += 1;
++                    this.programs.set(id, { prog: null, fs: null, loc: null, status: 0 });
++                    return id;
++                }
++                const src = complete ? body : this.programPrelude(uniform_vec4s) + body;
++                const vs = gl.createShader(gl.VERTEX_SHADER);
++                gl.shaderSource(vs, this.webgl2 ? vertexShaderSource_webgl2 : vertexShaderSource_webgl);
++                gl.compileShader(vs);
++                const fs = gl.createShader(gl.FRAGMENT_SHADER);
++                gl.shaderSource(fs, src);
++                gl.compileShader(fs);
++                const prog = gl.createProgram();
++                gl.attachShader(prog, vs);
++                gl.attachShader(prog, fs);
++                // The stock program's attribute slots, so the vertex layout set once
++                // (`setLayout`) feeds every program.
++                const a = this.programInfo.attribLocations;
++                gl.bindAttribLocation(prog, a.vertexPosition, "aVertexPosition");
++                gl.bindAttribLocation(prog, a.vertexColor, "aVertexColor");
++                gl.bindAttribLocation(prog, a.textureCoord, "aTextureCoord");
++                gl.linkProgram(prog);
++                const id = this.newProgramId;
++                this.newProgramId += 1;
++                const p = { prog, fs, loc: null, status: 1, mw: undefined, mh: undefined, mfb: undefined };
++                this.programs.set(id, p);
++                if (this.parallelCompile === null) this.programLinked(p);
++                return id;
++            },
++            // 0 failed, 1 compiling, 2 ready to draw with.
++            wasm_programStatus: (id) => {
++                const p = this.programs.get(id);
++                if (p === undefined) return 0;
++                if (p.status === 1 && this.gl.getProgramParameter(p.prog, this.parallelCompile.COMPLETION_STATUS_KHR)) {
++                    this.programLinked(p);
++                }
++                return p.status;
++            },
+             wasm_about_webgl2: () => {
+                 if (this.webgl2) {
+                     return 1;
+                 } else {
+                     return 0;
+                 }
+             },
+             wasm_panic: (ptr, len) => {
+@@ -937,30 +1087,35 @@ export class Dvui {
+                 }
+ 
+                 this.gl.drawElements(this.gl.TRIANGLES, indices.length, this.gl.UNSIGNED_SHORT, 0);
+             },
+             // A flush's worth of draws, for a backend that batches them: the stream's geometry,
+             // uploaded once, and its steps in order — each `cmd_count` entry eight i32s: texture,
+             // kind, x, y, w, h, and the range of the stream's indices it draws. Kind's bit 0 says
+             // the draw is clipped to x, y, w, h and the bits above it are the draw's blend (0
+-            // source-over, 1 add, 2 copy); -1 is a switch of render target to `texture`, -2 a
+-            // clear of it.
++            // source-over, 1 add, 2 copy, 3 punch); -1 is a switch of render target to `texture`,
++            // -2 a clear of it, -3 a switch of program to `texture` (0 dvui's own), x and y the
++            // offset and count of its vec4s in the stream's uniforms, w and h the textures it
++            // reads at units 1 and 2. Each stream starts and ends in dvui's own program.
+             wasm_renderStream: (
+                 index_ptr,
+                 index_len,
+                 vertex_ptr,
+                 vertex_len,
+                 sizeof_vertex,
+                 offset_pos,
+                 offset_col,
+                 offset_uv,
+                 cmd_ptr,
+                 cmd_count,
++                uniform_ptr,
++                uniform_floats,
+             ) => {
++                const uniforms = uniform_floats > 0 ? new Float32Array(this.instance.exports.memory.buffer, uniform_ptr, uniform_floats) : null;
+                 // A stream of only switches and clears has no geometry (and an empty slice's
+                 // pointer is not one to make a view at).
+                 if (index_len > 0) {
+                     const indices = new Uint16Array(this.instance.exports.memory.buffer, index_ptr, index_len / 2);
+                     this.gl.bufferData(this.gl.ELEMENT_ARRAY_BUFFER, indices, this.gl.DYNAMIC_DRAW);
+                     this.gl.bufferData(this.gl.ARRAY_BUFFER, this.bytesFromPointer(vertex_ptr, vertex_len), this.gl.DYNAMIC_DRAW);
+                     this.setLayout(sizeof_vertex, offset_pos, offset_col, offset_uv);
+                 }
+@@ -975,34 +1130,44 @@ export class Dvui {
+                         this.imports.wasm_renderTarget(textureId);
+                         continue;
+                     }
+                     if (kind === -2) {
+                         // A clear of a target, wherever drawing is going.
+                         this.imports.wasm_textureClearTarget(textureId);
+                         continue;
+                     }
++                    if (kind === -3) {
++                        // A switch of program, with its uniforms and textures.
++                        const at = cmds[c + 2] * 4, n = cmds[c + 3] * 4;
++                        const data = textureId !== 0 && uniforms !== null ? uniforms.subarray(at, at + n) : null;
++                        if (!this.useProgram(textureId, data, cmds[c + 4], cmds[c + 5])) this.useProgram(0, null, 0, 0);
++                        continue;
++                    }
+                     this.setMatrix();
+                     if ((kind & 1) === 1) {
+                         this.setScissor(cmds[c + 2], cmds[c + 3], cmds[c + 4], cmds[c + 5]);
+                     } else {
+                         this.setScissor(0, 0, this.renderTargetSize[0], this.renderTargetSize[1]);
+                     }
+                     const tex = textureId != 0 ? this.textureEntry(textureId) : null;
+                     if (textureId != 0 && tex === null) console.warn(`wasm_renderStream: missing texture id ${textureId}`);
++                    const stock = this.cur === this.stock;
+                     if (tex !== null) {
+                         this.bindTex(tex[0]);
+-                        this.setUseTex(1);
+-                    } else {
++                        if (stock) this.setUseTex(1);
++                    } else if (stock) {
+                         this.setUseTex(0);
+                     }
+-                    // The draw's blend as it was when drawn (bits above the clip's).
++                    // The draw's blend as it was when drawn (bits above the clip's): its
++                    // texture's, or the program's.
+                     this.setBlend(kind >> 1);
+                     this.gl.drawElements(this.gl.TRIANGLES, cmds[c + 7], this.gl.UNSIGNED_SHORT, cmds[c + 6] * 2);
+                 }
++                if (this.cur !== this.stock) this.useProgram(0, null, 0, 0);
+             },
+             wasm_cursor: (name_ptr, name_len) => {
+                 const cursor_name = this.stringFromPointer(name_ptr, name_len);
+                 this.gl.canvas.style.cursor = cursor_name;
+             },
+             wasm_text_input: (x, y, w, h) => {
+                 if (w > 0 && h > 0) {
+                     this.textInputRect = [x, y, w, h];
+@@ -1290,16 +1455,20 @@ export class Dvui {
+         // Bound for good: there is one program, one pair of buffers and one sampler, so a draw
+         // sends only its data and whatever else changed (`gls`).
+         this.gl.useProgram(this.shaderProgram);
+         this.gl.bindBuffer(this.gl.ELEMENT_ARRAY_BUFFER, this.indexBuffer);
+         this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.vertexBuffer);
+         this.gl.activeTexture(this.gl.TEXTURE0);
+         this.gl.uniform1i(this.programInfo.uniformLocations.uSampler, 0);
+ 
++        this.stock = { prog: this.shaderProgram, loc: null, status: 2 };
++        this.cur = this.stock;
++        this.parallelCompile = this.gl.getExtension("KHR_parallel_shader_compile");
++
+         this.gls = {};
+         this.setBlend(0);
+         this.gl.enable(this.gl.SCISSOR_TEST);
+         this.setScissor(
+             0,
+             0,
+             this.gl.canvas.clientWidth,
+             this.gl.canvas.clientHeight,

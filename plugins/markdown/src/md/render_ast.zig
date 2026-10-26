@@ -747,9 +747,9 @@ fn resolvedLocalImagePath(ctx: RenderContext, arena: std.mem.Allocator, src: []c
     if (t.len == 0) return null;
     if (net_image.isRemote(t)) return null;
     if (std.fs.path.isAbsolute(t))
-        return std.fs.path.resolve(arena, &.{t}) catch null;
+        return std.fs.path.resolveAlloc(arena, &.{t}) catch null;
     const base = ctx.image_base_dir orelse return null;
-    return std.fs.path.resolve(arena, &.{ base, t }) catch null;
+    return std.fs.path.resolveAlloc(arena, &.{ base, t }) catch null;
 }
 
 /// Encoded image bytes or already-rasterized pixels for one image URL, or why
@@ -879,11 +879,11 @@ fn tryRevealRelativePath(url: []const u8, open_side: bool, ctx: RenderContext) b
 
     const abs = blk: {
         if (std.fs.path.isAbsolute(decoded))
-            break :blk std.fs.path.resolve(arena, &.{decoded}) catch return false;
+            break :blk std.fs.path.resolveAlloc(arena, &.{decoded}) catch return false;
         const base = ctx.image_base_dir orelse dirnameOf(ctx.document_path) orelse return false;
         // Remote README bases are URLs — relative *page* links aren't editor targets.
         if (std.mem.find(u8, base, "://") != null) return false;
-        break :blk std.fs.path.resolve(arena, &.{ base, decoded }) catch return false;
+        break :blk std.fs.path.resolveAlloc(arena, &.{ base, decoded }) catch return false;
     };
 
     return revealPath(abs, headingLineFor(ctx, arena, path_part, fragment, abs), 0, open_side);
@@ -921,7 +921,7 @@ fn headingLineFor(
     // differently (the resolver joins its vault root to a vault-relative path, this file resolves
     // against the document's directory), and an unnormalized difference would silently cost the
     // jump rather than announce itself.
-    const res_abs = std.fs.path.resolve(arena, &.{res.path}) catch return 0;
+    const res_abs = std.fs.path.resolveAlloc(arena, &.{res.path}) catch return 0;
     if (!samePath(res_abs, abs)) return 0;
     return res.line;
 }

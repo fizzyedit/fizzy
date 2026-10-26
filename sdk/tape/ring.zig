@@ -77,8 +77,10 @@ pub fn header(bytes: []const u8) ReadError!Header {
 
 pub fn Ring(comptime name: []const u8, comptime Frame: type, comptime Record: type, comptime caps: Caps) type {
     comptime {
-        for (.{ "t_ns", "first", "count" }) |f| if (!@hasField(Frame, f)) @compileError(@typeName(Frame) ++ " has no `" ++ f ++ "`");
-        for (.{ "bytes_at", "bytes_len" }) |f| if (!@hasField(Record, f)) @compileError(@typeName(Record) ++ " has no `" ++ f ++ "`");
+        for (.{ "t_ns", "first", "count" }) |f|
+            if (!@hasField(Frame, f)) @compileError(@typeName(Frame) ++ " has no `" ++ f ++ "`");
+        for (.{ "bytes_at", "bytes_len" }) |f|
+            if (!@hasField(Record, f)) @compileError(@typeName(Record) ++ " has no `" ++ f ++ "`");
     }
     return struct {
         const Self = @This();
@@ -208,7 +210,8 @@ pub fn Ring(comptime name: []const u8, comptime Frame: type, comptime Record: ty
                 for (0..fr.count) |k| {
                     const r = self.records[@intCast((fr.first + k) % caps.records)];
                     var b: u64 = 0;
-                    while (b < r.bytes_len) : (b += 1) try w.writeByte(self.bytes[@intCast((r.bytes_at + b) % caps.bytes)]);
+                    while (b < r.bytes_len) : (b += 1)
+                        try w.writeByte(self.bytes[@intCast((r.bytes_at + b) % caps.bytes)]);
                 }
             }
         }
@@ -226,7 +229,18 @@ pub fn Ring(comptime name: []const u8, comptime Frame: type, comptime Record: ty
 
         /// A stretch of nothing: what a capture holds when nothing was recorded.
         pub fn writeEmpty(w: *std.Io.Writer) !void {
-            try w.writeStruct(Header{ .stream = stream, .frame_size = @sizeOf(Frame), .record_size = @sizeOf(Record), .frames = 0, .records = 0, .bytes = 0, .first_frame = 0 }, .little);
+            try w.writeStruct(
+                Header{
+                    .stream = stream,
+                    .frame_size = @sizeOf(Frame),
+                    .record_size = @sizeOf(Record),
+                    .frames = 0,
+                    .records = 0,
+                    .bytes = 0,
+                    .first_frame = 0,
+                },
+                .little,
+            );
         }
 
         /// A file `write` made, read in place: its arrays are views into the bytes, checked to fit.
@@ -250,7 +264,9 @@ pub fn Ring(comptime name: []const u8, comptime Frame: type, comptime Record: ty
 
         pub fn read(bytes: []const u8) ReadError!Stretch {
             const h = try header(bytes);
-            if (!std.mem.eql(u8, &h.stream, &stream) or h.frame_size != @sizeOf(Frame) or h.record_size != @sizeOf(Record)) return error.OtherStream;
+            if (!std.mem.eql(u8, &h.stream, &stream) or
+                h.frame_size != @sizeOf(Frame) or h.record_size != @sizeOf(Record))
+                return error.OtherStream;
             const frames_bytes = @as(usize, h.frames) * @sizeOf(Frame);
             const records_bytes = @as(usize, h.records) * @sizeOf(Record);
             if (bytes.len < @sizeOf(Header) + frames_bytes + records_bytes + h.bytes) return error.Truncated;
@@ -312,7 +328,11 @@ test "the rings keep the newest, and a stretch starts at the oldest frame still 
     defer std.testing.allocator.destroy(ring);
     ring.* = .{};
     // More frames than the ring holds, each with one record.
-    for (0..TestRing.frames_cap + 10) |i| ring.appendFrame(.{ .t_ns = @intCast(i) }, &.{.{ .button = @intCast(i % 16) }}, &.{});
+    for (0..TestRing.frames_cap + 10) |i| ring.appendFrame(
+        .{ .t_ns = @intCast(i) },
+        &.{.{ .button = @intCast(i % 16) }},
+        &.{},
+    );
     try std.testing.expectEqual(@as(u64, 10), ring.oldestWhole());
     // Payloads outrunning their ring: a frame whose bytes were overwritten is not whole.
     for (0..8) |_| ring.appendFrame(.{ .t_ns = 100 }, &.{.{ .button = 1 }}, &.{&@as([64]u8, @splat('x'))});
@@ -326,7 +346,15 @@ test "the rings keep the newest, and a stretch starts at the oldest frame still 
 
 test "a file that lies about its sizes is refused" {
     try std.testing.expectError(error.Truncated, TestRing.read("FZR"));
-    var bad: [@sizeOf(Header)]u8 = std.mem.toBytes(Header{ .stream = TestRing.stream, .frame_size = @sizeOf(TestFrame), .record_size = @sizeOf(TestRecord), .frames = 5, .records = 0, .bytes = 0, .first_frame = 0 });
+    var bad: [@sizeOf(Header)]u8 = std.mem.toBytes(Header{
+        .stream = TestRing.stream,
+        .frame_size = @sizeOf(TestFrame),
+        .record_size = @sizeOf(TestRecord),
+        .frames = 5,
+        .records = 0,
+        .bytes = 0,
+        .first_frame = 0,
+    });
     try std.testing.expectError(error.Truncated, TestRing.read(&bad));
     bad[0] = 'X';
     try std.testing.expectError(error.NotARecording, TestRing.read(&bad));
