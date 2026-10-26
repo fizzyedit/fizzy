@@ -487,6 +487,8 @@ pub fn AppDeinit(_: *dvui.Window) void {
     // `editor.deinit` runs each plugin's `deinit` first (pixi's persists its `.fizproject` and
     // frees its own state + packer while `editor.app.host`/folder are still live).
     fizzy.editor().deinit() catch unreachable;
+    // The update check allocates from the app's allocator until it returns.
+    update_notify.deinit();
     // Tear down the singleton listener after the editor so any callback
     // currently in flight finishes before we free state it touches.
     singleton.deinit();
