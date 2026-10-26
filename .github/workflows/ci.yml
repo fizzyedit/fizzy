@@ -135,7 +135,8 @@ jobs:
           - { os: windows-latest, name: Windows }
           - { os: macos-14, name: macOS }
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    # macOS runs 26 to 30 minutes on a healthy day; a slow run should not be a failed one.
+    timeout-minutes: ${{ matrix.name == 'macOS' && 45 || 30 }}
     steps:
       - uses: actions/checkout@v4
       # The Zig cache's key, worked out once, here, before anything is unpacked. The fetch below
@@ -237,6 +238,11 @@ jobs:
       - name: Compile web (wasm) build with a custom layout
         if: matrix.name != 'Windows'
         shell: bash
+        # The script builds through scripts/zb, which waits for the load average to fall under the
+        # performance cores. A runner's load is the previous step's compilers (16 against 3 on
+        # macOS), so zb idled 10 minutes there. Nothing else shares a CI runner: skip the wait.
+        env:
+          FIZZY_BUILD_SKIP: "1"
         run: bash scripts/ci-retry.sh scripts/check-web-layout.sh
 
       # The tapes fizzyed.it serves beside the app: a script or `docs/demos/` tape that no longer
