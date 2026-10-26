@@ -73,7 +73,16 @@ pub fn framework(b: *std.Build, optimize: std.lang.OptimizeMode) Framework {
         .single_threaded = true,
     });
     // What the page calls into (`web/web.js`): dvui's web exports.
-    web_backend.export_symbol_names = &.{ "dvui_init", "dvui_deinit", "dvui_update", "add_event", "arena_u8", "gpa_u8", "gpa_free", "new_font" };
+    web_backend.export_symbol_names = &.{
+        "dvui_init",
+        "dvui_deinit",
+        "dvui_update",
+        "add_event",
+        "arena_u8",
+        "gpa_u8",
+        "gpa_free",
+        "new_font",
+    };
     web_backend.addImport("dvui", dvui_web);
     dvui_web.addImport("backend", web_backend);
     const dvui_web_proxy_bridge = sdk.addProxyBridgeModule(b, web_target, optimize, dvui_web_dep, dvui_web);
@@ -86,7 +95,16 @@ pub fn framework(b: *std.Build, optimize: std.lang.OptimizeMode) Framework {
         .link_libc = false,
         .single_threaded = true,
     });
-    const icons_web = core_mod.addImports(b, core_module_web, dvui_web, b.dependency("fizzy_sdk", .{}).builder, web_target, optimize, null, null);
+    const icons_web = core_mod.addImports(
+        b,
+        core_module_web,
+        dvui_web,
+        b.dependency("fizzy_sdk", .{}).builder,
+        web_target,
+        optimize,
+        null,
+        null,
+    );
     return .{
         .dvui_dep = dvui_web_dep,
         .dvui = dvui_web,
@@ -135,7 +153,10 @@ pub fn build(
     web_exe.entry = .disabled;
     web_exe.root_module.addImport("dvui", dvui_web);
     // A page has one canvas: `backend_web.viewports`.
-    web_exe.root_module.addImport("viewports_none", @import("fizzy_backend").viewportsNoneModule(@import("exe.zig").backendDependency(b), dvui_web));
+    web_exe.root_module.addImport(
+        "viewports_none",
+        @import("fizzy_backend").viewportsNoneModule(@import("exe.zig").backendDependency(b), dvui_web),
+    );
     web_exe.root_module.addImport("web-backend", web_backend);
 
     // Extra wasm exports beyond dvui's own (`dvui_init`/`dvui_update`/etc.). The wasm
@@ -253,7 +274,10 @@ pub fn build(
     // And the named dependencies, resolved directly for wasm.
     for (web_plugin_deps) |dep_name| {
         const dep = b.lazyDependency(dep_name, .{ .target = web_target, .optimize = optimize }) orelse continue;
-        bundled_list.append(b.allocator, .{ .name = dep_name, .module = plugins.rehome(b, wiring, dep_name, dep.module("plugin")) }) catch @panic("OOM");
+        bundled_list.append(
+            b.allocator,
+            .{ .name = dep_name, .module = plugins.rehome(b, wiring, dep_name, dep.module("plugin")) },
+        ) catch @panic("OOM");
     }
     // A plugin may ship pages of its own beside the app (its `web/` directory → `plugins/<id>/`):
     // the far end of a popup round trip that is the plugin's, not fizzy's — a provider's
@@ -301,9 +325,32 @@ pub fn build(
 
     // The `app` framework module (the plugin store). Wired exactly as the native build wires
     // it — one helper, so the two cannot drift.
-    const app_module_web = sdk.wireAppModule(b, web_target, optimize, dvui_web, core_module_web, sdk_module_web, icons_web, markdown_module_web, null, build_opts, null, web_exe.root_module);
+    const app_module_web = sdk.wireAppModule(
+        b,
+        web_target,
+        optimize,
+        dvui_web,
+        core_module_web,
+        sdk_module_web,
+        icons_web,
+        markdown_module_web,
+        null,
+        build_opts,
+        null,
+        web_exe.root_module,
+    );
     app_module_web.addImport("bundled_plugins", bundled_web);
-    sdk.wireAppLayout(b, web_target, optimize, app_layout, dvui_web, app_module_web, core_module_web, sdk_module_web, web_exe.root_module);
+    sdk.wireAppLayout(
+        b,
+        web_target,
+        optimize,
+        app_layout,
+        dvui_web,
+        app_module_web,
+        core_module_web,
+        sdk_module_web,
+        web_exe.root_module,
+    );
 
     // Cache-buster: stamps a 64-char hash into the index.html / web.js placeholders so
     // the browser picks up new wasm builds without manual hard-reloads. Re-implements
@@ -355,7 +402,9 @@ pub fn build(
     const rehome_check: ?*std.Build.Step.Compile = if (own) blk: {
         const fixture = rehome_fixture.graph(b, b.resolveTargetQuery(.{}), optimize);
         var fixture_wiring = wiring;
-        fixture_wiring.consumer = b.createModule(.{ .target = web_target, .optimize = optimize, .link_libc = false, .single_threaded = true });
+        fixture_wiring.consumer = b.createModule(
+            .{ .target = web_target, .optimize = optimize, .link_libc = false, .single_threaded = true },
+        );
         const module = plugins.rehome(b, fixture_wiring, "rehome_fixture", fixture);
         rehome_fixture.check(b, fixture, module, false);
         break :blk b.addObject(.{ .name = "rehome-fixture-web", .root_module = module });
@@ -433,14 +482,24 @@ pub fn install(b: *std.Build, web: Web) void {
 /// the browser's storage for it, so a test build served beside the real one — fizzyed.it/testapp/
 /// beside /app/ — is built with a name of its own and keeps out of the real one's settings.
 fn stampStorage(b: *std.Build) std.Build.LazyPath {
-    const name = b.option([]const u8, "web-storage", "What the web app files its browser storage under (default \"fizzy\"); give a test build served beside the real one a name of its own") orelse "fizzy";
+    const name = b.option(
+        []const u8,
+        "web-storage",
+        "What the web app files its browser storage under (default \"fizzy\"); give a " ++
+            "test build served beside the real one a name of its own",
+    ) orelse "fizzy";
     for (name) |c| switch (c) {
         'a'...'z', '0'...'9', '-', '_' => {},
         else => std.debug.panic("-Dweb-storage={s}: only a-z, 0-9, '-' and '_'", .{name}),
     };
     const token = "__FIZZY_WEB_STORAGE__";
     b.dependOnFileContents(b.path("web/index.html"));
-    const html = std.Io.Dir.cwd().readFileAlloc(b.graph.io, b.root.joinString(b.allocator, "web/index.html") catch @panic("OOM"), b.allocator, .unlimited) catch |err|
+    const html = std.Io.Dir.cwd().readFileAlloc(
+        b.graph.io,
+        b.root.joinString(b.allocator, "web/index.html") catch @panic("OOM"),
+        b.allocator,
+        .unlimited,
+    ) catch |err|
         std.debug.panic("web/index.html: {t}", .{err});
     if (std.mem.find(u8, html, token) == null) std.debug.panic("web/index.html: no {s} to stamp", .{token});
     const stamped = std.mem.replaceOwned(u8, b.allocator, html, token, name) catch @panic("OOM");

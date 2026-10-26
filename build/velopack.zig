@@ -79,7 +79,12 @@ pub fn addVpkRun(b: *std.Build, vz: Dep, target: std.Build.ResolvedTarget) !*std
 
 /// `Velopack.h` as a Zig module, through translate-c: Zig 0.17 removed `@cImport`. Imported as
 /// `velopack_c` by the modules `linkVelopack` is given.
-fn velopackCModule(b: *std.Build, vz: Dep, target: std.Build.ResolvedTarget, optimize: std.lang.OptimizeMode) *std.Build.Module {
+fn velopackCModule(
+    b: *std.Build,
+    vz: Dep,
+    target: std.Build.ResolvedTarget,
+    optimize: std.lang.OptimizeMode,
+) *std.Build.Module {
     const tc: Translator = .init(b.dependency("translate_c", .{}), .{
         .c_source_file = vz.builder.dependency("velopack", .{}).path("include/Velopack.h"),
         .target = target,
@@ -249,7 +254,10 @@ pub fn resolveWindowsMsvcLibc(
         return .{ .libc_path = null, .needs_setup = false };
 
     if (opts.explicit_path) |p| {
-        const abs = if (std.fs.path.isAbsolute(p)) b.dupePath(p) else (b.root.joinString(b.allocator, p) catch @panic("OOM"));
+        const abs = if (std.fs.path.isAbsolute(p))
+            b.dupePath(p)
+        else
+            (b.root.joinString(b.allocator, p) catch @panic("OOM"));
         b.dependOnFileContents(b.graph.cwdRelativePath(abs));
         return .{ .libc_path = abs, .needs_setup = false };
     }
@@ -267,8 +275,14 @@ pub fn resolveWindowsMsvcLibc(
         break :blk true;
     };
 
-    if (exists) return .{ .libc_path = (b.root.joinString(b.allocator, rel) catch @panic("OOM")), .needs_setup = false };
-    if (opts.fetch_if_missing) return .{ .libc_path = (b.root.joinString(b.allocator, rel) catch @panic("OOM")), .needs_setup = true };
+    if (exists) return .{
+        .libc_path = (b.root.joinString(b.allocator, rel) catch @panic("OOM")),
+        .needs_setup = false,
+    };
+    if (opts.fetch_if_missing) return .{
+        .libc_path = (b.root.joinString(b.allocator, rel) catch @panic("OOM")),
+        .needs_setup = true,
+    };
     return .{ .libc_path = null, .needs_setup = false };
 }
 

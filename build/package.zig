@@ -55,7 +55,9 @@ pub fn addSteps(opts: Options) *std.Build.Step {
     // installer, but the install hook never runs: Setup.exe hangs with "the
     // application install hook failed". Fail loudly instead of shipping that trap.
     const windows_non_msvc = target.result.os.tag == .windows and target.result.abi != .msvc;
-    const failure: ?*std.Build.Step = if (velopack_required_fail) |fail_step| fail_step else if (windows_non_msvc) &b.addFail(
+    const failure: ?*std.Build.Step = if (velopack_required_fail) |fail_step|
+        fail_step
+    else if (windows_non_msvc) &b.addFail(
         \\`zig build package` for Windows requires the MSVC ABI so Velopack is linked.
         \\The default native target resolves to x86_64-windows-gnu, which builds a binary
         \\WITHOUT the Velopack runtime. vpk would still wrap it as a Velopack installer, but
@@ -190,7 +192,9 @@ pub fn addSteps(opts: Options) *std.Build.Step {
                     // Without this, Apple's notary service rejects with "signature does not
                     // include a secure timestamp" / "hardened runtime not enabled".
                     vpk_pkg_sh.addArg("--signEntitlements");
-                    const entitlements_path = b.root.joinString(b.allocator, "assets/macos/Fizzy.entitlements") catch |e| std.debug.panic("entitlements path: {}", .{e});
+                    const entitlements_path =
+                        b.root.joinString(b.allocator, "assets/macos/Fizzy.entitlements") catch |e|
+                            std.debug.panic("entitlements path: {}", .{e});
                     vpk_pkg_sh.addArg(entitlements_path);
                 }
                 if (macos_sign_install_identity) |id| {
@@ -257,7 +261,12 @@ pub fn addSteps(opts: Options) *std.Build.Step {
 /// fizzy's own (`build.zig`), or an app's built on fizzy (`fizzy.addPackageSteps`), whose
 /// `build.zig` passes fizzy its options again in each run.
 pub fn addPackageAllStep(b: *std.Build, no_emit: bool) void {
-    const packageall_step = b.step("packageall", "zig build package for each of the six release targets, with this build's -D options but the target's; -Dwindows-msvc-libc= and -Dfetch-msvc reach the *-windows-msvc runs only");
+    const packageall_step = b.step(
+        "packageall",
+        "zig build package for each of the six release targets, with this build's -D " ++
+            "options but the target's; -Dwindows-msvc-libc= and -Dfetch-msvc reach the " ++
+            "*-windows-msvc runs only",
+    );
     if (no_emit) {
         packageall_step.dependOn(&b.addFail("cannot run `packageall` with -Dno-emit").step);
         return;
@@ -283,7 +292,8 @@ pub fn addPackageAllStep(b: *std.Build, no_emit: bool) void {
         switch (entry.value_ptr.*) {
             .flag => list.append(b.allocator, b.fmt("-D{s}", .{name})) catch @panic("OOM"),
             .scalar => |v| list.append(b.allocator, b.fmt("-D{s}={s}", .{ name, v })) catch @panic("OOM"),
-            .list => |l| for (l.items) |v| list.append(b.allocator, b.fmt("-D{s}={s}", .{ name, v })) catch @panic("OOM"),
+            .list => |l| for (l.items) |v|
+                list.append(b.allocator, b.fmt("-D{s}={s}", .{ name, v })) catch @panic("OOM"),
             // Only a `b.dependency` call passes these, never a command line.
             .map, .lazy_path, .lazy_path_list => {},
         }
@@ -311,7 +321,9 @@ pub fn addPackageAllStep(b: *std.Build, no_emit: bool) void {
 
     var prev_step: ?*std.Build.Step = null;
     for (packageall_triples) |triple| {
-        const zig_pkg_run = b.addSystemCommand(&.{ b.graph.zig_exe, "build", "package", b.fmt("-Dtarget={s}", .{triple}) });
+        const zig_pkg_run = b.addSystemCommand(
+            &.{ b.graph.zig_exe, "build", "package", b.fmt("-Dtarget={s}", .{triple}) },
+        );
         zig_pkg_run.addArgs(common.items);
         if (std.mem.endsWith(u8, triple, "-windows-msvc")) zig_pkg_run.addArgs(msvc_only.items);
         // This build's own build file, from the cwd this build was run in (inherited): a
