@@ -211,6 +211,12 @@ const tape_boundary_types = .{
     tape.Tape.Keyframe,
     tape.Tape.Setting,
     tape.Tape.File,
+    tape.Tape.Check,
+    tape.Sequencer.Point,
+    tape.Sequencer.Failure,
+    tape.Sequencer.Sink,
+    tape.Sequencer.Sink.VTable,
+    replay.Player,
     replay.Stage,
     replay.Stage.VTable,
 };

@@ -44,11 +44,14 @@ const Played = struct {
 
 test "a plugin writes a demo, ships it as bytes, and plays it back" {
     const gpa = std.testing.allocator;
-    var script: tape.Script = .init(gpa, "fixture", "Fixture");
-    errdefer script.deinit();
-    try script.keyframe(.{ .root = "demo://fixture" });
-    try script.command("fixture.hello");
-    var owned = try script.finish();
+    var owned = owned: {
+        // `finish` hands the arena to `owned`, so `script` owns it only until then.
+        var script: tape.Script = .init(gpa, "fixture", "Fixture");
+        errdefer script.deinit();
+        try script.keyframe(.{ .root = "demo://fixture" });
+        try script.command("fixture.hello");
+        break :owned try script.finish();
+    };
     defer owned.deinit();
 
     const bytes = try tape.binary.encode(gpa, owned.tape, .{});

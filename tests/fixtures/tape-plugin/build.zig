@@ -1,6 +1,11 @@
 const std = @import("std");
 const fizzy = @import("fizzy");
 
+/// The plugin as an application links it (`build/app.zig` builds it this way and plays its tests).
+pub fn staticModule(b: *std.Build, framework: anytype) *std.Build.Module {
+    return fizzy.plugin.staticModule(b, framework, .{});
+}
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
