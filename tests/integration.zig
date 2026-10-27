@@ -10573,6 +10573,39 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try dvui.testing.settle(headlessFrame);
         // The list differs by form factor, so its generation moves and a retained one is stale.
         try std.testing.expect(desktop_api.generation() != desktop_generation);
+        // Tabs opened until the last one starts past the phone's narrow strip: selecting it scrolls
+        // the strip to it, so it is not left off the screen.
+        // In a folder of their own: none of the editor's watches is on it.
+        var strip_tmp = std.testing.tmpDir(.{});
+        defer strip_tmp.cleanup();
+        var strip_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const strip_dir = strip_buf[0..try strip_tmp.dir.realPath(dvui.io, &strip_buf)];
+        for (0..5) |n| {
+            var name_buf: [160]u8 = undefined;
+            // The last has a name wider than the strip, shown by its leading edge.
+            const name = if (n == 4)
+                try std.fmt.bufPrint(&name_buf, "strip-tab-{d}-{s}.txt", .{ n, "a-very-long-name-a-very-long-name-a-very-long-name-a-very-long-name-a-very-long-name-" })
+            else
+                try std.fmt.bufPrint(&name_buf, "strip-tab-{d}.txt", .{n});
+            try strip_tmp.dir.writeFile(dvui.io, .{ .sub_path = name, .data = "" });
+            const path = try std.fs.path.join(gpa, &.{ strip_dir, name });
+            defer gpa.free(path);
+            _ = try editor.openFilePath(path, editor.workbench.currentGroupingID());
+            for (0..200) |_| {
+                _ = try dvui.testing.step(headlessFrame);
+                const d = editor.activeDoc() orelse continue;
+                if (std.mem.eql(u8, d.owner.documentPath(d), path)) break;
+            }
+        }
+        try dvui.testing.settle(headlessFrame);
+        {
+            const pane = editor.workbench.workspaces.getPtr(editor.workbench.currentGroupingID()) orelse return error.TestUnexpectedResult;
+            const strip = pane.strip_rect_physical orelse return error.TestUnexpectedResult;
+            try std.testing.expect(pane.tab_slot_count >= 5);
+            const last = pane.tab_slots[pane.tab_slot_count - 1].rect;
+            try std.testing.expect(last.w > strip.w);
+            try std.testing.expect(last.x >= strip.x - 1 and last.x < strip.x + strip.w);
+        }
         try editor.demo.play("tour");
         const player = &editor.demo.player;
         var phone_frames: usize = 0;
@@ -10582,16 +10615,25 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
             phone_panes.look(&editor.workbench);
         }
         try std.testing.expectEqual(app.automation.Player.State.ended, player.state);
-        // The anchors the phone's tour aims at are drawn in its shape, but for one: the tour opens
-        // among this test's own tabs, and the phone's strip does not scroll to the selected tab, so
-        // the tour's README tab sits off the screen and its chapter is skipped (once).
-        // TODO(seam): the card tab strip scrolling to the selected tab (plans#60) makes this zero.
-        try std.testing.expect(player.timeouts <= 1);
+        // Every anchor the phone's tour aims at is drawn: the strip scrolls the selected tab on.
+        try std.testing.expectEqual(@as(u32, 0), player.timeouts);
         // A phone never splits by itself: the second document is a card in the one group.
         try std.testing.expectEqual(@as(usize, 1), phone_panes.most);
         player.unload();
         // Their documents are still open: the demo owns only what it opened.
         try std.testing.expect(editor.docFromPath(notes) != null);
+        try dvui.testing.settle(headlessFrame);
+        for (0..5) |n| {
+            var name_buf: [160]u8 = undefined;
+            const name = if (n == 4)
+                try std.fmt.bufPrint(&name_buf, "strip-tab-{d}-{s}.txt", .{ n, "a-very-long-name-a-very-long-name-a-very-long-name-a-very-long-name-a-very-long-name-" })
+            else
+                try std.fmt.bufPrint(&name_buf, "strip-tab-{d}.txt", .{n});
+            const path = try std.fs.path.join(gpa, &.{ strip_dir, name });
+            defer gpa.free(path);
+            const doc = editor.docFromPath(path) orelse return error.TestUnexpectedResult;
+            try editor.closeFileID(doc.id);
+        }
         try dvui.testing.settle(headlessFrame);
     }
 
