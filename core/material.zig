@@ -14,7 +14,11 @@
 //! opaque window, never to a clear one (`Material.effective`). What was asked stays as it was
 //! saved.
 //!
-//! All but the four publish and read functions is std-only (a unit-test root in `build/app.zig`).
+//! The third thing published is the glass's look: one `Look` per `Role` (`Looks`), the numbers every
+//! glass the app draws is drawn with (`publishLook`), set once in `Editor.tick` before plugins'
+//! `beginFrame` and read by `LiquidField`.
+//!
+//! All but the publish and read functions is std-only (a unit-test root in `build/app.zig`).
 const std = @import("std");
 
 pub const Material = struct {
@@ -73,6 +77,15 @@ pub fn inAppKinds(glass_program: bool) Kinds {
     inline for (comptime std.enums.values(Kind)) |k| @field(kinds, @tagName(k)) = inAppMissing(k, glass_program) == null;
     return kinds;
 }
+
+/// The numbers a glass is drawn with, one set per role (`glass_look.Look`)…
+pub const Look = @import("glass_look").Look;
+pub const Role = @import("glass_look").Role;
+/// …the five sets (`Looks.fromOpacity` is fizzy's)…
+pub const Looks = @import("glass_look").Looks;
+
+/// …published for this frame: null for the earlier glass, as each field's own numbers say.
+pub const publishLook = @import("glass").LiquidField.publishLook;
 
 const key = "core.material";
 
