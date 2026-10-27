@@ -10426,8 +10426,12 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         var strip_buf: [std.fs.max_path_bytes]u8 = undefined;
         const strip_dir = strip_buf[0..try strip_tmp.dir.realPath(dvui.io, &strip_buf)];
         for (0..5) |n| {
-            var name_buf: [32]u8 = undefined;
-            const name = try std.fmt.bufPrint(&name_buf, "strip-tab-{d}.txt", .{n});
+            var name_buf: [160]u8 = undefined;
+            // The last has a name wider than the strip, shown by its leading edge.
+            const name = if (n == 4)
+                try std.fmt.bufPrint(&name_buf, "strip-tab-{d}-{s}.txt", .{ n, "a-very-long-name-a-very-long-name-a-very-long-name-a-very-long-name-a-very-long-name-" })
+            else
+                try std.fmt.bufPrint(&name_buf, "strip-tab-{d}.txt", .{n});
             try strip_tmp.dir.writeFile(dvui.io, .{ .sub_path = name, .data = "" });
             const path = try std.fs.path.join(gpa, &.{ strip_dir, name });
             defer gpa.free(path);
@@ -10444,7 +10448,8 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
             const strip = pane.strip_rect_physical orelse return error.TestUnexpectedResult;
             try std.testing.expect(pane.tab_slot_count >= 5);
             const last = pane.tab_slots[pane.tab_slot_count - 1].rect;
-            try std.testing.expect(last.x >= strip.x - 1 and last.x + last.w <= strip.x + strip.w + 1);
+            try std.testing.expect(last.w > strip.w);
+            try std.testing.expect(last.x >= strip.x - 1 and last.x < strip.x + strip.w);
         }
         try editor.demo.play("tour");
         const player = &editor.demo.player;
@@ -10464,7 +10469,12 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try std.testing.expect(editor.docFromPath(notes) != null);
         try dvui.testing.settle(headlessFrame);
         for (0..5) |n| {
-            const path = try std.fmt.allocPrint(gpa, "{s}/strip-tab-{d}.txt", .{ strip_dir, n });
+            var name_buf: [160]u8 = undefined;
+            const name = if (n == 4)
+                try std.fmt.bufPrint(&name_buf, "strip-tab-{d}-{s}.txt", .{ n, "a-very-long-name-a-very-long-name-a-very-long-name-a-very-long-name-a-very-long-name-" })
+            else
+                try std.fmt.bufPrint(&name_buf, "strip-tab-{d}.txt", .{n});
+            const path = try std.fs.path.join(gpa, &.{ strip_dir, name });
             defer gpa.free(path);
             const doc = editor.docFromPath(path) orelse return error.TestUnexpectedResult;
             try editor.closeFileID(doc.id);

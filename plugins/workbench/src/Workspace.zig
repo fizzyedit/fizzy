@@ -483,10 +483,12 @@ fn drawTabs(self: *Workspace, region: sdk.Host.Region, tabs: []const *sdk.Surfac
         // shows, and once shown is left to the person's own scrolling.
         if (selected_index == i and self.strip_shown != tab_key) {
             const shown = scroll_area.data().borderRectScale().r;
-            const tab = slot.data().borderRectScale().r;
+            var tab = slot.data().borderRectScale().r;
             // A tab still opening out from nothing has no width to be seen by: the next frame.
             if (tab.w >= 1) {
-                if (tab.w >= shown.w or (tab.x >= shown.x - 1 and tab.x + tab.w <= shown.x + shown.w + 1)) {
+                // One wider than the strip is shown by its leading edge, the part a name starts in.
+                tab.w = @min(tab.w, shown.w);
+                if (tab.x >= shown.x - 1 and tab.x + tab.w <= shown.x + shown.w + 1) {
                     self.strip_shown = tab_key;
                 } else {
                     dvui.scrollTo(.{ .screen_rect = tab });
