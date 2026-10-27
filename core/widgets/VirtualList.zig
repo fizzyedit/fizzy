@@ -52,6 +52,15 @@ pub const State = struct {
         self.index.deinit(self.gpa);
         self.* = undefined;
     }
+
+    /// Puts the row with `key` at the top of the view from the next frame; a key not in the list
+    /// does nothing.
+    pub fn scrollTo(self: *State, key: u64) void {
+        if (self.index.indexOf(key) == null) return;
+        self.anchor = .{ .key = key, .offset = 0 };
+        self.pinned = false;
+        dvui.refresh(null, @src(), null);
+    }
 };
 
 pub const InitOptions = struct {
@@ -91,13 +100,14 @@ pub fn init(src: std.builtin.SourceLocation, opts: InitOptions, widget_opts: dvu
 
     const width = if (st.si.viewport.w > 0) st.si.viewport.w else first_frame_width;
     const view_h = if (st.si.viewport.h > 0) st.si.viewport.h else first_frame_height;
-    _ = st.index.invalidateForWidth(source, width);
     var count = opts.count;
     st.index.reconcile(st.gpa, source, count) catch |err| {
         // The rows are the caller's, and the index no longer matches them: draw none.
         dvui.log.err("VirtualList: {t} while reconciling {d} rows", .{ err, count });
         count = 0;
     };
+    // After reconciling, so `estimate` is only asked about rows the caller still has.
+    _ = st.index.invalidateForWidth(source, width);
 
     const total = @min(st.index.total(), dvui.max_float_safe);
     st.si.virtual_size.h = total;
@@ -182,16 +192,6 @@ pub const Row = struct {
 /// for. It stays true until they arrive: ask once, not once per frame.
 pub fn nearStart(self: *const VirtualList) bool {
     return self.opts.state.frame_y <= self.view_h * near_start_views;
-}
-
-/// Puts the row with `key` at the top of the view from the next frame; a key not in the list
-/// does nothing.
-pub fn scrollTo(self: *VirtualList, key: u64) void {
-    const st = self.opts.state;
-    if (st.index.indexOf(key) == null) return;
-    st.anchor = .{ .key = key, .offset = 0 };
-    st.pinned = false;
-    dvui.refresh(null, @src(), self.scroll.data().id);
 }
 
 fn drawTrail(self: *VirtualList) void {

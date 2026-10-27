@@ -4,12 +4,14 @@
 //!
 //! The one invariant everything else serves: **a row's height is either a measurement or an
 //! admission that it is not one.** An estimate never replaces a measurement taken at the current
-//! width. A width change keeps the old measurements as the best guess (they are no longer
-//! trusted, so the next draw measures them again) and re-estimates only the rows never measured.
+//! width. A width change keeps the old measurements as the best guess (they are not trusted at
+//! the new width, so the next draw measures them again) and re-estimates only the rows never
+//! measured.
 //!
 //! Cumulative heights live in a Fenwick tree, so `record` is O(log n) and `yAt`, `rowAt` and
-//! `visibleRange` are O(log n) however many rows there are. `reconcile` is O(1) while the rows are
-//! unchanged and O(n) when they are not (a prepend, an append, a deletion).
+//! `visibleRange` are O(log n) however many rows there are. `reconcile` is a key comparison per row
+//! while the rows are unchanged and O(n) with allocation when they are not (a prepend, an append,
+//! a deletion, a replaced row).
 //!
 //! Position is an `Anchor` (a row's key and an offset into it), never a pixel `y`: rows prepended
 //! above it, or measured above it, move its `y` and leave what the reader sees alone.
@@ -19,8 +21,10 @@ const std = @import("std");
 const HeightIndex = @This();
 
 pub const State = enum {
-    /// A guess from the caller's `estimate`, or a measurement taken at another width.
+    /// A guess from the caller's `estimate`.
     estimated,
+    /// A measurement taken at another width: the best guess, kept until the row is measured again.
+    stale,
     /// Laid out and measured at the current width.
     measured,
 };
@@ -145,7 +149,7 @@ pub fn atEnd(self: *const HeightIndex, y: f32, h: f32) bool {
 
 /// Whether `index` still needs a measurement, so a caller draws it whatever its estimate says.
 pub fn wantsMeasure(self: *const HeightIndex, index: usize) bool {
-    return self.states.items[index] == .estimated;
+    return self.states.items[index] != .measured;
 }
 
 /// Records what a laid-out row measured. Returns whether the height moved.
@@ -165,10 +169,10 @@ pub fn invalidateForWidth(self: *HeightIndex, source: Source, width: f32) bool {
     self.width = width;
     if (self.len() == 0) return true;
     for (self.states.items, 0..) |*state, i| {
-        if (state.* == .measured) {
-            state.* = .estimated;
-        } else {
-            self.heights.items[i] = source.estimate(source.ctx, i, width);
+        switch (state.*) {
+            .measured => state.* = .stale,
+            .stale => {},
+            .estimated => self.heights.items[i] = source.estimate(source.ctx, i, width),
         }
     }
     self.rebuild();
@@ -178,10 +182,11 @@ pub fn invalidateForWidth(self: *HeightIndex, source: Source, width: f32) bool {
 /// Brings the rows in line with the caller's `count` rows. A row whose key is still present keeps
 /// its height and state wherever it moved to; a new row starts at its estimate.
 pub fn reconcile(self: *HeightIndex, gpa: std.mem.Allocator, source: Source, count: usize) std.mem.Allocator.Error!void {
-    const old = self.len();
-    if (count == old and count > 0 and
-        self.keys.items[0] == source.key(source.ctx, 0) and
-        self.keys.items[count - 1] == source.key(source.ctx, count - 1)) return;
+    if (count == self.len()) {
+        for (self.keys.items, 0..) |key, i| {
+            if (key != source.key(source.ctx, i)) break;
+        } else return;
+    }
 
     const old_heights = self.heights.items;
     const old_states = self.states.items;
@@ -244,8 +249,12 @@ const Rows = struct {
     first_id: u64,
     count: usize,
 
+    /// A row swapped for one with another key, count and endpoints unchanged.
+    replaced: ?usize = null,
+
     fn key(ctx: *anyopaque, i: usize) u64 {
         const self: *Rows = @ptrCast(@alignCast(ctx));
+        if (self.replaced == i) return std.math.maxInt(u64);
         return self.first_id + i;
     }
 
@@ -406,4 +415,41 @@ test "twenty thousand rows keep the prefix sums right" {
     for (0..20_000) |i| _ = index.record(i, @floatFromInt(10 + i % 90));
     for ([_]usize{ 1, 4096, 12_345, 19_999, 20_000 }) |i| try testing.expectApproxEqAbs(naiveY(&index, i), index.yAt(i), 0.5);
     try testing.expectEqual(@as(usize, 12_345), index.rowAt(index.yAt(12_345) + 1).?);
+}
+
+test "a replaced or reordered interior row is noticed even when count and endpoints match" {
+    var rows: Rows = .{ .first_id = 0, .count = 10 };
+    var index = try fresh(&rows);
+    defer index.deinit(testing.allocator);
+    _ = index.record(4, 123);
+
+    rows.replaced = 4;
+    try index.reconcile(testing.allocator, rows.source(), rows.count);
+    try testing.expectEqual(@as(?usize, null), index.indexOf(4));
+    try testing.expectEqual(@as(?usize, 4), index.indexOf(std.math.maxInt(u64)));
+    try testing.expectEqual(State.estimated, index.stateAt(4));
+    try testing.expectEqual(@as(f32, 40), index.heightAt(4));
+}
+
+test "a second width change keeps the first one's measurements as guesses" {
+    var rows: Rows = .{ .first_id = 0, .count = 20 };
+    var index = try fresh(&rows);
+    defer index.deinit(testing.allocator);
+    _ = index.record(2, 77);
+
+    try testing.expect(index.invalidateForWidth(rows.source(), 50));
+    try testing.expectEqual(State.stale, index.stateAt(2));
+    try testing.expect(index.invalidateForWidth(rows.source(), 25));
+    try testing.expectEqual(@as(f32, 77), index.heightAt(2));
+    try testing.expect(index.wantsMeasure(2));
+    try testing.expectEqual(@as(f32, 160), index.heightAt(3));
+    try testing.expectApproxEqAbs(naiveY(&index, 20), index.total(), 0.01);
+}
+
+test "an empty list reconciles without allocating" {
+    var rows: Rows = .{ .first_id = 0, .count = 0 };
+    var index = try fresh(&rows);
+    defer index.deinit(testing.allocator);
+    var failing = testing.FailingAllocator.init(testing.allocator, .{ .fail_index = 0 });
+    try index.reconcile(failing.allocator(), rows.source(), 0);
 }
