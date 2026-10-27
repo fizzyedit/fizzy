@@ -49,6 +49,9 @@ pub const anim = @import("anim.zig");
 pub const motion = @import("glass").motion;
 /// A motion's clock stepped by its frames, so a long frame holds it rather than skipping it on.
 pub const FrameClock = @import("FrameClock.zig");
+/// Where each row of a variable-height list sits and how far its height can be trusted; std-only.
+/// `widgets.VirtualList` draws over it.
+pub const HeightIndex = @import("HeightIndex.zig");
 /// How round the app's corners are: the one Corner roundness setting every radius scales by.
 pub const corners = @import("corners.zig");
 /// Frosted glass that bends what it shows — lens at the rim, ripples through it.

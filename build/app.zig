@@ -1069,6 +1069,9 @@ fn addTests(
         // A motion's clock stepped by its frames, a long one held to a step. std-only (see
         // FrameClock.zig); the floats' landing and ghost run on it.
         .{ "fizzy-frame-clock-tests", "core/FrameClock.zig" },
+        // Variable-height row bookkeeping for `widgets/VirtualList.zig`. std-only, so anchors,
+        // measurements and width changes are tested without a Window.
+        .{ "fizzy-height-index-tests", "core/HeightIndex.zig" },
         // Ring buffering and dot-segment filtering for the folder watcher. std-only so it can
         // be tested here; FolderWatcher.zig itself needs a live editor.
         .{ "fizzy-folder-events-tests", "app/watch/folder_events.zig" },
