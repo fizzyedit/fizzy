@@ -150,11 +150,11 @@ PR creation. Fix the reported problem and retry finish. Neither helper merges or
 
 Three places, in order: the worker's **local gates** (step 3), which decide whether the PR is
 worth pushing; **cross-review** by a different worker; and **CI at ready**. A draft PR runs only
-the light `changes` job (`ci.yml`), so pushing to a draft costs almost nothing and proves nothing;
-`gh pr ready` starts the full matrix, and `ci-ok` is the required check on that run. A reviewer
+the light `changes` job (`ci.yml`); `ci-ok` is skipped on drafts. Pushing to a draft costs almost
+nothing and proves nothing; `gh pr ready` starts the full matrix, and `ci-ok` is the required check on that run. A reviewer
 waits for finished checks, so a draft is reviewed from its diff and the gate output in its body,
 and a cross-reviewer may give a verdict on a draft without CI. The merge question waits for the
-full CI at ready.
+full CI at ready. Workflow changes require the maintainer's explicit yes before merge.
 
 ## Review
 
