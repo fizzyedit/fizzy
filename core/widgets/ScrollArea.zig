@@ -56,7 +56,7 @@ pub const tuning: Fling.Tuning = .{
 pub fn init(src: std.builtin.SourceLocation, init_opts: dvui.ScrollAreaWidget.InitOpts, opts: dvui.Options) ScrollArea {
     const area = dvui.scrollArea(src, init_opts, opts);
     const c = &area.scroll.?;
-    const self: ScrollArea = .{
+    var self: ScrollArea = .{
         .area = area,
         .si = area.si,
         .touch = dvui.dataGetPtrDefault(null, c.data().id, "_touch", Touch, .{}),
@@ -76,6 +76,14 @@ pub fn init(src: std.builtin.SourceLocation, init_opts: dvui.ScrollAreaWidget.In
         e.handle(@src(), c.data());
         self.touch.x.cancel();
         self.touch.y.cancel();
+    }
+
+    // The coast moves the content before it is laid out, so a frame draws where the clock is at
+    // that frame. Moved after the children, it would draw where the clock was one gap ago, and
+    // an uneven gap would show as an uneven step.
+    if (!self.touch.dragging) {
+        self.coast();
+        if (c.init_opts.frame_viewport == null) c.frame_viewport = self.si.viewport.topLeft();
     }
     return self;
 }
@@ -126,8 +134,6 @@ pub fn deinit(self: *ScrollArea) void {
         _ = t.x.releaseWindowed(tuning, window_s);
         _ = t.y.releaseWindowed(tuning, window_s);
     }
-
-    if (!t.dragging) self.coast();
 
     // A nested child's propagated motion sets this (parent) area's velocity through dvui's
     // `processMotionScroll`; clear it so dvui's coast never runs beside ours.
@@ -212,6 +218,7 @@ var t_use_dvui: bool = false;
 /// Where a child of the area is drawn this frame (physical y, as the renderer would place it),
 /// and whether the renderer snaps there.
 var t_drawn_y: f32 = 0;
+var t_raw_y: f32 = 0;
 var t_snapping: bool = false;
 
 fn testFrame() !dvui.App.Result {
@@ -224,13 +231,14 @@ fn testFrame() !dvui.App.Result {
         t_viewport_y = scroll.si.viewport.y;
     } else {
         var scroll = ScrollArea.init(@src(), .{ .horizontal = .none, .vertical_bar = .hide }, .{ .expand = .both });
-        // After the area's `deinit`, which is where the coast moves it: the frame's final place.
+        // Read the final viewport after the area's event handling and edge correction.
         const si = scroll.si;
         defer t_viewport_y = si.viewport.y;
         defer scroll.deinit();
         const child = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 100, .h = 20000 } });
         t_snapping = dvui.snapToPixels();
         const y = child.rectScale().r.y;
+        t_raw_y = y;
         t_drawn_y = if (t_snapping) @round(y) else y;
     }
     return .ok;
@@ -273,19 +281,20 @@ fn flick() !f32 {
     return t_viewport_y - at_release;
 }
 
-/// How far the viewport has coasted from the release at each of 15 steps of 33 ms, the clock
+/// How far the content has been drawn to move from the release at each of 15 steps of 33 ms, the clock
 /// cut into frames by `gaps_ms` (summing to 33), so different cuts meet at equal timestamps.
 fn coastTrace(gaps_ms: []const u64, out: *[15]f32) !void {
     var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
     defer t.deinit();
     t_use_dvui = false;
-    const at_release = try swipe();
-    // A frame's step spans the gap before it, so end on the last gap and the frames after
-    // it span `gaps_ms` rotated, summing to 33 each step.
+    _ = try swipe();
+    const at_release = t_raw_y;
+    // A frame draws where the clock is at its start, so end on the last gap and the frames
+    // after it span `gaps_ms` rotated, summing to 33 each step.
     try frameAfter(gaps_ms[gaps_ms.len - 1]);
     for (out) |*slot| {
         for (gaps_ms) |g| try frameAfter(g);
-        slot.* = t_viewport_y - at_release;
+        slot.* = at_release - t_raw_y;
     }
 }
 
@@ -295,6 +304,32 @@ test "the coast is a function of time, not of how the frames cut it" {
     var jittery: [15]f32 = undefined;
     try coastTrace(&.{ 25, 8 }, &jittery);
     for (steady, jittery) |a, b| try std.testing.expectApproxEqAbs(a, b, 0.01);
+}
+
+test "coast displacement follows each frame gap" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    t_use_dvui = false;
+    _ = try swipe();
+    var previous_time = dvui.currentWindow().frame_time_ns;
+    try frameAfter(25);
+    var previous_y = t_raw_y;
+    var previous_speed: f32 = std.math.inf(f32);
+    var follows_gaps = true;
+    // frameAfter draws at the current timestamp, then begins the next frame with this gap.
+    // Alternating long and short gaps exposes a displacement applied one frame late.
+    for ([_]u64{ 8, 25, 8, 25, 8, 25, 8, 25 }) |next_gap| {
+        const time = dvui.currentWindow().frame_time_ns;
+        const gap_ms: f32 = @as(f32, @floatFromInt(time - previous_time)) / std.time.ns_per_ms;
+        try frameAfter(next_gap);
+        const displacement = previous_y - t_raw_y;
+        const speed = displacement / gap_ms;
+        follows_gaps = follows_gaps and displacement > 0 and speed < previous_speed;
+        previous_time = time;
+        previous_y = t_raw_y;
+        previous_speed = speed;
+    }
+    try std.testing.expect(follows_gaps);
 }
 
 test "a slow coast draws at a new place every frame, then snaps at rest" {
