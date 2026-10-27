@@ -159,6 +159,13 @@ for (const [before, after] of [
   fire("input", {});
   check("truncation preserves text outside the fragment", field.text, "x".repeat(20) + "y" + "x".repeat(59));
 }
+{
+  const { field, type, fire, select } = fixture();
+  for (const c of "mu") type(c);
+  select(2, 2);
+  fire("beforeinput", replacement("my"));
+  check("collapsed selection, no ranges: the word is replaced", field.text, "my");
+}
 if (failed > 0) {
   print(`text-input: ${failed} failed`);
   exit(1);
