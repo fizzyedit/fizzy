@@ -103,6 +103,14 @@ both against each pull request's own tree (`scripts/check-examples.sh`, which yo
 locally): a change here that breaks either fails here. A change that needs them changed too
 lands its PR in that repo alongside.
 
+An app that wants fizzy's own shape with a different frame sets the **`Chrome`** build options
+(`src/editor/Chrome.zig`): `-Dchrome-sidebar-edge=right` puts the rail and Sidebar on the right
+(the width stays the Sidebar's `extent`), `-Dchrome-panel=false` leaves out the Panel and fizzy's
+Output view, `-Dchrome-menu-bar=false` and `-Dchrome-infobar=false` leave out those bars
+(macOS keeps its native menu). The defaults are fizzy's own frame. An app-supplied layout
+(`-Dapp-layout=`) draws its own frame. The phone shape reads only `sidebar_edge` (landscape
+sheets) and `panel`.
+
 ## Plugin store: built, not forward-looking
 
 The plugin registry/install flow (author repo → release CI → `fizzyedit/plugins` registry →

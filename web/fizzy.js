@@ -7,7 +7,7 @@
 // Stamped by the build (`build/web.zig`): the hash of what it loads, and the storage name
 // (`-Dweb-storage`).
 
-import { Dvui } from "./web.js?cache-buster=TEMPLATE_HASH_WITH_PADDING__ITS_64_BYTES_LONG_THE_SAME_AS_SHA256";
+import { Dvui, TextInput } from "./web.js?cache-buster=TEMPLATE_HASH_WITH_PADDING__ITS_64_BYTES_LONG_THE_SAME_AS_SHA256";
 
 // The name this build files what it keeps in the browser under: its own files, the plugins it
 // remembers and their cached bytes. Every copy of the app served from one site shares the
@@ -974,6 +974,7 @@ export class Fizzy {
             canvas.style.cursor = m.name;
             break;
           case "textInput":
+            if ((textInputRect.length === 0) !== (m.rect.length === 0)) textInput.clear();
             textInputRect = m.rect;
             oskCheck();
             break;
@@ -1116,7 +1117,17 @@ export class Fizzy {
         axis(1, ev.deltaY, []);
       }, { passive: false });
 
+      // What the keyboard does to the fragment before the caret reaches the worker as typing.
+      const textInput = new TextInput(hidden, {
+        text: (text) => post({ type: "text", text }),
+        backspace: () => {
+          post({ type: "key", kind: 5, key: "Backspace", repeat: 0, mods: 0 });
+          post({ type: "key", kind: 6, key: "Backspace", repeat: 0, mods: 0 });
+        },
+      });
+      canvas.addEventListener("pointerdown", () => textInput.clear());
       const keydown = (ev) => {
+        textInput.keydown(ev);
         if (ev.key === "Tab") {
           if (ev.ctrlKey) return;
           ev.preventDefault();
@@ -1129,14 +1140,6 @@ export class Fizzy {
       hidden.addEventListener("keydown", keydown);
       canvas.addEventListener("keyup", keyup);
       hidden.addEventListener("keyup", keyup);
-      hidden.addEventListener("beforeinput", (ev) => {
-        ev.preventDefault();
-        if (ev.data && !ev.isComposing) post({ type: "text", text: ev.data });
-      });
-      hidden.addEventListener("compositionend", (ev) => {
-        if (ev.data) post({ type: "text", text: ev.data });
-        ev.target.value = "";
-      });
 
       const touches = [];
       const touchIndex = (id) => {

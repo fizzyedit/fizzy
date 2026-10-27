@@ -25,8 +25,9 @@
 //! path, or whichever mount claims the path's prefix (`gdrive://<account>`). A cloud plugin
 //! registers a mount through `Host.mount`; nothing here knows what is behind it. The one thing
 //! a mount changes is *when* an answer arrives: `vfs.Fs` completes asynchronously, so a miss on
-//! a cloud directory returns null this frame and the listing appears (with `env.refresh`) when
-//! the response lands. The local mount answers inside the same call, exactly as before.
+//! a directory returns null this frame and the listing appears (with `env.refresh`) when the
+//! response lands. The local mount's listings run on the `Io` pool too: a small folder is waited
+//! for briefly and answered in the same call, a large one is pending like a cloud one.
 const std = @import("std");
 const fuzzy = @import("fuzzy.zig");
 const vfs = @import("vfs/vfs.zig");
@@ -1282,12 +1283,10 @@ fn freeListing(self: *FileTable, listing: *Listing) void {
     self.gpa.destroy(listing);
 }
 
-pub const nameOrder = vfs.nameOrder;
-
 fn entryLessThan(_: void, lhs: Entry, rhs: Entry) bool {
     if (lhs.kind == .directory and rhs.kind != .directory) return true;
     if (lhs.kind != .directory and rhs.kind == .directory) return false;
-    return nameOrder(lhs.name, rhs.name) == .lt;
+    return vfs.nameOrder(lhs.name, rhs.name) == .lt;
 }
 
 /// Binary search of the file half of a listing (`entries[dir_count..]`, sorted by `nameOrder` —
@@ -1299,7 +1298,7 @@ fn listingHasFile(listing: *const Listing, name: []const u8) bool {
     var hi: usize = files_only.len;
     while (lo < hi) {
         const mid = lo + (hi - lo) / 2;
-        switch (nameOrder(files_only[mid].name, name)) {
+        switch (vfs.nameOrder(files_only[mid].name, name)) {
             .lt => lo = mid + 1,
             .gt => hi = mid,
             .eq => return true,
@@ -1469,6 +1468,96 @@ test "a query matching nothing stops at its budget instead of scanning the whole
     _ = table.search(fx.root, "qqqqqqqq");
     try t.expect(table.rank_next > 0);
     try t.expect(table.ranking());
+}
+
+/// An index already built for `fx.root`: `needles` paths matching `needle`, followed by `n`
+/// non-matching paths to keep ranking busy beyond one frame's share.
+fn fillIndex(fx: *Fixture, table: *FileTable, n: usize, needles: usize) !void {
+    const gpa = table.gpa;
+    table.index_stale = false;
+    try table.index_roots.append(gpa, try gpa.dupe(u8, fx.root));
+    try table.index.ensureTotalCapacity(gpa, n + needles);
+    for (0..needles) |i| {
+        table.index.appendAssumeCapacity(try std.fmt.allocPrint(gpa, "{s}/needle{d}.txt", .{ fx.root, i }));
+    }
+    for (0..n) |i| {
+        table.index.appendAssumeCapacity(try std.fmt.allocPrint(gpa, "{s}/dir{d}/file{d}.txt", .{ fx.root, i % 997, i }));
+    }
+}
+
+/// `search` called until its ranking is done, with no disk walk in play.
+fn finishRanking(table: *FileTable, root: []const u8, query: []const u8) []const Entry {
+    var hits = table.search(root, query);
+    while (table.ranking()) hits = table.search(root, query);
+    return hits;
+}
+
+test "a ranking carries on over paths appended to the index mid-rank" {
+    const t = std.testing;
+    // The arena batches the large index allocations; its backing allocator checks for leaks.
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    var fx = try Fixture.init(arena.allocator());
+    defer fx.deinit();
+    const table = fx.wire();
+
+    // More matches than `4 * max_results`, so the ranking has shrunk to its best more than once.
+    try fillIndex(&fx, table, 400_000, 1500);
+    _ = table.search(fx.root, "needle");
+    try t.expect(table.ranking());
+    const reached = table.rank_next;
+    try t.expect(reached > 0);
+
+    // A walk that only appends: the epoch stays, the generation moves.
+    const late = try std.fmt.allocPrint(table.gpa, "{s}/late/needle.txt", .{fx.root});
+    try table.index.append(table.gpa, late);
+    table.index_generation += 1;
+
+    _ = table.search(fx.root, "needle");
+    try t.expect(table.rank_next >= reached);
+    const hits = finishRanking(table, fx.root, "needle");
+
+    try t.expectEqual(max_results, hits.len);
+    try t.expectEqual(@as(usize, table.index.items.len), table.rank_next);
+    // The appended path is scored, and its short name beats the numbered ones, as it would in a
+    // ranking that never paused.
+    var found = false;
+    for (hits) |h| {
+        if (std.mem.endsWith(u8, h.dir.?, "late")) found = true;
+    }
+    try t.expect(found);
+    for (hits) |h| try t.expect(std.mem.startsWith(u8, h.name, "needle"));
+}
+
+test "a ranking restarts when the query changes or the index is thrown away mid-rank" {
+    const t = std.testing;
+    // The arena batches the large index allocations; its backing allocator checks for leaks.
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    var fx = try Fixture.init(arena.allocator());
+    defer fx.deinit();
+    const table = fx.wire();
+
+    try fillIndex(&fx, table, 400_000, 1500);
+    _ = table.search(fx.root, "qqqqqqqq");
+    try t.expect(table.ranking());
+
+    // Another query must not inherit candidates scored for the first.
+    var hits = finishRanking(table, fx.root, "needle1499");
+    try t.expect(hits.len > 0);
+    try t.expectEqualStrings("needle1499.txt", hits[0].name);
+    try t.expectEqual(@as(usize, table.index.items.len), table.rank_next);
+
+    // A half-ranked query, then the index replaced under it (`index_epoch`): the old position and
+    // candidates index the old strings, so the ranking starts over on the new ones.
+    _ = table.search(fx.root, "qqqqqqqq");
+    try t.expect(table.ranking());
+    table.freeIndex();
+    try fillIndex(&fx, table, 10, 3);
+    hits = finishRanking(table, fx.root, "qqqqqqqq");
+    try t.expectEqual(@as(usize, 0), hits.len);
+    hits = finishRanking(table, fx.root, "needle");
+    try t.expectEqual(@as(usize, 3), hits.len);
 }
 
 test "a folder bigger than one frame's share is indexed whole" {
@@ -1887,10 +1976,10 @@ test "unmount tells the host first, while the filesystem still exists" {
 
 test "nameOrder is case-insensitive but total" {
     const t = std.testing;
-    try t.expectEqual(std.math.Order.lt, nameOrder("apple", "Banana"));
-    try t.expectEqual(std.math.Order.lt, nameOrder("README", "readme"));
-    try t.expectEqual(std.math.Order.eq, nameOrder("same", "same"));
-    try t.expectEqual(std.math.Order.lt, nameOrder("doc", "docs"));
+    try t.expectEqual(std.math.Order.lt, vfs.nameOrder("apple", "Banana"));
+    try t.expectEqual(std.math.Order.lt, vfs.nameOrder("README", "readme"));
+    try t.expectEqual(std.math.Order.eq, vfs.nameOrder("same", "same"));
+    try t.expectEqual(std.math.Order.lt, vfs.nameOrder("doc", "docs"));
 }
 
 test "a listing sorts directories first, then names" {

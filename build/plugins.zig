@@ -75,11 +75,11 @@ pub const Linked = struct {
 
 /// Make the modules for `plugins`: fizzy's own built for this executable, an application's
 /// re-homed onto it. workbench must be listed, because the editor still holds its state
-/// (fizzyedit/plans#13).
+/// (fizzyedit/plans#16).
 pub fn link(b: *std.Build, w: Wiring, plugins: []const BundledPlugin) Linked {
     if (!linksFizzys(plugins, "workbench")) std.debug.panic(
         "fizzy: the plugin list must include `fizzy.plugins.workbench`; the editor " ++
-            "still holds its state (fizzyedit/plans#13)",
+            "still holds its state (fizzyedit/plans#16)",
         .{},
     );
 

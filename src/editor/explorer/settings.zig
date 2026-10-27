@@ -636,19 +636,8 @@ fn drawHoldMenuDuration() void {
 }
 
 fn drawInputScheme() void {
-    var dropdown: core.widgets.DropdownWidget = undefined;
-    dropdown.init(@src(), .{}, .{
-        .expand = .horizontal,
-        .corners = dvui.CornerRect.all(1000),
-    });
-    defer dropdown.deinit();
-
-    var hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{
-        .expand = .vertical,
-        .gravity_x = 1.0,
-    });
-
-    const label_text: []const u8 = switch (fizzy.editor().app.settings.input_scheme) {
+    const scheme = &fizzy.editor().app.settings.input_scheme;
+    const label_text: []const u8 = switch (scheme.*) {
         .auto => switch (dvui.mouseType()) {
             .unknown => "Auto",
             .mouse, .trackpad => |hint| dvui.currentWindow().arena().print("Auto ({s})", .{@tagName(hint)}) catch "Auto",
@@ -656,62 +645,12 @@ fn drawInputScheme() void {
         .mouse => "Mouse",
         .trackpad => "Trackpad",
     };
-    dvui.label(@src(), "{s}", .{label_text}, .{ .margin = .all(0), .padding = .all(0) });
-    core.icon.icon(@src(), "dropdown_triangle", dvui.entypo.triangle_down, .{}, .{ .gravity_y = 0.5 });
-
-    hbox.deinit();
-
-    if (dropdown.dropped()) {
-        inline for (.{
-            .{ "Auto", Editor.Settings.InputScheme.auto },
-            .{ "Mouse", Editor.Settings.InputScheme.mouse },
-            .{ "Trackpad", Editor.Settings.InputScheme.trackpad },
-        }) |choice| {
-            if (dropdown.addChoiceLabel(choice[0])) {
-                fizzy.editor().app.settings.input_scheme = choice[1];
-                fizzy.editor().markSettingsDirty();
-                dvui.refresh(null, @src(), null);
-            }
-        }
-    }
+    drawEnumDropdown(scheme, label_text, &.{ "Auto", "Mouse", "Trackpad" });
 }
 
 fn drawLayoutMode() void {
-    var dropdown: core.widgets.DropdownWidget = undefined;
-    dropdown.init(@src(), .{}, .{
-        .expand = .horizontal,
-        .corners = dvui.CornerRect.all(1000),
-    });
-    defer dropdown.deinit();
-
-    var hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{
-        .expand = .vertical,
-        .gravity_x = 1.0,
-    });
-
-    const label_text: []const u8 = switch (fizzy.editor().app.settings.layout_mode) {
-        .auto => "Auto",
-        .mobile => "Mobile",
-        .desktop => "Desktop",
-    };
-    dvui.label(@src(), "{s}", .{label_text}, .{ .margin = .all(0), .padding = .all(0) });
-    core.icon.icon(@src(), "dropdown_triangle", dvui.entypo.triangle_down, .{}, .{ .gravity_y = 0.5 });
-
-    hbox.deinit();
-
-    if (dropdown.dropped()) {
-        inline for (.{
-            .{ "Auto", Editor.Settings.LayoutMode.auto },
-            .{ "Mobile", Editor.Settings.LayoutMode.mobile },
-            .{ "Desktop", Editor.Settings.LayoutMode.desktop },
-        }) |choice| {
-            if (dropdown.addChoiceLabel(choice[0])) {
-                fizzy.editor().app.settings.layout_mode = choice[1];
-                fizzy.editor().markSettingsDirty();
-                dvui.refresh(null, @src(), null);
-            }
-        }
-    }
+    const mode = &fizzy.editor().app.settings.layout_mode;
+    drawEnumDropdown(mode, null, &.{ "Auto", "Mobile", "Desktop" });
 }
 
 // ---- Plugins ----------------------------------------------------------------------------
@@ -720,6 +659,18 @@ fn drawLayoutMode() void {
 /// the plugin's own card in the Plugins tab (`PluginStore`), not a row here — there is one of
 /// those per installed plugin, and the tree is fizzy's own settings.
 fn drawPluginUpdateMode() void {
+    const mode = &fizzy.editor().app.settings.plugin_update_mode;
+    drawEnumDropdown(mode, null, &.{ "Prompt", "Silent" });
+}
+
+/// A dropdown over every value of enum `E`: `choices` are the menu's labels in the enum's
+/// declaration order, and the closed button shows the current one unless `label_text` says
+/// otherwise. A pick marks the settings dirty.
+// anytype: a pointer to any settings enum; `E` is read off its type
+fn drawEnumDropdown(value: anytype, label_text: ?[]const u8, comptime choices: []const []const u8) void {
+    const E = @typeInfo(@TypeOf(value)).pointer.child;
+    comptime std.debug.assert(choices.len == std.enums.values(E).len);
+
     var dropdown: core.widgets.DropdownWidget = undefined;
     dropdown.init(@src(), .{}, .{
         .expand = .horizontal,
@@ -731,23 +682,14 @@ fn drawPluginUpdateMode() void {
         .expand = .vertical,
         .gravity_x = 1.0,
     });
-
-    const label_text: []const u8 = switch (fizzy.editor().app.settings.plugin_update_mode) {
-        .prompt => "Prompt",
-        .silent => "Silent",
-    };
-    dvui.label(@src(), "{s}", .{label_text}, .{ .margin = .all(0), .padding = .all(0) });
+    dvui.label(@src(), "{s}", .{label_text orelse choices[@backingInt(value.*)]}, .{ .margin = .all(0), .padding = .all(0) });
     core.icon.icon(@src(), "dropdown_triangle", dvui.entypo.triangle_down, .{}, .{ .gravity_y = 0.5 });
-
     hbox.deinit();
 
     if (dropdown.dropped()) {
-        inline for (.{
-            .{ "Prompt", Editor.Settings.PluginUpdateMode.prompt },
-            .{ "Silent", Editor.Settings.PluginUpdateMode.silent },
-        }) |choice| {
-            if (dropdown.addChoiceLabel(choice[0])) {
-                fizzy.editor().app.settings.plugin_update_mode = choice[1];
+        inline for (choices, std.enums.values(E)) |choice_label, choice| {
+            if (dropdown.addChoiceLabel(choice_label)) {
+                value.* = choice;
                 fizzy.editor().markSettingsDirty();
                 dvui.refresh(null, @src(), null);
             }

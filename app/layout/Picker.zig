@@ -753,7 +753,7 @@ fn drawLifted(self: *Picker, f: *Layout) void {
             .release => if (me.button.pointer()) {
                 e.handled = true;
                 ViewDrag.apply(f, ViewDrag.loose_source, me.p);
-                d.discard();
+                d.discard(f.gpa);
                 self.lifted = false;
                 dvui.captureMouse(null, e.num);
                 dvui.dragEnd();
