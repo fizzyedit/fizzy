@@ -71,4 +71,8 @@ test "a plugin writes a demo, ships it as bytes, and plays it back" {
 test "replay is the module that drives a window with a tape" {
     // The player takes the tape `tape` made: one `Tape` type on both sides of the import.
     try std.testing.expect(@hasDecl(replay.Player, "play"));
+    try std.testing.expect(@TypeOf(replay.Player.tape) ==
+        fn (*const replay.Player) ?*const tape.Tape);
+    try std.testing.expect(@FieldType(replay.Stage.VTable, "keyframe") ==
+        ?*const fn (*anyopaque, *const tape.Tape.Keyframe) void);
 }
