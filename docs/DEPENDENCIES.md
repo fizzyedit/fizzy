@@ -220,7 +220,8 @@ the patch changes it too, and nothing dvui's own web backend uses is taken away
 - `0008` **`wasm_renderStream`**, a flush's draws in one call: what `WebBackend.flushBatch` sends.
 - `0009` **Custom fragment programs in the draw stream** (`core.gfx.programs`).
 - `0010` **A keyboard's correction replaces the typed word** (`TextInput`): the hidden input holds the
-  word before the caret, and a replacement or recomposition becomes backspaces and the new text.
+  sentence fragment before the caret (up to 60 code points). Replacements, native input and
+  composition updates become backspaces and text.
   Test: `scripts/test-web-text-input.sh` (needs node, or jsc on macOS).
 
 The patches are the commits of a dvui checkout's branch, from the pinned commit. To change one,

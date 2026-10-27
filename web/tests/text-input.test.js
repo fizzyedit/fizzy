@@ -1,4 +1,4 @@
-// The hidden input's word and what a keyboard's correction does to the text. Run by
+// The hidden input's fragment and what a keyboard's correction does to the text. Run by
 // scripts/test-web-text-input.sh against the web.js the build writes (dvui's, patched):
 //   node text-input.test.js <path to the patched web.js>   (or jsc -m, as the script does)
 // A fake input stands in for the page's; the fake sink applies the edits like a text field.
@@ -28,7 +28,7 @@ function fixture() {
     text: (t) => { field.text += t; },
     backspace: () => { field.text = Array.from(field.text).slice(0, -1).join(""); },
   });
-  const fire = (type, ev) => listeners[type](ev);
+  const fire = (type, ev) => listeners[type]?.(ev);
   const type = (data) => fire("beforeinput", { preventDefault() {}, inputType: "insertText", data, isComposing: false });
   const select = (a, b) => { hidden.selectionStart = a; hidden.selectionEnd = b; };
   return { hidden, field, input, fire, type, select };
@@ -57,8 +57,8 @@ const replacement = (data, ranges = []) => ({
 {
   const { field, type, fire, select } = fixture();
   for (const c of "a teh") type(c);
-  select(0, 3);
-  fire("beforeinput", replacement("the", [{ startOffset: 0, endOffset: 3 }]));
+  select(2, 5);
+  fire("beforeinput", replacement("the", [{ startOffset: 2, endOffset: 5 }]));
   check("only the word after the space is replaced", field.text, "a the");
 }
 {
@@ -99,6 +99,65 @@ const replacement = (data, ranges = []) => ({
   input.keydown({ key: "ArrowLeft" });
   check("a navigation key clears it", hidden.value, "");
   check("and leaves the field alone", field.text, "tex");
+}
+{
+  const { field, type, select } = fixture();
+  for (const c of "say dont") type(c);
+  select(4, 8);
+  type("don't");
+  check("insertText suggestion replaces the selected whole word", field.text, "say don't");
+}
+// Native Android events can bypass cancelable beforeinput entirely.
+for (const [before, after] of [
+  ["please dont", "please don't"], ["well im", "well I'm"],
+  ["a well known", "a well-known"], ["i ", "I "],
+  ["see alot", "see a lot"],
+]) {
+  const { hidden, field, type, fire } = fixture();
+  for (const c of before) type(c);
+  check(`context retained: ${before}`, hidden.value, before);
+  hidden.value = after;
+  fire("input", { inputType: "insertText", data: after });
+  check(`suggestion: ${before}`, field.text, after);
+}
+{
+  const { hidden, field, type, fire } = fixture();
+  for (const c of "say teh") type(c);
+  fire("compositionstart", {});
+  hidden.value = "say the";
+  fire("compositionupdate", { data: "the" });
+  check("composition update rewrites the fragment", field.text, "say the");
+  fire("input", { isComposing: true });
+  fire("compositionend", { data: "the" });
+  fire("input", { inputType: "insertText", data: "the" });
+  check("composition final input is not duplicated", field.text, "say the");
+}
+{
+  const { field, type, fire } = fixture();
+  for (const c of "teh") type(c);
+  for (let i = 0; i < 3; i++) fire("beforeinput", {
+    preventDefault() {}, inputType: "deleteContentBackward",
+  });
+  type("the");
+  check("soft deletion and insertion pair", field.text, "the");
+}
+{
+  const { hidden, field, type, fire, input } = fixture();
+  for (const c of "old word") type(c);
+  input.clear(); // The canvas pointerdown invalidates context before moving the caret.
+  field.text = "old "; // Model the editor caret at the tapped insertion point.
+  for (const c of "teh") type(c);
+  hidden.value = "the";
+  fire("input", { inputType: "insertReplacementText" });
+  check("replacement after a tap uses only fresh context", field.text, "old the");
+}
+{
+  const { hidden, field, type, fire } = fixture();
+  for (const c of "x".repeat(80)) type(c);
+  check("fragment is bounded", hidden.value.length, 60);
+  hidden.value = "y" + hidden.value.slice(1);
+  fire("input", {});
+  check("truncation preserves text outside the fragment", field.text, "x".repeat(20) + "y" + "x".repeat(59));
 }
 if (failed > 0) {
   print(`text-input: ${failed} failed`);
