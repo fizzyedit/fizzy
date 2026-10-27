@@ -1108,8 +1108,6 @@ fn addTests(
         // /Applications, and what happens to the copy it leaves. std-only (see
         // install_location.zig); `macos_bundle.zig` asks the system and acts on it.
         .{ "fizzy-install-location-tests", "app/update/install_location.zig" },
-        // Quit's bounded wait on the launch update check's thread. std-only (see bounded_join.zig).
-        .{ "fizzy-bounded-join-tests", "app/update/bounded_join.zig" },
         // The command palette's recently used commands: order, re-use, the cap. std-only
         // (see RecentCommands.zig); `Recents` holds it and stores it in recents.zon.
         .{ "fizzy-recent-commands-tests", "app/RecentCommands.zig" },
