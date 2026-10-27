@@ -126,6 +126,28 @@ pub fn originNudged(cap_x: f64, cap_y: f64, cur_x: f64, cur_y: f64, max_delta: f
     return dx <= max_delta and dy <= max_delta;
 }
 
+/// The app's windows that are not the user's documents: each sits at a popup's level, over every
+/// Space, and is not the main window.
+pub const Transient = enum { menu, dialog, overlay, carry };
+
+/// Whether a transient window leaves the screen while the app is not the active one. Left up, it
+/// stands over another application's windows. A dialog is in the main window's stacking, and a
+/// quiet run is never active, so neither goes. The OS applies it (`hidesOnDeactivate`), so it holds
+/// with no frame of ours running; a drag keeps its windows because pressing in the app keeps it
+/// active.
+pub fn hidesWhenAppLeft(kind: Transient, quiet: bool) bool {
+    return kind != .dialog and !quiet;
+}
+
+test "hidesWhenAppLeft: menus, overlays and carry windows go with the app, dialogs and quiet runs stay" {
+    inline for (.{ Transient.menu, Transient.overlay, Transient.carry }) |kind| {
+        try std.testing.expect(hidesWhenAppLeft(kind, false));
+        try std.testing.expect(!hidesWhenAppLeft(kind, true));
+    }
+    try std.testing.expect(!hidesWhenAppLeft(.dialog, false));
+    try std.testing.expect(!hidesWhenAppLeft(.dialog, true));
+}
+
 test "chooseTitlebarStrip collapsed returns just the buffer" {
     const got = chooseTitlebarStrip(.{
         .collapsed = true,
