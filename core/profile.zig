@@ -22,6 +22,7 @@
 //! holding its own cost to a budget, an automation client measuring what a change costs, a
 //! benchmark. `report` writes what was measured as ZON, the same numbers the window shows.
 const std = @import("std");
+const builtin = @import("builtin");
 const dvui = @import("dvui");
 const perf = @import("gfx/perf.zig");
 /// What the profiler keeps past its half-second window: 30 seconds of windows, and the frames
@@ -39,7 +40,7 @@ pub const Gpu = @import("profile/Gpu.zig");
 /// Bumped whenever `Profiler`'s layout changes. Part of the key the host publishes it under
 /// (`publish_key`), so a plugin built against another layout finds none and records nothing: the
 /// `abi` field it would check sits wherever its own layout put it, which a reordered struct moves.
-pub const abi: u32 = 5;
+pub const abi: u32 = 6;
 
 pub const max_entries = 1024;
 const max_depth = 48;
@@ -102,6 +103,8 @@ pub const FrameStats = struct {
 
 pub const Profiler = struct {
     abi: u32 = abi,
+    /// Debug scroll discontinuities since startup.
+    scroll_jumps: u64 = 0,
     enabled: bool = false,
     paused: bool = false,
     /// Held still for a moment (the window's graph under the pointer): like `paused`, but the
@@ -667,6 +670,12 @@ pub fn section(name: []const u8) Scope {
     const owner = if (p.depth > 0) p.entries[p.stack[p.depth - 1]].owner else "?";
     const idx = p.open(owner, name) orelse return .{};
     return .{ .p = p, .idx = idx };
+}
+
+/// Count a debug scroll discontinuity in the shared host profiler.
+pub fn scrollJump(content: f32, allowed: f32) void {
+    if (builtin.mode != .debug or @abs(content) <= allowed) return;
+    if (current()) |p| p.scroll_jumps +|= 1;
 }
 
 /// Record for the next `ms` milliseconds, whether or not the profiler window is open — or for

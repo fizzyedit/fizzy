@@ -690,7 +690,7 @@ function applyForm() {
 // ---- from the page ----------------------------------------------------------------------------
 function addEvent(kind, a, b, c, d) {
     if (!dvuiApp || dvuiApp.stopped) return;
-    dvuiApp.instance.exports.add_event(kind, a, b, c, d);
+    dvuiApp.instance.exports.add_event(kind, a, b, c, d, performance.now());
     dvuiApp.requestRender();
 }
 function addStringEvent(kind, text, c, d) {
@@ -698,7 +698,7 @@ function addStringEvent(kind, text, c, d) {
     const bytes = utf8encode(text);
     if (bytes.length === 0 && kind !== 6) return;
     const ptr = dvuiApp.allocBuffer(dvuiApp.instance.exports.arena_u8, bytes);
-    dvuiApp.instance.exports.add_event(kind, ptr, bytes.length, c, d);
+    dvuiApp.instance.exports.add_event(kind, ptr, bytes.length, c, d, performance.now());
     dvuiApp.requestRender();
 }
 
@@ -724,6 +724,15 @@ onmessage = (e) => {
             addEvent(1, m.mods, 0, m.x * gl.drawingBufferWidth, m.y * gl.drawingBufferHeight);
             break;
         }
+        case "input":
+            if (!dvuiApp || dvuiApp.stopped) break;
+            for (const e of m.events) {
+                const gl = dvuiApp.gl;
+                const a = e.mouse ? [1, e.mods, 0, e.x * gl.drawingBufferWidth, e.y * gl.drawingBufferHeight] : e.a;
+                dvuiApp.instance.exports.add_event(...a, e.time - performance.timeOrigin);
+            }
+            dvuiApp.requestRender();
+            break;
         case "event":
             addEvent(m.a[0], m.a[1], m.a[2], m.a[3], m.a[4]);
             break;

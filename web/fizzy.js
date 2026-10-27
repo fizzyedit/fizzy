@@ -7,6 +7,43 @@
 // Stamped by the build (`build/web.zig`): the hash of what it loads, and the storage name
 // (`-Dweb-storage`).
 
+// Pointer input is batched before crossing the worker boundary. Times are absolute
+// performance-clock milliseconds; subtracting the receiver's origin preserves latency.
+export function pointerInput(canvas, send, clockOrigin = performance.timeOrigin, done = () => {}) {
+  canvas.style.touchAction = "none";
+  const slots = new Map();
+  const mods = (e) => (e.metaKey << 3) | (e.altKey << 2) | (e.ctrlKey << 1) | (e.shiftKey << 0);
+  const handle = (kind, ev) => {
+    const touch = ev.pointerType === "touch";
+    if (touch && kind === 8) {
+      const slot = Array.from({ length: 10 }, (_, i) => i).find((i) => !Array.from(slots.values()).includes(i));
+      if (slot === undefined) return;
+      slots.set(ev.pointerId, slot);
+    }
+    if (touch && !slots.has(ev.pointerId)) return;
+    if (kind === 8) canvas.setPointerCapture(ev.pointerId);
+    const rect = canvas.getBoundingClientRect();
+    let samples = kind === 10 ? ev.getCoalescedEvents?.() : null;
+    if (!samples?.length) samples = [ev];
+    const events = [];
+    for (const e of samples) {
+      const x = (e.clientX - rect.left) / rect.width;
+      const y = (e.clientY - rect.top) / rect.height;
+      const time = e.timeStamp + clockOrigin;
+      if (touch) events.push({ a: [kind, slots.get(ev.pointerId), 0, x, y], time });
+      else {
+        events.push({ mouse: true, x, y, mods: mods(e), time });
+        if (kind !== 10) events.push({ a: [kind === 8 ? 2 : 3, ev.button, mods(ev), 0, 0], time });
+      }
+    }
+    send({ type: "input", events });
+    if (kind === 9) { slots.delete(ev.pointerId); done(); }
+  };
+  for (const [name, kind] of [["pointerdown", 8], ["pointermove", 10], ["pointerup", 9], ["pointercancel", 9]]) {
+    canvas.addEventListener(name, (ev) => handle(kind, ev), { capture: true });
+  }
+}
+
 import { Dvui, TextInput } from "./web.js?cache-buster=TEMPLATE_HASH_WITH_PADDING__ITS_64_BYTES_LONG_THE_SAME_AS_SHA256";
 
 // The name this build files what it keeps in the browser under: its own files, the plugins it
@@ -813,8 +850,7 @@ export class Fizzy {
     dvuiCanvas.addEventListener("wheel", (ev) => {
       if (ev.ctrlKey && ev.deltaMode === 0) {
         ev.preventDefault();
-        ev.stopImmediatePropagation();
-        if (dvuiApp && dvuiApp.instance.exports.FizzyWebTrackpadMagnification) {
+            if (dvuiApp && dvuiApp.instance.exports.FizzyWebTrackpadMagnification) {
           dvuiApp.instance.exports.FizzyWebTrackpadMagnification(-ev.deltaY / 100);
           // dvui normally calls `requestRender` from its own wheel listener — since we
           // swallowed the event in the capture phase, drive the frame loop ourselves so
@@ -1080,12 +1116,7 @@ export class Fizzy {
       const mods = (ev) => (ev.metaKey << 3) | (ev.altKey << 2) | (ev.ctrlKey << 1) | (ev.shiftKey << 0);
       const event = (a0, a1, a2, a3, a4) => post({ type: "event", a: [a0, a1, a2, a3, a4] });
       canvas.addEventListener("contextmenu", (ev) => ev.preventDefault());
-      canvas.addEventListener("mousemove", (ev) => {
-        const rect = canvas.getBoundingClientRect();
-        post({ type: "mouse", x: (ev.clientX - rect.left) / (rect.right - rect.left), y: (ev.clientY - rect.top) / (rect.bottom - rect.top), mods: mods(ev) });
-      });
-      canvas.addEventListener("mousedown", (ev) => event(2, ev.button, mods(ev), 0, 0));
-      canvas.addEventListener("mouseup", (ev) => event(3, ev.button, mods(ev), 0, 0));
+      pointerInput(canvas, post, performance.timeOrigin, oskCheck);
 
       const scrollLowest = [99999, 99999];
       let scrollLowestBatch = [99999, 99999];
@@ -1141,33 +1172,6 @@ export class Fizzy {
       canvas.addEventListener("keyup", keyup);
       hidden.addEventListener("keyup", keyup);
 
-      const touches = [];
-      const touchIndex = (id) => {
-        let idx = touches.findIndex((t) => t[0] === id);
-        if (idx < 0) {
-          idx = touches.length;
-          touches.push([id, idx]);
-        }
-        return idx;
-      };
-      const touchEvents = (kind, ev, done) => {
-        ev.preventDefault();
-        const rect = canvas.getBoundingClientRect();
-        for (const touch of ev.changedTouches) {
-          const x = (touch.clientX - rect.left) / (rect.right - rect.left);
-          const y = (touch.clientY - rect.top) / (rect.bottom - rect.top);
-          const tidx = touchIndex(touch.identifier);
-          event(kind, touches[tidx][1], 0, x, y);
-          if (done) touches.splice(tidx, 1);
-        }
-      };
-      canvas.addEventListener("touchstart", (ev) => touchEvents(8, ev, false), { passive: false });
-      canvas.addEventListener("touchend", (ev) => {
-        touchEvents(9, ev, true);
-        oskCheck();
-      }, { passive: false });
-      canvas.addEventListener("touchmove", (ev) => touchEvents(10, ev, false), { passive: false });
-
       pinchSink = (amount) => post({ type: "pinch", amount });
     }
 
@@ -1222,6 +1226,16 @@ export class Fizzy {
           // Late-bind the app reference so the capture-phase wheel listener above can
           // forward pinch deltas into the trackpad accumulator and kick a render.
           dvuiApp = app;
+          for (const name of ["touchstart", "touchmove", "touchend", "touchcancel", "mousedown", "mousemove", "mouseup"]) {
+            dvuiCanvas.addEventListener(name, (ev) => ev.stopImmediatePropagation(), { capture: true });
+          }
+          pointerInput(dvuiCanvas, (m) => {
+            for (const e of m.events) {
+              const a = e.mouse ? [1, e.mods, 0, e.x * app.gl.drawingBufferWidth, e.y * app.gl.drawingBufferHeight] : e.a;
+              app.instance.exports.add_event(...a, e.time - performance.timeOrigin);
+            }
+            app.requestRender();
+          }, performance.timeOrigin, () => app.oskCheck());
           // The main-thread loop never sent the device to the editor, so Firefox and Safari
           // (which take this path) were always `.desktop`: send it now and on change.
           applyFormMain();

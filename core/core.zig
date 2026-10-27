@@ -135,3 +135,6 @@ pub const transport = struct {
 
 /// Fixed Fizzy accent colours — theme-independent. See `palette.zig`.
 pub const palette = @import("palette.zig");
+
+/// Input timestamps shared through the dvui window, including plugin images.
+pub const input_time = @import("input_time.zig");

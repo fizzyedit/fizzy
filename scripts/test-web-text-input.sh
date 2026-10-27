@@ -6,6 +6,7 @@ cd "$(dirname "$0")/.."
 js=zig-out/web/web.js
 [ -f "$js" ] || { echo "test-web-text-input: no $js; run zig build web" >&2; exit 1; }
 if command -v node >/dev/null; then
+    node web/tests/pointer-input.test.mjs
     exec node web/tests/text-input.test.js "$PWD/$js"
 fi
 jsc=/System/Library/Frameworks/JavaScriptCore.framework/Versions/Current/Helpers/jsc
