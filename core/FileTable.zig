@@ -1469,10 +1469,10 @@ test "a query matching nothing stops at its budget instead of scanning the whole
     try t.expect(table.ranking());
 }
 
-/// An index already built for `fx.root`: `n` paths that match nothing, so a ranking over them
-/// is longer than one frame's share, then `needles` paths matching `needle` after them.
+/// An index already built for `fx.root`: `needles` paths matching `needle`, followed by `n`
+/// non-matching paths to keep ranking busy beyond one frame's share.
 fn fillIndex(fx: *Fixture, table: *FileTable, n: usize, needles: usize) !void {
-    const gpa = std.testing.allocator;
+    const gpa = table.gpa;
     table.index_stale = false;
     try table.index_roots.append(gpa, try gpa.dupe(u8, fx.root));
     try table.index.ensureTotalCapacity(gpa, n + needles);
@@ -1493,7 +1493,10 @@ fn finishRanking(table: *FileTable, root: []const u8, query: []const u8) []const
 
 test "a ranking carries on over paths appended to the index mid-rank" {
     const t = std.testing;
-    var fx = try Fixture.init(t.allocator);
+    // The arena batches the large index allocations; its backing allocator checks for leaks.
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    var fx = try Fixture.init(arena.allocator());
     defer fx.deinit();
     const table = fx.wire();
 
@@ -1505,8 +1508,8 @@ test "a ranking carries on over paths appended to the index mid-rank" {
     try t.expect(reached > 0);
 
     // A walk that only appends: the epoch stays, the generation moves.
-    const late = try std.fmt.allocPrint(t.allocator, "{s}/late/needle.txt", .{fx.root});
-    try table.index.append(t.allocator, late);
+    const late = try std.fmt.allocPrint(table.gpa, "{s}/late/needle.txt", .{fx.root});
+    try table.index.append(table.gpa, late);
     table.index_generation += 1;
 
     _ = table.search(fx.root, "needle");
@@ -1527,7 +1530,10 @@ test "a ranking carries on over paths appended to the index mid-rank" {
 
 test "a ranking restarts when the query changes or the index is thrown away mid-rank" {
     const t = std.testing;
-    var fx = try Fixture.init(t.allocator);
+    // The arena batches the large index allocations; its backing allocator checks for leaks.
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    var fx = try Fixture.init(arena.allocator());
     defer fx.deinit();
     const table = fx.wire();
 
