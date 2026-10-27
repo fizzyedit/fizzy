@@ -142,7 +142,8 @@ jobs:
         with:
           ref: ${{ matrix.ref }}
       # The Zig cache as in ci.yml's test job: a fixed key, one cold build saved once. setup-zig's
-      # own cache saved a new copy every run.
+      # package cache saved a new copy every run. The compiler tarball is still cached separately
+      # as setup-zig-tarball-<tarball name> (version, OS and architecture), as in ci.yml.
       - name: Zig cache key
         id: zig-cache-key
         run: |
