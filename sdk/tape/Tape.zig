@@ -232,7 +232,6 @@ pub const Keyframe = struct {
     files: []const File = &.{},
     /// Paths relative to `root`, opened in order; the last one is the active document.
     open: []const []const u8 = &.{},
-    layout: Layout = .keep,
     /// Settings the demo depends on — an editor that closes brackets, a preview beside the text —
     /// put in place at the cut whatever the viewer has chosen, and given back when the demo ends.
     settings: []const Setting = &.{},
@@ -242,19 +241,6 @@ pub const Keyframe = struct {
         for (self.files) |*f| if (std.mem.eql(u8, f.path, path)) return f;
         return null;
     }
-
-    /// How the window is arranged at the cut. The stage's to interpret, like the rest; fizzy's
-    /// leaves every window as it is, whatever is asked.
-    pub const Layout = enum {
-        /// As it is.
-        keep,
-        /// The app's default.
-        reset,
-        /// The app's default with only what the work needs showing, so the eye goes to the
-        /// demo rather than the chrome (fizzy: the documents — no bottom panel, the explorer put
-        /// away until the demo opens it).
-        focused,
-    };
 };
 
 /// One setting, as `settings.zon` spells it.

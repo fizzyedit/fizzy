@@ -76,7 +76,7 @@ quitting: bool = false,
 /// The window as the person had it when each scene first began (a window's arrangement only), by
 /// keyframe: a seek that replays a scene starts from there, since a keyframe does not arrange the
 /// window itself. Freed when the demo lets go (`freeSaved`).
-entries: std.AutoArrayHashMapUnmanaged(*const automation.Tape.Keyframe, *Snapshot) = .empty,
+entries: std.AutoArrayHashMapUnmanaged(*const automation.Tape.Keyframe, *Arrangement) = .empty,
 /// Every plugin's settings as the demo found them, as ZON, to give back at the end.
 settings_saved: std.ArrayListUnmanaged(SavedSettings) = .empty,
 /// The app's own settings a tape can change, as the demo found them: only the window's material
@@ -110,7 +110,7 @@ const Saved = struct {
     /// The window as the person had it (places, floats, seed tree, the documents' panes), put back
     /// at the tape's end by closing what the tape made (`end`); the panes meanwhile are kept from
     /// `panes.zon` (`Workbench.panes_held`). Null where it could not be noted.
-    arrangement: ?*Snapshot,
+    arrangement: ?*Arrangement,
     /// The one they were in.
     active: ?u64,
     /// The explorer's open folders, and whether its root had opened (`Workbench.file_tree_root_opened`).
@@ -469,14 +469,9 @@ fn begin(ctx: *anyopaque, _: *const automation.Tape) void {
     // Their documents stay open where they are, and nothing of the demo's closes, saves or
     // restores them (`ownsDocument`).
     const gpa = editor.app.gpa;
-    const arrangement: ?*Snapshot = blk: {
-        const snap = newSnapshot(editor) orelse break :blk null;
-        fillArrangement(editor, snap) catch |err| {
-            dvui.log.warn("demo: could not note the window: {t}", .{err});
-            destroySnapshot(editor, snap);
-            break :blk null;
-        };
-        break :blk snap;
+    const arrangement: ?*Arrangement = Arrangement.create(editor) catch |err| blk: {
+        dvui.log.warn("demo: could not note the window: {t}", .{err});
+        break :blk null;
     };
     // Held only when there is something to put back: the panes would be saved as the person's.
     editor.workbench.panes_held = arrangement != null;
@@ -535,11 +530,9 @@ fn end(ctx: *anyopaque) void {
     // documents' panes are the workbench's own, kept from `panes.zon` while the tape played
     // (`Workbench.panes_held`).
     const saved = self.saved orelse return;
-    if (saved.arrangement) |snap| {
-        restoreArrangement(editor, snap, true) catch |err| dvui.log.warn("demo: could not put the window back: {t}", .{err});
-        if (snap.explorer_closed != editor.explorer.closed) {
-            if (snap.explorer_closed) editor.explorer.close(editor) else editor.explorer.open(editor);
-        }
+    if (saved.arrangement) |arrangement| {
+        restoreArrangement(editor, arrangement, true) catch |err| dvui.log.warn("demo: could not put the window back: {t}", .{err});
+        arrangement.restoreExplorer(editor);
     }
     editor.app.layout.dirty = false;
     editor.command_palette.finishClose();
@@ -582,13 +575,12 @@ fn keep(ctx: *anyopaque) void {
 fn freeSaved(self: *Demo) void {
     const gpa = self.editor.app.gpa;
     for (self.entries.values()) |entry| {
-        entry.arena.deinit();
-        gpa.destroy(entry);
+        entry.destroy(gpa);
     }
     self.entries.clearAndFree(gpa);
     const saved = self.saved orelse return;
     if (saved.folder) |f| gpa.free(f);
-    if (saved.arrangement) |snap| destroySnapshot(self.editor, snap);
+    if (saved.arrangement) |arrangement| arrangement.destroy(gpa);
     gpa.free(saved.branches);
     self.saved = null;
 }
@@ -636,18 +628,11 @@ fn enterScene(self: *Demo, kf: *const automation.Tape.Keyframe) void {
     if (self.entries.get(kf)) |entry| {
         restoreArrangement(editor, entry, false) catch |err|
             dvui.log.warn("demo: could not put the window back to where the scene began: {t}", .{err});
-        if (entry.explorer_closed != editor.explorer.closed) {
-            if (entry.explorer_closed) editor.explorer.close(editor) else editor.explorer.open(editor);
-        }
+        entry.restoreExplorer(editor);
         return;
     }
-    const entry = newSnapshot(editor) orelse return;
-    const stored = blk: {
-        fillArrangement(editor, entry) catch break :blk false;
-        self.entries.put(gpa, kf, entry) catch break :blk false;
-        break :blk true;
-    };
-    if (!stored) destroySnapshot(editor, entry);
+    const entry = Arrangement.create(editor) catch return;
+    self.entries.put(gpa, kf, entry) catch entry.destroy(gpa);
 }
 
 // ---- settings --------------------------------------------------------------------------------
@@ -912,32 +897,33 @@ fn fastForward(ctx: *anyopaque, on: bool) void {
 // ---- snapshots ---------------------------------------------------------------------------------
 
 /// A moment of a scene, for a seek to come back to (see the file comment). Everything in `arena`.
-/// A snapshot of the app as it is now, less what `fill` and `fillArrangement` write.
-fn newSnapshot(editor: *Editor) ?*Snapshot {
+/// A snapshot of the app as it is now, less what `fill` writes. Takes `arrangement`, which a failed
+/// call frees.
+fn newSnapshot(editor: *Editor, arrangement: Arrangement) ?*Snapshot {
     const gpa = editor.app.gpa;
-    const snap = gpa.create(Snapshot) catch return null;
+    const snap = gpa.create(Snapshot) catch {
+        arrangement.arena.deinit();
+        return null;
+    };
     snap.* = .{
         .arena = .init(gpa),
         .root = "",
         .nodes = &.{},
         .docs = &.{},
         .active = null,
-        .explorer_closed = editor.explorer.closed,
+        .arrangement = arrangement,
         .branches = &.{},
         .root_opened = editor.workbench.file_tree_root_opened,
         .settings = &.{},
         .material = editor.app.settings.window_material,
         .focus = dvui.focusedWidgetId() orelse .zero,
         .focus_subwindow = dvui.focusedSubwindowId(),
-        .regions = "",
-        .tree = null,
-        .places = &.{},
-        .panes = undefined,
     };
     return snap;
 }
 
 fn destroySnapshot(editor: *Editor, snap: *Snapshot) void {
+    snap.arrangement.arena.deinit();
     snap.arena.deinit();
     editor.app.gpa.destroy(snap);
 }
@@ -951,7 +937,7 @@ const Snapshot = struct {
     /// Open documents, in the order they were opened, and which was active.
     docs: []const Doc,
     active: ?usize,
-    explorer_closed: bool,
+    arrangement: Arrangement,
     branches: []const dvui.Id,
     /// Whether the tree had opened its root on its own yet (`Workbench.file_tree_root_opened`),
     /// put back with `branches`: a root shut because the tree had not been drawn yet would stay
@@ -961,16 +947,26 @@ const Snapshot = struct {
     material: core.material.Kind,
     focus: dvui.Id,
     focus_subwindow: dvui.Id,
-    /// How the window was arranged: the app's places as `layout.zon` would remember them
-    /// (`Editor.collectSavedRegions`, ZON, by name), its seed tree (ZON, null with none), each
-    /// place's widget state and view, and the documents' panes.
+
+    const Node = struct { path: []const u8, kind: @FieldType(core.vfs.Mem.Node, "kind"), bytes: []const u8 };
+    const Doc = struct { path: []const u8, grouping: u64, state: []const u8 };
+};
+
+/// The app's places as `Arrangement.regions` holds them.
+const RegionsZon = struct { regions: []const fizzy.backend.SavedRegion };
+
+/// How the window is arranged: what a scene's start, a snapshot and the tape's end put back.
+const Arrangement = struct {
+    arena: std.heap.ArenaAllocator,
+    /// The app's places as `layout.zon` would remember them (`Editor.collectSavedRegions`, ZON, by
+    /// name), its seed tree (ZON, null with none), each place's widget state and view, and the
+    /// documents' panes.
     regions: [:0]const u8,
     tree: ?[:0]const u8,
     places: []const Place,
     panes: Editor.Workbench.Arrangement,
+    explorer_closed: bool,
 
-    const Node = struct { path: []const u8, kind: @FieldType(core.vfs.Mem.Node, "kind"), bytes: []const u8 };
-    const Doc = struct { path: []const u8, grouping: u64, state: []const u8 };
     /// A place as it was drawn: how wide (`_size`; zero is shut), where it opens back to (`_open`),
     /// whether it was opened on a window too narrow for it (`_peek`), and the view it showed. The
     /// explorer's place keeps only its view: a restore opens or shuts the explorer itself
@@ -985,10 +981,65 @@ const Snapshot = struct {
         open: ?f32,
         peek: ?bool,
     };
-};
 
-/// The app's places and seed tree as `Snapshot.regions` and `Snapshot.tree` hold them.
-const Arrangement = struct { regions: []const fizzy.backend.SavedRegion };
+    /// The window as it is now, on its own arena; `destroy` frees it.
+    fn create(editor: *Editor) !*Arrangement {
+        const gpa = editor.app.gpa;
+        const self = try gpa.create(Arrangement);
+        errdefer gpa.destroy(self);
+        self.* = try take(editor, gpa);
+        return self;
+    }
+
+    /// The window as it is now, by value; its arena is in `gpa` and the owner frees it with
+    /// `arena.deinit()` (`destroy` does, for one made by `create`).
+    fn take(editor: *Editor, gpa: std.mem.Allocator) !Arrangement {
+        var arena: std.heap.ArenaAllocator = .init(gpa);
+        errdefer arena.deinit();
+        const a = arena.allocator();
+        const explorer = if (editor.regionFor(sdk.keywords.ide.sidebar)) |r| r.name else "";
+        const regions = editor.app.layout.regions.items;
+        const places = try a.alloc(Place, regions.len);
+        var n: usize = 0;
+        for (regions) |r| {
+            if (r.name.len == 0 or r.id == .zero) continue;
+            const view = editor.app.host.selectionForKey(r.selectionKey());
+            places[n] = .{
+                .id = r.id,
+                .key = r.selectionKey(),
+                .view = if (view) |v| try a.dupe(u8, v) else null,
+                .sized = !r.by_name and !std.mem.eql(u8, r.name, explorer),
+                .size = dvui.dataGet(null, r.id, "_size", f32),
+                .open = dvui.dataGet(null, r.id, "_open", f32),
+                .peek = dvui.dataGet(null, r.id, "_peek", bool),
+            };
+            n += 1;
+        }
+        const saved_regions = try regionsZon(editor, a);
+        const tree = try treeZon(editor, a);
+        const panes = try editor.workbench.arrangement(a);
+        // Copy the arena only after every allocation has updated its buffer list.
+        return .{
+            .arena = arena,
+            .regions = saved_regions,
+            .tree = tree,
+            .places = places[0..n],
+            .panes = panes,
+            .explorer_closed = editor.explorer.closed,
+        };
+    }
+
+    fn destroy(self: *Arrangement, gpa: std.mem.Allocator) void {
+        self.arena.deinit();
+        gpa.destroy(self);
+    }
+
+    /// Open or shut the explorer as it was.
+    fn restoreExplorer(self: *const Arrangement, editor: *Editor) void {
+        if (self.explorer_closed == editor.explorer.closed) return;
+        if (self.explorer_closed) editor.explorer.close(editor) else editor.explorer.open(editor);
+    }
+};
 
 /// The app's places as ZON, by name, in `gpa`: what a snapshot compares and puts back.
 fn regionsZon(editor: *Editor, gpa: std.mem.Allocator) ![:0]u8 {
@@ -1002,7 +1053,7 @@ fn regionsZon(editor: *Editor, gpa: std.mem.Allocator) ![:0]u8 {
     }.less);
     var aw: std.Io.Writer.Allocating = .init(gpa);
     errdefer aw.deinit();
-    try std.zon.stringify.serializeMaxDepth(Arrangement{ .regions = regions }, .{}, &aw.writer, 16);
+    try std.zon.stringify.serializeMaxDepth(RegionsZon{ .regions = regions }, .{}, &aw.writer, 16);
     return aw.toOwnedSliceSentinel(0);
 }
 
@@ -1025,7 +1076,8 @@ fn capture(ctx: *anyopaque) ?*anyopaque {
     const root = self.mount orelse return null;
     const mem = self.mem orelse return null;
 
-    const snap = newSnapshot(editor) orelse return null;
+    const arrangement = Arrangement.take(editor, editor.app.gpa) catch return null;
+    const snap = newSnapshot(editor, arrangement) orelse return null;
     snap.root = root;
     const ok = fill(self, snap, root, mem) catch false;
     if (!ok) {
@@ -1074,72 +1126,44 @@ fn fill(self: *Demo, snap: *Snapshot, root: []const u8, mem: *core.vfs.Mem) !boo
     }
     snap.settings = settings.items;
 
-    try fillArrangement(editor, snap);
     return true;
 }
 
-/// `snap`'s window arrangement: the app's places, seed tree, each place's state, the documents' panes.
-fn fillArrangement(editor: *Editor, snap: *Snapshot) !void {
-    const a = snap.arena.allocator();
-    snap.regions = try regionsZon(editor, a);
-    snap.tree = try treeZon(editor, a);
-    const explorer = if (editor.regionFor(sdk.keywords.ide.sidebar)) |r| r.name else "";
-    const regions = editor.app.layout.regions.items;
-    const places = try a.alloc(Snapshot.Place, regions.len);
-    var n: usize = 0;
-    for (regions) |r| {
-        if (r.name.len == 0 or r.id == .zero) continue;
-        const view = editor.app.host.selectionForKey(r.selectionKey());
-        places[n] = .{
-            .id = r.id,
-            .key = r.selectionKey(),
-            .view = if (view) |v| try a.dupe(u8, v) else null,
-            .sized = !r.by_name and !std.mem.eql(u8, r.name, explorer),
-            .size = dvui.dataGet(null, r.id, "_size", f32),
-            .open = dvui.dataGet(null, r.id, "_open", f32),
-            .peek = dvui.dataGet(null, r.id, "_peek", bool),
-        };
-        n += 1;
-    }
-    snap.places = places[0..n];
-    snap.panes = try editor.workbench.arrangement(a);
-}
-
-/// Put the window back to how `snap` found it (`Snapshot.regions` and on): the app's places, the
+/// Put the window back to how `arrangement` found it: the app's places, the
 /// floats, the seed tree, the documents' panes and each place's size and view. What is the same
 /// already is left alone, so a restore within one arrangement touches nothing of it. An error —
 /// having changed nothing — when it could not be read back: everything that can fail is done
 /// before anything changes. `graceful`: a float made since flies shut rather than going at once.
-fn restoreArrangement(editor: *Editor, snap: *const Snapshot, graceful: bool) !void {
+fn restoreArrangement(editor: *Editor, arrangement: *const Arrangement, graceful: bool) !void {
     const gpa = editor.app.gpa;
     const state = &editor.app.layout;
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
     var diag: std.zon.parse.Diagnostics = undefined;
 
-    // The app's places as the snapshot had them, where they differ from now.
+    // The app's places as the arrangement had them, where they differ from now.
     const regions: ?[]const fizzy.backend.SavedRegion = blk: {
         const now = try regionsZon(editor, gpa);
         defer gpa.free(now);
-        if (std.mem.eql(u8, now, snap.regions)) break :blk null;
-        break :blk (try std.zon.parse.fromSlice(Arrangement, .{ .gpa = gpa, .arena = arena.allocator(), .source = snap.regions, .diagnostics = &diag })).regions;
+        if (std.mem.eql(u8, now, arrangement.regions)) break :blk null;
+        break :blk (try std.zon.parse.fromSlice(RegionsZon, .{ .gpa = gpa, .arena = arena.allocator(), .source = arrangement.regions, .diagnostics = &diag })).regions;
     };
     // Its seed tree, built, where it differs: null for none at all.
     const same_tree = blk: {
         const now = try treeZon(editor, gpa);
         defer if (now) |t| gpa.free(t);
-        if (now == null or snap.tree == null) break :blk now == null and snap.tree == null;
-        break :blk std.mem.eql(u8, now.?, snap.tree.?);
+        if (now == null or arrangement.tree == null) break :blk now == null and arrangement.tree == null;
+        break :blk std.mem.eql(u8, now.?, arrangement.tree.?);
     };
     var dock: ?core.widgets.DockLayout = null;
-    if (!same_tree) if (snap.tree) |source| {
+    if (!same_tree) if (arrangement.tree) |source| {
         const tree = try std.zon.parse.fromSlice(core.widgets.DockLayout.Snapshot, .{ .gpa = gpa, .arena = arena.allocator(), .source = source, .diagnostics = &diag });
         dock = try core.widgets.DockLayout.fromSnapshot(gpa, tree);
         dock.?.animated = true;
     };
     errdefer if (dock) |*d| d.deinit();
     // The panes: all or nothing, and the last thing that can fail.
-    try editor.workbench.arrange(snap.panes);
+    try editor.workbench.arrange(arrangement.panes);
 
     if (regions) |saved| {
         state.clearArrangement(gpa);
@@ -1185,12 +1209,12 @@ fn restoreArrangement(editor: *Editor, snap: *const Snapshot, graceful: bool) !v
     // forgotten too, or a split of that name made again would open at the size this one was left.
     for (state.regions.items) |r| {
         if (r.by_name or r.id == .zero) continue;
-        const had = for (snap.places) |p| {
+        const had = for (arrangement.places) |p| {
             if (p.id == r.id) break true;
         } else false;
         if (!had) @import("app").layout.Layout.State.forgetWidgetSize(r.id);
     }
-    for (snap.places) |p| {
+    for (arrangement.places) |p| {
         if (p.sized) {
             putData(f32, p.id, "_size", p.size);
             // At rest at that size, not easing toward it.
@@ -1228,7 +1252,7 @@ fn restore(ctx: *anyopaque, raw: *anyopaque) bool {
     for (snap.docs) |d| _ = openDoc(editor, d.path) orelse return false;
     // The window as it was, before anything else is put back: it can fail, and fails changing
     // nothing.
-    restoreArrangement(editor, snap, false) catch |err| {
+    restoreArrangement(editor, &snap.arrangement, false) catch |err| {
         dvui.log.warn("demo: could not put the window's layout back: {t}", .{err});
         return false;
     };
@@ -1260,9 +1284,7 @@ fn restore(ctx: *anyopaque, raw: *anyopaque) bool {
         if (openIndex(editor, snap.docs[a].path)) |index| editor.workbench.setActiveDocIndex(index);
     }
 
-    if (snap.explorer_closed != editor.explorer.closed) {
-        if (snap.explorer_closed) editor.explorer.close(editor) else editor.explorer.open(editor);
-    }
+    snap.arrangement.restoreExplorer(editor);
     editor.workbench.open_branches.clearRetainingCapacity();
     for (snap.branches) |id| editor.workbench.setBranchOpen(id, true);
     editor.workbench.file_tree_root_opened = snap.root_opened;
