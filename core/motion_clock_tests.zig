@@ -7,6 +7,7 @@ const dvui = @import("dvui");
 const glass = @import("glass");
 const FrameClock = @import("FrameClock.zig");
 const Spring = @import("Spring.zig");
+const wall = @import("replay").wall;
 
 const MotionClock = glass.MotionClock;
 const ms = std.time.ns_per_ms;
@@ -167,4 +168,19 @@ test "real time still counts a stall the motion clock held" {
     try std.testing.expect(dvui.frameTimeNS() - frame_before <= 8 * ms + MotionClock.max_step_ns);
     // A wall time on the frame clock's side of the line.
     try std.testing.expectEqual(dvui.frameTimeNS(), MotionClock.fromWall(MotionClock.wallFrameNs()));
+}
+
+test "a replay wait's timeout counts the wall the motion clock held" {
+    var rig = try Rig.init(true);
+    defer rig.deinit();
+    var seen: i128 = 0;
+    _ = wall.gapMs(&seen);
+    // Ten seconds at 10 fps: each 100 ms frame moves motion by a step, but the wait ran for all of it.
+    var waited_ms: f64 = 0;
+    for (0..100) |_| {
+        try rig.frame(100);
+        waited_ms += wall.gapMs(&seen);
+    }
+    try std.testing.expectApproxEqAbs(@as(f64, 10_000), waited_ms, 1e-6);
+    try std.testing.expect(dvui.secondsSinceLastFrame() * 1000 <= 34 + 1e-6);
 }

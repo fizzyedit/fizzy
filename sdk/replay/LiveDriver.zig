@@ -38,6 +38,7 @@ const std = @import("std");
 const dvui = @import("dvui");
 const Tape = @import("tape").Tape;
 const Sequencer = @import("tape").Sequencer;
+const wall = @import("wall.zig");
 const Stage = @import("Stage.zig");
 const Input = @import("Input.zig");
 const anchor = @import("anchor.zig");
@@ -46,6 +47,8 @@ stage: Stage,
 owned: ?Tape.Owned = null,
 seq: Sequencer = undefined,
 input: Input = .{},
+/// The motion clock's debt at the last frame (`wall.gapMs`).
+debt_seen_ns: i128 = 0,
 /// How the last tape ended; null while one plays, or before any has.
 outcome: ?Outcome = null,
 /// A wait gave up during this frame's advance: the op index it gave up at.
@@ -150,7 +153,7 @@ pub fn frame(self: *LiveDriver) void {
     dvui.refresh(null, @src(), null);
     if (!self.seq.holding and !self.stage.idle()) return;
 
-    const wall_ms = @min(dvui.secondsSinceLastFrame() * 1000, 1000);
+    const wall_ms = @min(wall.gapMs(&self.debt_seen_ns), 1000);
     // A glide with a button held is a drag: played at its own pace, a frame's worth at a time, as
     // a hand moves, never in one jump. Jumped to its end it reached the app as one motion event,
     // and a drag needs the pointer past its threshold first and then moving — a floating window

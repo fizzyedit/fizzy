@@ -60,6 +60,7 @@ const Sequencer = @import("tape").Sequencer;
 const Stage = @import("Stage.zig");
 const Input = @import("Input.zig");
 const anchor = @import("anchor.zig");
+const wall = @import("wall.zig");
 
 const log = std.log.scoped(.automation);
 
@@ -101,6 +102,8 @@ showing: bool = false,
 /// in it, and a later run of the same displayed frame is the one shown. Never on a backend that
 /// draws every run.
 run_unseen: bool = false,
+/// The motion clock's debt at the last frame (`wall.gapMs`).
+debt_seen_ns: i128 = 0,
 /// The displayed frame's wall time, which `wallNs` keeps to through its catch-up runs.
 shown_wall_ns: i128 = 0,
 /// The last displayed frame drove the tape, so the app has been drawing since: the time to this
@@ -786,7 +789,7 @@ pub fn frame(self: *Player) void {
     // however long the demo sat paused, and a frame past `max_frame_ms`, the app not drawing at
     // all (a hidden tab draws nothing). A catch-up run's step is demo time, and no wall time
     // passed for a wait to count.
-    const since_ms = dvui.secondsSinceLastFrame() * 1000;
+    const since_ms = wall.gapMs(&self.debt_seen_ns);
     const wall_ms: f64 = if (self.catching_up) 0 else @min(since_ms, if (self.live) max_frame_ms else 100);
     if (!self.catching_up) self.live = self.state == .playing or self.state == .seeking;
     switch (self.state) {
