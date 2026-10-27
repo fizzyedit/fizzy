@@ -998,6 +998,20 @@ test "a frame's GPU counts land in its own slot and the window's average, not be
     try std.testing.expectEqual(@as(f64, 2), p.stats.gpu.?.targets);
 }
 
+test "scrollJump counts a debug discontinuity past what the finger allows, and only that" {
+    if (builtin.mode != .debug) return error.SkipZigTest;
+    is_host = true;
+    defer is_host = false;
+    host_profiler = .{};
+    defer host_profiler = .{};
+    scrollJump(1, 2);
+    scrollJump(-2, 2);
+    try std.testing.expectEqual(@as(u64, 0), host_profiler.scroll_jumps);
+    scrollJump(5, 2);
+    scrollJump(-5, 2);
+    try std.testing.expectEqual(@as(u64, 2), host_profiler.scroll_jumps);
+}
+
 test "hostDeinit frees what recording made, and a second call does nothing" {
     dvui.io = std.testing.io;
     const gpa = std.testing.allocator;

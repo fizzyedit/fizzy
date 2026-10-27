@@ -850,7 +850,8 @@ export class Fizzy {
     dvuiCanvas.addEventListener("wheel", (ev) => {
       if (ev.ctrlKey && ev.deltaMode === 0) {
         ev.preventDefault();
-            if (dvuiApp && dvuiApp.instance.exports.FizzyWebTrackpadMagnification) {
+        ev.stopImmediatePropagation();
+        if (dvuiApp && dvuiApp.instance.exports.FizzyWebTrackpadMagnification) {
           dvuiApp.instance.exports.FizzyWebTrackpadMagnification(-ev.deltaY / 100);
           // dvui normally calls `requestRender` from its own wheel listener — since we
           // swallowed the event in the capture phase, drive the frame loop ourselves so
