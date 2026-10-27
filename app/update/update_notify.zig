@@ -148,9 +148,6 @@ fn worker(
             remote_ver_len = n;
             phase.store(@backingInt(Phase.done_yes), .release);
         },
-        .no_update, .remote_empty => {
-            phase.store(@backingInt(Phase.done_no), .release);
-        },
         else => {
             phase.store(@backingInt(Phase.done_no), .release);
         },
@@ -433,10 +430,13 @@ fn displayProgressToast(id: dvui.Id) !void {
     }
 }
 
-test "launch worker signals completion on success and error" {
+test "launch worker signals completion on available, no update and error" {
     const Check = struct {
         fn success(_: std.Io, _: std.mem.Allocator, _: []u8) error{OutOfMemory}!auto_update.CheckSummary {
             return .no_update;
+        }
+        fn available(_: std.Io, _: std.mem.Allocator, _: []u8) error{OutOfMemory}!auto_update.CheckSummary {
+            return .{ .available = "9.9.9" };
         }
         fn failure(_: std.Io, _: std.mem.Allocator, _: []u8) error{OutOfMemory}!auto_update.CheckSummary {
             return error.OutOfMemory;
@@ -444,10 +444,10 @@ test "launch worker signals completion on success and error" {
     };
     defer check_done = .unset;
     defer phase.store(@backingInt(Phase.pending), .release);
-    for ([_]@TypeOf(&Check.success){ &Check.success, &Check.failure }) |check| {
+    for ([_]@TypeOf(&Check.success){ &Check.success, &Check.available, &Check.failure }) |check| {
         check_done = .unset;
         worker(std.testing.allocator, check);
         try std.testing.expect(check_done.isSet());
-        try std.testing.expectEqual(AppUpdateState.none, appUpdateState());
+        try std.testing.expectEqual(if (check == &Check.available) AppUpdateState.available else .none, appUpdateState());
     }
 }
