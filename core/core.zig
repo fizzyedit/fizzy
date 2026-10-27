@@ -47,6 +47,8 @@ pub const widgets = @import("widgets.zig");
 pub const anim = @import("anim.zig");
 /// How things move: the one motion setting every animation reads (off, minimal, playful).
 pub const motion = @import("glass").motion;
+/// The clock motion runs on, and the wall time of the frame for what means real time.
+pub const MotionClock = @import("glass").MotionClock;
 /// A motion's clock stepped by its frames, so a long frame holds it rather than skipping it on.
 pub const FrameClock = @import("FrameClock.zig");
 /// How round the app's corners are: the one Corner roundness setting every radius scales by.

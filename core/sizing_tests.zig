@@ -31,4 +31,6 @@ test {
     _ = @import("dialogs.zig");
     // Where a tooltip goes: inside its screen, flipped to the side with room.
     _ = @import("widgets/FloatingTooltipWidget.zig");
+    // One motion clock: a late frame holds motion, and real time still counts it.
+    _ = @import("motion_clock_tests.zig");
 }
