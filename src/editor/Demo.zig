@@ -583,7 +583,7 @@ fn freeSaved(self: *Demo) void {
     self.entries.clearAndFree(gpa);
     const saved = self.saved orelse return;
     if (saved.folder) |f| gpa.free(f);
-    if (saved.arrangement) |arrangement| arrangement.destroy(self.editor.app.gpa);
+    if (saved.arrangement) |arrangement| arrangement.destroy(gpa);
     gpa.free(saved.branches);
     self.saved = null;
 }
@@ -974,6 +974,8 @@ const Arrangement = struct {
         return self;
     }
 
+    /// The window as it is now, by value; its arena is in `gpa` and the owner frees it with
+    /// `arena.deinit()` (`destroy` does, for one made by `create`).
     fn take(editor: *Editor, gpa: std.mem.Allocator) !Arrangement {
         var arena: std.heap.ArenaAllocator = .init(gpa);
         errdefer arena.deinit();
@@ -1016,7 +1018,7 @@ const Arrangement = struct {
     }
 
     /// Open or shut the explorer as it was.
-    fn restoreExplorer(self: Arrangement, editor: *Editor) void {
+    fn restoreExplorer(self: *const Arrangement, editor: *Editor) void {
         if (self.explorer_closed == editor.explorer.closed) return;
         if (self.explorer_closed) editor.explorer.close(editor) else editor.explorer.open(editor);
     }
