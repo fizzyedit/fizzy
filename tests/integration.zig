@@ -2981,6 +2981,129 @@ test "a takeover surface appears only while its trigger is selected, and then an
     try std.testing.expectEqualStrings("test.workspace", layout.selected(main).?.id);
 }
 
+// -- the chrome option ---------------------------------------------------------------------------
+// `layout.zig` (fizzy's desktop shape) under each `Chrome`: which end the rail and Sidebar sit at,
+// and whether the Panel exists.
+
+const ChromeFrame = struct {
+    var editor: ?*fizzy.Editor = null;
+    var explorer: fizzy.Explorer = .{};
+    var chrome: fizzy.Editor.Chrome = .{};
+
+    fn menuDraw(_: ?*anyopaque) !void {
+        dvui.labelNoFmt(@src(), "Test menu", .{}, .{});
+    }
+
+    fn frame() !dvui.App.Result {
+        const e = editor.?;
+        fizzy.core.anchor.want();
+        e.chrome = chrome;
+        var layout = fizzy.Editor.Layout.init(&e.app.host, &e.app.layout, e.app.gpa, dvui.currentWindow().arena());
+        const result = try fizzy.layout.layout(e, &layout);
+        e.app.layout.publishRegions();
+        return result;
+    }
+};
+
+fn chromeBounds(editor: *fizzy.Editor, name: []const u8) ?dvui.Rect.Physical {
+    for (editor.app.layout.regions.items) |r| if (std.mem.eql(u8, r.name, name)) return r.bounds;
+    return null;
+}
+
+/// Draw fizzy's shape under `chrome`, with a view in each of its places, and hand `check` the editor.
+// anytype: the checks have inferred error sets.
+fn withChrome(chrome: fizzy.Editor.Chrome, comptime check: anytype) !void {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+    const editor = ctx.editor;
+    editor.app.gpa = std.testing.allocator;
+    defer editor.app.layout.regions.deinit(editor.app.gpa);
+    defer editor.app.layout.regions_building.deinit(editor.app.gpa);
+    defer editor.app.layout.deinitExtents(editor.app.gpa);
+    defer editor.app.layout.deinitQualified(editor.app.gpa);
+    defer editor.app.layout.deinitAssignments(editor.app.gpa);
+
+    editor.infobar = .{};
+    editor.app.host.fizzy_api = .{ .ctx = editor, .vtable = &fizzy.Editor.fizzy_api_vtable };
+    try editor.app.host.registerMenu(.{ .id = "test.menu", .draw = ChromeFrame.menuDraw });
+    ChromeFrame.explorer = .{};
+    editor.explorer = &ChromeFrame.explorer;
+    ChromeFrame.editor = editor;
+    defer ChromeFrame.editor = null;
+    ChromeFrame.chrome = chrome;
+
+    const kw = fizzy.sdk.keywords.ide;
+    try editor.app.host.registerSurface(.{ .id = "test.files", .title = "Files", .keywords = kw.sidebar, .draw = TabsFrame.draw });
+    try editor.app.host.registerSurface(.{ .id = "test.workspace", .title = "Workspace", .keywords = kw.main, .draw = TabsFrame.draw });
+    try editor.app.host.registerSurface(.{ .id = "test.output", .title = "Output", .keywords = kw.panel, .draw = TabsFrame.draw });
+    try dvui.testing.settle(ChromeFrame.frame);
+    try check(editor);
+}
+
+fn expectSidebarLeft(editor: *fizzy.Editor) !void {
+    const side = chromeBounds(editor, "Sidebar") orelse return error.TestUnexpectedResult;
+    const main = chromeBounds(editor, "Main") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(side.x < main.x);
+    // The rail sits left of it.
+    try std.testing.expect(side.x > 0);
+    try std.testing.expect(chromeBounds(editor, "Panel") != null);
+}
+
+fn expectSidebarRight(editor: *fizzy.Editor) !void {
+    const side = chromeBounds(editor, "Sidebar") orelse return error.TestUnexpectedResult;
+    const main = chromeBounds(editor, "Main") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(side.x > main.x + main.w - 1);
+    // The rail takes the window's last stretch, so the Sidebar stops short of the edge.
+    try std.testing.expect(side.x + side.w < dvui.windowRectPixels().w - 20);
+    // And the left edge is Main's, with only the work area's gutter before it.
+    try std.testing.expect(main.x < 40);
+    try std.testing.expect(chromeBounds(editor, "Panel") != null);
+}
+
+fn expectNoPanel(editor: *fizzy.Editor) !void {
+    try std.testing.expect(chromeBounds(editor, "Main") != null);
+    try std.testing.expect(chromeBounds(editor, "Sidebar") != null);
+    try std.testing.expect(chromeBounds(editor, "Panel") == null);
+    try std.testing.expect(editor.regionFor(fizzy.sdk.keywords.ide.panel) == null);
+}
+
+test "chrome: the defaults are fizzy's own frame, Sidebar left of Main with a Panel" {
+    try std.testing.expectEqual(fizzy.Editor.Chrome{}, fizzy.Editor.Chrome.configured);
+    try withChrome(.{}, expectSidebarLeft);
+}
+
+test "chrome: sidebar_edge right puts the rail and Sidebar right of Main" {
+    try withChrome(.{ .sidebar_edge = .right }, expectSidebarRight);
+}
+
+test "chrome: panel false leaves no Panel place" {
+    try withChrome(.{ .panel = false }, expectNoPanel);
+}
+
+fn expectBarsVisible(editor: *fizzy.Editor) !void {
+    const side = chromeBounds(editor, "Sidebar") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(side.h < dvui.windowRectPixels().h - 1);
+}
+
+fn expectBarsHidden(editor: *fizzy.Editor) !void {
+    const side = chromeBounds(editor, "Sidebar") orelse return error.TestUnexpectedResult;
+    try std.testing.expectApproxEqAbs(dvui.windowRectPixels().h, side.h, 0.5);
+}
+
+test "chrome: infobar occupies space only when enabled" {
+    try withChrome(.{ .menu_bar = false }, expectBarsVisible);
+    try withChrome(.{ .menu_bar = false, .infobar = false }, expectBarsHidden);
+}
+
+test "chrome: in-window menu occupies space only when enabled" {
+    const Menu = @import("fizzy").Editor.Menu;
+    const before = Menu.debug_force_on_macos;
+    Menu.debug_force_on_macos = true;
+    defer Menu.debug_force_on_macos = before;
+    try withChrome(.{ .infobar = false }, expectBarsVisible);
+    try withChrome(.{ .menu_bar = false, .infobar = false }, expectBarsHidden);
+}
+
 // -- the mobile shape ----------------------------------------------------------------------------
 // `layout_mobile.zig` under a forced `.mobile` form factor: which places it declares, what it
 // draws, and that mobile's arrangement is kept apart from a desktop's in `layout.zon`.
@@ -3020,6 +3143,7 @@ fn mobileCase(ctx: *shim.Ctx) !void {
     MobileFrame.explorer = .{};
     editor.explorer = &MobileFrame.explorer;
     fizzy.core.platform.cached_form_factor = .mobile;
+    editor.chrome = .{};
     MobileFrame.editor = editor;
     const kw = fizzy.sdk.keywords.ide;
     try editor.app.host.registerSurface(.{ .id = "test.files", .title = "Files", .keywords = kw.sidebar, .draw = TabsFrame.draw });
@@ -3041,6 +3165,7 @@ test "mobile's shape is Main, two shut sheets, a bar of the rail's views and a c
 
     fizzy.core.platform.cached_form_factor = .mobile;
     defer fizzy.core.platform.cached_form_factor = .desktop;
+    editor.chrome = .{};
     MobileFrame.editor = editor;
     defer MobileFrame.editor = null;
 
@@ -3901,6 +4026,33 @@ test "an adaptive split saved beside comes back as the same share stacked" {
     try std.testing.expect(state.splits.setShare("Main/r1", 0.5));
     _ = state.setExtent(editor.app.gpa, "Main/r1", 590);
 
+    // Exercise the same collection, ZON format and reconstruction as a saved layout.
+    const gpa = std.testing.allocator;
+    const regions = editor.collectSavedRegions(gpa);
+    defer gpa.free(regions);
+    var out: std.Io.Writer.Allocating = .init(gpa);
+    defer out.deinit();
+    try std.zon.stringify.serializeMaxDepth(regions, .{}, &out.writer, 64);
+    const text = try gpa.dupeSentinel(u8, out.written(), 0);
+    defer gpa.free(text);
+    var saved_arena: std.heap.ArenaAllocator = .init(gpa);
+    defer saved_arena.deinit();
+    var saved_diag: std.zon.parse.Diagnostics = undefined;
+    const saved = try std.zon.parse.fromSlice([]fizzy.backend.SavedRegion, .{
+        .gpa = gpa,
+        .arena = saved_arena.allocator(),
+        .source = text,
+        .diagnostics = &saved_diag,
+        .ignore_unknown_fields = true,
+    });
+    state.resetLayout(gpa);
+    editor.applySavedRegions(saved);
+    const links = state.splits.collectLinks(gpa);
+    defer gpa.free(links);
+    try std.testing.expectEqual(@as(usize, 1), links.len);
+    try std.testing.expectEqual(@as(?f32, 0.5), links[0].share);
+    try std.testing.expect(links[0].adaptive);
+
     for (0..60) |_| _ = try dvui.testing.step(ColumnCardFrame.frame);
     const top = try ColumnCardFrame.sizeOf(editor, "Main");
     const bottom = try ColumnCardFrame.sizeOf(editor, "Main/r1");
@@ -3974,6 +4126,35 @@ test "a drag while an adaptive split is turned is not kept when it turns back" {
     const bottom = try ColumnCardFrame.sizeOf(editor, "Main/r1");
     try std.testing.expectApproxEqAbs(share, bottom.h / (top.h + bottom.h), 0.03);
     try std.testing.expect(!editor.app.layout.dirty);
+}
+
+test "an adaptive split saved without a share loads with the ratio absent" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+    const gpa = std.testing.allocator;
+    const editor = ctx.editor;
+    editor.app.gpa = gpa;
+    defer editor.app.layout.deinitExtents(gpa);
+    defer editor.app.layout.deinitQualified(gpa);
+
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    var diagnostics: std.zon.parse.Diagnostics = undefined;
+    const saved = try std.zon.parse.fromSlice([]fizzy.backend.SavedRegion, .{
+        .gpa = gpa,
+        .arena = arena.allocator(),
+        .source = ".{.{ .name = \"Main/r1\", .parent = \"Main\", .from = \"right\", .extent = 590, .adaptive = true }}",
+        .diagnostics = &diagnostics,
+        .ignore_unknown_fields = true,
+    });
+    try std.testing.expectEqual(@as(?f32, null), saved[0].share);
+    editor.applySavedRegions(saved);
+    const links = editor.app.layout.splits.collectLinks(gpa);
+    defer gpa.free(links);
+    try std.testing.expectEqual(@as(usize, 1), links.len);
+    try std.testing.expect(links[0].adaptive);
+    try std.testing.expectEqual(@as(?f32, null), links[0].share);
+    try std.testing.expectEqual(@as(f32, 590), editor.app.layout.extent("Main/r1", 0));
 }
 
 /// Main | (Main/r1 over Main/r1/b1) in fizzy's split forest, each holding one view. Main/r1 is two
@@ -7635,6 +7816,38 @@ test "float: a float in an OS window with its own buttons still has a close a ta
     try dvui.testing.settle(WantFrame.frame);
     try dvui.testing.settle(WantFrame.frame);
     try std.testing.expectEqual(@as(usize, 0), editor.app.layout.floats.items.items.len);
+}
+
+test "float: a press on the header of a float in an OS window, off its buttons, does not close it" {
+    var case = try ManyPanelCase.init();
+    defer case.deinit();
+    const editor = case.ctx.editor;
+    try case.place("Panel", "Panel", .swap);
+    const floats = editor.app.layout.floats.items.items;
+    try std.testing.expectEqual(@as(usize, 1), floats.len);
+    floats[0].viewport = .{ .rect = floats[0].rect, .os_buttons = true, .buttons_w = 60 };
+
+    const WantFrame = struct {
+        fn frame() !dvui.App.Result {
+            fizzy.core.anchor.want();
+            return ManyPanelFrame.frame();
+        }
+    };
+    try dvui.testing.settle(WantFrame.frame);
+    try dvui.testing.settle(WantFrame.frame);
+
+    const close = dvui.tagGet("float-close:Float 1") orelse return error.TestUnexpectedResult;
+    const header = dvui.tagGet("float-header:Float 1") orelse return error.TestUnexpectedResult;
+    // The header's far end, well clear of the leading traffic light.
+    const pt: dvui.Point.Physical = .{ .x = header.rect.x + header.rect.w - 8, .y = close.rect.y + close.rect.h / 2 };
+    try std.testing.expect(pt.x > close.rect.x + close.rect.w);
+    const cw = dvui.currentWindow();
+    _ = try cw.addEventMouseMotion(.{ .pt = pt });
+    _ = try cw.addEventMouseButton(.left, .press);
+    _ = try cw.addEventMouseButton(.left, .release);
+    try dvui.testing.settle(WantFrame.frame);
+    try dvui.testing.settle(WantFrame.frame);
+    try std.testing.expectEqual(@as(usize, 1), editor.app.layout.floats.items.items.len);
 }
 
 test "float: closing it loses no view its keywords would show nowhere" {
@@ -13441,6 +13654,28 @@ fn openedSheet(size: SheetSize, keywords: []const []const u8, name: []const u8) 
     sheet.open();
     try dvui.testing.settle(MobileFrame.frame);
     return regionRect(editor, name) orelse error.TestUnexpectedResult;
+}
+
+test "mobile chrome: disabled panel has no place or toggle, landscape explorer follows edge" {
+    for (sheet_sizes) |size| {
+        var ctx = try shim.initSized(std.testing.allocator, .{ .w = size.w, .h = size.h });
+        defer ctx.deinit(std.testing.allocator);
+        try mobileCase(&ctx);
+        defer mobileTeardown(&ctx);
+        const editor = ctx.editor;
+        editor.chrome = .{ .panel = false, .sidebar_edge = .right };
+        try dvui.testing.settle(MobileFrame.frame);
+        try std.testing.expect(chromeBounds(editor, "Panel") == null);
+        try std.testing.expect(editor.regionFor(fizzy.sdk.keywords.ide.panel) == null);
+        try std.testing.expect(dvui.tagGet("fizzy.mobile.panel") == null);
+        editor.regionFor(fizzy.sdk.keywords.ide.sidebar).?.open();
+        try dvui.testing.settle(MobileFrame.frame);
+        const explorer = chromeBounds(editor, "Explorer") orelse return error.TestUnexpectedResult;
+        if (size.w > size.h) {
+            try std.testing.expect(explorer.x > dvui.windowRectPixels().w * 0.4);
+            try std.testing.expectApproxEqAbs(dvui.windowRectPixels().w, explorer.x + explorer.w, 1);
+        }
+    }
 }
 
 test "mobile sheets: capped in width in portrait, side sheets in landscape" {
