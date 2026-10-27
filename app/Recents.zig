@@ -247,7 +247,7 @@ test "a recents.zon from before times reads in order, every time unknown" {
     var dirs = try TestDirs.init(gpa);
     defer dirs.deinit(gpa);
 
-    const old = try gpa.print(".{{ .last_open_folder = \"\", .folders = .{{ \"{s}\", \"{s}\" }}, .commands = .{{}} }}", .{ dirs.a, dirs.b });
+    const old = try gpa.print(".{{ .last_open_folder = \"\", .folders = .{{ \"{f}\", \"{f}\" }}, .commands = .{{}} }}", .{ std.zig.fmtString(dirs.a), std.zig.fmtString(dirs.b) });
     defer gpa.free(old);
     try core.fs.write(dvui.io, dirs.zon, old);
 
@@ -285,7 +285,7 @@ test "a time stays with its folder when a row before it is gone from disk" {
     var dirs = try TestDirs.init(gpa);
     defer dirs.deinit(gpa);
 
-    const zon = try gpa.print(".{{ .folders = .{{ \"{s}/gone\", \"{s}\" }}, .folders_opened = .{{ 100, 200 }} }}", .{ dirs.a, dirs.b });
+    const zon = try gpa.print(".{{ .folders = .{{ \"{f}/gone\", \"{f}\" }}, .folders_opened = .{{ 100, 200 }} }}", .{ std.zig.fmtString(dirs.a), std.zig.fmtString(dirs.b) });
     defer gpa.free(zon);
     try core.fs.write(dvui.io, dirs.zon, zon);
 

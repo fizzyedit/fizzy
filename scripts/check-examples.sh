@@ -7,6 +7,9 @@
 # dependency does. A path dependency (or `zig build --fork`) would see the whole checkout and
 # miss a file left out of `.paths`.
 #
+# tests/fixtures/app-only is an app listing only a plugin of its own, which must fail to build
+# naming `fizzy.plugins.workbench` (the list is the list, and workbench is required for now).
+#
 # example-app gets the whole repo (its shapes, and its dvui app on either backend), and for its
 # replay app the plugin SDK; example-plugin gets the plugin SDK. The SDK is packed as a release
 # would be (`scripts/pack-sdk.sh`).
@@ -123,6 +126,23 @@ if [[ -n $builds ]]; then
   echo "== example-plugin and example-app, against this tree"
   printf '%s\n' $builds | xargs -P "${EXAMPLES_JOBS:-3}" -n 1 bash -c 'build_one "$1"' _
 fi
+
+# An app's list is exact: one naming none of fizzy's, workbench included, fails while build.zig
+# configures, which compiles nothing. The build must fail and say which plugin is missing.
+echo "== app-only fixture, expected to fail naming fizzy.plugins.workbench"
+mkdir -p "$work/app-only"
+pack "$root/tests/fixtures/app-only" | tar -x -C "$work/app-only"
+(cd "$work/app-only" && zig fetch --save=fizzy "$work/fizzy.tar.gz" >/dev/null)
+if (cd "$work/app-only" && zig build --prefix "$work/out/app-only") > "$work/log-app-only.txt" 2>&1; then
+  echo "FAIL  app-only: built, but an app without fizzy.plugins.workbench must not"
+  exit 1
+fi
+if ! grep -q 'fizzy\.plugins\.workbench' "$work/log-app-only.txt"; then
+  echo "FAIL  app-only: failed without naming fizzy.plugins.workbench"
+  sed 's/^/      /' "$work/log-app-only.txt"
+  exit 1
+fi
+echo "ok    app-only (failed as expected)"
 
 # The build API an app and a plugin package call (`fizzy.framework`, `staticModule`, `addApp`,
 # `addWebSteps`, `addPackageSteps`; design/build-api.md), on a fixture app of its own: two plugin
