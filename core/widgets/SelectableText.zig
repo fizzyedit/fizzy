@@ -21,6 +21,7 @@ const SelectableText = @This();
 tl: *dvui.TextLayoutWidget,
 hold: *TouchHold,
 
+/// Starts the layout and reads this frame's touch events. Call `deinit` on the result, as for `dvui.textLayout`.
 pub fn init(src: std.builtin.SourceLocation, init_opts: dvui.TextLayoutWidget.InitOptions, opts: dvui.Options) SelectableText {
     var tl_opts = init_opts;
     tl_opts.touch_edit_just_focused = false;
@@ -33,6 +34,7 @@ pub fn init(src: std.builtin.SourceLocation, init_opts: dvui.TextLayoutWidget.In
     return self;
 }
 
+/// Ends the layout and puts back the tap rules `init` turned off.
 pub fn deinit(self: *SelectableText) void {
     // Both are set by a touch-down for the tap rules `init` turned off; leaving them set would
     // make the release select.
@@ -87,9 +89,12 @@ fn clear(tl: *dvui.TextLayoutWidget) void {
     tl.selection.end = 0;
     tl.selection.cursor = 0;
     tl.state.touch_editing = false;
+    // dvui's own release, run inside `textLayout` before `processTouch`, may have queued a word.
+    tl.sel_move = .none;
 }
 
 const t_text = "alpha beta gamma delta";
+// Written by `testFrame` and read by the test that drives it, on the one test thread.
 var t_selection: dvui.TextLayoutWidget.Selection = .{};
 var t_touch_editing = false;
 
@@ -134,6 +139,25 @@ test "a tap on text leaves the selection alone" {
     try touch(.release, on_text_x, on_text_y);
     try frameAfter(50);
     try frameAfter(600);
+    try std.testing.expect(!selected());
+    try std.testing.expect(!t_touch_editing);
+}
+
+test "a tap whose press and release land in one frame leaves the selection alone" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 200 } });
+    defer t.deinit();
+    try dvui.testing.settle(testFrame);
+    // Hold to select, so the text keeps focus; then a tap arrives as one frame's events.
+    try touch(.press, on_text_x, on_text_y);
+    try frameAfter(500);
+    try frameAfter(16);
+    try frameAfter(16);
+    try touch(.release, on_text_x, on_text_y);
+    try frameAfter(16);
+    try touch(.press, on_text_x, on_text_y);
+    try touch(.release, on_text_x, on_text_y);
+    try frameAfter(16);
+    try frameAfter(16);
     try std.testing.expect(!selected());
     try std.testing.expect(!t_touch_editing);
 }

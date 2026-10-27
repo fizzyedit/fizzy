@@ -16,9 +16,12 @@ pub const slop_pt: f32 = 14;
 
 /// A finger is down on the text, still holding or finished with this press.
 armed: bool = false,
+/// The hold has selected; the release is then not a tap.
 fired: bool = false,
+/// Where the finger went down, in physical pixels.
 x: f32 = 0,
 y: f32 = 0,
+/// Frame time of the press.
 start_ns: i128 = 0,
 
 /// A finger went down on the text at (`x`, `y`) in physical pixels.
