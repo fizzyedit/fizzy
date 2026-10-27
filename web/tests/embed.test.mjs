@@ -1,6 +1,6 @@
 // Two copies of fizzy on one page, against a fake DOM and a fake wasm: the page's own fields keep
 // their keys, a chord goes to the copy it is aimed at, full screen takes the embed, and the editor
-// is fetched and compiled once. Run: `node web/test/embed.test.mjs`.
+// is fetched and compiled once. Run: `node web/tests/embed.test.mjs`.
 
 import assert from "node:assert/strict";
 import fs from "node:fs";

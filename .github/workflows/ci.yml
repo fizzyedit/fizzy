@@ -276,7 +276,7 @@ jobs:
       - name: Test embedding two copies
         if: matrix.name != 'Windows'
         shell: bash
-        run: node web/test/embed.test.mjs
+        run: node web/tests/embed.test.mjs
 
       # The tapes fizzyed.it serves beside the app: a script or `docs/demos/` tape that no longer
       # builds or reads back fails here, not on the deploy after merge.
