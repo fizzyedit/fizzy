@@ -51,6 +51,9 @@ paths, fuzzy matching, the LSP client, the profiler.
   min size, so a row scrolled back into view is zero-height for a frame. A virtualized list must
   overscan, size its spacers from `count × pitch` rather than from what was drawn, and measure
   pitch as the *largest* gap between drawn rows.
+  Rows of different heights use `core.widgets.VirtualList` over `core.HeightIndex`, which holds
+  the reader's place as a row key + offset and the rows' total under that 2e6 limit by being
+  given a window of the history, not all of it.
 - **dvui draws dialogs and toasts in `Window.endRendering`,** after the app's frame and after
   floats have taken their subwindows. Anything that must see a dialog's subwindow that frame
   draws it earlier itself. dvui also stops its widget capture at `drawRetained`, so snapshots
