@@ -173,9 +173,9 @@ pub const width_epsilon: f32 = 0.5;
 ///
 /// This is the whole point of the anchor. An absolute `viewport.y` only means something relative
 /// to a total height, and this renderer's total changes constantly — blocks get measured, the pane
-/// resizes, the document is re-parsed under an edit. Every one of those silently redefined what
-/// the reader's scroll offset pointed at, which is what made the preview jump. A line number does
-/// not move when the block above it turns out to be 40px taller than guessed.
+/// resizes, the document is re-parsed under an edit. Every one of those silently redefined what the
+/// reader's scroll offset pointed at, which is what made the preview jump. A line number does not
+/// move when the block above it turns out to be 40px taller than guessed.
 pub const Anchor = struct {
     /// Hash of the anchored block's source, or 0 when it had none.
     ///
@@ -396,8 +396,8 @@ pub const Table = struct {
     }
 
     /// Make sure `heights` has a slot for `index`, filling any gap with estimates. Blocks are
-    /// placed in document order, so filling forward never skips a slot that later needs a
-    /// different value.
+    /// placed in document order, so filling forward never skips a slot that later needs a different
+    /// value.
     pub fn ensureSlot(self: *Table, gpa: std.mem.Allocator, index: usize, m: Metrics, column_width: f32) void {
         while (self.heights.items.len <= index) {
             const i = self.heights.items.len;
@@ -427,7 +427,14 @@ pub const Table = struct {
     /// A `partial` measurement never overwrites a height we already have: an off-screen table
     /// reporting its header height is strictly less informative than whatever the block last
     /// measured on screen.
-    pub fn record(self: *Table, gpa: std.mem.Allocator, index: usize, mm: Measurement, m: Metrics, column_width: f32) void {
+    pub fn record(
+        self: *Table,
+        gpa: std.mem.Allocator,
+        index: usize,
+        mm: Measurement,
+        m: Metrics,
+        column_width: f32,
+    ) void {
         self.ensureSlot(gpa, index, m, column_width);
         if (index >= self.heights.items.len) return; // allocation failed; nothing to update
         // Resolved through `heightAt`, not read raw: an `.estimated` slot carries no stored height
@@ -486,8 +493,8 @@ pub const Table = struct {
     ///
     /// Every wrapped block reflows, so no height is *current* any more — but a stale measurement is
     /// still far closer to the truth than an estimate, so heights are kept and merely demoted to
-    /// `.stale`. They must not be clamped toward the estimate: an image or a table occupies
-    /// one line of source, so its estimate is a dozen pixels against a real several hundred, and
+    /// `.stale`. They must not be clamped toward the estimate: an image or a table occupies one
+    /// line of source, so its estimate is a dozen pixels against a real several hundred, and
     /// clamping collapsed the whole document's height model on every split drag.
     ///
     /// Returns true when the width actually moved.
@@ -953,7 +960,8 @@ test "width change keeps measurements instead of clamping them to estimates" {
 // is a real answer; the frame after it draws a few rows for the first time, and dvui lays a new
 // text layout out at an assumed width, so those rows come out short and the block's measurement is
 // contaminated. That number must not replace the clean one. It did while "clean, at this width"
-// and "laid out at a width that is gone" were both `.measured`, because the second must be replaced.
+// and "laid out at a width that is gone" were both `.measured`, because the second must be
+// replaced.
 test "a contaminated measurement does not replace a clean one at the same width" {
     const gpa = testing.allocator;
     var t = testTable(gpa, 1, 1);

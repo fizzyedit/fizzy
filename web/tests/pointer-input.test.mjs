@@ -43,3 +43,17 @@ runInNewContext('switch (m.type) { ' + batchCase + ' }', {
 });
 assert.deepEqual(calls.map((a) => a[5]), [1002, 1003, 1004]);
 assert.equal(renders, 1);
+
+// The second press and first release of a chord are pointermove events.
+const chordStart = sent.length;
+const mouse = (buttons, time) => ({ ...event(1, 50, time), pointerType: 'mouse', buttons, button: buttons === 3 || buttons === 0 ? 2 : 0 });
+listeners.pointerdown(mouse(1, 10));
+listeners.pointermove(mouse(3, 11));
+listeners.pointermove(mouse(2, 12));
+listeners.pointerup(mouse(0, 13));
+assert.deepEqual(sent.slice(chordStart).flatMap((m) => Array.from(m.events).filter((e) => e.a).map((e) => Array.from(e.a).slice(0, 2))),
+  [[2, 0], [2, 2], [3, 0], [3, 2]]);
+listeners.pointerdown(mouse(5, 14));
+listeners.pointercancel(mouse(5, 15));
+assert.deepEqual(Array.from(sent.at(-1).events).filter((e) => e.a).map((e) => Array.from(e.a).slice(0, 2)), [[3, 0], [3, 1]]);
+console.log('pointer input: chord transitions and cancellation passed');

@@ -127,6 +127,11 @@ if [[ -n $builds ]]; then
   printf '%s\n' $builds | xargs -P "${EXAMPLES_JOBS:-3}" -n 1 bash -c 'build_one "$1"' _
 fi
 
+# A plugin that imports `tape` and `replay` builds and plays a tape as a dylib too
+# (tests/fixtures/tape-plugin; the same file is tested linked into the app by `test-integration`).
+echo "== tape-plugin fixture, as a dylib"
+(cd "$root/tests/fixtures/tape-plugin" && zig build test --cache-dir "$work/tape-plugin-cache" --prefix "$work/tape-plugin-out")
+
 # An app's list is exact: one naming none of fizzy's, workbench included, fails while build.zig
 # configures, which compiles nothing. The build must fail and say which plugin is missing.
 echo "== app-only fixture, expected to fail naming fizzy.plugins.workbench"

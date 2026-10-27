@@ -232,7 +232,11 @@ inline fn statBlock() void {
 }
 
 /// `dvui.textLayout` + the counters, so no call site can add one without the others.
-inline fn textLayout(src: std.lang.SourceLocation, init_opts: dvui.TextLayoutWidget.InitOptions, opts: dvui.Options) *dvui.TextLayoutWidget {
+inline fn textLayout(
+    src: std.lang.SourceLocation,
+    init_opts: dvui.TextLayoutWidget.InitOptions,
+    opts: dvui.Options,
+) *dvui.TextLayoutWidget {
     stats.text_layouts += 1;
     const tl = dvui.textLayout(src, init_opts, opts);
     if (init_opts.break_lines and dvui.firstFrame(tl.data().id)) stats.fresh_text_layouts += 1;
@@ -827,9 +831,13 @@ fn addMarkdownLink(
     opts: dvui.Options,
     ctx: RenderContext,
 ) void {
-    const defs: dvui.Options = .{ .color_text = .{ .color = dvui.themeGet().focus }, .font = dvui.Font.theme(.body).withUnderline(.{}) };
+    const defs: dvui.Options = .{
+        .color_text = .{ .color = dvui.themeGet().focus },
+        .font = dvui.Font.theme(.body).withUnderline(.{}),
+    };
     if (tl.addTextClick(text orelse url, defs.override(opts))) |click_event| {
-        const open_side = (click_event == .mouse and (click_event.mouse.button == .middle or click_event.mouse.mod.matchBind("ctrl/cmd")));
+        const open_side = (click_event == .mouse and
+            (click_event.mouse.button == .middle or click_event.mouse.mod.matchBind("ctrl/cmd")));
         openMarkdownUrl(url, open_side, ctx);
     }
 }
@@ -979,9 +987,9 @@ fn tryRevealFileUri(url: []const u8, open_side: bool) bool {
 /// the side when `open_side`. Returns false when workbench isn't available or refused.
 ///
 /// Split out of `tryRevealFileUri` so a caller that already *has* a path — a resolved wikilink —
-/// doesn't have to encode it into a `file://` URI just to have it decoded straight back. That
-/// round trip isn't merely wasteful: it has to percent-encode, and a path containing a space or
-/// a `#` is exactly where a hand-rolled encoder goes wrong.
+/// doesn't have to encode it into a `file://` URI just to have it decoded straight back. That round
+/// trip isn't merely wasteful: it has to percent-encode, and a path containing a space or a `#` is
+/// exactly where a hand-rolled encoder goes wrong.
 fn revealPath(path: []const u8, line: u32, character: u32, open_side: bool) bool {
     return sdk.host().revealPosition(path, line, character, open_side) catch |err| {
         dvui.log.err("markdown: revealPosition failed for {s}: {any}", .{ path, err });
@@ -1053,7 +1061,9 @@ fn decodeFileUriPath(arena: std.mem.Allocator, encoded: []const u8) ![]u8 {
     if (comptime is_windows) {
         // `file:///C:/Users/...` decodes to `/C:/Users/...`; strip the leading slash and
         // swap separators so this is a usable native Windows path.
-        if (out.items.len >= 3 and out.items[0] == '/' and std.ascii.isAlphabetic(out.items[1]) and out.items[2] == ':') {
+        if (out.items.len >= 3 and out.items[0] == '/' and
+            std.ascii.isAlphabetic(out.items[1]) and out.items[2] == ':')
+        {
             _ = out.orderedRemove(0);
         }
         for (out.items) |*c| {
@@ -1472,13 +1482,23 @@ fn renderInlineFlowContainer(container: ast.Node, span: dvui.Options, ctx: Rende
                 .link => {
                     const link_font = span.fontGet().withUnderline(.{});
                     const link_color = dvui.themeGet().focus;
-                    renderInlineFlowContainer(node, span.override(.{ .font = link_font, .color_text = .{ .color = link_color } }), ctx, ids);
+                    renderInlineFlowContainer(
+                        node,
+                        span.override(.{ .font = link_font, .color_text = .{ .color = link_color } }),
+                        ctx,
+                        ids,
+                    );
                 },
                 else => {
                     if (node.nodeType() == .strikethrough) {
                         const strike_font = span.fontGet().withStrike(.{});
                         const strike_color = dvui.themeGet().color(.control, .text).opacity(0.5);
-                        renderInlineFlowContainer(node, span.override(.{ .font = strike_font, .color_text = .{ .color = strike_color } }), ctx, ids);
+                        renderInlineFlowContainer(
+                            node,
+                            span.override(.{ .font = strike_font, .color_text = .{ .color = strike_color } }),
+                            ctx,
+                            ids,
+                        );
                     } else if (node.firstChild()) |_| {
                         renderInlineFlowContainer(node, span, ctx, ids);
                     } else if (node.literal()) |t| {
@@ -1598,12 +1618,19 @@ fn renderWikilink(
         // available to say "provisional" with.) Inert until there's a create-note flow.
         .unresolved => addText(tl, label, .{
             .font = span.fontGet().withUnderline(.{ .thick = 0.04 }),
-            .color_text = (span.color_text orelse dvui.ColorOrGradient.fromColor(theme.color(.content, .text))).opacity(0.6),
+            .color_text = (span.color_text orelse
+                dvui.ColorOrGradient.fromColor(theme.color(.content, .text))).opacity(0.6),
         }),
     }
 }
 
-fn renderInlineNodeToTl(tl: *dvui.TextLayoutWidget, x: ast.Node, span: dvui.Options, ctx: RenderContext, ids: *IdGen) void {
+fn renderInlineNodeToTl(
+    tl: *dvui.TextLayoutWidget,
+    x: ast.Node,
+    span: dvui.Options,
+    ctx: RenderContext,
+    ids: *IdGen,
+) void {
     switch (x.nodeType()) {
         .text => {
             if (x.literal()) |t| renderTextWithWikilinks(tl, x, t, span, ctx);
@@ -1671,7 +1698,13 @@ fn renderInlineNodeToTl(tl: *dvui.TextLayoutWidget, x: ast.Node, span: dvui.Opti
             if (x.nodeType() == .strikethrough) {
                 const strike_font = span.fontGet().withStrike(.{});
                 const strike_color = dvui.themeGet().color(.control, .text).opacity(0.5);
-                renderInlines(tl, x, span.override(.{ .font = strike_font, .color_text = .{ .color = strike_color } }), ctx, ids);
+                renderInlines(
+                    tl,
+                    x,
+                    span.override(.{ .font = strike_font, .color_text = .{ .color = strike_color } }),
+                    ctx,
+                    ids,
+                );
             } else if (x.firstChild()) |_| {
                 renderInlines(tl, x, span, ctx, ids);
             } else if (x.literal()) |t| {
@@ -1695,8 +1728,7 @@ fn renderInlineNodeToTl(tl: *dvui.TextLayoutWidget, x: ast.Node, span: dvui.Opti
 /// is emitted with that height and its contents are skipped entirely; the scroll container still
 /// sees the document's true total height, so the scrollbar and every scroll position stay exactly
 /// as they were. A block whose height isn't known at all is always drawn, so the cache fills in
-/// without ever showing a gap — which makes a document's first frame one full layout, and only
-/// one.
+/// without ever showing a gap — which makes a document's first frame one full layout, and only one.
 ///
 /// Widths change every frame while a panel animates open or a window is dragged, which is
 /// handled by `resettle_budget` rather than by throwing the cache away — see below.
@@ -1717,7 +1749,10 @@ fn renderTopLevel(doc_node: ast.Node, ids: *IdGen, ctx: RenderContext) void {
     const width_in_flux = rs.blocks.invalidateForWidth(ctx.column_width);
     rs.width_in_flux = width_in_flux;
     if (diag and width_in_flux) {
-        dvui.log.warn("md-diag: column width now {d:.2} — every cached height distrusted, tables unpinned", .{ctx.column_width});
+        dvui.log.warn(
+            "md-diag: column width now {d:.2} — every cached height distrusted, tables unpinned",
+            .{ctx.column_width},
+        );
     }
     if (width_in_flux) {
         // Come back next frame — if the width has stopped moving, resettle can start.
@@ -1764,8 +1799,8 @@ fn renderTopLevel(doc_node: ast.Node, ids: *IdGen, ctx: RenderContext) void {
     // starving distant blocks outright (164 of 185 unmeasured after 600 frames on
     // plans/PLUGIN_MANIFEST_PLAN.md). Both budgets being non-zero is what makes the sweep
     // terminate: once every block has been measured twice, nothing wants a re-measure,
-    // `pending_measure` hits zero, and the refresh loop stops. A bounded warm-up, not a
-    // permanent wake.
+    // `pending_measure` hits zero, and the refresh loop stops. A bounded warm-up, not a permanent
+    // wake.
     var resettle_below_left: usize = if (width_in_flux) 0 else resettle_below_budget;
     var resettle_above_left: usize = if (width_in_flux) 0 else resettle_above_budget;
 
@@ -1822,8 +1857,7 @@ fn renderTopLevel(doc_node: ast.Node, ids: *IdGen, ctx: RenderContext) void {
                 .expand = .horizontal,
                 // Stable across frames for a given skip-run start so scroll anchoring stays
                 // coherent when a neighbouring run's height changes.
-                // The id varies with how many blocks the run stands for, not just where it
-                // starts.
+                // The id varies with how many blocks the run stands for, not just where it starts.
                 //
                 // dvui sizes a widget to `max(min_size_content, what it measured last frame)`,
                 // so a widget that keeps its id also keeps its height — and pinning
@@ -1991,8 +2025,20 @@ fn renderTopLevel(doc_node: ast.Node, ids: *IdGen, ctx: RenderContext) void {
             const prev = rs.place_err;
             if (diag and !std.math.isNan(prev) and @abs(err - prev) > 8) {
                 dvui.log.warn(
-                    "md-diag: PLACEMENT drift {d:.1} -> {d:.1} ({d:.1}pt) at block {d} ({s}) cursor_y={d:.1} laid_at={d:.1} spacer={d:.1} skipped_from={d} at viewport y={d:.0}",
-                    .{ prev, err, err - prev, index, @tagName(rs.blocks.extents.items[index].kind), y, wrapper.data().rect.y, rs.diag_last_spacer, rs.diag_last_skip_from, ctx.viewport.y },
+                    "md-diag: PLACEMENT drift {d:.1} -> {d:.1} ({d:.1}pt) at block {d} " ++
+                        "({s}) cursor_y={d:.1} laid_at={d:.1} spacer={d:.1} skipped_from={d} at viewport y={d:.0}",
+                    .{
+                        prev,
+                        err,
+                        err - prev,
+                        index,
+                        @tagName(rs.blocks.extents.items[index].kind),
+                        y,
+                        wrapper.data().rect.y,
+                        rs.diag_last_spacer,
+                        rs.diag_last_skip_from,
+                        ctx.viewport.y,
+                    },
                 );
             }
             rs.place_err = err;
@@ -2062,7 +2108,15 @@ fn renderTopLevel(doc_node: ast.Node, ids: *IdGen, ctx: RenderContext) void {
         if (diag and known_h > 0 and @abs(after_h - known_h) > diag_height_jump) {
             dvui.log.warn(
                 "md-diag: block {d} ({s}) height {d:.0} -> {d:.0} ({s}, rows_pending={d}) at viewport y={d:.0}",
-                .{ index, @tagName(rs.blocks.extents.items[index].kind), known_h, after_h, @tagName(rs.blocks.stateAt(index)), rs.block_rows_pending, ctx.viewport.y },
+                .{
+                    index,
+                    @tagName(rs.blocks.extents.items[index].kind),
+                    known_h,
+                    after_h,
+                    @tagName(rs.blocks.stateAt(index)),
+                    rs.block_rows_pending,
+                    ctx.viewport.y,
+                },
             );
         }
         // What the widget actually EMITTED, against what the height table believes.
@@ -2076,7 +2130,8 @@ fn renderTopLevel(doc_node: ast.Node, ids: *IdGen, ctx: RenderContext) void {
         // scrollbar is fine".
         if (diag and known_h > 0 and @abs(emitted - known_h) > diag_height_jump) {
             dvui.log.warn(
-                "md-diag: block {d} ({s}) EMITTED {d:.0} but table says {d:.0} (recorded {d:.0}, {s}, partial={any}, pinned={any}) at viewport y={d:.0}",
+                "md-diag: block {d} ({s}) EMITTED {d:.0} but table says {d:.0} (recorded " ++
+                    "{d:.0}, {s}, partial={any}, pinned={any}) at viewport y={d:.0}",
                 .{
                     index,          @tagName(rs.blocks.extents.items[index].kind),
                     emitted,        known_h,
@@ -2233,7 +2288,13 @@ pub fn anchorForLineAt(rs: *const RenderState, line: u32, at_px: f32, column_wid
 }
 
 /// Turn the settled scroll offset back into an anchor, after the scroll area has committed.
-pub fn anchorCapture(rs: *const RenderState, viewport_y: f32, column_width: f32, origin_y: f32, max_scroll: f32) ?Anchor {
+pub fn anchorCapture(
+    rs: *const RenderState,
+    viewport_y: f32,
+    column_width: f32,
+    origin_y: f32,
+    max_scroll: f32,
+) ?Anchor {
     return rs.blocks.captureAnchor(viewport_y, currentMetrics(), column_width, origin_y, max_scroll);
 }
 
@@ -2263,7 +2324,13 @@ fn rowNeedsMeasure(ctx: RenderContext, g: *dvui.GridWidget, row: ast.Node) bool 
 /// inside re-wraps narrower, the next frame's measurement is narrower still, and a short cell
 /// ends up one character wide. Natural widths are measured from the text instead, so they are the
 /// same every frame no matter what the table currently looks like.
-fn tableColumnWidths(n: ast.Node, num_cols: usize, avail: f32, cell_padding: dvui.Rect, ctx: RenderContext) []const f32 {
+fn tableColumnWidths(
+    n: ast.Node,
+    num_cols: usize,
+    avail: f32,
+    cell_padding: dvui.Rect,
+    ctx: RenderContext,
+) []const f32 {
     const font = dvui.Font.theme(.body);
     const body_m = font.sizeM(1, 1).w;
     const mono_m = dvui.Font.theme(.mono).sizeM(1, 1).w;
@@ -2544,7 +2611,11 @@ fn renderBlock(n: ast.Node, ids: *IdGen, ctx: RenderContext) void {
                     .id_extra = ids.next(),
                 });
                 defer hdr.deinit();
-                var tl_i = textLayout(@src(), .{}, .{ .expand = .horizontal, .background = false, .id_extra = ids.next() });
+                var tl_i = textLayout(
+                    @src(),
+                    .{},
+                    .{ .expand = .horizontal, .background = false, .id_extra = ids.next() },
+                );
                 addText(tl_i, info, .{
                     .font = dvui.Font.theme(.mono).withWeight(.bold),
                     .color_text = .{ .color = dvui.themeGet().color(.control, .text).opacity(0.55) },
@@ -2852,7 +2923,8 @@ fn renderBlock(n: ast.Node, ids: *IdGen, ctx: RenderContext) void {
                         // `renderDocument` asks for another frame while any remains. It stays
                         // owed on the frame it *is* measured on, because a measurement only
                         // counts once a second pass agrees with it.
-                        if (!measured_before and !row_visible and !ctx.rs.block_measure_exhausted) stats.pending_measure += 1;
+                        if (!measured_before and !row_visible and !ctx.rs.block_measure_exhausted)
+                            stats.pending_measure += 1;
                         // Any row that has not been measured for real leaves this table's height
                         // a guess, however it is drawn — see `RenderState.block_rows_pending`.
                         if (!measured_before) ctx.rs.block_rows_pending += 1;
@@ -2998,7 +3070,8 @@ pub fn renderDocument(root: ast.Node, ctx: RenderContext) void {
     var ids: IdGen = .{ .n = ctx.id_base };
     renderBlock(root, &ids, resolved_ctx);
 
-    // Keep frames coming until the measuring budgets have caught up — see `Stats.pending_measure`.
+    // Keep frames coming until the measuring budgets have caught up — see
+    // `Stats.pending_measure`.
     if (stats.pending_measure > 0) dvui.refresh(null, @src(), null);
 
     if (comptime builtin.target.cpu.arch != .wasm32) {

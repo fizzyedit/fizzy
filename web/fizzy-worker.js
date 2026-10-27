@@ -30,6 +30,8 @@ const env = {
     // The page's `startup`: what to load, open and play once the editor is up.
     startup: { plugins: [], open: [], show: "", demos: [], tape: "" },
     baseURI: "",
+    // Whether the page can go full screen at all (not Safari on iPhone), measured on the page.
+    fullscreenSupported: false,
 };
 const inputStub = { style: {}, value: "", setAttribute() {}, addEventListener() {}, focus() {}, select() {} };
 self.document = {
@@ -213,6 +215,9 @@ const fizzyImports = (target) => ({
     },
     fizzy_web_toggle_fullscreen() {
         postMessage({ type: "fullscreen" });
+    },
+    fizzy_web_fullscreen_supported() {
+        return env.fullscreenSupported ? 1 : 0;
     },
     fizzy_web_now_real_ms() {
         return Date.now();
@@ -610,7 +615,7 @@ function postBoundKeys() {
 
 // ---- start -------------------------------------------------------------------------------
 async function start(init) {
-    Object.assign(env, { size: init.size, prefs: init.prefs, storage: init.storage, storageName: init.storageName, buildStorageName: init.buildStorageName || init.storageName, startup: init.startup, baseURI: init.baseURI });
+    Object.assign(env, { size: init.size, prefs: init.prefs, storage: init.storage, storageName: init.storageName, buildStorageName: init.buildStorageName || init.storageName, startup: init.startup, baseURI: init.baseURI, fullscreenSupported: init.fullscreenSupported });
     adoptCanvas(init.canvas);
     warmRememberedPlugins();
 
