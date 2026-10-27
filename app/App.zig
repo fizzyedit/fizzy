@@ -1013,7 +1013,7 @@ pub fn recordCaseClash(app: *App, id: []const u8, other: []const u8, path: ?[]co
     const why = app.arena.allocator().print("id '{s}' differs only in case from the plugin '{s}'", .{ id, other }) catch "id differs only in case from another plugin";
     std.log.warn("plugin '{s}': {s}; not loaded", .{ id, why });
     // The web's loader has no build on disk to read a version from.
-    const probe = if (comptime builtin.target.cpu.arch == .wasm32) null else if (path) |p| PluginLoader.probeVersionInfo(p) else null;
+    const probe = if (comptime builtin.target.cpu.arch == .wasm32) null else if (path) |p| PluginLoader.probeVersionInfo(app.gpa, p) else null;
     app.clearFailedUserPlugin(id);
     app.recordPluginFailure(id, why, null, if (probe) |info| info.plugin_version else null, if (path) |p| .of(p) else .{});
 }
@@ -1328,7 +1328,7 @@ pub fn reconcilePluginSettings(app: *App) void {
 /// (loaded / disabled / failed) rather than vanishing from the UI.
 pub fn recordLoadFailure(app: *App, id: []const u8, path: []const u8, err: PluginLoader.LoadError) void {
     const reason = App.pluginLoadFailureReason(err);
-    const probe = PluginLoader.probeVersionInfo(path);
+    const probe = PluginLoader.probeVersionInfo(app.gpa, path);
     const detail: ?[]const u8 = if (probe) |info|
         App.formatPluginProbeDetail(app.gpa, info) catch null
     else
