@@ -2990,13 +2990,14 @@ const ChromeFrame = struct {
     var explorer: fizzy.Explorer = .{};
     var chrome: fizzy.Editor.Chrome = .{};
 
+    fn menuDraw(_: ?*anyopaque) !void {
+        dvui.labelNoFmt(@src(), "Test menu", .{}, .{});
+    }
+
     fn frame() !dvui.App.Result {
         const e = editor.?;
         fizzy.core.anchor.want();
         e.chrome = chrome;
-        // The shim's zeroed editor cannot draw the infobar or the menu bar.
-        e.chrome.infobar = false;
-        e.chrome.menu_bar = false;
         var layout = fizzy.Editor.Layout.init(&e.app.host, &e.app.layout, e.app.gpa, dvui.currentWindow().arena());
         const result = try fizzy.layout.layout(e, &layout);
         e.app.layout.publishRegions();
@@ -3022,6 +3023,9 @@ fn withChrome(chrome: fizzy.Editor.Chrome, comptime check: anytype) !void {
     defer editor.app.layout.deinitQualified(editor.app.gpa);
     defer editor.app.layout.deinitAssignments(editor.app.gpa);
 
+    editor.infobar = .{};
+    editor.app.host.fizzy_api = .{ .ctx = editor, .vtable = &fizzy.Editor.fizzy_api_vtable };
+    try editor.app.host.registerMenu(.{ .id = "test.menu", .draw = ChromeFrame.menuDraw });
     ChromeFrame.explorer = .{};
     editor.explorer = &ChromeFrame.explorer;
     ChromeFrame.editor = editor;
@@ -3076,6 +3080,30 @@ test "chrome: panel false leaves no Panel place" {
     try withChrome(.{ .panel = false }, expectNoPanel);
 }
 
+fn expectBarsVisible(editor: *fizzy.Editor) !void {
+    const side = chromeBounds(editor, "Sidebar") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(side.h < dvui.windowRectPixels().h - 1);
+}
+
+fn expectBarsHidden(editor: *fizzy.Editor) !void {
+    const side = chromeBounds(editor, "Sidebar") orelse return error.TestUnexpectedResult;
+    try std.testing.expectApproxEqAbs(dvui.windowRectPixels().h, side.h, 0.5);
+}
+
+test "chrome: infobar occupies space only when enabled" {
+    try withChrome(.{ .menu_bar = false }, expectBarsVisible);
+    try withChrome(.{ .menu_bar = false, .infobar = false }, expectBarsHidden);
+}
+
+test "chrome: in-window menu occupies space only when enabled" {
+    const Menu = @import("fizzy").Editor.Menu;
+    const before = Menu.debug_force_on_macos;
+    Menu.debug_force_on_macos = true;
+    defer Menu.debug_force_on_macos = before;
+    try withChrome(.{ .infobar = false }, expectBarsVisible);
+    try withChrome(.{ .menu_bar = false, .infobar = false }, expectBarsHidden);
+}
+
 // -- the mobile shape ----------------------------------------------------------------------------
 // `layout_mobile.zig` under a forced `.mobile` form factor: which places it declares, what it
 // draws, and that mobile's arrangement is kept apart from a desktop's in `layout.zon`.
@@ -3115,6 +3143,7 @@ fn mobileCase(ctx: *shim.Ctx) !void {
     MobileFrame.explorer = .{};
     editor.explorer = &MobileFrame.explorer;
     fizzy.core.platform.cached_form_factor = .mobile;
+    editor.chrome = .{};
     MobileFrame.editor = editor;
     const kw = fizzy.sdk.keywords.ide;
     try editor.app.host.registerSurface(.{ .id = "test.files", .title = "Files", .keywords = kw.sidebar, .draw = TabsFrame.draw });
@@ -3136,6 +3165,7 @@ test "mobile's shape is Main, two shut sheets, a bar of the rail's views and a c
 
     fizzy.core.platform.cached_form_factor = .mobile;
     defer fizzy.core.platform.cached_form_factor = .desktop;
+    editor.chrome = .{};
     MobileFrame.editor = editor;
     defer MobileFrame.editor = null;
 
@@ -13198,6 +13228,28 @@ fn openedSheet(size: SheetSize, keywords: []const []const u8, name: []const u8) 
     sheet.open();
     try dvui.testing.settle(MobileFrame.frame);
     return regionRect(editor, name) orelse error.TestUnexpectedResult;
+}
+
+test "mobile chrome: disabled panel has no place or toggle, landscape explorer follows edge" {
+    for (sheet_sizes) |size| {
+        var ctx = try shim.initSized(std.testing.allocator, .{ .w = size.w, .h = size.h });
+        defer ctx.deinit(std.testing.allocator);
+        try mobileCase(&ctx);
+        defer mobileTeardown(&ctx);
+        const editor = ctx.editor;
+        editor.chrome = .{ .panel = false, .sidebar_edge = .right };
+        try dvui.testing.settle(MobileFrame.frame);
+        try std.testing.expect(chromeBounds(editor, "Panel") == null);
+        try std.testing.expect(editor.regionFor(fizzy.sdk.keywords.ide.panel) == null);
+        try std.testing.expect(dvui.tagGet("fizzy.mobile.panel") == null);
+        editor.regionFor(fizzy.sdk.keywords.ide.sidebar).?.open();
+        try dvui.testing.settle(MobileFrame.frame);
+        const explorer = chromeBounds(editor, "Explorer") orelse return error.TestUnexpectedResult;
+        if (size.w > size.h) {
+            try std.testing.expect(explorer.x > dvui.windowRectPixels().w * 0.4);
+            try std.testing.expectApproxEqAbs(dvui.windowRectPixels().w, explorer.x + explorer.w, 1);
+        }
+    }
 }
 
 test "mobile sheets: capped in width in portrait, side sheets in landscape" {
