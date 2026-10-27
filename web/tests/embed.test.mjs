@@ -15,6 +15,10 @@ const source = fs.readFileSync(new URL("../fizzy.js", import.meta.url), "utf8")
   .replaceAll("?cache-buster=TEMPLATE_HASH_WITH_PADDING__ITS_64_BYTES_LONG_THE_SAME_AS_SHA256", "");
 fs.writeFileSync(path.join(dir, "fizzy.js"), source);
 fs.writeFileSync(path.join(dir, "web.js"), `
+export class TextInput {
+  keydown() {}
+  clear() {}
+}
 export class Dvui {
   constructor() { this.imports = {}; this.hidden_input = null; }
   setInstance(instance) { this.instance = instance; }
