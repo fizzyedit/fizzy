@@ -69,10 +69,15 @@ const BundledApp = struct {
 const Watchdog = struct {
     const limit_ms = 180_000;
 
+    /// Guards `phase_name` and `phase_count`: `enter` writes them on the test thread, `watch` reads
+    /// them on the watchdog thread.
     var lock: std.Io.Mutex = .init;
     var phase_name: []const u8 = "setup";
     var phase_count: usize = 0;
+    /// Set by `stop` on the test thread to end `watch`; reset after the join so the next test can
+    /// `start` again.
     var done: std.Io.Event = .unset;
+    /// The watchdog thread: spawned by `start`, joined by `stop`, both on the test thread.
     var thread: ?std.Thread = null;
 
     fn start() !void {
