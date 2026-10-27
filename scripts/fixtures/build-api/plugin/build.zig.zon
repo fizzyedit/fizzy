@@ -1,0 +1,14 @@
+.{
+    .name = .fixture_plugin,
+    .version = "0.0.1",
+    .minimum_zig_version = "0.17.0",
+    .fingerprint = 0x9b70afac3d2d8bc6,
+    .paths = .{ "build.zig", "build.zig.zon", "plugin.zig", "plugin.zig.zon", "lib.zig", "lib.c" },
+    .dependencies = .{
+        // Replaced by `zig fetch --save=fizzy` with this tree's packed SDK.
+        .fizzy = .{
+            .url = "https://github.com/fizzyedit/fizzy/releases/download/sdk-v0.2.30/fizzy-sdk-v0.2.30.tar.gz",
+            .hash = "fizzy-0.2.30-SGBwY1QnJwDznUMVnSLATxXgH2e8_Vz7eMwLj9UQ0sVU",
+        },
+    },
+}
