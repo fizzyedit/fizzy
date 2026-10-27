@@ -147,6 +147,13 @@ test "demo: every bundled demo plays to the end through fizzy's stage, a seek la
                 break;
             };
         }
+        if (std.mem.eql(u8, e.name, "tour")) {
+            var explorer_prng: std.Random.DefaultPrng = .init(0x6);
+            const explorer_random = explorer_prng.random();
+            var explorer_picks: [bundled_random_seeks]usize = undefined;
+            for (&explorer_picks) |*pick| pick.* = explorer_random.uintLessThan(usize, moments.items.len);
+            try picks.insertSlice(gpa, 0, &explorer_picks);
+        }
         var wrong: usize = 0;
         for (picks.items) |i| {
             const want = moments.items[i];
@@ -395,23 +402,27 @@ test "demo: every bundled demo plays to the end through fizzy's stage, a seek la
         defer gpa.free(panes_zon);
         try std.Io.Dir.cwd().writeFile(dvui.io, .{ .sub_path = panes_zon, .data = ".{ .persons = true }" });
 
-        // The explorer shut, so the person's pane has the room for the tour's drop to split it
-        // (`core.placement`): with it open the drop is left out of the tour.
-        app.editor.explorer.close(app.editor);
-        try dvui.testing.settle(headlessFrame);
+        // The explorer left open: the person's pane has no room for the tour's drop to split it
+        // (`core.placement`), so the drop is left out and the tab is brought forward instead.
+        // (The integration test plays the tour with it shut, for the split.)
+        try std.testing.expect(!app.editor.explorer.closed);
         try app.editor.demo.play("tour");
         var held = true;
         var split = false;
+        var forward = false;
         frames = 0;
         while (p.state != .ended and frames < 5_000) : (frames += 1) {
             _ = try dvui.testing.step(headlessFrame);
             if (frames == 30) _ = try app.editor.openFilePath(later, wb.currentGroupingID());
             if (frames > 5 and p.state == .playing) held = held and wb.panes_held;
             split = split or wb.workspaces.count() > panes_before.groupings.len;
+            forward = forward or std.mem.endsWith(u8, activePath(app.editor), "src/main.zig");
         }
         try std.testing.expectEqual(automation.Player.State.ended, p.state);
+        try std.testing.expectEqual(@as(u32, 0), p.timeouts);
         try std.testing.expect(held);
-        try std.testing.expect(split);
+        try std.testing.expect(!split);
+        try std.testing.expect(forward);
         p.unload();
         try dvui.testing.settle(headlessFrame);
 

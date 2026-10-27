@@ -15,10 +15,29 @@ name: CI
 # three cold. Now the merge that changes a dependency saves the new caches, a cache GitHub
 # evicted after a quiet week comes back on the next merge, and every merge is tested on all
 # three platforms. Nothing waits on a main run, and a cache hit makes the extra jobs short.
+#
+# A draft pull request runs only `changes`: its author ran the gates on their own machine, and a
+# draft decides nothing, so the matrix would only repeat that. The matrix runs once per push to a
+# ready pull request, and `ready_for_review` starts it for the push the draft already holds.
+# `changes` reports code=false and sdl=false for a draft, the builds skip, and `ci-ok` passes on
+# skipped jobs; `gh pr ready` is therefore what makes the required check mean something, and
+# `main`'s ruleset still requires it. Pushes to main and the merge queue are unchanged.
+#
+# A green `ci-ok` on a draft means "nothing was built", and that is safe only because a draft
+# cannot be merged and the merge queue reruns the whole matrix on the `merge_group` ref. Turning
+# a ready PR back into a draft is not a trigger, so its last full result stays on it; push or
+# mark it ready again for a fresh one.
+#
+# The Zig compiler is restored from the Actions cache by every job: setup-zig keeps the verified
+# tarball under the key `setup-zig-tarball-<tarball name>` (the version is pinned by ZIG_VERSION;
+# a job's log shows `Cache hit for: setup-zig-tarball-zig-x86_64-linux-0.17.0`),
+# independent of the `use-cache: false` the jobs set for the Zig *package* cache, which has the
+# per-job key `zig-<ZIG_VERSION>-<job>-<os>-<arch>-<hash of every build.zig.zon>`.
 on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   merge_group:
   workflow_dispatch:
 
@@ -59,8 +78,14 @@ jobs:
           EVENT: ${{ github.event_name }}
           PUSH_BEFORE: ${{ github.event.before }}
           QUEUE_BASE: ${{ github.event.merge_group.base_sha }}
+          DRAFT: ${{ github.event.pull_request.draft }}
         run: |
           set -euo pipefail
+          if [ "$DRAFT" = true ]; then
+            echo "::notice::draft pull request: nothing was built; the full CI runs at gh pr ready"
+            printf 'code=false\nsdl=false\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           case "$EVENT" in
             pull_request) base=HEAD^1 ;;
             merge_group) base=$QUEUE_BASE ;;
@@ -112,6 +137,8 @@ jobs:
         run: sh scripts/test-zb.sh
       - name: scripts/check-kickoff
         run: python3 scripts/test-check-kickoff.py
+      - name: scripts/hello-numbers (harness, no windows)
+        run: python3 scripts/test-hello-numbers.py
       - name: scripts/agent-prepare, agent-finish
         run: bash scripts/test-agent-work.sh
       - name: superfans (fan-dedupe, fan-route, fan-lint on seeded input)
@@ -135,7 +162,8 @@ jobs:
           - { os: windows-latest, name: Windows }
           - { os: macos-14, name: macOS }
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    # macOS runs 26 to 30 minutes on a healthy day; a slow run should not be a failed one.
+    timeout-minutes: ${{ matrix.name == 'macOS' && 45 || 30 }}
     steps:
       - uses: actions/checkout@v4
       # The Zig cache's key, worked out once, here, before anything is unpacked. The fetch below
@@ -237,6 +265,11 @@ jobs:
       - name: Compile web (wasm) build with a custom layout
         if: matrix.name != 'Windows'
         shell: bash
+        # The script builds through scripts/zb, which waits for the load average to fall under the
+        # performance cores. A runner's load is the previous step's compilers (16 against 3 on
+        # macOS), so zb idled 10 minutes there. Nothing else shares a CI runner: skip the wait.
+        env:
+          FIZZY_BUILD_SKIP: "1"
         run: bash scripts/ci-retry.sh scripts/check-web-layout.sh
 
       # The tapes fizzyed.it serves beside the app: a script or `docs/demos/` tape that no longer
@@ -375,6 +408,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       # The Zig cache as in the test job: a fixed key, one cold build saved once.

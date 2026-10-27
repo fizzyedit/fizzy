@@ -67,6 +67,7 @@ const PluginManager = @import("app").store.Manager;
 pub const FilesService = @import("FilesService.zig");
 const SettingsTree = @import("SettingsTree.zig");
 const OutputPanel = @import("OutputPanel.zig");
+pub const Chrome = @import("Chrome.zig");
 const SettingsPluginsZon = @import("app").settings.PluginsZon;
 const file_glyphs = @import("file_glyphs.zig");
 const SettingsWatcher = @import("app").watch.SettingsWatcher;
@@ -199,6 +200,10 @@ last_titlebar_color: dvui.Color,
 sidebar: Sidebar,
 
 infobar: Infobar,
+
+/// The frame of fizzy's shape this build keeps. A field and not a `comptime` read so a test can
+/// draw the shape either way.
+chrome: Chrome = .configured,
 
 /// Whether a text-input widget held keyboard focus at the end of the last frame.
 ///
@@ -493,8 +498,6 @@ pub fn init(
             KeptDocuments.noteRecoveredFromCheckpoint();
         }
     }
-
-    // Save-queue worker is owned by the pixel-art plugin (`initPlugin` in `postInit`).
 
     { // Setup themes
         var fizzy_dark = dvui.themeGet();
@@ -843,7 +846,7 @@ pub fn loadUserPlugins(editor: *Editor, config_folder: []const u8) void {
                 dvui.log.info("user plugin '{s}': already loaded as a built-in; skipped", .{plugin_id});
             } else {
                 dvui.log.err("user plugin '{s}': id already registered by a built-in; skipped", .{plugin_id});
-                const probe = PluginLoader.probeVersionInfo(path);
+                const probe = PluginLoader.probeVersionInfo(editor.app.gpa, path);
                 editor.app.recordPluginFailure(plugin_id, "id already registered by a built-in plugin", null, if (probe) |info| info.plugin_version else null, .of(path));
             }
             editor.app.gpa.free(path);
@@ -937,8 +940,8 @@ fn unloadPluginLibs(editor: *Editor) void {
 
 // ---- runtime plugin lifecycle (store: install / enable / disable / update) ---------
 //
-// Only dylib-loaded *user* plugins are managed here. Bundled built-ins (pixi/workbench/
-// code) ship in the app and are never unloaded, even though they also appear in
+// Only dylib-loaded *user* plugins are managed here. Bundled built-ins (workbench,
+// text, …) ship in the app and are never unloaded, even though they also appear in
 // `loaded_plugin_libs` when loaded from their bundled dylibs.
 
 /// True when `id` names one of the bundled built-ins (ships in the app, must never be
@@ -1623,7 +1626,7 @@ fn beginWebPluginLoad(editor: *Editor, id: []const u8, url: []const u8, sha256: 
     // Two requests for one id before the first lands (the page's remembered list and a
     // `?plugin=` of the same id, say) would register it twice; the second one waits for nothing.
     // The first one's `arrived` reports for both, so the store's spinner still ends: every
-    // request ends in exactly one `arrived` (the page's fetches have a deadline, `index.html`'s
+    // request ends in exactly one `arrived` (the page's fetches have a deadline, `fizzy.js`'s
     // `fetchPluginBytes`, and its `.catch` reports a failure), and `arrived` settles the store's
     // row by id, so this early return cannot leave a row on "Updating…".
     if (web_loads_in_flight.contains(id)) return;
@@ -2316,13 +2319,15 @@ pub fn postInit(editor: *Editor) !void {
     // even with no document open, since it's a diagnostic view, not a per-file one. Before the
     // plugins, so it is the bottom panel's first view and a plugin's (the dashboard, a terminal)
     // comes after it: a region shows its first view until someone picks another.
-    try editor.app.host.registerSurface(.{
-        .id = "fizzy.output",
-        .title = "Output",
-        .keywords = sdk.keywords.ide.panel,
-        .persistent = true,
-        .draw = OutputPanel.draw,
-    });
+    if (editor.chrome.panel) {
+        try editor.app.host.registerSurface(.{
+            .id = "fizzy.output",
+            .title = "Output",
+            .keywords = sdk.keywords.ide.panel,
+            .persistent = true,
+            .draw = OutputPanel.draw,
+        });
+    }
 
     inline for (bundled_plugins) |m| {
         const extra: ?*anyopaque = if (comptime std.mem.eql(u8, m.plugin_id, "workbench")) @ptrCast(&editor.workbench) else null;
@@ -5186,6 +5191,7 @@ pub fn collectSavedRegions(editor: *Editor, gpa: std.mem.Allocator) []fizzy.back
             gop.value_ptr.parent = l.parent;
             gop.value_ptr.from = @tagName(l.side);
             gop.value_ptr.adaptive = if (l.adaptive) true else null;
+            gop.value_ptr.share = l.share;
         }
     }
     {
@@ -5285,7 +5291,10 @@ fn loadRuntimeSplits(state: *Layout.State, gpa: std.mem.Allocator, saved: []cons
         const parent = r.parent orelse continue;
         const side = Layout.State.SplitTree.parseSide(r.from orelse continue) orelse continue;
         const made = state.splits.split(gpa, intern.go, parent, side, r.extent orelse 0, r.name);
-        if (made != null and (r.adaptive orelse false)) _ = state.splits.markAdaptive(r.name);
+        if (made != null and (r.adaptive orelse false)) {
+            _ = state.splits.markAdaptive(r.name);
+            if (r.share) |share| _ = state.splits.setShare(r.name, share);
+        }
     }
 }
 
@@ -7302,7 +7311,7 @@ pub fn deinit(editor: *Editor) !void {
     // Owned outright rather than cached by dvui, so it has to be released explicitly.
     editor.app.layout.center_transition.discard();
     editor.app.layout.center_prev_id = null;
-    editor.app.layout.view_drag.discard();
+    editor.app.layout.view_drag.discard(editor.app.gpa);
     editor.app.layout.deinitSwaps(editor.app.gpa);
     editor.app.layout.regions.deinit(editor.app.gpa);
     editor.preview_docs.deinit(editor.app.gpa);
@@ -7342,6 +7351,7 @@ pub fn deinit(editor: *Editor) !void {
     editor.checkpoint.deinit(editor);
     // Rebuilds still opening: their threads joined, what they opened dropped unregistered.
     editor.plugin_reloads.deinit(editor.app.gpa);
+    if (comptime builtin.target.cpu.arch != .wasm32) PluginLoader.deinitOpenedPaths(editor.app.gpa);
     if (editor.session) |*kept| kept.deinit();
     // Before the plugin `deinit` loop below: `tick` fans out into plugin vtables, and this
     // joins the thread that feeds it.

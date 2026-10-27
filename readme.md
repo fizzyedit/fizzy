@@ -44,15 +44,23 @@ Download `hello-numbers-<OS>-<arch>` from a run for the exact JSON lines and sou
 
 | Linux x86_64, example-app minimal | ReleaseFast | ReleaseSmall |
 | --- | --- | --- |
-| Stripped executable | 21,789,128 B | 14,892,728 B |
-| Installer (`.AppImage`) | 31,582,712 B | 15,084,024 B |
-| First frame (`core.profile`) | 491 ms | 87 ms |
-| Idle RSS after 30 s | 144,674,816 B | 133,455,872 B |
-| Gzipped wasm | 4,145,339 B | 3,348,450 B |
+| Stripped executable | 21,168,760 B | 14,607,864 B |
+| Installer (`.AppImage`) | 23,091,704 B | 13,548,024 B |
+| First frame (`core.profile`) | 731 ms | 79 ms |
+| Idle RSS after 30 s | 144,408,576 B | 133,521,408 B |
+| Gzipped wasm | 3,952,577 B | 3,243,050 B |
 
-Source: [run 40195192369](https://github.com/fizzyedit/fizzy/actions/runs/40195192369) at
-`c4f0e401` (Xvfb with Mesa software rendering on a GitHub runner; one sample each). The macOS
-column is not yet recorded: that run's macOS job failed.
+| macOS arm64, example-app minimal | ReleaseFast | ReleaseSmall |
+| --- | --- | --- |
+| Stripped executable | 18,929,968 B | 13,134,240 B |
+| Installer (`.pkg`) | 13,753,818 B | 11,041,560 B |
+| First frame (`core.profile`) | 742 ms | 401 ms |
+| Idle RSS after 30 s | 77,217,792 B | 75,186,176 B |
+| Gzipped wasm | 3,952,577 B | 3,243,050 B |
+
+Sources: both from [run 40362195739](https://github.com/fizzyedit/fizzy/actions/runs/40362195739)
+at `e572d74a` (ubuntu-24.04 and macos-14 runners).
+One sample each; Linux uses Xvfb with Mesa software rendering on a GitHub runner.
 
 See the [method and manual Electron/Tauri comparison](docs/HELLO_NUMBERS.md) before comparing
 samples: runner hardware, OS caches, packaged resources and startup clocks affect the results.
