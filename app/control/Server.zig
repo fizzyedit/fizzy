@@ -729,7 +729,7 @@ const TestClient = struct {
         w.interface.flush() catch return;
         var rbuf: [1024]u8 = undefined;
         var r = stream.reader(self.io, &rbuf);
-        // Read the HTTP body by its length, or SSE through the expected final message.
+        // Read the HTTP body by its length, an SSE stream through its expected final message, else to the end.
         // Windows AF_UNIX does not reliably notify readers when the peer closes.
         while (self.reply_len < self.reply.len) {
             const n = r.interface.readSliceShort(self.reply[self.reply_len..][0..1]) catch return;
@@ -752,6 +752,8 @@ const TestClient = struct {
                 self.reply_len += 1;
                 if (std.mem.endsWith(u8, self.reply[0..self.reply_len], end)) return;
             }
+        } else {
+            self.reply_len += r.interface.readSliceShort(self.reply[self.reply_len..]) catch 0;
         }
     }
 };
