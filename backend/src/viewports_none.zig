@@ -95,6 +95,7 @@ pub fn carryShape(_: *Viewport, _: ?f32, _: f32) void {}
 pub fn carryLens(_: *Viewport, _: bool) void {}
 /// Any look, `WindowGlassLook` or the backend package's (an app on dvui's own SDL3 backend still
 /// dresses its main window with `platform`'s): there is no viewport to give it to.
+// anytype: Accept both app and backend glass look types on targets without viewports.
 pub fn windowGlass(_: *Viewport, _: anytype) bool {
     return false;
 }

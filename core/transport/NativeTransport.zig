@@ -85,7 +85,7 @@ pub fn init(gpa: std.mem.Allocator, io: std.Io, wake: ?*const fn () void) Native
 /// Waits for every worker still running (the one place that does — the transport's memory
 /// is about to go away under them); their responses are dropped.
 pub fn deinit(self: *NativeTransport) void {
-    var threads: std.ArrayListUnmanaged(std.Thread) = .empty;
+    var threads: std.ArrayList(std.Thread) = .empty;
     defer threads.deinit(self.gpa);
     {
         self.mutex.lock();
@@ -114,7 +114,13 @@ pub fn transport(self: *NativeTransport) vfs.http.Transport {
 
 const vtable: vfs.http.Transport.VTable = .{ .request = request, .cancel = cancel, .pump = pump };
 
-fn request(ptr: *anyopaque, allocator: std.mem.Allocator, req: vfs.http.Request, cb: vfs.http.DoneFn, ctx: ?*anyopaque) vfs.Error!vfs.http.Job {
+fn request(
+    ptr: *anyopaque,
+    allocator: std.mem.Allocator,
+    req: vfs.http.Request,
+    cb: vfs.http.DoneFn,
+    ctx: ?*anyopaque,
+) vfs.Error!vfs.http.Job {
     const self: *NativeTransport = @ptrCast(@alignCast(ptr));
     if (comptime builtin.target.cpu.arch == .wasm32) return error.Unsupported;
     const a = self.gpa;
@@ -169,7 +175,11 @@ fn worker(job: *Job) void {
     // By its host alone: a URL's path and query can carry tokens, and a trace is for sharing.
     var name_buf: [64]u8 = undefined;
     const host = if (std.Uri.parse(job.url)) |u| (if (u.host) |h| h.percent_encoded else "") else |_| "";
-    const timed = @import("../profile/Spans.zig").span(std.mem.print(&name_buf, "http {t} {s}", .{ job.method, host }) catch "http");
+    const timed = @import("../profile/Spans.zig").span(std.mem.print(
+        &name_buf,
+        "http {t} {s}",
+        .{ job.method, host },
+    ) catch "http");
     const result = perform(job);
     timed.end();
     const self = job.owner;
@@ -257,7 +267,7 @@ fn cancel(ptr: *anyopaque, handle: vfs.http.Job) void {
 
 fn pump(ptr: *anyopaque) void {
     const self: *NativeTransport = @ptrCast(@alignCast(ptr));
-    var done: std.ArrayListUnmanaged(*Job) = .empty;
+    var done: std.ArrayList(*Job) = .empty;
     defer done.deinit(self.gpa);
     {
         self.mutex.lock();

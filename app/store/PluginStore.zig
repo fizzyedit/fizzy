@@ -110,7 +110,8 @@ const Job = struct {
     /// This job's download worker, as a cancelable `Io` task group rather than a detached
     /// `std.Thread`. The worker writes `err_buf`/`err_len`/`status` back into the `Job`, so the
     /// `Job` must not be freed while it is alive — and a detached thread gave `freeJob` no way to
-    /// know. Nothing in the download path sets a network timeout either, so a stalled or
+    /// know. Nothing in the native download path sets a network timeout (the web's fetches
+    /// have one, `web/fizzy.js`'s `fetchPluginBytes`), so a stalled or
     /// blackholed release host keeps that worker running arbitrarily long: quitting mid-download
     /// left a live thread writing into freed memory. `Group.cancel` both interrupts the blocked
     /// syscall (the worker returns `error.Canceled`) *and* awaits the task, so `freeJob` is
@@ -123,7 +124,7 @@ const Job = struct {
     tasks: std.Io.Group = .init,
 };
 
-var jobs: std.StringArrayHashMapUnmanaged(*Job) = .empty;
+var jobs: std.array_hash_map.String(*Job) = .empty;
 
 /// UI actions queued during `draw` and applied in `tick` so plugin unload never mutates
 /// `host.plugins` (or dlcloses an image) while the store view is still iterating it.
@@ -135,7 +136,7 @@ const PendingAction = union(enum) {
     dismiss: struct { id: []u8 },
 };
 
-var pending_actions: std.ArrayListUnmanaged(PendingAction) = .empty;
+var pending_actions: std.ArrayList(PendingAction) = .empty;
 
 /// Last-known display name per plugin id (app-allocator owned). A sideloaded plugin only exposes
 /// its display name while loaded — once disabled it is unloaded and we'd otherwise fall back to the
@@ -143,14 +144,14 @@ var pending_actions: std.ArrayListUnmanaged(PendingAction) = .empty;
 /// toggled. We remember the name the first time we see it (loaded plugin or registry row) and reuse
 /// it as the stable title for the disabled/failed states. (Session-scoped: a plugin disabled before
 /// it was ever loaded this session still shows its id until enabled once.)
-var name_cache: std.StringArrayHashMapUnmanaged([]u8) = .empty;
+var name_cache: std.array_hash_map.String([]u8) = .empty;
 
 /// Last-known installed version per plugin id (app-allocator owned keys, plain values). Like
 /// `name_cache`, a sideloaded plugin only exposes its version while loaded — once disabled it is
 /// unloaded, and a failed build's version is only known if the dylib could be probed. We remember
 /// the version the first time we see it (loaded plugin, failed-load probe, or on-disk probe) and
 /// reuse it as the "current version" for disabled/failed cards.
-var version_cache: std.StringArrayHashMapUnmanaged(std.SemanticVersion) = .empty;
+var version_cache: std.array_hash_map.String(std.SemanticVersion) = .empty;
 
 /// Disk-probed manifest fields per plugin id (app-allocator owned keys and values; an all-empty
 /// entry means "probed, genuinely has nothing" so it isn't re-probed every frame either). Backs
@@ -158,7 +159,7 @@ var version_cache: std.StringArrayHashMapUnmanaged(std.SemanticVersion) = .empty
 /// `authorUrlFor` — registry and built-in values are already cheap and never touch this. One
 /// cache rather than one per field, because a single `dlopen` + parse yields all of them at once.
 /// Cleared by `refreshDiskScan`.
-var manifest_cache: std.StringArrayHashMapUnmanaged(PluginLoader.ProbedManifest) = .empty;
+var manifest_cache: std.array_hash_map.String(PluginLoader.ProbedManifest) = .empty;
 
 /// Every plugin id with a directory in `{config}/plugins/` (app-allocator owned), refreshed by
 /// `refreshDiskScan`. The installed pane's in-memory sources (loaded plugins, disabled ids,
@@ -166,7 +167,7 @@ var manifest_cache: std.StringArrayHashMapUnmanaged(PluginLoader.ProbedManifest)
 /// what is actually on disk, which is the only thing that guarantees a broken plugin always has
 /// a card to uninstall or reinstall from — even one that arrived in a state nothing recorded
 /// (a half-finished install, a sideloaded directory, a build fizzy never tried to load).
-var disk_ids: std.ArrayListUnmanaged([]u8) = .empty;
+var disk_ids: std.ArrayList([]u8) = .empty;
 /// Set when the plugins directory may have changed (first draw, Refresh, and after any install /
 /// uninstall / enable-disable applied in `tick`) so `draw` rescans once instead of listing the
 /// directory on every frame the tab is open.
@@ -194,7 +195,7 @@ pub fn uninstalledCatalog(arena: std.mem.Allocator) []const CatalogOffer {
     const snap = c.acquire();
     defer c.release();
     const s = snap orelse return &.{};
-    var out: std.ArrayListUnmanaged(CatalogOffer) = .empty;
+    var out: std.ArrayList(CatalogOffer) = .empty;
     for (s.summary.plugins) |p| {
         if (presentLocally(p.id)) continue;
         const rel = s.shard.releaseFor(p.id) orelse continue;
@@ -423,7 +424,7 @@ fn probeOnDiskInfo() void {
             }
         }
         if (!have_version) {
-            if (PluginLoader.probeVersionInfo(path)) |info| {
+            if (PluginLoader.probeVersionInfo(a, path)) |info| {
                 rememberVersion(id, info.plugin_version);
             }
         }
@@ -874,9 +875,16 @@ pub const PendingUpdate = struct {
     /// The last attempt failed (the download, not the load — see `tick`). The row stays on the
     /// offer with its button back, labelled Retry.
     failed: bool = false,
+    /// Why the last web attempt failed, shown beside Retry (`webLoadFailed`); empty when unknown.
+    reason_buf: [160]u8 = undefined,
+    reason_len: usize = 0,
+
+    pub fn reason(self: *const PendingUpdate) []const u8 {
+        return self.reason_buf[0..self.reason_len];
+    }
 };
 
-var pending_updates: std.ArrayListUnmanaged(PendingUpdate) = .empty;
+var pending_updates: std.ArrayList(PendingUpdate) = .empty;
 
 /// Where the once-per-session update check has got to.
 const AutoPhase = enum {
@@ -943,23 +951,23 @@ fn markPendingUpdateFailed(id: []const u8) void {
 /// simply replaced) and from inside the card list's own draw, since it touches no catalog state.
 /// Ids whose web load or update is in flight — the page is fetching and linking, and the host
 /// has not yet accepted or refused the module. `app.gpa`-owned; one entry per id.
-var web_in_flight: std.StringArrayHashMapUnmanaged(void) = .empty;
+var web_in_flight: std.array_hash_map.String(void) = .empty;
 
 /// The web's plugins directory: every id the page remembers a build for (it brings each back at
 /// startup) or that loaded this visit. `refreshDiskScan` lists the ones the page still remembers
 /// into `disk_ids`, so everything the desktop does with a plugin on disk — the Installed card,
 /// Uninstall and Reinstall, the update pass — applies here too. `app.gpa`-owned keys.
-var web_known: std.StringArrayHashMapUnmanaged(void) = .empty;
+var web_known: std.array_hash_map.String(void) = .empty;
 /// Startup loads the page asked for that have not landed yet. The update pass waits for these:
 /// until a remembered build has been accepted or refused, the pass cannot tell a plugin that is
 /// running from one that needs repairing.
-var web_startup_waiting: std.StringArrayHashMapUnmanaged(void) = .empty;
+var web_startup_waiting: std.array_hash_map.String(void) = .empty;
 /// The page has made all of its startup requests (`webStartupRequested`).
 var web_startup_requested = false;
 
 const web_loader = if (builtin.target.cpu.arch == .wasm32) @import("PluginLoader_web.zig") else struct {};
 
-fn putId(set: *std.StringArrayHashMapUnmanaged(void), id: []const u8) void {
+fn putId(set: *std.array_hash_map.String(void), id: []const u8) void {
     const gop = set.getOrPut(app.gpa, id) catch return;
     if (!gop.found_existing) {
         gop.key_ptr.* = app.gpa.dupe(u8, id) catch {
@@ -969,11 +977,11 @@ fn putId(set: *std.StringArrayHashMapUnmanaged(void), id: []const u8) void {
     }
 }
 
-fn removeId(set: *std.StringArrayHashMapUnmanaged(void), id: []const u8) void {
+fn removeId(set: *std.array_hash_map.String(void), id: []const u8) void {
     if (set.fetchSwapRemove(id)) |kv| app.gpa.free(kv.key);
 }
 
-fn freeIds(set: *std.StringArrayHashMapUnmanaged(void)) void {
+fn freeIds(set: *std.array_hash_map.String(void)) void {
     for (set.keys()) |k| app.gpa.free(k);
     set.deinit(app.gpa);
     set.* = .empty;
@@ -1014,12 +1022,17 @@ pub fn webLoadSucceeded(id: []const u8) void {
 /// It did not: the fetch failed, the module was refused, or the plugin it would have replaced
 /// has unsaved documents. The offer stays, wearing Retry — the running plugin was never torn
 /// down, so there is something to go back to.
-pub fn webLoadFailed(id: []const u8) void {
+pub fn webLoadFailed(id: []const u8, reason: []const u8) void {
     clearWebInFlight(id);
     removeId(&web_startup_waiting, id);
     if (pendingRowFor(id)) |row| {
         row.started = false;
         row.failed = true;
+        // Cut on a codepoint boundary, so a multi-byte character is never left half-drawn.
+        var n = @min(reason.len, row.reason_buf.len);
+        while (n > 0 and n < reason.len and (reason[n] & 0xC0) == 0x80) n -= 1;
+        row.reason_len = n;
+        @memcpy(row.reason_buf[0..row.reason_len], reason[0..row.reason_len]);
     }
     dvui.refresh(null, @src(), null);
 }
@@ -1037,6 +1050,7 @@ fn applyWebUpdate(id: []const u8, url: []const u8, sha256: []const u8) void {
     if (pendingRowFor(id)) |row| {
         row.started = true;
         row.failed = false;
+        row.reason_len = 0;
     }
     app.updateFromUrl(id, url, sha256) catch |err| {
         clearWebInFlight(id);
@@ -1064,6 +1078,7 @@ pub fn applyPendingUpdate(id: []const u8) void {
     });
     row.started = true;
     row.failed = false;
+    row.reason_len = 0;
 }
 
 /// One-line progress for `id` as the update window shows it, or null while the row still has an
@@ -1125,6 +1140,20 @@ fn drawUpdateCardControls(entry: StoreEntry) void {
         return;
     }
     const failed = if (pendingRowFor(entry.id)) |row| row.failed else false;
+    if (pendingRowFor(entry.id)) |row| if (row.failed and row.reason_len != 0) {
+        // Wrapped and capped, so a long reason grows the row downward and never pushes the
+        // Retry button out of the card.
+        var tl = dvui.textLayout(@src(), .{ .break_lines = true }, .{
+            .background = false,
+            .gravity_y = 0.5,
+            .max_size_content = .{ .w = 240, .h = std.math.floatMax(f32) },
+            .margin = dvui.Rect.all(0),
+            .color_text = .{ .color = theme.color(.window, .text).opacity(0.7) },
+            .font = dvui.Font.theme(.mono).larger(-1.0),
+        });
+        tl.addText(row.reason(), .{});
+        tl.deinit();
+    };
     if (dvui.button(@src(), if (failed) "Retry" else "Update", .{}, .{ .gravity_y = 0.5, .font = body.larger(-1.0) }))
         applyPendingUpdate(entry.id);
 }
@@ -1971,7 +2000,7 @@ fn entryScoreLess(_: void, lhs: StoreEntry, rhs: StoreEntry) bool {
 
 /// Drop non-matching entries and order what's left. With no query this is the plain A→Z list the
 /// store has always shown; with one, the best match is the first card.
-fn rankEntries(entries: *std.ArrayListUnmanaged(StoreEntry), query: *const fuzzy.Query) void {
+fn rankEntries(entries: *std.ArrayList(StoreEntry), query: *const fuzzy.Query) void {
     if (query.isEmpty()) {
         std.sort.pdq(StoreEntry, entries.items, {}, entryLess);
         return;
@@ -2027,7 +2056,7 @@ fn draw(_: ?*anyopaque) anyerror!dvui.App.Result {
 
     // Store entries (STORE tab): one row per registry plugin, independent of local install
     // state — a pure "what does the store publish" list. See `drawStoreCard`.
-    var store_entries: std.ArrayListUnmanaged(StoreEntry) = .empty;
+    var store_entries: std.ArrayList(StoreEntry) = .empty;
     if (maybe_snapshot) |snap| {
         for (snap.summary.plugins) |entry| {
             rememberName(entry.id, entry.name);
@@ -2045,7 +2074,7 @@ fn draw(_: ?*anyopaque) anyerror!dvui.App.Result {
     // Installed entries (INSTALLED tab): everything genuinely present locally — loaded,
     // disabled-on-disk, sideloaded, or a failed/rejected build — enriched with a matching
     // registry row (for "store vX" / Update-availability) wherever the registry knows the id too.
-    var installed_entries: std.ArrayListUnmanaged(StoreEntry) = .empty;
+    var installed_entries: std.ArrayList(StoreEntry) = .empty;
     for (app.host.plugins.items) |plugin| {
         // The app's own registrations (the store page owner) are plugins to the document
         // machinery and nothing a user manages: no version, no update, nothing to uninstall.
@@ -2255,7 +2284,7 @@ fn drawStoreSection(entries: []const StoreEntry, filter_text: []const u8, status
     var pane_box = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .background = false });
     defer pane_box.deinit();
 
-    var scroll = dvui.scrollArea(@src(), .{
+    var scroll = core.widgets.ScrollArea.init(@src(), .{
         .scroll_info = &store_scroll_info,
         .horizontal_bar = .auto_overlay,
         .vertical_bar = .auto_overlay,
@@ -2304,7 +2333,7 @@ fn drawInstalledSection(entries: []const StoreEntry, filter_text: []const u8) us
     var pane_box = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .background = false });
     defer pane_box.deinit();
 
-    var scroll = dvui.scrollArea(@src(), .{
+    var scroll = core.widgets.ScrollArea.init(@src(), .{
         .scroll_info = &installed_scroll_info,
         .horizontal_bar = .auto_overlay,
         .vertical_bar = .auto_overlay,
@@ -2588,15 +2617,7 @@ fn drawCardShell(entry: StoreEntry, controls: *const fn (StoreEntry) void, row2_
                         },
                         "{s}",
                         .{desc_label.label_str},
-                        .{
-                            .border = .all(0),
-                            .box_shadow = .{
-                                .color = .black,
-                                .corners = core.corners.all(core.corners.surface),
-                                .fade = 4,
-                                .alpha = 0.25,
-                            },
-                        },
+                        .{},
                     );
                 }
                 desc_label.deinit();

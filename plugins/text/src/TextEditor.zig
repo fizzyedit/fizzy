@@ -1494,8 +1494,8 @@ const HoverGoToSplit = struct { body: []const u8, links: []const HoverGoToLink }
 /// first-seen order and de-duped by URL. Labels/urls are slices into `hover_text`; `body` is
 /// either the original slice (nothing to strip) or arena-allocated.
 fn splitHoverGoToLinks(hover_text: []const u8, arena: std.mem.Allocator) !HoverGoToSplit {
-    var links: std.ArrayListUnmanaged(HoverGoToLink) = .empty;
-    var remove_spans: std.ArrayListUnmanaged(struct { start: usize, end: usize }) = .empty;
+    var links: std.ArrayList(HoverGoToLink) = .empty;
+    var remove_spans: std.ArrayList(struct { start: usize, end: usize }) = .empty;
 
     var search_from: usize = 0;
     while (findGoToSpan(hover_text, search_from)) |span| {
@@ -1508,7 +1508,7 @@ fn splitHoverGoToLinks(hover_text: []const u8, arena: std.mem.Allocator) !HoverG
         return .{ .body = hover_text, .links = &.{} };
     }
 
-    var body: std.ArrayListUnmanaged(u8) = .empty;
+    var body: std.ArrayList(u8) = .empty;
     var cursor: usize = 0;
     for (remove_spans.items) |span| {
         if (span.start > cursor) try body.appendSlice(arena, hover_text[cursor..span.start]);
@@ -1562,7 +1562,7 @@ fn endOfGoToLinks(src: []const u8, links_start: usize) ?usize {
     return if (found_one) i else null;
 }
 
-fn parseGoToLinks(links_text: []const u8, out: *std.ArrayListUnmanaged(HoverGoToLink), arena: std.mem.Allocator) !void {
+fn parseGoToLinks(links_text: []const u8, out: *std.ArrayList(HoverGoToLink), arena: std.mem.Allocator) !void {
     var i: usize = 0;
     while (i < links_text.len and links_text[i] == '[') {
         const close_bracket = std.mem.findScalarPos(u8, links_text, i + 1, ']') orelse break;
@@ -1589,7 +1589,7 @@ fn parseGoToLinks(links_text: []const u8, out: *std.ArrayListUnmanaged(HoverGoTo
 }
 
 fn compactBlankLines(arena: std.mem.Allocator, src: []const u8) ![]const u8 {
-    var out: std.ArrayListUnmanaged(u8) = .empty;
+    var out: std.ArrayList(u8) = .empty;
     var i: usize = 0;
     var newline_run: usize = 0;
     while (i < src.len) : (i += 1) {

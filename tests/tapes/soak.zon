@@ -17,8 +17,6 @@
             .{ .path = "src/main.zig", .text = "const std = @import(\"std\");\n\npub fn main() void {\n    std.debug.print(\"soak\\n\", .{});\n}\n" },
         },
         .open = .{ "src/main.zig", "README.md" },
-        // The explorer open, so there is a view to float.
-        .layout = .reset,
     }},
     .home = "region:Main",
     .chapters = .{

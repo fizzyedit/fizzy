@@ -1404,6 +1404,19 @@ int fizzy_macos_viewport_menu(void *nswindow, void *main_nswindow, long material
 }
 
 /*
+ * A menu's window goes from the screen while the app is not the active one, as an OS menu does: it
+ * sits at a popup's level on every Space, and left up it stood over the other app's windows until
+ * the person came back and clicked. AppKit hides it on deactivation by itself, so it needs no frame
+ * of the app's to notice (`Popout` closes the menu itself in the next one, `core.screens.menusDismissed`).
+ */
+void fizzy_macos_viewport_menu_hides(void *nswindow) {
+    @autoreleasepool {
+        NSWindow *window = (__bridge NSWindow *)nswindow;
+        if (window != nil) [window setHidesOnDeactivate:YES];
+    }
+}
+
+/*
  * `nswindow` just above `other` in the stacking, where it is not already: a growing float's
  * picture over the overlay holding the glass it grows out of (`Popout.growDrops`), both at a popup's
  * level, where whichever was ordered last is in front.

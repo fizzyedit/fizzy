@@ -58,7 +58,13 @@ pub fn transport(allocator: std.mem.Allocator) vfs.http.Transport {
 
 const vtable: vfs.http.Transport.VTable = .{ .request = request, .cancel = cancel, .pump = pump };
 
-fn request(_: *anyopaque, allocator: std.mem.Allocator, req: vfs.http.Request, cb: vfs.http.DoneFn, ctx: ?*anyopaque) vfs.Error!vfs.http.Job {
+fn request(
+    _: *anyopaque,
+    allocator: std.mem.Allocator,
+    req: vfs.http.Request,
+    cb: vfs.http.DoneFn,
+    ctx: ?*anyopaque,
+) vfs.Error!vfs.http.Job {
     const a = gpa orelse return error.Unsupported;
     const p = try a.create(Pending);
     errdefer a.destroy(p);
@@ -66,12 +72,13 @@ fn request(_: *anyopaque, allocator: std.mem.Allocator, req: vfs.http.Request, c
 
     // Headers as lines; the JS side splits them back out. Built here so the import takes one
     // buffer rather than a table of pointers.
-    var lines: std.ArrayListUnmanaged(u8) = .empty;
+    var lines: std.ArrayList(u8) = .empty;
     defer lines.deinit(a);
     for (req.headers) |h| {
         // The line format is the protocol between Zig and JS; a CR/LF in a value would end
         // the line early (or trap the frame inside `Headers.append`), so it is refused here.
-        if (std.mem.findAny(u8, h.name, "\r\n:") != null or std.mem.findAny(u8, h.value, "\r\n") != null) return error.Http;
+        if (std.mem.findAny(u8, h.name, "\r\n:") != null or
+            std.mem.findAny(u8, h.value, "\r\n") != null) return error.Http;
         try lines.appendSlice(a, h.name);
         try lines.appendSlice(a, ": ");
         try lines.appendSlice(a, h.value);
@@ -83,7 +90,17 @@ fn request(_: *anyopaque, allocator: std.mem.Allocator, req: vfs.http.Request, c
     p.id = id;
     try pending.put(a, id, p);
     const method = req.method.asSlice();
-    wasm.fizzy_web_request(id, method.ptr, method.len, req.url.ptr, req.url.len, lines.items.ptr, lines.items.len, req.body.ptr, req.body.len);
+    wasm.fizzy_web_request(
+        id,
+        method.ptr,
+        method.len,
+        req.url.ptr,
+        req.url.len,
+        lines.items.ptr,
+        lines.items.len,
+        req.body.ptr,
+        req.body.len,
+    );
     return .{ .id = id };
 }
 
@@ -103,7 +120,7 @@ fn pump(_: *anyopaque) void {
     const a = gpa orelse return;
     // Collect first: a callback may start another request, which must not land in the list
     // being walked — and may cancel a later one, which is then skipped and freed here.
-    var done: std.ArrayListUnmanaged(*Pending) = .empty;
+    var done: std.ArrayList(*Pending) = .empty;
     defer done.deinit(a);
     for (pending.values()) |p| {
         if (p.result != null) {

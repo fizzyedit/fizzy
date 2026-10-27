@@ -6,6 +6,7 @@
 //! `platformModule` gives the platform pieces to an app on this backend or on dvui's own SDL3 one.
 //! dvui is the caller's and never pinned here, so the backend compiles against the app's dvui.
 const std = @import("std");
+const Translator = @import("translate_c").Translator;
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
@@ -18,6 +19,36 @@ pub fn build(b: *std.Build) void {
         });
         test_step.dependOn(&b.addRunArtifact(compile).step);
     }
+
+    // The conformance suite as a program, for a real platform's driver. Today: Sim, to check the
+    // suite itself.
+    const winsys_module = b.createModule(.{ .root_source_file = b.path("winsys/root.zig"), .target = target, .optimize = optimize });
+    const conformance = b.addExecutable(.{
+        .name = "winsys-conformance",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("winsys/conformance/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "winsys", .module = winsys_module }},
+        }),
+    });
+    const conformance_run = b.addRunArtifact(conformance);
+    if (b.option([]const u8, "conformance-tag", "Run only the cases of this tag (all, needs_display, macos, windows, linux)")) |tag| conformance_run.addArgs(&.{ "--tag", tag });
+    if (b.option([]const u8, "conformance-filter", "Run only the cases whose name contains this")) |text| conformance_run.addArgs(&.{ "--filter", text });
+    if (b.option(bool, "conformance-list", "List the cases instead of running them") orelse false) conformance_run.addArg("--list");
+    b.step("conformance", "Run the windowing conformance suite (-Dconformance-tag, -Dconformance-filter, -Dconformance-list)").dependOn(&conformance_run.step);
+
+    // The interface compiles for the web too: no OS, no libc. `analysed` in the root makes the object
+    // analyse every declaration, which a build of unreferenced code would not.
+    const winsys_web = b.addObject(.{
+        .name = "winsys-wasm32",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("winsys/root.zig"),
+            .target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding }),
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&winsys_web.step);
 
     // The suites for fizzy's SDL patches (the `test:` patches in `patches/sdl`), on SDL's own test
     // harness, against the patched library. Arguments after `--` reach the runner:
@@ -76,6 +107,12 @@ pub const unit_tests = [_]struct { name: []const u8, root: []const u8 }{
     .{ .name = "backend-health-tests", .root = "src/Health.zig" },
     // Which touch button each finger on the screen presses; a trackpad's fingers, none.
     .{ .name = "backend-touch-slots-tests", .root = "src/touch_slots.zig" },
+    // The windowing interface (`winsys`): window, event, display, clipboard, dnd and IME types,
+    // and the platform vtable every backend implements. std-only.
+    .{ .name = "backend-winsys-tests", .root = "winsys/root.zig" },
+    // The GPU device interface (`gpu`): the narrow surface `GpuRenderer` draws through, shader
+    // formats and their pick, and the `Null` device. std-only.
+    .{ .name = "backend-gpu-tests", .root = "gpu/root.zig" },
 };
 
 /// Where the macOS SDK is, for a macOS target that is not the host's own (`-Dtarget=aarch64-macos`
@@ -144,10 +181,11 @@ pub fn backendModule(dep: *std.Build.Dependency, dvui_mod: *std.Build.Module, op
     const sdl_optimize: std.lang.OptimizeMode = if (opts.optimize == .debug) .fast else opts.optimize;
     const sdl_dep = sdlDependency(b, opts.target, sdl_optimize, opts.macos_sdk);
 
-    const sdl_translate_c = b.addTranslateC(.{
-        .root_source_file = b.path("src/sdl3-c.h"),
+    const sdl_translate_c: Translator = .init(b.dependency("translate_c", .{}), .{
+        .c_source_file = b.path("src/sdl3-c.h"),
         .target = opts.target,
         .optimize = opts.optimize,
+        .default_init = true,
     });
     if (sdl_dep) |sdl| sdl_translate_c.addIncludePath(sdl.artifact("SDL3").getEmittedIncludeTree());
 
@@ -158,7 +196,7 @@ pub fn backendModule(dep: *std.Build.Dependency, dvui_mod: *std.Build.Module, op
         .sanitize_c = .full,
         .link_libc = true,
         .imports = &.{
-            .{ .name = "sdl3-c", .module = sdl_translate_c.createModule() },
+            .{ .name = "sdl3-c", .module = sdl_translate_c.mod },
             .{ .name = "dvui", .module = dvui_mod },
         },
     });

@@ -16,6 +16,9 @@ how an app wires it).
   does not dress its windows (`platform.window.app_dresses_windows`): never both. It sits inside
   `os_windows`' `beforeFrame`/`afterFrame`, whose pictures bind their own targets and give this
   one back; anything that draws into the main window's frame goes before `plainFrameEnd`.
+- **`gpu/` is the device interface `GpuRenderer` is to draw through** (std-only, no SDL): shaped
+  like SDL_GPU, with an SDL_GPU adapter and renderers of our own meant to stand behind it.
+  `GpuRenderer` does not use it yet. `gpu/README.md` has the audit and the decisions.
 - **dvui is the caller's.** It is never pinned here; the backend compiles against the app's dvui.
 - **SDL is patched here,** not in a fork: `patches/sdl/*.patch`, applied by zig-patch. How to
   change, add or bump them is `docs/DEPENDENCIES.md` ("SDL", "Bumping"). Touching a patch or this
@@ -23,9 +26,28 @@ how an app wires it).
 - **std-only tests are listed in `build.zig`'s `unit_tests`,** and fizzy's `zig build test` runs
   them. Window rules that can be stated without a window go in such a file
   (`platform/window_layout.zig`, `viewport_map.zig`).
+- **`winsys/stream.zig` is a file format.** `Recorder` writes it, `Replayer` plays it into a
+  `Sim`, and `winsys/tests/streams/*.hex` are the golden streams. A change to `Event` or any
+  type a record holds moves the bytes: bump `stream.version`, then replace the hex a failing
+  test prints. A stream must carry no platform identity (window, display, touch ids are renamed
+  by `stream.Ids`) so one recorded on a Mac replays on Linux CI.
+- **A stream is a transcript of the session.** Unredacted it holds typed text, key characters,
+  IME input, clipboard contents, window titles and dropped file paths and text. `Recorder.Options.redact` is on by default
+  (those become `*` of the same length, so lengths still leak; key characters dropped; physical keys and
+  timing stay, so it is not anonymous), the clipboard is read only with `read_clipboard`, and the
+  stream stops at `max_bytes` (`Recorder.full`). Never commit or share a `redact = false` stream
+  that was not made from scripted input.
 - **Verify on the platform you changed.** CI's Windows cross-compile proves fizzy links, not that
   it works. `docs/MACOS_LIVE_RESIZE.md` and `docs/WINDOWS_LIVE_RESIZE.md` show how a resize
   was measured.
+
+- **`winsys/conformance/` is the contract for platforms.** One comptime-generic suite over a
+  driver type (`root.zig` lists what a driver declares); cases are tagged `.all`, `.needs_display`
+  or an OS, and a case whose injection hook the driver lacks is skipped. Every adapter must pass
+  `.all` before it is selectable. `Sim` runs it in `zig build test`; `zig build conformance`
+  (`-Dconformance-tag`, `-Dconformance-filter`, `-Dconformance-list`) is the binary a real
+  platform's driver is added to. A case asserts what the interface and `docs/window-notes/`
+  promise, never what Sim happens to do.
 
 ## macOS pitfalls
 

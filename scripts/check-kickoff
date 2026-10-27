@@ -1,0 +1,79 @@
+#!/usr/bin/env python3
+"""Validate kickoff files or fizzyedit/work issues against the documented template."""
+
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+TEMPLATE = Path(__file__).resolve().parents[1] / "docs/AGENT_WORK.md"
+MAX_CHARACTERS = 1600
+
+
+def template_fields():
+    text = TEMPLATE.read_text(encoding="utf-8")
+    section = text.split("## Kickoff template", 1)[1].split("```", 2)[1]
+    fields = re.findall(r"^([^:\n]+):", section, re.MULTILINE)
+    if not fields or len(fields) != len(set(fields)):
+        raise ValueError("kickoff template has no fields or duplicate fields")
+    return fields
+
+
+def validate(body, fields):
+    values = {}
+    current = None
+    for line in body.splitlines():
+        # GitHub issue forms emit headings; pasted kickoffs use Label: value.
+        heading = re.fullmatch(r"### (.+?)\s*", line)
+        label, separator, value = line.partition(":")
+        name = heading[1] if heading else label
+        if name in fields and (heading or separator):
+            current = name
+            values.setdefault(name, []).append("" if heading else value)
+        elif current:
+            values[current].append(line)
+    values = {name: "\n".join(lines).strip() for name, lines in values.items()}
+    failures = []
+    for name in fields:
+        if not values.get(name) or values[name] == "_No response_":
+            failures.append(f"{name}: missing field or empty value")
+    if len(body) > MAX_CHARACTERS:
+        failures.append(f"Body: {len(body)} characters exceeds {MAX_CHARACTERS}")
+    if values.get("Branch") and not re.fullmatch(r"[a-z0-9-]+/[a-z0-9._-]+", values["Branch"]):
+        failures.append("Branch: must match ^[a-z0-9-]+/[a-z0-9._-]+$")
+    if re.search(r"scripts/zb\s+zig\s+build", values.get("Gates", "")):
+        failures.append("Gates: use scripts/zb build, not scripts/zb zig build")
+    if not re.search(r"fizzyedit/work#(?:[1-9][0-9]*|N)\b", values.get("Rules", "")):
+        failures.append("Rules: must require a PR reference to fizzyedit/work#N")
+    return failures
+
+
+def main():
+    if len(sys.argv) != 2:
+        print("usage: scripts/check-kickoff <file|issue-number>", file=sys.stderr)
+        return 2
+    source = sys.argv[1]
+    try:
+        fields = template_fields()
+        if re.fullmatch(r"[1-9][0-9]*", source):
+            body = subprocess.run(
+                ["gh", "issue", "view", source, "--repo", "fizzyedit/work", "--json", "body", "--jq", ".body"],
+                check=True, capture_output=True, text=True,
+            ).stdout.removesuffix("\n")
+        else:
+            body = Path(source).read_text(encoding="utf-8")
+        failures = validate(body, fields)
+    except (OSError, ValueError, IndexError, subprocess.CalledProcessError) as error:
+        print(f"check-kickoff: {source}: {error}", file=sys.stderr)
+        if isinstance(error, subprocess.CalledProcessError) and error.stderr:
+            print(error.stderr.strip(), file=sys.stderr)
+        return 2
+    for failure in failures:
+        print(f"{source}: {failure}", file=sys.stderr)
+    if not failures:
+        print(f"{source}: kickoff passes")
+    return bool(failures)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

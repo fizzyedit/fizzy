@@ -117,7 +117,7 @@ pub fn draw(_: Infobar, editor: *fizzy.Editor) !void {
             dot.y -= 4.5 * brs.s;
             dot.fill(dvui.CornerRect.Physical.round(4.5 * brs.s), .{
                 .color = .{ .color = dvui.themeGet().color(.highlight, .fill) },
-                .fade = 0,
+                .fade = 1,
             });
         }
     }

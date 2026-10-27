@@ -14,7 +14,7 @@ const is_windows = builtin.target.os.tag == .windows;
 /// port=<garbage>`, which is what sent zls (the first server built on this client) into
 /// `error.InvalidPort` on Windows.
 pub fn pathToUri(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
-    var out: std.ArrayListUnmanaged(u8) = .empty;
+    var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(allocator);
     try out.appendSlice(allocator, "file://");
 
@@ -44,7 +44,7 @@ pub fn uriToPath(allocator: std.mem.Allocator, uri: []const u8) ![]u8 {
     if (!std.mem.startsWith(u8, uri, prefix)) return error.UnsupportedScheme;
     const encoded = uri[prefix.len..];
 
-    var out: std.ArrayListUnmanaged(u8) = .empty;
+    var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(allocator);
     var i: usize = 0;
     while (i < encoded.len) {
@@ -65,7 +65,9 @@ pub fn uriToPath(allocator: std.mem.Allocator, uri: []const u8) ![]u8 {
     if (comptime is_windows) {
         // `file:///C:/Users/...` decodes to `/C:/Users/...` above; strip the leading slash and
         // swap separators back to `\` so this round-trips into a usable native Windows path.
-        if (out.items.len >= 3 and out.items[0] == '/' and std.ascii.isAlphabetic(out.items[1]) and out.items[2] == ':') {
+        if (out.items.len >= 3 and out.items[0] == '/' and
+            std.ascii.isAlphabetic(out.items[1]) and out.items[2] == ':')
+        {
             _ = out.orderedRemove(0);
         }
         for (out.items) |*c| {

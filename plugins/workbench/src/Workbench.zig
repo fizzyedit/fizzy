@@ -25,11 +25,8 @@ pub const Workbench = @This();
 /// The split tree the panes live in. `core.widgets.DockLayout`, one panel per leaf.
 pub const Panes = core.widgets.DockLayout;
 
-/// A held pane's tabs (`held_tabs`): its grouping, and the surface ids it held, owned.
-pub const HeldTabs = struct { grouping: u64, ids: [][]u8 };
-
 allocator: std.mem.Allocator,
-decorators: std.ArrayListUnmanaged(BranchDecorator) = .empty,
+decorators: std.ArrayList(BranchDecorator) = .empty,
 
 /// The panes, keyed by grouping, in row order. What each one *holds* is not here: it is the
 /// app's assignment under the pane's name (`Workspace.name`), which is also how last session's
@@ -41,17 +38,9 @@ workspaces: std.AutoArrayHashMapUnmanaged(u64, Workspace) = .empty,
 /// plugin's own directory whenever it changes (`workbench_layout.savePanes`).
 panes: Panes,
 panes_dirty: bool = false,
-/// A demo has the window (`holdPanes`): nothing is saved, and last session's panes wait.
-holding: bool = false,
-/// The person's arrangement while a demo has the window, a copy of its own (null where it could
-/// not be made, or before there was one), and the pane they were in.
-held_panes: ?Panes = null,
-held_open: u64 = 0,
-/// The person's panes themselves while a demo has the window, and what each held (its
-/// assignment, copied): set aside whole, with their documents, which stay open and are never
-/// seated in the demo's panes (`workbench_layout.holdPanes`).
-held_workspaces: std.AutoArrayHashMapUnmanaged(u64, Workspace) = .empty,
-held_tabs: std.ArrayListUnmanaged(HeldTabs) = .empty,
+/// Set while a demo plays: the panes it arranges are not written to `panes.zon`, which keeps the
+/// person's own until the demo puts them back or lets them go (`Demo.end`, `Demo.keep`).
+panes_held: bool = false,
 /// Where the panes are arranged when the app arranges them instead of `panes`: each pane a view
 /// of the app's, in a place of the app's, beside another by a split of the app's (fizzy's
 /// `Workspaces`, behind `FIZZY_WORKSPACES=1`). Null: the panes are this tree's leaves, as before.
@@ -98,15 +87,17 @@ pending_new_file_path: ?[]u8 = null,
 /// Documents on their way, by the placeholder surface id their tab shows while they load: the
 /// app fills this in (`Openings` in fizzy) and the tab strip reads it to draw a tab that has no
 /// document yet. Strings are the app's; this only borrows them.
-loading: std.StringArrayHashMapUnmanaged(Loading) = .empty,
+loading: std.array_hash_map.String(Loading) = .empty,
 
 /// The app's half of arranging the panes (`places`). Every pane is named by its grouping; what
 /// it is called in the app's layout is the app's business.
 pub const Places = struct {
     ctx: *anyopaque,
-    /// Give `grouping`'s pane a place on `side` of the place holding `anchor`'s. False when there
-    /// is no room, or `anchor`'s pane is in no place yet.
-    beside: *const fn (ctx: *anyopaque, grouping: u64, anchor: u64, side: Panes.Side) bool,
+    /// Give `grouping`'s pane a place on `side` of the place holding `anchor`'s. `adaptive`: fizzy
+    /// made the split, not the person, so it runs the way its room's shape asks from here on
+    /// (`core.placement.orient`), `side` being where it starts. False when there is no room, or
+    /// `anchor`'s pane is in no place yet.
+    beside: *const fn (ctx: *anyopaque, grouping: u64, anchor: u64, side: Panes.Side, adaptive: bool) bool,
     /// Whether `grouping`'s pane has a place, or will have one without being given it: the one
     /// pane the layout's keywords show where no other is.
     placed: *const fn (ctx: *anyopaque, grouping: u64) bool,
@@ -186,7 +177,8 @@ pub fn paneLeaf(self: *Workbench, grouping: u64) ?Panes.NodeIndex {
 
 /// Give `grouping` a leaf if it has none: the root when the tree is empty, else a split off the
 /// current pane's right edge (or off the last pane, when the current one is gone). Where the app
-/// arranges the panes, a place beside the current one's.
+/// arranges the panes, a place beside the current one's. The split is fizzy's, so it follows its
+/// room's shape (`sideBeside`) and turns with it.
 fn seatPane(self: *Workbench, grouping: u64) !void {
     if (self.places) |p| {
         if (p.placed(p.ctx, grouping)) return;
@@ -196,7 +188,7 @@ fn seatPane(self: *Workbench, grouping: u64) !void {
             if (g != grouping) break g;
         } else return;
         // No room yet (the layout has not drawn): the app places it once there is.
-        _ = p.beside(p.ctx, grouping, anchor, .right);
+        _ = p.beside(p.ctx, grouping, anchor, self.sideBeside(anchor), true);
         return;
     }
     if (self.paneLeaf(grouping) != null) return;
@@ -213,14 +205,80 @@ fn seatPane(self: *Workbench, grouping: u64) !void {
         const last = self.panes.lastLeaf(self.panes.root);
         break :blk Workspace.groupingOfName(self.panes.nodes.items[last].leaf.tabs.items[0]) orelse self.open_workspace_grouping;
     };
-    try self.paneBeside(grouping, anchor, .right);
+    try self.paneBeside(grouping, anchor, self.sideBeside(anchor), true);
 }
 
-/// Open a new pane for `grouping` on `side` of `anchor`'s pane — a drop on a pane's edge. The
-/// workspace is created too, so `pane()` afterwards finds both.
-pub fn paneBeside(self: *Workbench, grouping: u64, anchor: u64, side: Panes.Side) !void {
+/// The side a split off a `w` by `h` room starts on: right of one wider than tall, below one taller
+/// (`core.placement.orient`).
+pub fn sideFor(w: f32, h: f32) Panes.Side {
+    return switch (core.placement.orient(null, w, h)) {
+        .side_by_side => .right,
+        .stacked => .bottom,
+    };
+}
+
+/// `grouping`'s pane as it was last drawn, in points. Null before it has drawn.
+fn paneSize(self: *const Workbench, grouping: u64) ?core.placement.Size {
+    const pr = (self.workspaces.get(grouping) orelse return null).pane_rect_physical orelse return null;
+    const s = dvui.windowNaturalScale();
+    return .{ .w = pr.w / s, .h = pr.h / s };
+}
+
+/// The side a pane opened beside `anchor`'s starts on, from the shape of `anchor`'s room.
+pub fn sideBeside(self: *const Workbench, anchor: u64) Panes.Side {
+    const room = self.paneSize(anchor) orelse return .right;
+    return sideFor(room.w, room.h);
+}
+
+/// What opening beside the person's pane asks of `core.placement.place`: the other pane that is
+/// there, if any, and the answer over the person's room and that pane's. Null before the person's
+/// pane has drawn, with no room to judge.
+const Beside = struct { other: ?u64, room: ?core.placement.Size, answer: ?core.placement.Result };
+
+fn besideAnswer(self: *Workbench, here: u64) Beside {
+    const other = for (self.workspaces.values()) |ws| {
+        if (ws.grouping != here and !self.paneClosing(ws.grouping)) break ws.grouping;
+    } else null;
+    const room = self.paneSize(here) orelse return .{ .other = other, .room = null, .answer = null };
+    var others: [1]core.placement.Size = undefined;
+    const places: []const core.placement.Size = if (other) |g| blk: {
+        others[0] = self.paneSize(g) orelse .{ .w = 0, .h = 0 };
+        break :blk &others;
+    } else &.{};
+    return .{ .other = other, .room = room, .answer = core.placement.place(room, places) };
+}
+
+/// The grouping a document opened beside the person's goes in (`core.placement.place`): another
+/// pane that is there, else a new one when the person's has room for two, else the person's own,
+/// where it becomes a card. The caller makes it the front card, as a plain open does.
+pub fn besideGrouping(self: *Workbench) u64 {
+    const asked = self.besideAnswer(self.open_workspace_grouping);
+    // Not drawn yet, so no room to judge: beside as before, in the other pane if there is one.
+    const answer = asked.answer orelse return asked.other orelse self.newGroupingID();
+    return switch (answer) {
+        .into => asked.other.?,
+        .split => self.newGroupingID(),
+        .tab => self.open_workspace_grouping,
+    };
+}
+
+/// The edge of `grouping`'s pane an open beside it splits on, or null where it joins a pane or
+/// becomes a card. What a demo's `drop:beside` aims at, over the pane it is aimed at.
+pub fn besideEdge(self: *Workbench, grouping: u64) ?Panes.Side {
+    const asked = self.besideAnswer(grouping);
+    const room = asked.room orelse return null;
+    return switch (asked.answer orelse return null) {
+        .split => sideFor(room.w, room.h),
+        .into, .tab => null,
+    };
+}
+
+/// Open a new pane for `grouping` on `side` of `anchor`'s pane — a drop on a pane's edge, which
+/// stays on that side, or fizzy's own split (`adaptive`), which follows the room. The workspace
+/// is created too, so `pane()` afterwards finds both.
+pub fn paneBeside(self: *Workbench, grouping: u64, anchor: u64, side: Panes.Side, adaptive: bool) !void {
     if (self.places) |p| {
-        if (!p.beside(p.ctx, grouping, anchor, side)) return error.NoRoom;
+        if (!p.beside(p.ctx, grouping, anchor, side, adaptive)) return error.NoRoom;
         const gop = try self.workspaces.getOrPut(self.allocator, grouping);
         if (!gop.found_existing) gop.value_ptr.* = Workspace.init(grouping);
         gop.value_ptr.expecting = true;
@@ -233,6 +291,8 @@ pub fn paneBeside(self: *Workbench, grouping: u64, anchor: u64, side: Panes.Side
     const pane_name = try self.allocator.dupe(u8, Workspace.name(&buf, grouping));
     errdefer self.allocator.free(pane_name);
     try self.panes.splitLeaf(anchor_leaf, side, pane_name);
+    // The leaf's slot is now the split.
+    self.panes.nodes.items[anchor_leaf].split.adaptive = adaptive;
     self.panes_dirty = true;
     const gop = try self.workspaces.getOrPut(self.allocator, grouping);
     if (!gop.found_existing) gop.value_ptr.* = Workspace.init(grouping);
@@ -301,35 +361,6 @@ pub fn documentClosed(self: *Workbench, doc: sdk.DocHandle) void {
             if (active.id == doc.id) ws.active = null;
         }
     }
-    // One of the person's, closed while a demo has the window: gone from their held panes too.
-    self.forgetHeld(doc, id);
-}
-
-/// `doc`, whose tab is `id`, from the person's held panes (`holdPanes`): its tab, where `id` is
-/// given, and any pane's cached handle of it.
-fn forgetHeld(self: *Workbench, doc: sdk.DocHandle, id: ?[]const u8) void {
-    for (self.held_workspaces.values()) |*ws| {
-        if (ws.active) |active| {
-            if (active.id == doc.id) ws.active = null;
-        }
-    }
-    const gone = id orelse return;
-    for (self.held_tabs.items) |*t| {
-        const k = for (t.ids, 0..) |held, k| {
-            if (std.mem.eql(u8, held, gone)) break k;
-        } else continue;
-        self.allocator.free(t.ids[k]);
-        std.mem.copyForwards([]u8, t.ids[k..], t.ids[k + 1 ..]);
-        t.ids = self.allocator.realloc(t.ids, t.ids.len - 1) catch t.ids[0 .. t.ids.len - 1];
-    }
-}
-
-/// Whether `doc` is one of the person's, set aside with their panes while a demo has the window
-/// (`holdPanes`).
-pub fn holdsDocument(self: *const Workbench, doc: sdk.DocHandle) bool {
-    if (!self.holding) return false;
-    const id = sdk.document.surfaceId(runtime.host().arena(), doc.owner.id, doc.owner.documentPath(doc)) catch return false;
-    return workbench_layout.heldDocument(self, doc, id);
 }
 
 /// The tab naming surface `id` goes from whichever pane holds it: a document that will not come
@@ -346,7 +377,6 @@ pub fn documentDetached(self: *Workbench, doc: sdk.DocHandle) void {
             if (active.id == doc.id) ws.active = null;
         }
     }
-    self.forgetHeld(doc, null);
 }
 
 /// A document's path changed under it (an explorer rename, a Save As): its tab is keyed by
@@ -356,13 +386,6 @@ pub fn documentDetached(self: *Workbench, doc: sdk.DocHandle) void {
 /// starts from `activeDoc()` — Save first among them — quietly does nothing.
 pub fn documentRenamed(self: *Workbench, doc: sdk.DocHandle, old_id: []const u8) void {
     const new_id = sdk.document.surfaceId(runtime.host().arena(), doc.owner.id, doc.owner.documentPath(doc)) catch return;
-    // One of the person's, renamed while a demo has the window: its held tab follows.
-    for (self.held_tabs.items) |t| for (t.ids, 0..) |held, k| {
-        if (!std.mem.eql(u8, held, old_id)) continue;
-        const copy = self.allocator.dupe(u8, new_id) catch break;
-        self.allocator.free(held);
-        t.ids[k] = copy;
-    };
     const ws = self.swapTabId(old_id, new_id) orelse return;
     // Selection is by id too. Only the pane showing this document re-selects, and only
     // within itself — this is not a focus change, so `open_workspace_grouping` stays.
@@ -389,7 +412,7 @@ pub fn swapTabId(self: *Workbench, old_id: []const u8, new_id: []const u8) ?*Wor
         for (existing) |e| if (std.mem.eql(u8, e, new_id)) {
             has_new = true;
         };
-        var ids: std.ArrayListUnmanaged([]const u8) = .empty;
+        var ids: std.ArrayList([]const u8) = .empty;
         var found = false;
         for (existing) |e| {
             if (std.mem.eql(u8, e, old_id)) {
@@ -436,18 +459,6 @@ pub fn removeTabEverywhere(self: *Workbench, id: []const u8) void {
 
 pub fn rebuildWorkspaces(self: *Workbench) !void {
     return workbench_layout.rebuildWorkspaces(self);
-}
-
-pub fn holdPanes(self: *Workbench) void {
-    workbench_layout.holdPanes(self);
-}
-
-pub fn onePane(self: *Workbench) void {
-    workbench_layout.onePane(self);
-}
-
-pub fn restorePanes(self: *Workbench) void {
-    workbench_layout.restorePanes(self);
 }
 
 /// The panes as they stand, for a demo's snapshot (`workbench_layout.arrangement`).
@@ -509,10 +520,7 @@ pub fn showBeside(self: *Workbench, doc: sdk.DocHandle) void {
     }
     const id = sdk.document.surfaceId(runtime.host().arena(), doc.owner.id, doc.owner.documentPath(doc)) catch return;
     if (self.workspaces.getPtr(here)) |ws| if (ws.hasTab(id) and ws.tabCount() == 1) return;
-    // Beside: a pane there is already, or else a new one on this one's right.
-    const target = for (self.workspaces.values()) |ws| {
-        if (ws.grouping != here and !self.paneClosing(ws.grouping)) break ws.grouping;
-    } else self.newGroupingID();
+    const target = self.besideGrouping();
     for (self.workspaces.values()) |*ws| if (ws.grouping != target) ws.removeTab(id);
     const side = self.pane(target) catch return;
     side.addTab(id, true);

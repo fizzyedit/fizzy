@@ -58,7 +58,8 @@ texture_rect: dvui.Rect.Physical = .{},
 photo_box: dvui.Rect = .{ .x = 0, .y = 0, .w = 1, .h = 1 },
 /// Its pixels, premultiplied RGBA rows of `photo_size`, kept where the app shows the picture under
 /// the OS's glass (`core.dialogs.carry_windows`) — handed over once, as an image (`photo_gen` new
-/// with each picture) — and freed with the drag (`discard`). Null elsewhere.
+/// with each picture) — and freed with the drag (`discard`), both given the one allocator the layout
+/// owns it with. Null elsewhere.
 photo_pixels: ?[]dvui.Color.PMA = null,
 photo_size: [2]u32 = .{ 0, 0 },
 photo_gen: u32 = 0,
@@ -482,11 +483,11 @@ fn takes(d: *const ViewDrag, o: Offer) bool {
     return false;
 }
 
-pub fn discard(self: *ViewDrag) void {
+pub fn discard(self: *ViewDrag, gpa: std.mem.Allocator) void {
     // Destroyed with a frame, and only in one: discarded at teardown (quitting mid-drag) there is
     // no window, and the GPU goes with the process.
     if (self.texture) |tex| if (dvui.current_window != null) dvui.Texture.destroyLater(tex);
-    self.forgetPixels();
+    self.forgetPixels(gpa);
     // The drops still showing outlive the drag: they run back together where they were drawn
     // (`drawOverlay`), whatever the drop has just done to their places.
     const finishing = self.last_pending;
@@ -496,10 +497,10 @@ pub fn discard(self: *ViewDrag) void {
     self.last_pending_count = finishing_count;
 }
 
-pub fn takePicture(self: *ViewDrag, pic: *dvui.Picture) void {
+pub fn takePicture(self: *ViewDrag, gpa: std.mem.Allocator, pic: *dvui.Picture) void {
     pic.stop();
     self.photo_box = .{ .x = 0, .y = 0, .w = 1, .h = 1 };
-    self.forgetPixels();
+    self.forgetPixels(gpa);
     if (dvui.Texture.readTarget(dvui.currentWindow().arena(), pic.texture)) |px| {
         const w = pic.texture.width;
         const h = pic.texture.height;
@@ -507,7 +508,7 @@ pub fn takePicture(self: *ViewDrag, pic: *dvui.Picture) void {
         // What the drop shows of it, closer where it is too wide to read shrunk into the drop.
         self.photo_box = focusBox(dvui.currentWindow().arena(), px, w, h, self.photo_box, 2 * drop_r * dvui.currentWindow().natural_scale * std.math.sqrt1_2);
         if (core.dialogs.carry_windows and px.len >= @as(usize, w) * h) {
-            if (std.heap.page_allocator.dupe(dvui.Color.PMA, px[0 .. @as(usize, w) * h])) |kept| {
+            if (gpa.dupe(dvui.Color.PMA, px[0 .. @as(usize, w) * h])) |kept| {
                 self.photo_pixels = kept;
                 self.photo_size = .{ w, h };
                 self.photo_gen +%= 1;
@@ -521,8 +522,8 @@ pub fn takePicture(self: *ViewDrag, pic: *dvui.Picture) void {
     self.texture_rect = pic.r;
 }
 
-fn forgetPixels(self: *ViewDrag) void {
-    if (self.photo_pixels) |px| std.heap.page_allocator.free(px);
+fn forgetPixels(self: *ViewDrag, gpa: std.mem.Allocator) void {
+    if (self.photo_pixels) |px| gpa.free(px);
     self.photo_pixels = null;
 }
 
@@ -678,7 +679,7 @@ pub fn shotWanted(l: *Layout, is_source: bool) Shot {
 pub fn keepShot(l: *Layout, shot: Shot, pic: *dvui.Picture) void {
     const d = &l.state.view_drag;
     if (shot.card) {
-        d.takePicture(pic);
+        d.takePicture(l.gpa, pic);
         if (d.texture) |tex| {
             // Over what the frame already has under the place, as its draw would have gone: the
             // capture is clear where the place draws nothing — the window's base shows there — and
@@ -1322,15 +1323,21 @@ pub fn drawZones(l: *Layout, name: []const u8, key: dvui.Id) void {
     // is the target, so a demo aims at the bubble rather than an offset from the place's middle.
     // Marked only while a tape asks for anchors, and ahead of the offer queue's limit (which has
     // nothing to do with the bubble being there).
-    if (target and !covered and core.anchor.wanted()) for (DropZones.all) |z| {
-        if (z == .remove and !zones.remove) continue;
-        const b = zones.bubble(z);
-        const r: dvui.Rect.Physical = .{ .x = b.c.x - b.r, .y = b.c.y - b.r, .w = 2 * b.r, .h = 2 * b.r };
-        switch (z) {
-            .edge => |side| core.anchor.markRect(key, r, true, "drop:{t}", .{side}),
-            else => core.anchor.markRect(key, r, true, "drop:{t}", .{z}),
+    if (target and !covered and core.anchor.wanted()) {
+        const beside = if (l.state.beside) |aim_at| aim_at.edge(aim_at.ctx, name) else null;
+        for (DropZones.all) |z| {
+            if (z == .remove and !zones.remove) continue;
+            const b = zones.bubble(z);
+            const r: dvui.Rect.Physical = .{ .x = b.c.x - b.r, .y = b.c.y - b.r, .w = 2 * b.r, .h = 2 * b.r };
+            switch (z) {
+                .edge => |side| {
+                    core.anchor.markRect(key, r, true, "drop:{t}", .{side});
+                    if (beside == side) core.anchor.markRect(key, r, true, "drop:beside", .{});
+                },
+                else => core.anchor.markRect(key, r, true, "drop:{t}", .{z}),
+            }
         }
-    };
+    }
     // Queued, not drawn: over everything, once every place has drawn (`drawOverlay`).
     const now = dvui.currentWindow().frame_time_ns;
     if (d.pending_frame != now) {
@@ -2277,12 +2284,12 @@ pub fn insertInto(l: *Layout, source: []const u8, dest: []const u8, at: Insert) 
     // The whole list it goes into: the assignment, ids of plugins not loaded now included so they
     // keep their slots; or what the place shows by keyword, then — moving along an order —
     // whatever an earlier order named that is not showing now.
-    var base: std.ArrayListUnmanaged([]const u8) = .empty;
+    var base: std.ArrayList([]const u8) = .empty;
     base.appendSlice(l.arena, held) catch return;
     if (assigned == null and along) if (l.state.order(dest)) |ids| for (ids) |id| {
         if (!containsId(base.items, id)) base.append(l.arena, id) catch return;
     };
-    var list: std.ArrayListUnmanaged([]const u8) = .empty;
+    var list: std.ArrayList([]const u8) = .empty;
     for (base.items) |id| if (!std.mem.eql(u8, id, moved)) list.append(l.arena, id) catch return;
     const index = switch (at) {
         .before => |id| indexOfId(list.items, id) orelse list.items.len,
@@ -2306,7 +2313,7 @@ pub fn insertInto(l: *Layout, source: []const u8, dest: []const u8, at: Insert) 
 
 /// Put `view`, new and in no place yet, into `dest`'s list at `at`, and show it there.
 fn insertView(l: *Layout, dest: []const u8, view: []const u8, at: Insert) void {
-    var list: std.ArrayListUnmanaged([]const u8) = .empty;
+    var list: std.ArrayList([]const u8) = .empty;
     list.appendSlice(l.arena, holding(l, dest)) catch return;
     const index = switch (at) {
         .before => |id| indexOfId(list.items, id) orelse list.items.len,
@@ -2325,7 +2332,7 @@ fn insertView(l: *Layout, dest: []const u8, view: []const u8, at: Insert) void {
 fn others(l: *Layout, r: Region) []const []const u8 {
     const d = &l.state.view_drag;
     if (!d.active() or d.with_n <= 1) return &.{};
-    var ids: std.ArrayListUnmanaged([]const u8) = .empty;
+    var ids: std.ArrayList([]const u8) = .empty;
     for (d.with[1..d.with_n]) |it| {
         if (it.id.len == 0 or !accepts(r, keywordsOf(l, it.id))) continue;
         ids.append(l.arena, it.id) catch break;
@@ -2481,7 +2488,7 @@ fn landView(l: *Layout, from: []const u8, dest: []const u8, plan: Drop.Plan, vie
 /// The application's new view holding `moved` and what was carried with it (`State.documents`).
 fn houseView(l: *Layout, moved: []const u8) ?[]const u8 {
     const docs = l.state.documents orelse return null;
-    var ids: std.ArrayListUnmanaged([]const u8) = .empty;
+    var ids: std.ArrayList([]const u8) = .empty;
     ids.append(l.arena, moved) catch return null;
     const d = &l.state.view_drag;
     if (d.active() and d.with_n > 1) for (d.with[1..d.with_n]) |it| {
@@ -2659,7 +2666,7 @@ pub fn sendHome(l: *Layout, leaves: []const []const u8, home: []const u8) void {
     // Every view out of the float's places first, so what a place's keywords show is read with
     // them all free: a view written into a place its keywords fill takes the rest of what they
     // show there with it, and would leave behind one of the float's still held by it.
-    var ids: std.ArrayListUnmanaged([]const u8) = .empty;
+    var ids: std.ArrayList([]const u8) = .empty;
     for (leaves) |leaf| {
         for (state.assignment(leaf) orelse continue) |raw| {
             ids.append(l.arena, ownId(l.arena, raw) orelse continue) catch {};
@@ -2815,7 +2822,7 @@ fn swap(l: *Layout, source: []const u8, dest: []const u8, moved: []const u8) voi
 /// dropped once it has (`shutIfEmptied`).
 fn join(l: *Layout, source: []const u8, dest: []const u8, moved: []const u8) void {
     const pair = l.state.joinable(source, dest) orelse return swap(l, source, dest, moved);
-    var ids: std.ArrayListUnmanaged([]const u8) = .empty;
+    var ids: std.ArrayList([]const u8) = .empty;
     for ([_][]const u8{ dest, source }) |name| {
         for (holding(l, name)) |id| {
             const own = ownId(l.arena, id) orelse continue;
@@ -2843,7 +2850,7 @@ fn holding(l: *Layout, name: []const u8) []const []const u8 {
     if (l.state.assignment(name)) |ids| return ids;
     const r = regionNamed(l.state, name) orelse return &.{};
     const items = l.matchingIn(r);
-    var out = std.ArrayListUnmanaged([]const u8).initCapacity(l.arena, items.len) catch return &.{};
+    var out = std.ArrayList([]const u8).initCapacity(l.arena, items.len) catch return &.{};
     for (items) |s| out.appendAssumeCapacity(s.id);
     return out.items;
 }
@@ -3011,7 +3018,7 @@ fn idsWith(arena: std.mem.Allocator, ids: []const []const u8, add: []const u8) [
 }
 
 fn idsWithout(arena: std.mem.Allocator, ids: []const []const u8, drop: []const u8) []const []const u8 {
-    var out = std.ArrayListUnmanaged([]const u8).initCapacity(arena, ids.len) catch return &.{};
+    var out = std.ArrayList([]const u8).initCapacity(arena, ids.len) catch return &.{};
     for (ids) |id| {
         if (!std.mem.eql(u8, id, drop)) out.appendAssumeCapacity(id);
     }
@@ -3019,7 +3026,7 @@ fn idsWithout(arena: std.mem.Allocator, ids: []const []const u8, drop: []const u
 }
 
 fn idsReplacing(arena: std.mem.Allocator, ids: []const []const u8, drop: []const u8, add: []const u8) []const []const u8 {
-    var out = std.ArrayListUnmanaged([]const u8).initCapacity(arena, ids.len + 1) catch return &.{add};
+    var out = std.ArrayList([]const u8).initCapacity(arena, ids.len + 1) catch return &.{add};
     var replaced = false;
     for (ids) |id| {
         if (std.mem.eql(u8, id, drop)) {

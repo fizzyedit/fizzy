@@ -1,16 +1,18 @@
 //! The composition spike: Windows only. `zig build -Dtarget=x86_64-windows-gnu` (or
 //! aarch64-windows-gnu) puts `windows-composition-spike.exe` in `zig-out/bin`. See README.md.
 const std = @import("std");
+const Translator = @import("translate_c").Translator;
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{ .default_target = .{ .os_tag = .windows, .abi = .gnu } });
     const optimize = b.standardOptimizeOption(.{});
 
     const sdl = b.dependency("sdl", .{ .target = target, .optimize = optimize });
-    const sdl_c = b.addTranslateC(.{
-        .root_source_file = b.path("src/sdl3-c.h"),
+    const sdl_c: Translator = .init(b.dependency("translate_c", .{}), .{
+        .c_source_file = b.path("src/sdl3-c.h"),
         .target = target,
         .optimize = optimize,
+        .default_init = true,
     });
     sdl_c.addIncludePath(sdl.artifact("SDL3").getEmittedIncludeTree());
 
@@ -22,7 +24,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .link_libc = true,
             .imports = &.{
-                .{ .name = "sdl3-c", .module = sdl_c.createModule() },
+                .{ .name = "sdl3-c", .module = sdl_c.mod },
                 .{ .name = "win32", .module = b.dependency("zigwin32", .{}).module("win32") },
             },
         }),

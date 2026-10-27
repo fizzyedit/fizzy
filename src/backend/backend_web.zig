@@ -90,7 +90,7 @@ pub fn setWindowStyle(_: *dvui.Window) void {}
 /// popup already returns to the page that opened it.
 pub fn raiseWindow() void {}
 
-/// The page's `keydown` check (`web/index.html`): it writes `KeyboardEvent.key` here, then asks
+/// The page's `keydown` check (`web/fizzy.js`): it writes `KeyboardEvent.key` here, then asks
 /// `FizzyWebKeyBound` whether the app binds it — see `Keybinds.webKeyBound`.
 export fn FizzyWebKeyBuffer() [*]u8 {
     return &fizzy.Editor.Keybinds.web_key_buf;
@@ -108,7 +108,7 @@ const page = if (builtin.target.cpu.arch == .wasm32) struct {
     fn fizzy_web_toggle_fullscreen() void {}
 };
 
-/// The page's Fullscreen API (`web/index.html`), which also takes the keyboard lock so the
+/// The page's Fullscreen API (`web/fizzy.js`), which also takes the keyboard lock so the
 /// shortcuts a browser keeps for itself (⌘W, ⌘T, Ctrl+Tab) reach the app while full screen.
 /// Runs a frame after the key press or click that asked for it, which is inside the browser's
 /// user-activation window.
@@ -161,18 +161,30 @@ pub fn setupMacOSMenuBar() void {}
 pub fn teardownMacOSMenuBar() void {}
 
 // Browser trackpad pinch arrives as a `wheel` event with `ctrlKey=true` (synthesized by every
-// modern browser). The bootstrap JS in `web/index.html` intercepts those events in the
+// modern browser). The bootstrap JS in `web/fizzy.js` intercepts those events in the
 // capture phase, prevents the browser's default page-zoom, and forwards the magnification
 // delta into the wasm export below. Same accumulator pattern as the macOS native trackpad
 // monitor — the canvas widget drains via `takeTrackpadPinchRatio` once per frame.
 var pending_pinch_ratio: f32 = 1.0;
 
-/// Called from `web/index.html` via `app.instance.exports.FizzyWebTrackpadMagnification`
+/// Called from `web/fizzy.js` via `app.instance.exports.FizzyWebTrackpadMagnification`
 /// for every pinch wheel event. `delta` is a small relative magnification (positive = zoom in)
 /// derived from `-ev.deltaY` scaled to match macOS NSEvent magnification magnitudes.
 export fn FizzyWebTrackpadMagnification(delta: f32) void {
     if (delta == 0.0) return;
     pending_pinch_ratio *= (1.0 + delta);
+}
+
+/// Called by the page (through the worker) on load, resize and rotation: whether the primary
+/// pointer is a finger with no hover, and the screen in CSS px. `core.platform.formFactor()`
+/// is the answer; the page never sniffs the user agent. `override` is the visit's `?form=`
+/// (`form_factor.overrideFromCode`; -1 for none). Returns the form factor chosen, as its
+/// `FormFactor` number, for the page's console readout.
+export fn FizzyWebSetFormFactor(coarse: bool, w_css: f32, h_css: f32, override: i32) u8 {
+    const platform = fizzy.core.platform;
+    platform.cached_form_factor = platform.form_factor.classify(coarse, w_css, h_css);
+    platform.cached_form_override = platform.form_factor.overrideFromCode(override);
+    return @backingInt(platform.formFactor());
 }
 
 /// Symmetric with the native API: nothing to install on web because the JS bootstrap wires
@@ -225,7 +237,8 @@ pub const modifier_control: c_ulong = 0;
 
 /// Web's dialog callbacks run synchronously within the frame already (`WebSaveAs.callAfter`), so
 /// there's nothing to drain here. Kept symmetric with the native backend's deferred-dispatch
-/// queue (see `backend_native.pollPendingDialogResult`) so `Editor.tick` can call it unconditionally.
+/// queue (see `backend_native.pollPendingDialogResult`) so `Editor.tick` can call it
+/// unconditionally.
 pub const PendingDialogResult = struct {
     callback: *const fn (?[][:0]const u8) void,
     files: ?[][:0]const u8,

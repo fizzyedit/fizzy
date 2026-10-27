@@ -1,0 +1,150 @@
+#!/usr/bin/env python3
+"""Append one line per finished agent PR: "PR | worker | rounds-to-green | review findings | CI reds".
+
+    agent-record <pr>            record one PR (printed, appended unless already recorded)
+    agent-record --all <since>   backfill merged PRs from <since> (YYYY-MM-DD) that reference fizzyedit/work
+
+Reads GitHub through `gh` only and parses nothing but labels and the "Part of fizzyedit/work#N"
+line. The log is ${FIZZY_AGENT_LOG:-~/.cache/fizzy-agent-record.txt}; the repo ${FIZZY_REPO:-fizzyedit/fizzy}.
+"""
+
+import json
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+REPO = os.environ.get("FIZZY_REPO", "fizzyedit/fizzy")
+WORK = "fizzyedit/work"
+FAILED = {"failure", "timed_out"}
+THREADS = """query($o:String!,$r:String!,$n:Int!,$c:String){repository(owner:$o,name:$r){
+pullRequest(number:$n){reviewThreads(first:100,after:$c){nodes{id}
+pageInfo{hasNextPage endCursor}}}}}"""
+
+
+def log_path():
+    return Path(os.environ.get("FIZZY_AGENT_LOG") or "~/.cache/fizzy-agent-record.txt").expanduser()
+
+
+class Skip(Exception):
+    """A PR that cannot be recorded now; the message says why."""
+
+
+def gh(*args):
+    out = subprocess.run(["gh", *args], capture_output=True, text=True)
+    if out.returncode != 0:
+        raise Skip(f"gh {' '.join(args)} failed: {out.stderr.strip()}")
+    if not out.stdout.strip():
+        raise Skip(f"gh {' '.join(args)} printed nothing")
+    return json.loads(out.stdout)
+
+
+def pages(path, *extra):
+    """A paginated list endpoint as one flat list of items."""
+    data = gh("api", "--paginate", "--slurp", *extra, path)
+    items = []
+    for page in data or []:
+        if isinstance(page, dict):
+            page = next((v for v in page.values() if isinstance(v, list)), [])
+        items.extend(page if isinstance(page, list) else [page])
+    return items
+
+
+def threads(pr):
+    owner, name = REPO.split("/")
+    count, cursor = 0, None
+    while True:
+        args = ["api", "graphql", "-f", f"query={THREADS}", "-f", f"o={owner}", "-f", f"r={name}", "-F", f"n={pr}"]
+        if cursor:
+            args += ["-f", f"c={cursor}"]
+        conn = gh(*args)["data"]["repository"]["pullRequest"]["reviewThreads"]
+        count += len(conn["nodes"])
+        if not conn["pageInfo"]["hasNextPage"]:
+            return count
+        cursor = conn["pageInfo"]["endCursor"]
+
+
+def measure(pr):
+    """The recorded line for a PR, or None when it does not reference fizzyedit/work."""
+    info = gh("api", f"repos/{REPO}/pulls/{pr}")
+    if not info.get("merged_at") and info.get("state") != "closed":
+        raise Skip("not merged or closed yet, so its numbers are not final")
+    ref = re.search(r"Part of fizzyedit/work#(\d+)", info.get("body") or "")
+    if not ref:
+        return None
+    issue = gh("api", f"repos/{WORK}/issues/{ref[1]}")
+    workers = sorted(l["name"][len("running:"):] for l in issue["labels"] if l["name"].startswith("running:"))
+    if not workers:
+        print(f"agent-record: PR {pr}: {WORK}#{ref[1]} has no running:* label, worker recorded as unknown", file=sys.stderr)
+
+    commits = pages(f"repos/{REPO}/pulls/{pr}/commits")
+    reds = {}
+    for commit in commits:
+        for run in pages(f"repos/{REPO}/commits/{commit['sha']}/check-runs"):
+            if run.get("conclusion") in FAILED:
+                reds[run["id"]] = run.get("completed_at") or ""
+
+    # A push is a commit; rounds count those after the PR first left draft or first went red.
+    events = pages(f"repos/{REPO}/issues/{pr}/timeline")
+    marks = [e["created_at"] for e in events if e.get("event") == "ready_for_review"]
+    marks += [t for t in reds.values() if t]
+    rounds = 0
+    if marks:
+        since = min(marks)
+        rounds = sum(1 for c in commits if c["commit"]["committer"]["date"] > since)
+
+    comments = len(pages(f"repos/{REPO}/pulls/{pr}/comments"))
+    findings = f"{comments}c/{threads(pr)}t"
+    return f"#{pr} | {'+'.join(workers) or 'unknown'} | {rounds} | {findings} | {len(reds)}"
+
+
+def recorded(path):
+    if not path.exists():
+        return {}
+    return {l.split(" | ", 1)[0]: l for l in path.read_text().splitlines()}
+
+
+def record(pr, path):
+    """The PR's line, measured and appended unless the log already holds it."""
+    held = recorded(path).get(f"#{pr}")
+    if held:
+        return held
+    line = measure(pr)
+    if line:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a") as f:
+            f.write(line + "\n")
+    return line
+
+
+def main(argv):
+    path = log_path()
+    if len(argv) == 1 and argv[0].isdigit():
+        try:
+            line = record(int(argv[0]), path)
+        except Skip as why:
+            sys.exit(f"agent-record: PR {argv[0]} skipped: {why}")
+        if line is None:
+            sys.exit(f"agent-record: PR {argv[0]} does not say 'Part of {WORK}#N'")
+        print(line)
+    elif len(argv) == 2 and argv[0] == "--all":
+        query = f'repo:{REPO} is:pr is:merged merged:>={argv[1]} "{WORK}"'
+        try:
+            found = pages("search/issues", "--method", "GET", "-f", f"q={query}")
+        except Skip as why:
+            sys.exit(f"agent-record: search failed: {why}")
+        for item in found:
+            try:
+                line = record(item["number"], path)
+            except Skip as why:
+                print(f"agent-record: PR {item['number']} skipped: {why}", file=sys.stderr)
+                continue
+            if line:
+                print(line)
+    else:
+        sys.exit(__doc__)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

@@ -202,8 +202,8 @@ pub const end_epsilon: f32 = 1.0;
 
 /// The block height table, in document order.
 pub const Table = struct {
-    heights: std.ArrayListUnmanaged(Height) = .empty,
-    extents: std.ArrayListUnmanaged(SourceExtent) = .empty,
+    heights: std.ArrayList(Height) = .empty,
+    extents: std.ArrayList(SourceExtent) = .empty,
     /// Column width `heights` was measured at. Negative means "nothing measured yet".
     layout_width: f32 = -1,
 

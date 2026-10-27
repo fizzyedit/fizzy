@@ -232,6 +232,14 @@ pub const groups = [_]Group{
                 // Every panel is individually searchable — see `LayoutSettings`.
                 .search = .{ .score = LayoutSettings.score, .draw = LayoutSettings.draw },
             },
+            .{
+                .label = "Layout",
+                .key = "layout_mode",
+                .description = "Whether the window is laid out for a touch screen (Mobile: one " ++
+                    "full-screen place with sheets) or for a desktop. Auto follows the device.",
+                .keywords = "mobile tablet touch phone desktop layout form factor",
+                .draw = drawLayoutMode,
+            },
         },
     },
     .{
@@ -628,19 +636,8 @@ fn drawHoldMenuDuration() void {
 }
 
 fn drawInputScheme() void {
-    var dropdown: core.widgets.DropdownWidget = undefined;
-    dropdown.init(@src(), .{}, .{
-        .expand = .horizontal,
-        .corners = dvui.CornerRect.all(1000),
-    });
-    defer dropdown.deinit();
-
-    var hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{
-        .expand = .vertical,
-        .gravity_x = 1.0,
-    });
-
-    const label_text: []const u8 = switch (fizzy.editor().app.settings.input_scheme) {
+    const scheme = &fizzy.editor().app.settings.input_scheme;
+    const label_text: []const u8 = switch (scheme.*) {
         .auto => switch (dvui.mouseType()) {
             .unknown => "Auto",
             .mouse, .trackpad => |hint| dvui.currentWindow().arena().print("Auto ({s})", .{@tagName(hint)}) catch "Auto",
@@ -648,24 +645,12 @@ fn drawInputScheme() void {
         .mouse => "Mouse",
         .trackpad => "Trackpad",
     };
-    dvui.label(@src(), "{s}", .{label_text}, .{ .margin = .all(0), .padding = .all(0) });
-    core.icon.icon(@src(), "dropdown_triangle", dvui.entypo.triangle_down, .{}, .{ .gravity_y = 0.5 });
+    drawEnumDropdown(scheme, label_text, &.{ "Auto", "Mouse", "Trackpad" });
+}
 
-    hbox.deinit();
-
-    if (dropdown.dropped()) {
-        inline for (.{
-            .{ "Auto", Editor.Settings.InputScheme.auto },
-            .{ "Mouse", Editor.Settings.InputScheme.mouse },
-            .{ "Trackpad", Editor.Settings.InputScheme.trackpad },
-        }) |choice| {
-            if (dropdown.addChoiceLabel(choice[0])) {
-                fizzy.editor().app.settings.input_scheme = choice[1];
-                fizzy.editor().markSettingsDirty();
-                dvui.refresh(null, @src(), null);
-            }
-        }
-    }
+fn drawLayoutMode() void {
+    const mode = &fizzy.editor().app.settings.layout_mode;
+    drawEnumDropdown(mode, null, &.{ "Auto", "Mobile", "Desktop" });
 }
 
 // ---- Plugins ----------------------------------------------------------------------------
@@ -674,6 +659,18 @@ fn drawInputScheme() void {
 /// the plugin's own card in the Plugins tab (`PluginStore`), not a row here — there is one of
 /// those per installed plugin, and the tree is fizzy's own settings.
 fn drawPluginUpdateMode() void {
+    const mode = &fizzy.editor().app.settings.plugin_update_mode;
+    drawEnumDropdown(mode, null, &.{ "Prompt", "Silent" });
+}
+
+/// A dropdown over every value of enum `E`: `choices` are the menu's labels in the enum's
+/// declaration order, and the closed button shows the current one unless `label_text` says
+/// otherwise. A pick marks the settings dirty.
+// anytype: a pointer to any settings enum; `E` is read off its type
+fn drawEnumDropdown(value: anytype, label_text: ?[]const u8, comptime choices: []const []const u8) void {
+    const E = @typeInfo(@TypeOf(value)).pointer.child;
+    comptime std.debug.assert(choices.len == std.enums.values(E).len);
+
     var dropdown: core.widgets.DropdownWidget = undefined;
     dropdown.init(@src(), .{}, .{
         .expand = .horizontal,
@@ -685,23 +682,14 @@ fn drawPluginUpdateMode() void {
         .expand = .vertical,
         .gravity_x = 1.0,
     });
-
-    const label_text: []const u8 = switch (fizzy.editor().app.settings.plugin_update_mode) {
-        .prompt => "Prompt",
-        .silent => "Silent",
-    };
-    dvui.label(@src(), "{s}", .{label_text}, .{ .margin = .all(0), .padding = .all(0) });
+    dvui.label(@src(), "{s}", .{label_text orelse choices[@backingInt(value.*)]}, .{ .margin = .all(0), .padding = .all(0) });
     core.icon.icon(@src(), "dropdown_triangle", dvui.entypo.triangle_down, .{}, .{ .gravity_y = 0.5 });
-
     hbox.deinit();
 
     if (dropdown.dropped()) {
-        inline for (.{
-            .{ "Prompt", Editor.Settings.PluginUpdateMode.prompt },
-            .{ "Silent", Editor.Settings.PluginUpdateMode.silent },
-        }) |choice| {
-            if (dropdown.addChoiceLabel(choice[0])) {
-                fizzy.editor().app.settings.plugin_update_mode = choice[1];
+        inline for (choices, std.enums.values(E)) |choice_label, choice| {
+            if (dropdown.addChoiceLabel(choice_label)) {
+                value.* = choice;
                 fizzy.editor().markSettingsDirty();
                 dvui.refresh(null, @src(), null);
             }
@@ -849,7 +837,7 @@ const MaterialDropdown = struct {
 /// chosen, and saying why. The row shows the kind drawn, and says which is saved where that
 /// differs; the saved kind is never rewritten. Null when nothing was picked; else the pick, null
 /// being "Same as window".
-fn materialDropdown(src: std.builtin.SourceLocation, m: MaterialDropdown) ??fizzy.core.material.Kind {
+fn materialDropdown(src: std.lang.SourceLocation, m: MaterialDropdown) ??fizzy.core.material.Kind {
     const Kind = fizzy.core.material.Kind;
     var dropdown: core.widgets.DropdownWidget = undefined;
     // With `follows`, choice 0 is the window's and each kind is one further down.

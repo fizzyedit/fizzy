@@ -1,0 +1,154 @@
+#!/usr/bin/env bash
+# Publish a worker change with evidence that does not depend on a model's final message.
+# `agent-finish --claim <issue>` opens the draft PR early (no gates run); a plain run updates its body.
+set -euo pipefail
+reason='unexpected failure'
+trap 'echo "agent-finish: $reason" >&2' ERR
+fail() { echo "agent-finish: $*" >&2; exit 1; }
+claim=false
+if [[ ${1:-} == --claim ]]; then claim=true; shift; fi
+[[ $# == 1 ]] || fail 'usage: agent-finish [--claim] <issue number or fizzyedit/work#N>'
+issue=${1#fizzyedit/work#}
+[[ $issue =~ ^[1-9][0-9]*$ ]] || fail 'issue must be a positive number or fizzyedit/work#N'
+cd "$(dirname "$0")/.."
+command -v gh >/dev/null 2>&1 || fail 'gh is required'
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+branch_re='^[a-z][a-z0-9_-]*/[a-z0-9][a-z0-9_-]*$'
+use_jj=false
+if command -v jj >/dev/null 2>&1 && jj root >/dev/null 2>&1; then
+    use_jj=true
+    reason='could not identify the working bookmark'
+    # The bookmark sits on @, or on @- when the working copy is a fresh empty change above it.
+    rev=@
+    branch=$(jj log -r @ --no-graph -T 'local_bookmarks.map(|b| b.name()).join("\n")' | grep -E "$branch_re" || true)
+    if [[ -z $branch ]]; then
+        rev=@-
+        branch=$(jj log -r @- --no-graph -T 'local_bookmarks.map(|b| b.name()).join("\n")' | grep -E "$branch_re" || true)
+    fi
+else
+    branch=$(git symbolic-ref --quiet --short HEAD)
+fi
+[[ $branch =~ $branch_re ]] || fail 'exactly one area/slug branch must point at the working change'
+title="${branch%%/*}: ${branch#*/}"
+if $use_jj; then
+    # Keep the worker's own description; only fill in an empty one.
+    reason='could not read the change description'
+    desc=$(jj log -r "$rev" --no-graph -T 'description.first_line()')
+    if [[ -n $desc ]]; then
+        title=$desc
+    else
+        jj describe -r "$rev" -m "$title"
+    fi
+fi
+reason='could not compare with origin/main'
+if $use_jj; then
+    jj diff --from main@origin --to "$rev" --stat >"$tmp/stat"
+else
+    # Inside this clone only; .gitignore keeps zig-pkg, .zig-cache, zig-out and .DS_Store out.
+    git add -A
+    git diff origin/main --stat >"$tmp/stat"
+fi
+$claim || [[ -s $tmp/stat ]] || fail 'no changes relative to main'
+marker='<!-- agent-finish: generated below -->'
+headings=$'## Goal\n\n%s\n\n## What changed and why\n\n%s\n\n## How it was verified\n\n%s\n\n## Not done / follow-ups\n\n%s'
+if $use_jj && ! git rev-parse --git-dir >/dev/null 2>&1; then
+    summary_file="$(jj root)/.jj/PR_SUMMARY.md"
+else
+    summary_file="$(git rev-parse --git-dir)/PR_SUMMARY.md"
+fi
+reason='could not look up pull request'
+pr=$(gh pr list --head "$branch" --base main --json number --jq '.[0].number // empty')
+pr_body=
+[[ -n $pr ]] && pr_body=$(gh pr view "$pr" --json body --jq .body | tr -d '\r')
+reason='could not write the pull request summary'
+# The writer's summary: PR_SUMMARY.md, else what the PR body already holds above the marker,
+# else the headings with "(to fill)" so a missing summary shows.
+if [[ -f $summary_file ]]; then
+    cat "$summary_file" >"$tmp/summary"
+elif grep -qxF "$marker" <<<"$pr_body"; then
+    awk -v m="$marker" '$0 == m { exit } !started && (/^Part of / || /^Rework: / || /^$/) { next } { started = 1; print }' <<<"$pr_body" >"$tmp/summary"
+elif $claim; then
+    printf "$headings\n" '' '' '' 'Draft: work in progress' >"$tmp/summary"
+else
+    printf "$headings\n" '(to fill)' '(to fill)' '(to fill)' '(to fill)' >"$tmp/summary"
+fi
+changes=$(tail -n 1 "$tmp/stat" | awk '
+    /files? changed/ { n = $1; a = 0; d = 0 }
+    /insertion/ { for (i = 1; i < NF; i++) if ($(i + 1) ~ /^insertion/) a = $i }
+    /deletion/ { for (i = 1; i < NF; i++) if ($(i + 1) ~ /^deletion/) d = $i }
+    END { printf "%d files, +%d/-%d", n, a, d }')
+gates_label='not run yet'
+: >"$tmp/gates"
+if $claim; then
+    printf 'Gates not run yet; `scripts/agent-finish %s` replaces this with their output.\n' "$issue" >>"$tmp/gates"
+else
+    gates_total=6
+    gates_passed=0
+    run_gate() {
+        local status=0
+        "$@" >"$tmp/gate" 2>&1 || status=$?
+        cat "$tmp/gate"
+        {
+            printf '### `%s` (exit %s)\n\n```text\n' "$*" "$status"
+            # GitHub caps a PR body near 65k characters; the tail holds the summary.
+            if [[ $(wc -l <"$tmp/gate") -gt 50 ]]; then printf '... (earlier output omitted)\n'; fi
+            tail -n 50 "$tmp/gate"
+            printf '\n```\n\n'
+        } >>"$tmp/gates"
+        [[ $status == 0 ]] || fail "gate failed: $*"
+        if [[ $1 == scripts/zb ]]; then
+            # A successful test count can accompany a failed build step; zig appends
+            # "; M/M tests passed" to the steps line when tests ran.
+            awk '
+                /Build Summary:/ {
+                    split($3, steps, "/")
+                    if (steps[1] > 0 && steps[1] == steps[2] &&
+                        $4 == "steps" && $5 ~ /^succeeded/) passed = 1
+                }
+                END { exit !passed }
+            ' "$tmp/gate" || fail "missing successful Build Summary: $*"
+        fi
+        gates_passed=$((gates_passed + 1))
+    }
+    run_gate scripts/check-fmt.sh
+    run_gate scripts/zb build --summary all
+    for gate in test test-integration check-web test-sdk-version; do
+        run_gate scripts/zb build "$gate" --summary all
+    done
+    gates_label="$gates_passed of $gates_total passed"
+fi
+# A rework run on an existing PR keeps the PR's own work issue: its running: lock and
+# close-merged find the PR by that line.
+part_of=$(grep -m1 -E '^Part of fizzyedit/work#[1-9][0-9]*$' <<<"$pr_body" || true)
+{
+    if [[ -n $part_of && $part_of != "Part of fizzyedit/work#$issue" ]]; then
+        printf '%s\nRework: work#%s\n\n' "$part_of" "$issue"
+    else
+        printf 'Part of fizzyedit/work#%s\n\n' "$issue"
+    fi
+    sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' "$tmp/summary"
+    printf '\n\n%s\n\n<details><summary>Changes (%s)</summary>\n\n```text\n' "$marker" "$changes"
+    head -n 100 "$tmp/stat"
+    printf '```\n\n</details>\n\n<details><summary>Gates: %s</summary>\n\n' "$gates_label"
+    cat "$tmp/gates"
+    printf '</details>\n'
+} >"$tmp/body"
+reason='could not publish branch'
+if $use_jj; then
+    jj git push --bookmark "$branch"
+else
+    if ! git diff --cached --quiet; then
+        git commit -m "$title"
+    elif [[ $(git rev-list --count origin/main..HEAD) == 0 ]]; then
+        # A claim before any work: gh pr create needs a commit ahead of main.
+        git commit --allow-empty -m "$title: claim"
+    fi
+    git push --set-upstream origin "$branch"
+fi
+reason='could not write draft pull request'
+if [[ -n $pr ]]; then
+    gh pr edit "$pr" --body-file "$tmp/body"
+else
+    gh pr create --draft --base main --head "$branch" --title "$title" --body-file "$tmp/body"
+fi

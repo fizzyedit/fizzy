@@ -136,7 +136,15 @@ pub const Key = enum {
 /// ever fire together with itself, which is never what anyone means.
 pub fn isModifier(k: Key) bool {
     return switch (k) {
-        .left_shift, .right_shift, .left_control, .right_control, .left_alt, .right_alt, .left_command, .right_command => true,
+        .left_shift,
+        .right_shift,
+        .left_control,
+        .right_control,
+        .left_alt,
+        .right_alt,
+        .left_command,
+        .right_command,
+        => true,
         else => false,
     };
 }

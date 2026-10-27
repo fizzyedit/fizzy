@@ -98,6 +98,7 @@ pub const Position = struct { line: u32, character: u32 };
 pub const Range = struct { start: Position, end: Position };
 
 /// `e`'s span in `a` as protocol positions, through `toPosition(ctx, byte) Position`.
+// anytype: Document owners supply their own byte-to-position callback context.
 pub fn range(e: Edit, ctx: anytype, comptime toPosition: fn (@TypeOf(ctx), usize) Position) Range {
     return .{ .start = toPosition(ctx, e.start), .end = toPosition(ctx, e.end) };
 }

@@ -42,11 +42,15 @@
 //! and the backend's clock is moved on by as much (`frames`' `clock`) so dvui's stays monotonic
 //! and continuous after. The player's own chrome (the transport bar) runs on the wall (`wallNs`).
 //!
+//! **Closing** always leaves the app as it is (`Stage.keep`), and "Revert to before" (`revert`) is
+//! the one way back to the session the demo set aside. `play` after a person changed things carries
+//! on from there as a new branch (`branched`) rather than replaying over their work; seeking back
+//! is the history.
+//!
 //! **Interruption**: while playing, a real click, tap, scroll or key pauses the demo — a pointer
 //! event goes on to do what the person meant, the first key is only taken as "stop". Real pointer
-//! motion is held off (the tape owns the pointer while it plays). Anything real that reaches the app
-//! while paused marks the app `diverged` from the tape; resuming then replays to the paused moment
-//! first, so the demo carries on from its own state, not from whatever the person left behind.
+//! motion is held off (the tape owns the pointer while it plays). Anything real that reaches the
+//! app while paused marks the app `diverged` from the tape.
 const Player = @This();
 
 const std = @import("std");
@@ -74,11 +78,15 @@ after_seek: After = .pause,
 seek_target: f64 = 0,
 /// Where the seek replays from, for the overlay's progress.
 seek_from: f64 = 0,
-/// Demo time per wall time while playing: one of `speeds`, from the transport or `setRate`.
-rate: f32 = 1,
-
 /// Real input reached the app since the tape last put it in a known state.
 diverged: bool = false,
+/// The tape went on from a state the person had changed (`play` after a divergence) rather than
+/// replaying over it: a new branch. What it does is no longer the tape's own history, so no
+/// snapshot is taken of it or checked against it. A seek back into the history (`restoreSnapshot`,
+/// `rewind`) is the way out.
+branched: bool = false,
+/// How the bar's close ends the demo, decided when it was pressed (`close`, `revert`).
+leave: Leave = .keep,
 /// Wall time one displayed frame may spend on silent frames while a seek catches up (`frames`).
 budget_ns: i128 = 8 * std.time.ns_per_ms,
 /// How far the app's clock is ahead of the wall: the demo time silent frames covered that the
@@ -130,8 +138,8 @@ scene: ?usize = null,
 /// Replays that did not reach the model a snapshot holds (`Stage.fingerprint`): the tape does
 /// not replay exactly. Logged as they happen; tests read it.
 mismatches: u32 = 0,
-/// Waits that gave up since the demo was loaded: what one waited for never came, and the tape
-/// carried on regardless. Logged as they happen; tests read it.
+/// Ops that failed since the demo was loaded: a wait gave up, or a move never found its target,
+/// and the rest of that chapter was skipped. Logged as they happen; tests read it.
 timeouts: u32 = 0,
 /// Whether letting go of the scrubber plays or stays paused: as it was when it was taken.
 scrub_after: After = .pause,
@@ -212,17 +220,26 @@ pub const Transport = struct {
     next: dvui.Rect.Physical = .{},
     track: dvui.Rect.Physical = .{},
     close: dvui.Rect.Physical = .{},
+    /// "Revert to before", while the overlay shows it (`drawRevert`); empty otherwise.
+    revert: dvui.Rect.Physical = .{},
     /// The tab on the bar that sends it into where it rests (`tucked`).
     tab: dvui.Rect.Physical = .{},
     /// Where the bar rests was drawn last frame (fizzy: corner glass in the window's own corner),
     /// physical, as far round it as the pointer is on it: what the bar hides into, and a press
     /// there brings it back. Null when it was not drawn.
     rest: ?dvui.Rect.Physical = null,
-    /// Sent into where it rests (its tab): the bar stays there, playing or not, until that brings it
-    /// back (a press here, the pointer held on it in the overlay).
+    /// Sent into where it rests (its tab): the bar stays there, playing or not, until that brings
+    /// it back (a press here, the pointer held on it in the overlay).
     tucked: bool = false,
-    /// The speed on the track (`rate`), which a press steps through `speeds`.
+    /// The speed slider, label and line (`Sequencer.speed`), whose notches are `Sequencer.speeds`.
     speed: dvui.Rect.Physical = .{},
+    /// The slider's line alone, where a press lands on a notch.
+    speed_line: dvui.Rect.Physical = .{},
+    /// A viewer is dragging the slider's knob.
+    speed_drag: bool = false,
+    /// The slider took the last press: the arrow keys, Home and End move its notch (and
+    /// do not pause the demo) until a press lands elsewhere.
+    speed_focus: bool = false,
     /// The demo time the scrubber is held at while a viewer drags it; the player seeks there as
     /// it moves (`frame`), and once more when it is let go.
     scrub: ?f64 = null,
@@ -232,6 +249,9 @@ pub const Transport = struct {
     /// the window the bar is in, those windows' rects last frame, physical: the app's to set. The
     /// bar is drawn under them, so a press there is theirs, not the bar's.
     covered: [8]dvui.Rect.Physical = undefined,
+    /// Each of `covered` as it lies over the main window's frame, physical: where the OS window is
+    /// on screen, which a caption in the main window keeps clear of.
+    covered_main: [8]dvui.Rect.Physical = undefined,
     covered_n: u8 = 0,
     /// When the real pointer was last on the bar, or its rest brought it (ns, `wallNs`): while
     /// playing, the bar shows for a while after, then goes back to rest.
@@ -246,6 +266,22 @@ pub const Transport = struct {
     closing: bool = false,
     /// Shut, having been closing — the overlay's word to `frame` that the demo can go now.
     shut: bool = false,
+
+    /// The notch of `Sequencer.speeds` nearest physical x on the speed line.
+    pub fn speedAt(self: Transport, x: f32) usize {
+        if (self.speed_line.w <= 0) return 0;
+        const f = std.math.clamp((x - self.speed_line.x) / self.speed_line.w, 0, 1);
+        return @intFromFloat(@round(f * @as(f32, Sequencer.speeds.len - 1)));
+    }
+
+    /// Let go of a speed drag (and the slider's key focus) that can no longer be answered: the
+    /// bar is gone, closing or tucked away, so nothing under the pointer is the slider.
+    pub fn dropStaleDrag(self: *Transport) void {
+        if (self.bar == null or self.closing or self.tucked) {
+            self.speed_drag = false;
+            self.speed_focus = false;
+        }
+    }
 
     /// The demo time under physical x on the track.
     pub fn timeAt(self: Transport, x: f32, total_ms: u32) f64 {
@@ -280,22 +316,6 @@ pub fn wallNs(self: *const Player) i128 {
 }
 
 /// The demo time to show: the scrubber's while it is held, else the sequencer's.
-/// The speeds the transport steps through.
-pub const speeds = [_]f32{ 0.25, 0.5, 1, 2, 4 };
-
-/// Play at `rate` times the tape's own pace, clamped to the slowest and fastest of `speeds`.
-pub fn setRate(self: *Player, rate: f32) void {
-    self.rate = std.math.clamp(rate, speeds[0], speeds[speeds.len - 1]);
-}
-
-/// The next of `speeds` after the current one, round to the slowest.
-pub fn stepRate(self: *Player) void {
-    for (speeds) |sp| {
-        if (sp > self.rate + 0.001) return self.setRate(sp);
-    }
-    self.setRate(speeds[0]);
-}
-
 pub fn now(self: *const Player) f64 {
     if (self.transport.scrub) |t| return t;
     return if (self.state == .seeking) self.seek_target else self.seq.now;
@@ -314,6 +334,10 @@ pub fn driving(self: *const Player) bool {
     };
 }
 
+/// How a demo is let go of: `keep` leaves the app as the tape and the person have it; `revert`
+/// gives the person back the session the demo set aside.
+pub const Leave = enum { keep, revert };
+
 pub const LoadOptions = struct {
     autoplay: bool = true,
 };
@@ -328,6 +352,7 @@ pub fn load(self: *Player, owned: Tape.Owned, opts: LoadOptions) void {
     const win = dvui.windowRectPixels();
     self.seq.pointer = .{ .x = win.x + win.w / 2, .y = win.y + win.h / 2 };
     self.diverged = false;
+    self.branched = false;
     self.transport = .{};
     self.mismatches = 0;
     self.timeouts = 0;
@@ -336,11 +361,28 @@ pub fn load(self: *Player, owned: Tape.Owned, opts: LoadOptions) void {
 }
 
 /// Close the demo from its bar: the bar runs its pieces back together and goes, as it does when it
-/// gets out of the way of a playing demo, and only then is the demo let go (`frame` → `unload`).
+/// gets out of the way of a playing demo, and only then is the demo let go (`frame` → `release`).
 /// Unloaded at once, the bar vanished under the pointer that closed it. Paused meanwhile, where
-/// it is. A bar not showing has nothing to close: the demo goes at once.
+/// it is. A bar not showing has nothing to close: the demo goes at once. The demo stops where
+/// it is and the app stays as it is, always; `revert` is the way back.
 pub fn close(self: *Player) void {
-    if (self.transport.openness <= 0.001) return self.unload();
+    self.dismiss(.keep);
+}
+
+/// Close the demo from its bar and give the person the session it set aside (`Leave.revert`).
+pub fn revert(self: *Player) void {
+    self.dismiss(.revert);
+}
+
+/// Stop at once and keep the app as it is, as `close` does: the command's way, with no bar to run
+/// back.
+pub fn stop(self: *Player) void {
+    self.release(.keep);
+}
+
+fn dismiss(self: *Player, how: Leave) void {
+    self.leave = how;
+    if (self.transport.openness <= 0.001) return self.release(how);
     self.pause();
     self.transport.closing = true;
     dvui.refresh(null, @src(), null);
@@ -348,11 +390,18 @@ pub fn close(self: *Player) void {
 
 /// Stop and let go of the demo; the stage gives the user their session back.
 pub fn unload(self: *Player) void {
+    self.release(.revert);
+}
+
+fn release(self: *Player, how: Leave) void {
     if (self.owned == null) return;
     self.input.releaseHeld();
     if (self.state == .seeking) self.stage.fastForward(false);
     self.dropSnapshots();
-    self.stage.end();
+    switch (how) {
+        .keep => self.stage.keep(),
+        .revert => self.stage.end(),
+    }
     self.owned.?.deinit();
     self.owned = null;
     self.state = .idle;
@@ -361,15 +410,25 @@ pub fn unload(self: *Player) void {
     self.settling = null;
     self.live = false;
     self.last_press = null;
+    self.diverged = false;
+    self.branched = false;
     self.transport = .{};
     if (dvui.current_window != null) dvui.refresh(null, @src(), null);
 }
 
 pub fn play(self: *Player) void {
     switch (self.state) {
-        .paused => if (self.diverged) self.seekTo(self.seq.now, .play) else {
+        // Carrying on from what the person did is a new branch: the tape's own history up to here
+        // stays to be rewound to, and is not replayed over their work.
+        .paused => {
+            if (self.diverged) {
+                self.diverged = false;
+                self.branched = true;
+            }
             self.state = .playing;
         },
+        // A restart: the tape's first keyframe replaces whatever is on screen, so nothing of a
+        // person's is left to branch from (`seekTo` clears `diverged` as it cuts).
         .ended => self.seekTo(0, .play),
         .seeking => self.after_seek = .play,
         .playing, .idle => {},
@@ -471,6 +530,12 @@ fn arrive(self: *Player) void {
         .play => .playing,
         .pause => .paused,
     };
+    // Landing paused mid-drag is the same cut-short drag `pause` drops: nothing stays held for
+    // later real motion to drag with.
+    if (self.state == .paused and self.input.held.count() > 0) {
+        self.input.releaseHeld();
+        self.diverged = true;
+    }
 }
 
 /// Back to the keyframe op `kf`, to replay from there.
@@ -482,6 +547,7 @@ fn rewind(self: *Player, kf: usize) void {
     self.scene = null;
     self.last_press = null;
     self.diverged = false;
+    self.branched = false;
     self.checked_cursor = null;
 }
 
@@ -528,6 +594,7 @@ fn restoreSnapshot(self: *Player, i: usize) bool {
     }
     self.last_press = null;
     self.diverged = false;
+    self.branched = false;
     // The moment is checked again: a restore is a replay too.
     self.checked_cursor = null;
     self.seek_from = s.at;
@@ -540,7 +607,7 @@ fn restoreSnapshot(self: *Player, i: usize) bool {
 fn settle(self: *Player) bool {
     const st = &(self.settling orelse return false);
     st.runs += 1;
-    const pt = if (st.target) |t| Input.targetPoint(t) else null;
+    const pt = if (st.target) |t| Input.targetPoint(self.stage, t) else null;
     const still = if (st.target == null) true else if (pt != null and st.last != null)
         pt.?.x == st.last.?.x and pt.?.y == st.last.?.y
     else
@@ -592,7 +659,7 @@ fn nearestSnapshot(self: *const Player, t: f64, kf: usize) ?usize {
 /// At a calm moment while the tape drives, take a snapshot if one is due — or, where one was
 /// taken on an earlier pass, check the replay reached the same model.
 fn keepSnapshot(self: *Player) void {
-    if (!self.stage.snapshots()) return;
+    if (!self.stage.snapshots() or self.branched) return;
     const t = self.tape() orelse return;
     if (self.seq.cursor == 0 or !self.seq.calm() or self.input.held.count() > 0) return;
     if (!self.stage.idle()) return;
@@ -652,7 +719,10 @@ fn verify(self: *Player, s: Snapshot) void {
     if (got == want) return;
     self.mismatches += 1;
     const name = if (self.tape()) |t| t.name else "?";
-    log.warn("demo '{s}': replaying to {d:.0} ms did not reach what playing did — the tape does not replay exactly", .{ name, s.at });
+    log.warn("demo '{s}': replaying to {d:.0} ms did not reach what playing did — the tape does not replay exactly", .{
+        name,
+        s.at,
+    });
 }
 
 fn dropSnapshots(self: *Player) void {
@@ -668,12 +738,15 @@ fn dropSnapshots(self: *Player) void {
 pub fn frame(self: *Player) void {
     // Whether this run is seen, once the seek it asks for (or lands) is known: a run while a seek
     // catches up draws nothing, but the one `frames` ends it with.
-    defer self.run_unseen = if (self.set_unseen) |set| set((self.state == .seeking or self.catching_up) and !self.showing) else false;
+    defer self.run_unseen = if (self.set_unseen) |set|
+        set((self.state == .seeking or self.catching_up) and !self.showing)
+    else
+        false;
     if (self.owned == null) return;
     // Widgets name themselves for the tape while one is loaded (`anchor`).
     anchor.want();
     // The bar has closed itself shut (`close`): the demo goes now.
-    if (self.transport.shut) return self.unload();
+    if (self.transport.shut) return self.release(self.leave);
     self.takeRealInput();
     if (self.owned == null) return; // the bar's close button, with no bar showing
     self.claimCursor();
@@ -720,7 +793,7 @@ pub fn frame(self: *Player) void {
         .playing => {
             Input.holdPointer(self.seq.pointer);
             self.seq.replaying = false;
-            _ = self.seq.advance(self.seq.now + wall_ms * self.rate, wall_ms, self.sink());
+            _ = self.seq.advance(self.seq.playUntil(wall_ms), wall_ms, self.sink());
             if (self.seq.done() and self.seq.now >= @as(f64, @floatFromInt(self.duration()))) self.state = .ended;
         },
         .seeking => {
@@ -749,7 +822,12 @@ pub fn frame(self: *Player) void {
 /// the runs took the app's clock past the wall — and, a seek still in flight, to the moment it
 /// goes on from — so the next frame carries on from there. Without one a silent run steps the
 /// clock the least dvui accepts, a microsecond, and timers wait for the wall.
-pub fn frames(self: *Player, win: *dvui.Window, frame_fn: *const fn () anyerror!dvui.App.Result, clock: ?*i128) anyerror!dvui.App.Result {
+pub fn frames(
+    self: *Player,
+    win: *dvui.Window,
+    frame_fn: *const fn () anyerror!dvui.App.Result,
+    clock: ?*i128,
+) anyerror!dvui.App.Result {
     // Counted before the run, which may land the seek, and after it, which may have asked for one.
     const was_seeking = self.state == .seeking;
     if (was_seeking) self.seek_stats.shown += 1;
@@ -804,7 +882,10 @@ fn runAt(self: *const Player, win: *dvui.Window, clock: ?*i128, base_ns: i128, b
     // Waiting on a glide's target to stop moving (`targetStill`), a run is a frame of motion where
     // the backend's clock can be moved on: on a microsecond's clock, a place sliding open would
     // never move between runs, and look still.
-    const soonest = win.frame_time_ns + if (self.aiming != null and clock != null) msToNs(Sequencer.path_step_ms) else std.time.ns_per_us;
+    const soonest = win.frame_time_ns + if (self.aiming != null and clock != null)
+        msToNs(Sequencer.path_step_ms)
+    else
+        std.time.ns_per_us;
     if (clock == null or self.state != .seeking) return soonest;
     return @max(soonest, base_ns + msToNs(self.nextMoment() - base_ms));
 }
@@ -853,6 +934,7 @@ fn takeRealInput(self: *Player) void {
             .mouse => |me| {
                 if (me.action == .position) continue;
                 if (self.transportTakes(e, me)) continue;
+                if (me.action == .press) self.transport.speed_focus = false;
                 switch (self.state) {
                     .playing => switch (me.action) {
                         // The tape owns the pointer while it plays.
@@ -861,24 +943,41 @@ fn takeRealInput(self: *Player) void {
                             self.pause();
                             self.diverged = true;
                         },
-                        .release, .position => {},
+                        // A drag the tape is making is the tape's to end.
+                        .release => if (self.input.held.count() > 0) e.handle(@src(), wd),
+                        .position => {},
                     },
                     // A replay in progress takes nothing from anyone.
                     .seeking => e.handle(@src(), wd),
                     .paused, .ended => switch (me.action) {
-                        .focus, .press, .wheel_x, .wheel_y => self.diverged = true,
+                        .focus, .press, .wheel_x, .wheel_y => {
+                            self.diverged = true;
+                        },
                         else => {},
                     },
                     .idle => {},
                 }
             },
-            .key, .text => switch (self.state) {
+            .key => |ke| if (self.speedKey(e, ke)) {} else switch (self.state) {
                 .playing => {
                     e.handle(@src(), wd);
                     self.pause();
                 },
                 .seeking => e.handle(@src(), wd),
-                .paused, .ended => self.diverged = true,
+                .paused, .ended => {
+                    self.diverged = true;
+                },
+                .idle => {},
+            },
+            .text => switch (self.state) {
+                .playing => {
+                    e.handle(@src(), wd);
+                    self.pause();
+                },
+                .seeking => e.handle(@src(), wd),
+                .paused, .ended => {
+                    self.diverged = true;
+                },
                 .idle => {},
             },
             .window, .app => {},
@@ -886,11 +985,42 @@ fn takeRealInput(self: *Player) void {
     }
 }
 
+/// A key on the speed slider, while it holds focus or the pointer is on it: the arrows step a
+/// notch, Home and End go to the ends, Escape lets go. True when it took the key.
+fn speedKey(self: *Player, e: *dvui.Event, ke: dvui.Event.Key) bool {
+    const tr = &self.transport;
+    const hovered = if (tr.pointer) |p| tr.speed.contains(p) else false;
+    if (tr.bar == null or tr.closing or !(tr.speed_focus or hovered)) return false;
+    switch (ke.code) {
+        .left, .down => if (ke.action != .up) self.seq.nudgeSpeed(-1),
+        .right, .up => if (ke.action != .up) self.seq.nudgeSpeed(1),
+        .home => if (ke.action != .up) self.seq.setSpeedIndex(0),
+        .end => if (ke.action != .up) self.seq.setSpeedIndex(Sequencer.speeds.len - 1),
+        .escape => tr.speed_focus = false,
+        else => return false,
+    }
+    e.handle(@src(), dvui.currentWindow().data());
+    dvui.refresh(null, @src(), null);
+    return true;
+}
+
 /// Whether a real pointer event belongs to the transport bar; if so it is handled here.
 fn transportTakes(self: *Player, e: *dvui.Event, me: dvui.Event.Mouse) bool {
     const wd = dvui.currentWindow().data();
     const tr = &self.transport;
     if (me.action == .motion or me.action == .press) tr.pointer = me.p;
+    tr.dropStaleDrag();
+    // A press while dragging means the release was lost (focus left the window).
+    if (me.action == .press) tr.speed_drag = false;
+    if (tr.speed_drag) {
+        switch (me.action) {
+            .motion => self.seq.setSpeedIndex(tr.speedAt(me.p.x)),
+            .release => tr.speed_drag = false,
+            else => {},
+        }
+        e.handle(@src(), wd);
+        return true;
+    }
     if (tr.scrub != null) {
         switch (me.action) {
             .motion => tr.scrub = tr.timeAt(me.p.x, self.duration()),
@@ -923,7 +1053,7 @@ fn transportTakes(self: *Player, e: *dvui.Event, me: dvui.Event.Mouse) bool {
     };
     const bar = tr.bar orelse return false;
     const on_tab = tr.tab.contains(me.p);
-    if (!bar.contains(me.p) and !on_tab) return false;
+    if (!bar.contains(me.p) and !on_tab and !tr.revert.contains(me.p)) return false;
     if (!tr.tucked) tr.stirred_ns = self.wallNs();
     // Closing, the bar is on its way out: what is pressed on it on the way does nothing.
     if (tr.closing) {
@@ -931,6 +1061,7 @@ fn transportTakes(self: *Player, e: *dvui.Event, me: dvui.Event.Mouse) bool {
         return true;
     }
     if (me.action == .press and me.button.pointer()) {
+        tr.speed_focus = tr.speed.contains(me.p);
         if (on_tab) {
             tr.tucked = true;
             tr.stirred_ns = null;
@@ -938,15 +1069,23 @@ fn transportTakes(self: *Player, e: *dvui.Event, me: dvui.Event.Mouse) bool {
         } else if (tr.play.contains(me.p)) {
             self.toggle();
         } else if (tr.speed.contains(me.p)) {
-            self.stepRate();
+            tr.speed_drag = true;
+            self.seq.setSpeedIndex(tr.speedAt(me.p.x));
         } else if (tr.track.contains(me.p)) {
             tr.scrub = tr.timeAt(me.p.x, self.duration());
-            self.scrub_after = if (self.state == .playing or (self.state == .seeking and self.after_seek == .play)) .play else .pause;
+            self.scrub_after = if (self.state == .playing or (self.state == .seeking and self.after_seek == .play))
+                .play
+            else
+                .pause;
             self.scrubbed_to = null;
         } else if (tr.prev.contains(me.p)) {
             self.stepChapter(-1);
         } else if (tr.next.contains(me.p)) {
             self.stepChapter(1);
+        } else if (tr.revert.contains(me.p)) {
+            e.handle(@src(), wd);
+            self.revert();
+            return true;
         } else if (tr.close.contains(me.p)) {
             e.handle(@src(), wd);
             self.close();
@@ -965,11 +1104,11 @@ fn claimCursor(self: *Player) void {
     const tr = &self.transport;
     if (tr.scrub != null) return dvui.cursorSet(.hand);
     if (tr.pointer) |p| {
-        if (tr.tab.contains(p)) return dvui.cursorSet(.hand);
+        if (tr.tab.contains(p) or tr.revert.contains(p)) return dvui.cursorSet(.hand);
         if (tr.rest) |d| if (d.contains(p)) return dvui.cursorSet(.hand);
         if (tr.bar) |bar| {
             if (bar.contains(p)) {
-                for ([_]dvui.Rect.Physical{ tr.play, tr.prev, tr.next, tr.track, tr.close }) |r| {
+                for ([_]dvui.Rect.Physical{ tr.play, tr.prev, tr.next, tr.track, tr.close, tr.revert }) |r| {
                     if (r.contains(p)) return dvui.cursorSet(.hand);
                 }
                 return dvui.cursorSet(.arrow);
@@ -995,7 +1134,7 @@ const sink_vtable: Sequencer.Sink.VTable = .{
     .command = command,
     .keyframe = keyframe,
     .holds = holds,
-    .timedOut = timedOut,
+    .failed = failed,
     .step = step,
     .still = targetStill,
 };
@@ -1006,7 +1145,7 @@ fn targetStill(ctx: *anyopaque, target: Tape.Target) bool {
     const self = from(ctx);
     // Untagged, it is the window's own coordinates, which go nowhere.
     if (self.state != .seeking or target.tag.len == 0) return true;
-    const pt = Input.targetPoint(target) orelse {
+    const pt = Input.targetPoint(self.stage, target) orelse {
         self.aiming = null;
         return true;
     };
@@ -1028,8 +1167,8 @@ fn from(ctx: *anyopaque) *Player {
     return @ptrCast(@alignCast(ctx));
 }
 
-fn locate(_: *anyopaque, target: Tape.Target) ?Sequencer.Point {
-    return Input.targetPoint(target);
+fn locate(ctx: *anyopaque, target: Tape.Target) ?Sequencer.Point {
+    return Input.targetPoint(from(ctx).stage, target);
 }
 
 fn moveTo(_: *anyopaque, pt: Sequencer.Point) void {
@@ -1074,16 +1213,37 @@ fn keyframe(ctx: *anyopaque, kf: *const Tape.Keyframe) void {
 }
 
 fn holds(ctx: *anyopaque, until: Tape.Until) bool {
-    return Input.tagHolds(until) orelse from(ctx).stage.idle();
+    return Input.tagHolds(from(ctx).stage, until) orelse from(ctx).stage.idle();
 }
 
-fn timedOut(ctx: *anyopaque, until: Tape.Until) void {
-    from(ctx).timeouts += 1;
-    const name = if (from(ctx).tape()) |t| t.name else "?";
-    switch (until) {
-        .idle => dvui.log.warn("demo '{s}': gave up waiting for the app to settle", .{name}),
-        .shown => |tag| dvui.log.warn("demo '{s}': gave up waiting for '{s}' to be drawn", .{ name, tag }),
-        .gone => |tag| dvui.log.warn("demo '{s}': gave up waiting for '{s}' to go", .{ name, tag }),
+fn failed(ctx: *anyopaque, failure: Sequencer.Failure) void {
+    const self = from(ctx);
+    self.timeouts += 1;
+    const name = if (self.tape()) |t| t.name else "?";
+    const at = if (self.tape()) |t| t.ops[failure.op].at else 0;
+    switch (failure.what) {
+        .wait => |until| switch (until) {
+            .idle => dvui.log.warn(
+                "demo '{s}': gave up waiting for the app to settle (op {d}, {d} ms); " ++
+                    "skipping {d} ops to the next chapter",
+                .{ name, failure.op, at, failure.skipped },
+            ),
+            .shown => |tag| dvui.log.warn(
+                "demo '{s}': gave up waiting for '{s}' to be drawn (op {d}, {d} ms); " ++
+                    "skipping {d} ops to the next chapter",
+                .{ name, tag, failure.op, at, failure.skipped },
+            ),
+            .gone => |tag| dvui.log.warn(
+                "demo '{s}': gave up waiting for '{s}' to go (op {d}, {d} ms); " ++
+                    "skipping {d} ops to the next chapter",
+                .{ name, tag, failure.op, at, failure.skipped },
+            ),
+        },
+        .target => |t| dvui.log.warn(
+            "demo '{s}': '{s}' was never drawn to move to (op {d}, {d} ms); " ++
+                "skipping {d} ops to the next chapter",
+            .{ name, t.tag, failure.op, at, failure.skipped },
+        ),
     }
 }
 
@@ -1092,4 +1252,36 @@ fn timedOut(ctx: *anyopaque, until: Tape.Until) void {
 pub fn pointerShown(self: *const Player, fade_ms: f64) f32 {
     const t = self.tape() orelse return 1;
     return t.pointerShown(self.seq.cursor, self.seq.now, fade_ms);
+}
+
+test "the speed slider snaps to the nearest notch and clamps past its ends" {
+    const last = Sequencer.speeds.len - 1;
+    const tr: Transport = .{ .speed_line = .{ .x = 100, .y = 0, .w = 60, .h = 10 } };
+    try std.testing.expectEqual(@as(usize, 0), tr.speedAt(100));
+    try std.testing.expectEqual(@as(usize, 0), tr.speedAt(-50));
+    try std.testing.expectEqual(last, tr.speedAt(160));
+    try std.testing.expectEqual(last, tr.speedAt(900));
+    // The middle of the line is the middle notch; a hair off a notch snaps to it.
+    try std.testing.expectEqual(last / 2, tr.speedAt(130));
+    const notch = 60.0 / @as(f32, @floatFromInt(last));
+    try std.testing.expectEqual(@as(usize, 1), tr.speedAt(100 + notch * 1.2));
+    // Without a line there is nothing to land on.
+    try std.testing.expectEqual(@as(usize, 0), (Transport{}).speedAt(130));
+}
+
+test "a speed drag does not outlive the bar it began on" {
+    const bar: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 10, .h = 10 };
+    var tr: Transport = .{ .bar = bar, .speed_drag = true };
+    tr.dropStaleDrag();
+    try std.testing.expect(tr.speed_drag);
+    tr.closing = true;
+    tr.dropStaleDrag();
+    try std.testing.expect(!tr.speed_drag);
+    tr = .{ .bar = bar, .tucked = true, .speed_drag = true };
+    tr.dropStaleDrag();
+    try std.testing.expect(!tr.speed_drag);
+    tr = .{ .speed_drag = true, .speed_focus = true };
+    tr.dropStaleDrag();
+    try std.testing.expect(!tr.speed_drag);
+    try std.testing.expect(!tr.speed_focus);
 }

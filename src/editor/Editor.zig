@@ -67,6 +67,7 @@ const PluginManager = @import("app").store.Manager;
 pub const FilesService = @import("FilesService.zig");
 const SettingsTree = @import("SettingsTree.zig");
 const OutputPanel = @import("OutputPanel.zig");
+pub const Chrome = @import("Chrome.zig");
 const SettingsPluginsZon = @import("app").settings.PluginsZon;
 const file_glyphs = @import("file_glyphs.zig");
 const SettingsWatcher = @import("app").watch.SettingsWatcher;
@@ -88,6 +89,7 @@ pub const Infobar = @import("Infobar.zig");
 pub const Menu = @import("Menu.zig");
 /// Fizzy's own shape. A consumer that wants another one passes `-Dapp-layout=`.
 const fizzy_layout = @import("layout.zig");
+const mobile_layout = @import("layout_mobile.zig");
 pub const Layout = @import("app").layout.Layout;
 pub const Region = @import("app").layout.Region;
 const AppInfo = @import("app").AppInfo;
@@ -198,6 +200,10 @@ last_titlebar_color: dvui.Color,
 sidebar: Sidebar,
 
 infobar: Infobar,
+
+/// The frame of fizzy's shape this build keeps. A field and not a `comptime` read so a test can
+/// draw the shape either way.
+chrome: Chrome = .configured,
 
 /// Whether a text-input widget held keyboard focus at the end of the last frame.
 ///
@@ -493,8 +499,6 @@ pub fn init(
         }
     }
 
-    // Save-queue worker is owned by the pixel-art plugin (`initPlugin` in `postInit`).
-
     { // Setup themes
         var fizzy_dark = dvui.themeGet();
         fizzy_dark.embedded_fonts = embedded_fonts;
@@ -525,8 +529,12 @@ pub fn init(
             .text = fizzy_dark.window.fill,
         };
 
+        // Bright enough to read on the window and control fills (5.4:1 fill, 6.6:1 text on the
+        // window; an icon needs 3:1, text 4.5:1). `.text` is named because the fallback is the
+        // content text, which is not red.
         fizzy_dark.err = .{
-            .fill = .{ .r = 109, .g = 35, .b = 54, .a = 255 },
+            .fill = .{ .r = 255, .g = 85, .b = 95, .a = 255 },
+            .text = .{ .r = 255, .g = 120, .b = 125, .a = 255 },
         };
 
         // theme.content
@@ -563,8 +571,10 @@ pub fn init(
             .border = .{ .r = 47, .g = 179, .b = 135, .a = 255 },
             .text = .{ .r = 58, .g = 10, .b = 26, .a = 255 },
         };
+        // Pale enough to read as red on red: the fill is 6.9:1 on the window and 3.9:1 on the
+        // content fill; the text colour is 11.8:1 on the window.
         strawberry.err = .{
-            .fill = .{ .r = 199, .g = 17, .b = 20, .a = 255 },
+            .fill = .{ .r = 255, .g = 160, .b = 165, .a = 255 },
             .text = .{ .r = 255, .g = 238, .b = 228, .a = 255 },
         };
 
@@ -597,8 +607,10 @@ pub fn init(
             .text = fizzy_light.window.fill,
         };
 
+        // Darker than the dark theme's, against the light window (5.5:1 fill, 6.6:1 text).
         fizzy_light.err = .{
-            .fill = .{ .r = 109, .g = 35, .b = 54, .a = 255 },
+            .fill = .{ .r = 190, .g = 25, .b = 45, .a = 255 },
+            .text = .{ .r = 170, .g = 15, .b = 35, .a = 255 },
         };
 
         // theme.content
@@ -834,7 +846,7 @@ pub fn loadUserPlugins(editor: *Editor, config_folder: []const u8) void {
                 dvui.log.info("user plugin '{s}': already loaded as a built-in; skipped", .{plugin_id});
             } else {
                 dvui.log.err("user plugin '{s}': id already registered by a built-in; skipped", .{plugin_id});
-                const probe = PluginLoader.probeVersionInfo(path);
+                const probe = PluginLoader.probeVersionInfo(editor.app.gpa, path);
                 editor.app.recordPluginFailure(plugin_id, "id already registered by a built-in plugin", null, if (probe) |info| info.plugin_version else null, .of(path));
             }
             editor.app.gpa.free(path);
@@ -928,8 +940,8 @@ fn unloadPluginLibs(editor: *Editor) void {
 
 // ---- runtime plugin lifecycle (store: install / enable / disable / update) ---------
 //
-// Only dylib-loaded *user* plugins are managed here. Bundled built-ins (pixi/workbench/
-// code) ship in the app and are never unloaded, even though they also appear in
+// Only dylib-loaded *user* plugins are managed here. Bundled built-ins (workbench,
+// text, …) ship in the app and are never unloaded, even though they also appear in
 // `loaded_plugin_libs` when loaded from their bundled dylibs.
 
 /// True when `id` names one of the bundled built-ins (ships in the app, must never be
@@ -1613,7 +1625,10 @@ pub fn loadWebPlugin(editor: *Editor, id: []const u8, url: []const u8, sha256: [
 fn beginWebPluginLoad(editor: *Editor, id: []const u8, url: []const u8, sha256: []const u8, replace: bool) WebLoadError!void {
     // Two requests for one id before the first lands (the page's remembered list and a
     // `?plugin=` of the same id, say) would register it twice; the second one waits for nothing.
-    // The first one's `arrived` reports for both, so the store's spinner still ends.
+    // The first one's `arrived` reports for both, so the store's spinner still ends: every
+    // request ends in exactly one `arrived` (the page's fetches have a deadline, `fizzy.js`'s
+    // `fetchPluginBytes`, and its `.catch` reports a failure), and `arrived` settles the store's
+    // row by id, so this early return cannot leave a row on "Updating…".
     if (web_loads_in_flight.contains(id)) return;
     const gpa = editor.app.gpa;
     try web_loads_in_flight.put(gpa, try gpa.dupe(u8, id), {});
@@ -1636,10 +1651,12 @@ const WebPluginRequest = struct {
         const editor = req.editor;
         const gpa = editor.app.gpa;
         var registered = false;
+        // What the update window shows beside Retry; each refusal below sets it.
+        var why: []const u8 = "the plugin did not load";
         defer {
             if (web_loads_in_flight.fetchRemove(req.id)) |kv| gpa.free(kv.key);
             if (!registered) {
-                PluginStore.webLoadFailed(req.id);
+                PluginStore.webLoadFailed(req.id, why);
                 _ = takeWebFileTypePrompt(gpa, req.id);
             }
             gpa.free(req.id);
@@ -1649,6 +1666,7 @@ const WebPluginRequest = struct {
         const lib = arrival.lib orelse {
             dvui.log.err("web plugin '{s}' ({s}): the page could not load it", .{ req.id, req.url });
             req.failed("the page could not fetch or link the plugin's module (offline, a changed download, or not a plugin)", null);
+            why = if (arrival.why.len != 0) arrival.why else "could not fetch or link the module";
             gpa.free(req.url);
             return;
         };
@@ -1658,6 +1676,7 @@ const WebPluginRequest = struct {
         const ready = PluginLoader.prepare(req.url, req.id, lib) catch |err| {
             dvui.log.err("web plugin '{s}' ({s}): refused: {s}", .{ req.id, req.url, @errorName(err) });
             req.failed(App.pluginLoadFailureReason(err), lib);
+            why = App.pluginLoadFailureReason(err);
             gpa.free(req.url);
             return;
         };
@@ -1669,6 +1688,7 @@ const WebPluginRequest = struct {
             // the user nothing.
             editor.unloadPlugin(req.id, .{}) catch |err| {
                 dvui.log.err("web plugin '{s}': cannot take over: {s}", .{ req.id, @errorName(err) });
+                why = "could not hand over from the running build (unsaved documents?)";
                 gpa.free(req.url);
                 return;
             };
@@ -1681,6 +1701,7 @@ const WebPluginRequest = struct {
         }) catch |err| {
             dvui.log.err("web plugin '{s}' ({s}): register failed: {s}", .{ req.id, req.url, @errorName(err) });
             req.failed(App.pluginLoadFailureReason(err), lib);
+            why = App.pluginLoadFailureReason(err);
             gpa.free(req.url);
             return;
         };
@@ -1804,7 +1825,7 @@ export fn FizzyWebShowInRoot(path_ptr: [*]const u8, path_len: usize) void {
     if (relative.len == 0) return;
     const full = editor.app.gpa.print("{s}/{s}", .{ std.mem.trimEnd(u8, root, "/"), relative }) catch return;
     // Not opened here: the page can call before the app has drawn a frame (a tab opened in the
-    // background, a phone slow to its first frame), when there are no places yet to open it in
+    // background, a mobile device slow to its first frame), when there are no places yet to open it in
     // or to close round it. The first frame that has them does it (`processPendingShow`).
     if (editor.pending_show) |old_path| editor.app.gpa.free(old_path);
     editor.pending_show = full;
@@ -2298,13 +2319,15 @@ pub fn postInit(editor: *Editor) !void {
     // even with no document open, since it's a diagnostic view, not a per-file one. Before the
     // plugins, so it is the bottom panel's first view and a plugin's (the dashboard, a terminal)
     // comes after it: a region shows its first view until someone picks another.
-    try editor.app.host.registerSurface(.{
-        .id = "fizzy.output",
-        .title = "Output",
-        .keywords = sdk.keywords.ide.panel,
-        .persistent = true,
-        .draw = OutputPanel.draw,
-    });
+    if (editor.chrome.panel) {
+        try editor.app.host.registerSurface(.{
+            .id = "fizzy.output",
+            .title = "Output",
+            .keywords = sdk.keywords.ide.panel,
+            .persistent = true,
+            .draw = OutputPanel.draw,
+        });
+    }
 
     inline for (bundled_plugins) |m| {
         const extra: ?*anyopaque = if (comptime std.mem.eql(u8, m.plugin_id, "workbench")) @ptrCast(&editor.workbench) else null;
@@ -2954,7 +2977,7 @@ pub fn insertOpenDoc(editor: *Editor, doc_buf: *anyopaque, owner: *sdk.Plugin, i
 /// How many steps `doc`'s owner keeps of its history, for its grip's fill: the history limit
 /// counts its entries, not the track's steps (each undo, redo and joined step its own). Asked of the
 /// owner only when the track moved; 0 for a document not recorded, whose grip is plain.
-fn keptSteps(ds: *DocSurface, doc: sdk.DocHandle, recorded: anytype) usize {
+fn keptSteps(ds: *DocSurface, doc: sdk.DocHandle, recorded: ?*const @import("app").Tracks.Track) usize {
     const track_steps = if (recorded) |tr| tr.steps.items.len else return 0;
     if (ds.kept_at != track_steps) {
         ds.kept_at = track_steps;
@@ -2990,9 +3013,6 @@ fn registerDocSurface(editor: *Editor, doc: sdk.DocHandle) !void {
     });
     // The owner's own name for it, when it has one, copied in (`Host.documentTitleChanged`).
     editor.app.host.documentTitleChanged(doc);
-    // One of the person's, set aside while a demo plays (made again by a rename, or landing in a
-    // pane of theirs): hidden too.
-    if (!editor.demo.ownsDocument(doc)) editor.app.host.setSurfaceHidden(ds.id, true);
 }
 
 fn unregisterDocSurface(editor: *Editor, doc_id: u64) void {
@@ -3183,9 +3203,9 @@ fn drawDocSurface(ctx: ?*anyopaque) anyerror!dvui.App.Result {
     const recorded = if (editor.app.tracks) |*t| t.trackOf(doc.id) else null;
     if (recorded != null) {
         const pane = canvas.data().borderRectScale().r;
-        // Above the bar as it stands, its strip and the feed over it included.
-        const under = if (ds.transport.place(pane, dvui.frameTimeNS())) |bar| pane.y + pane.h - bar.y + 40 * dvui.windowRectScale().s else 0;
-        ds.frames.take(editor.app.gpa, pane, @max(76 * dvui.windowRectScale().s, under), @import("app").HistoryTransport.stripPixels(pane));
+        // Above where the bar can reach, whether or not it shows or its strip is open: a
+        // size that followed the bar would make each kept picture another view of the pane.
+        ds.frames.take(editor.app.gpa, pane, @import("app").HistoryTransport.cover * dvui.windowRectScale().s, @import("app").HistoryTransport.stripPixels(pane));
     }
 
     const focus_before = dvui.lastFocusedIdInFrame();
@@ -3628,6 +3648,43 @@ pub fn markWindowRatiosDirty(editor: *Editor) void {
     editor.app.layout.save_deadline_ns = fizzy.core.perf.nanoTimestamp() + Settings.autosave_timeout_ns;
 }
 
+/// Switch to the arrangement `shape` keeps in `layout.zon` (`Layout.State.shape`), when the shape
+/// drawing the window changed: a rotation or a resize across the mobile threshold. The one being
+/// left is written first if it has unsaved changes. A no-op while the shape is the same.
+///
+/// Limit: it replaces the in-memory arrangement outright, floats included, whatever else is
+/// happening. `chooseShape` is the caller that holds a Layout setting change while a demo plays;
+/// the detected form factor comes from the screen's short side, so it changes with the device and
+/// not with a resize.
+pub fn useShape(editor: *Editor, shape: []const u8) void {
+    const state = &editor.app.layout;
+    if (std.mem.eql(u8, state.shape, shape)) return;
+    if (state.dirty) editor.saveRegions();
+    state.resetLayout(editor.app.gpa);
+    // `resetLayout` is also Reset Layout, which asks the next save to clear the file's tree. A
+    // switch only empties the state in memory; what the file holds for either shape stays.
+    state.tree_cleared = false;
+    state.shape = shape;
+    state.dirty = false;
+    editor.loadSavedLayout();
+    dvui.refresh(null, @src(), null);
+}
+
+/// Hand the Layout setting to `core.platform`, where `formFactor()` (and so `Layout.form_factor`,
+/// whatever shape an app draws) reads it. Held while a demo plays: a form-factor flip replaces
+/// floats and the in-memory arrangement, which a demo's stage depends on, so it waits for the demo.
+pub fn syncLayoutMode(editor: *Editor) void {
+    if (!editor.demo.active()) fizzy.core.platform.cached_layout_mode = editor.app.settings.layout_mode;
+}
+
+/// Draw with the shape the Layout setting and the device call for. fizzy's own shapes only: an app
+/// supplying its layout chooses for itself and gets the setting through `syncLayoutMode`.
+pub fn chooseShape(editor: *Editor) void {
+    editor.syncLayoutMode();
+    const mobile = fizzy.core.platform.formFactor() == .mobile;
+    editor.useShape(if (mobile) mobile_layout.shape_key else "");
+}
+
 /// Forget extents, assignments and runtime splits, write an empty region list,
 /// and redraw. Window geometry in `layout.zon` is left alone.
 pub fn resetLayout(editor: *Editor) void {
@@ -3637,7 +3694,7 @@ pub fn resetLayout(editor: *Editor) void {
     dvui.refresh(null, @src(), null);
 }
 
-/// Hand the center region the whole viewport on a collapsed (phone / narrow web) layout: close
+/// Hand the center region the whole viewport on a collapsed (mobile / narrow web) layout: close
 /// the explorer peek and swing the bottom panel shut. Call it right after a tap has put
 /// something worth reading in the center — e.g. selecting a plugin in the store, whose detail
 /// page renders as a center provider behind the peeked-open explorer.
@@ -3894,6 +3951,7 @@ pub fn reconcileExternalSettingsChange(editor: *Editor) void {
     editor.app.settings.kept_history_gb = parsed.kept_history_gb;
     editor.app.settings.control_server = parsed.control_server;
     editor.app.settings.input_scheme = parsed.input_scheme;
+    editor.app.settings.layout_mode = parsed.layout_mode;
     editor.app.settings.plugin_update_mode = parsed.plugin_update_mode;
 
     // Re-apply the existing idempotent appliers unconditionally — cheap, and each already
@@ -4379,7 +4437,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     // How things move this frame, for every animation here and in every plugin (`core.motion`).
     // A demo replaying to a seek wants every frame to land where it is going: no motion — but the
     // glass keeps its edge, the transport's among it, scrubbed or not.
-    const playback: f32 = if (editor.demo.player.state == .playing) editor.demo.player.rate else 1;
+    const playback: f32 = if (editor.demo.player.state == .playing) editor.demo.player.seq.speed else 1;
     fizzy.core.motion.publish(editor.app.settings.motion, editor.app.settings.motion_speed, dvui.currentWindow().backend.prefersReducedMotion(), editor.demo.fast, playback);
     fizzy.core.programs.publishHost();
     // Where the main window's title bar takes presses, not the app (macOS): floating windows,
@@ -4422,6 +4480,8 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     if (editor.app.tracks) |*t| {
         t.kept_cap = @intFromFloat(@max(0, editor.app.settings.kept_history_gb) * (1 << 30));
         t.tick();
+        // A checkpoint's diff not done is carried on at the next frame's top, asleep or not.
+        if (t.due) dvui.refresh(null, @src(), null);
     }
     if (editor.share_pending) |p| {
         editor.share_pending = null;
@@ -4790,6 +4850,12 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             editor.processPendingSaveAs();
             editor.processPendingShow();
 
+            // fizzy's own shapes: a mobile device gets the mobile one (`Layout.form_factor` is this same
+            // value). An app supplying its own layout chooses for itself, and keeps
+            // `layout.zon`'s first arrangement. Before the `Layout` is made over the state, since
+            // switching replaces what is in it.
+            const own_shapes = comptime !build_opts.has_app_layout;
+            if (own_shapes) editor.chooseShape() else editor.syncLayoutMode();
             var layout: Layout = .init(&editor.app.host, &editor.app.layout, editor.app.gpa, editor.app.arena.allocator());
             // Published for the duration of the shape, so a plugin drawing inside a region can
             // declare one of its own through `Host.region`. Cleared below: a `*Layout` that
@@ -4805,6 +4871,8 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             layout.ctx = ctx;
             const shell_result = if (comptime build_opts.has_app_layout)
                 @import("app_layout").layout(ctx, &layout)
+            else if (fizzy.core.platform.formFactor() == .mobile)
+                mobile_layout.layout(ctx, &layout)
             else
                 fizzy_layout.layout(ctx, &layout);
 
@@ -4815,6 +4883,9 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             // `regionFor` answered from the previous frame, which is what lets a command
             // dispatched between frames drive a region (see `Layout.State.regions`).
             editor.app.layout.publishRegions();
+            // The shape's walk of the split trees is over (only `Region` holds their nodes, and
+            // nothing after this does): places dropped during it are freed now, not under the walk.
+            editor.app.layout.splits.reap(editor.app.gpa);
             // Over every place: a drag's join spans two of them.
             layout.drawDragOverlay();
             // The picker photographs surfaces that drew nowhere this frame, and floats above
@@ -4911,6 +4982,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         tr.covered_n = 0;
         for (Popout.windowsShown(&buf)) |w| {
             tr.covered[tr.covered_n] = w.part;
+            tr.covered_main[tr.covered_n] = w.over;
             tr.covered_n += 1;
         }
     }
@@ -5052,15 +5124,40 @@ fn saveRegions(editor: *Editor) void {
     const gpa = editor.app.gpa;
     const regions = editor.collectSavedRegions(gpa);
     defer gpa.free(regions);
-    fizzy.backend.saveRegions(editor.app.config_folder, regions);
+    // A demo's documents live in memory (`demo://`) and a kept demo (`Demo.keep`) leaves them in
+    // the layout: they are not written, for no later launch could open them.
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    for (regions) |*r| {
+        inline for (.{ &r.surfaces, &r.order }) |field| if (field.*) |ids| {
+            if (withoutSessionMounts(arena.allocator(), ids)) |kept| field.* = kept;
+        };
+    }
+    fizzy.backend.saveRegions(editor.app.config_folder, editor.app.layout.shape, regions);
     if (editor.app.layout.dock) |*d| {
         const snap = d.snapshot(gpa) catch return;
         defer snap.deinit(gpa);
-        fizzy.backend.saveTree(editor.app.config_folder, snap);
+        fizzy.backend.saveTree(editor.app.config_folder, editor.app.layout.shape, snap);
     } else if (editor.app.layout.tree_cleared) {
-        fizzy.backend.saveTree(editor.app.config_folder, null);
+        fizzy.backend.saveTree(editor.app.config_folder, editor.app.layout.shape, null);
         editor.app.layout.tree_cleared = false;
     }
+}
+
+/// `ids` less the documents of a mount only a demo or a recording makes, or null when it holds none.
+fn withoutSessionMounts(arena: std.mem.Allocator, ids: []const []const u8) ?[]const []const u8 {
+    const session = struct {
+        fn is(id: []const u8) bool {
+            const path = sdk.document.pathOfSurfaceId(id) orelse return false;
+            return std.mem.startsWith(u8, path, "demo://") or std.mem.startsWith(u8, path, "tape://");
+        }
+    }.is;
+    for (ids) |id| if (session(id)) {
+        var out: std.ArrayList([]const u8) = .empty;
+        for (ids) |other| if (!session(other)) out.append(arena, other) catch return null;
+        return out.items;
+    };
+    return null;
 }
 
 /// Every place `layout.zon` should remember, as it stands: extents, assignments, splits,
@@ -5093,6 +5190,8 @@ pub fn collectSavedRegions(editor: *Editor, gpa: std.mem.Allocator) []fizzy.back
             if (!gop.found_existing) gop.value_ptr.* = .{ .name = l.name };
             gop.value_ptr.parent = l.parent;
             gop.value_ptr.from = @tagName(l.side);
+            gop.value_ptr.adaptive = if (l.adaptive) true else null;
+            gop.value_ptr.share = l.share;
         }
     }
     {
@@ -5118,10 +5217,10 @@ pub fn collectSavedRegions(editor: *Editor, gpa: std.mem.Allocator) []fizzy.back
 /// top of the layout as it stands. At launch, and when a demo gives the window back.
 pub fn loadSavedLayout(editor: *Editor) void {
     const gpa = editor.app.gpa;
-    const saved = fizzy.backend.loadRegions(gpa, editor.app.config_folder);
+    const saved = fizzy.backend.loadRegions(gpa, editor.app.config_folder, editor.app.layout.shape);
     defer fizzy.backend.freeRegions(gpa, saved);
     editor.applySavedRegions(saved);
-    if (fizzy.backend.loadTree(gpa, editor.app.config_folder)) |d| {
+    if (fizzy.backend.loadTree(gpa, editor.app.config_folder, editor.app.layout.shape)) |d| {
         editor.app.layout.pending_dock = d;
     }
 }
@@ -5191,7 +5290,11 @@ fn loadRuntimeSplits(state: *Layout.State, gpa: std.mem.Allocator, saved: []cons
     for (order) |r| {
         const parent = r.parent orelse continue;
         const side = Layout.State.SplitTree.parseSide(r.from orelse continue) orelse continue;
-        _ = state.splits.split(gpa, intern.go, parent, side, r.extent orelse 0, r.name);
+        const made = state.splits.split(gpa, intern.go, parent, side, r.extent orelse 0, r.name);
+        if (made != null and (r.adaptive orelse false)) {
+            _ = state.splits.markAdaptive(r.name);
+            if (r.share) |share| _ = state.splits.setShare(r.name, share);
+        }
     }
 }
 
@@ -7208,7 +7311,7 @@ pub fn deinit(editor: *Editor) !void {
     // Owned outright rather than cached by dvui, so it has to be released explicitly.
     editor.app.layout.center_transition.discard();
     editor.app.layout.center_prev_id = null;
-    editor.app.layout.view_drag.discard();
+    editor.app.layout.view_drag.discard(editor.app.gpa);
     editor.app.layout.deinitSwaps(editor.app.gpa);
     editor.app.layout.regions.deinit(editor.app.gpa);
     editor.preview_docs.deinit(editor.app.gpa);
@@ -7248,6 +7351,7 @@ pub fn deinit(editor: *Editor) !void {
     editor.checkpoint.deinit(editor);
     // Rebuilds still opening: their threads joined, what they opened dropped unregistered.
     editor.plugin_reloads.deinit(editor.app.gpa);
+    if (comptime builtin.target.cpu.arch != .wasm32) PluginLoader.deinitOpenedPaths(editor.app.gpa);
     if (editor.session) |*kept| kept.deinit();
     // Before the plugin `deinit` loop below: `tick` fans out into plugin vtables, and this
     // joins the thread that feeds it.
@@ -7435,6 +7539,22 @@ fn pmSelf(ctx: *anyopaque) *Editor {
     return @ptrCast(@alignCast(ctx));
 }
 
+/// The store's `PluginManager.Error` for what fizzy's own code raised; the cause of `Failed` is logged.
+fn pmError(err: anyerror) PluginManager.Error {
+    return PluginManager.preserved(err) orelse {
+        dvui.log.err("plugin action failed: {s}", .{@errorName(err)});
+        return error.Failed;
+    };
+}
+
+/// The call sites return different `void` error unions (the loader's, the installer's,
+/// `Allocator.Error`), and a named type for them would be `anyerror!void`, which says less;
+/// each is only `catch`ed and translated by `pmError`.
+// anytype: differing void error unions, each only caught and translated
+fn pmResult(result: anytype) PluginManager.Error!void {
+    result catch |err| return pmError(err);
+}
+
 const plugin_manager_vtable: PluginManager.VTable = .{
     .isDisabled = struct {
         fn f(ctx: *anyopaque, id: []const u8) bool {
@@ -7452,8 +7572,8 @@ const plugin_manager_vtable: PluginManager.VTable = .{
         }
     }.f,
     .setAutoUpdate = struct {
-        fn f(ctx: *anyopaque, id: []const u8, on: bool) anyerror!void {
-            return pmSelf(ctx).setPluginAutoUpdate(id, on);
+        fn f(ctx: *anyopaque, id: []const u8, on: bool) PluginManager.Error!void {
+            return pmResult(pmSelf(ctx).setPluginAutoUpdate(id, on));
         }
     }.f,
     .updateMode = struct {
@@ -7499,49 +7619,49 @@ const plugin_manager_vtable: PluginManager.VTable = .{
         }
     }.f,
     .install = struct {
-        fn f(ctx: *anyopaque, id: []const u8) anyerror!void {
-            return pmSelf(ctx).installAndLoadPlugin(id);
+        fn f(ctx: *anyopaque, id: []const u8) PluginManager.Error!void {
+            return pmResult(pmSelf(ctx).installAndLoadPlugin(id));
         }
     }.f,
     .installFromUrl = struct {
-        fn f(ctx: *anyopaque, id: []const u8, url: []const u8, sha256: []const u8) anyerror!void {
+        fn f(ctx: *anyopaque, id: []const u8, url: []const u8, sha256: []const u8) PluginManager.Error!void {
             const editor = pmSelf(ctx);
             // Installing is choosing it, as on the desktop (`installAndLoadPlugin`) — and, as
             // there, an install is an arrival, so fizzy asks about its file types once it has
             // loaded. Not `isPluginUndecided`: that is a drop-in found on disk and never
             // decided, which a plugin coming from the store never is, so the web never asked.
             editor.app.untrackDisabledPlugin(id);
-            try editor.setPluginEnabledPersisted(id, true);
+            editor.setPluginEnabledPersisted(id, true) catch |err| return pmError(err);
             queueWebFileTypePrompt(editor.app.gpa, id);
-            return editor.loadWebPlugin(id, url, sha256);
+            return pmResult(editor.loadWebPlugin(id, url, sha256));
         }
     }.f,
     .loadFromUrl = struct {
-        fn f(ctx: *anyopaque, id: []const u8, url: []const u8, sha256: []const u8) anyerror!void {
+        fn f(ctx: *anyopaque, id: []const u8, url: []const u8, sha256: []const u8) PluginManager.Error!void {
             const editor = pmSelf(ctx);
             // For the visit: the arrival neither remembers it nor asks about its file types.
-            if (!web_visit_only.contains(id)) web_visit_only.put(editor.app.gpa, try editor.app.gpa.dupe(u8, id), {}) catch {};
-            return editor.loadWebPlugin(id, url, sha256);
+            if (!web_visit_only.contains(id)) web_visit_only.put(editor.app.gpa, editor.app.gpa.dupe(u8, id) catch return error.OutOfMemory, {}) catch {};
+            return pmResult(editor.loadWebPlugin(id, url, sha256));
         }
     }.f,
     .updateFromUrl = struct {
-        fn f(ctx: *anyopaque, id: []const u8, url: []const u8, sha256: []const u8) anyerror!void {
-            return pmSelf(ctx).updateWebPlugin(id, url, sha256);
+        fn f(ctx: *anyopaque, id: []const u8, url: []const u8, sha256: []const u8) PluginManager.Error!void {
+            return pmResult(pmSelf(ctx).updateWebPlugin(id, url, sha256));
         }
     }.f,
     .update = struct {
-        fn f(ctx: *anyopaque, id: []const u8, force: bool) anyerror!void {
-            return pmSelf(ctx).updatePlugin(id, force);
+        fn f(ctx: *anyopaque, id: []const u8, force: bool) PluginManager.Error!void {
+            return pmResult(pmSelf(ctx).updatePlugin(id, force));
         }
     }.f,
     .uninstall = struct {
-        fn f(ctx: *anyopaque, id: []const u8, force: bool) anyerror!void {
-            return pmSelf(ctx).uninstallPlugin(id, force);
+        fn f(ctx: *anyopaque, id: []const u8, force: bool) PluginManager.Error!void {
+            return pmResult(pmSelf(ctx).uninstallPlugin(id, force));
         }
     }.f,
     .setEnabled = struct {
-        fn f(ctx: *anyopaque, id: []const u8, enabled: bool, force: bool) anyerror!void {
-            return pmSelf(ctx).setPluginEnabled(id, enabled, force);
+        fn f(ctx: *anyopaque, id: []const u8, enabled: bool, force: bool) PluginManager.Error!void {
+            return pmResult(pmSelf(ctx).setPluginEnabled(id, enabled, force));
         }
     }.f,
     .reconcileDiscovered = struct {

@@ -50,6 +50,9 @@ tab_slot_count: usize = 0,
 /// Where in this pane's assignment a tab carried in the app's view drag would go in, while it is
 /// over the strip — last frame's reading, the gap this frame opens for it (`offerStrip`).
 strip_insert: ?usize = null,
+/// The tab (`tab_key`) last seen on the strip's visible part, so the strip scrolls to the selected
+/// tab when the selection moves and not again while the person scrolls it by hand.
+strip_shown: ?usize = null,
 /// The gap drawn this frame: where it starts along the strip and how wide it is, physical.
 /// `insertIndexAt` reads the tabs as if it were not there, so the gap does not chase itself.
 gap_x: f32 = 0,
@@ -155,6 +158,10 @@ pub fn draw(self: *Workspace) !dvui.App.Result {
     self.active = if (selected) |s| documentOf(s) else null;
     const pane_r = pane_box.rectScale().r;
     self.pane_rect_physical = pane_r;
+    // The person's pane, when it has the room for an open beside to split it: a tape that drops a
+    // tab on the edge asks for this first, or skips the drop (`core.placement`).
+    if (core.anchor.wanted() and runtime.workbench().open_workspace_grouping == self.grouping and
+        runtime.workbench().besideEdge(self.grouping) != null) core.anchor.mark(pane_box, "workbench.beside-room", .{});
 
     if (tabs.len > 0) {
         self.dropSnapshot();
@@ -471,6 +478,24 @@ fn drawTabs(self: *Workspace, region: sdk.Host.Region, tabs: []const *sdk.Surfac
             }
         }
 
+        // A selection that moved off the strip's visible part (a new pane's tabs, a phone's narrow
+        // strip) is brought on. A tab the strip has not yet grown to reach is asked again until it
+        // shows, and once shown is left to the person's own scrolling.
+        if (selected_index == i and self.strip_shown != tab_key) {
+            const shown = scroll_area.data().borderRectScale().r;
+            var tab = slot.data().borderRectScale().r;
+            // A tab still opening out from nothing has no width to be seen by: the next frame.
+            if (tab.w >= 1) {
+                // One wider than the strip is shown by its leading edge, the part a name starts in.
+                tab.w = @min(tab.w, shown.w);
+                if (tab.x >= shown.x - 1 and tab.x + tab.w <= shown.x + shown.w + 1) {
+                    self.strip_shown = tab_key;
+                } else {
+                    dvui.scrollTo(.{ .screen_rect = tab });
+                }
+            }
+        }
+
         if (is_selected) {
             core.draw.drawTabActiveIndicator(
                 slot.data().borderRectScale(),
@@ -565,7 +590,7 @@ pub fn addTab(self: *Workspace, id: []const u8, focus: bool) void {
     self.expecting = false;
     var buf: [32]u8 = undefined;
     const arena = runtime.host().arena();
-    var ids: std.ArrayListUnmanaged([]const u8) = .empty;
+    var ids: std.ArrayList([]const u8) = .empty;
     if (runtime.host().assignedSurfaces(name(&buf, self.grouping))) |existing| {
         for (existing) |e| {
             if (std.mem.eql(u8, e, id)) {
@@ -584,7 +609,7 @@ pub fn removeTab(self: *Workspace, id: []const u8) void {
     var buf: [32]u8 = undefined;
     const existing = runtime.host().assignedSurfaces(name(&buf, self.grouping)) orelse return;
     const arena = runtime.host().arena();
-    var ids: std.ArrayListUnmanaged([]const u8) = .empty;
+    var ids: std.ArrayList([]const u8) = .empty;
     var found = false;
     for (existing) |e| {
         if (std.mem.eql(u8, e, id)) {
@@ -601,7 +626,7 @@ pub fn removeTabsForPath(self: *Workspace, path: []const u8) bool {
     var buf: [32]u8 = undefined;
     const existing = runtime.host().assignedSurfaces(name(&buf, self.grouping)) orelse return false;
     const arena = runtime.host().arena();
-    var ids: std.ArrayListUnmanaged([]const u8) = .empty;
+    var ids: std.ArrayList([]const u8) = .empty;
     var found = false;
     for (existing) |e| {
         if (sdk.document.pathOfSurfaceId(e)) |p| if (std.mem.eql(u8, p, path)) {
@@ -708,7 +733,7 @@ pub fn insertTab(self: *Workspace, id: []const u8, index: usize) void {
     self.expecting = false;
     var buf: [32]u8 = undefined;
     const arena = runtime.host().arena();
-    var ids: std.ArrayListUnmanaged([]const u8) = .empty;
+    var ids: std.ArrayList([]const u8) = .empty;
     var at = index;
     if (runtime.host().assignedSurfaces(name(&buf, self.grouping))) |existing| {
         for (existing, 0..) |e, k| {
@@ -745,7 +770,7 @@ pub fn paneDrop(ctx: ?*anyopaque, drop: sdk.RegionSpec.Drop) bool {
         .center => grouping,
         .edge => |side| blk: {
             const g = wb.newGroupingID();
-            wb.paneBeside(g, grouping, paneSide(side)) catch return false;
+            wb.paneBeside(g, grouping, paneSide(side), false) catch return false;
             break :blk g;
         },
     };
@@ -1174,7 +1199,7 @@ fn drawTabMenu(tabs: []const *const sdk.Surface, index: usize, doc: sdk.DocHandl
     menu.close();
 
     // Collected before any close runs: closing edits the list these indices point into.
-    var ids: std.ArrayListUnmanaged(u64) = .empty;
+    var ids: std.ArrayList(u64) = .empty;
     const arena = host.arena();
     for (tabs, 0..) |surface, i| {
         const other = documentOf(surface) orelse continue;

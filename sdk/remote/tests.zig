@@ -11,15 +11,40 @@ fn sample(comptime tag: message.Type) Message {
     const rect: message.Rect = .{ .x = 1, .y = 2.5, .w = 3, .h = -4 };
     const mods: message.Mods = .{ .shift = true, .super = true };
     return switch (tag) {
-        .hello => .{ .hello = .{ .version_min = 1, .version_max = 3, .app_id = "it.fizzy", .app_version = "0.9.1", .tiers_offered = .{ .draw_list = true, .shared_texture = true }, .tiers_wanted = .{ .draw_list = true }, .features = 0x8000_0000_0000_0001, .mode = .standalone } },
+        .hello => .{ .hello = .{
+            .version_min = 1,
+            .version_max = 3,
+            .app_id = "it.fizzy",
+            .app_version = "0.9.1",
+            .tiers_offered = .{ .draw_list = true, .shared_texture = true },
+            .tiers_wanted = .{ .draw_list = true },
+            .features = 0x8000_0000_0000_0001,
+            .mode = .standalone,
+        } },
         .bye => .{ .bye = .{ .reason = .shutdown, .text = "going away" } },
-        .create_view => .{ .create_view = .{ .view = 9, .kind = .document, .target = "/a/b.md", .width = 1920, .height = 1080, .scale = 2, .tier = .native_surface, .native_handle = 0xdead_beef_cafe } },
+        .create_view => .{ .create_view = .{
+            .view = 9,
+            .kind = .document,
+            .target = "/a/b.md",
+            .width = 1920,
+            .height = 1080,
+            .scale = 2,
+            .tier = .native_surface,
+            .native_handle = 0xdead_beef_cafe,
+        } },
         .view_created => .{ .view_created = .{ .view = 9, .tier = .shared_texture, .width = 10, .height = 20 } },
         .close_view => .{ .close_view = .{ .view = 9 } },
         .view_closed => .{ .view_closed = .{ .view = 9, .reason = .create_failed, .text = "no such region" } },
         .resize => .{ .resize = .{ .view = 9, .width = 800, .height = 600, .scale = 1.5, .rect = rect } },
         .pointer_motion => .{ .pointer_motion = .{ .view = 9, .x = 10.5, .y = -3, .mods = mods } },
-        .pointer_button => .{ .pointer_button = .{ .view = 9, .button = 2, .pressed = true, .x = 1, .y = 2, .mods = mods } },
+        .pointer_button => .{ .pointer_button = .{
+            .view = 9,
+            .button = 2,
+            .pressed = true,
+            .x = 1,
+            .y = 2,
+            .mods = mods,
+        } },
         .wheel => .{ .wheel = .{ .view = 9, .dx = 0, .dy = -120, .mods = mods } },
         .touch => .{ .touch = .{ .view = 9, .id = 4, .phase = .move, .kind = .pen, .x = 5, .y = 6, .pressure = 0.25 } },
         .key => .{ .key = .{ .view = 9, .down = true, .repeat = true, .host_code = 65, .code = 0x1e, .mods = mods } },
@@ -164,7 +189,10 @@ test "unknown types: optional skipped, required refused" {
     defer arena.deinit();
     const unknown: message.Type = @fromBackingInt(@intCast(5000));
     try t.expect(try codec.decode(arena.allocator(), .{ .type = unknown, .flags = 0, .payload = "abc" }) == null);
-    try t.expectError(error.UnknownRequired, codec.decode(arena.allocator(), .{ .type = unknown, .flags = codec.flag_required, .payload = "abc" }));
+    try t.expectError(
+        error.UnknownRequired,
+        codec.decode(arena.allocator(), .{ .type = unknown, .flags = codec.flag_required, .payload = "abc" }),
+    );
 
     // Through a stream, the skipped frame does not disturb its neighbours.
     var bytes: std.ArrayList(u8) = .empty;
@@ -208,7 +236,10 @@ test "oversize messages are refused and leave the buffer alone" {
     try codec.encode(t.allocator, &out, sample(.focus), 1024);
     const before = out.items.len;
     const big: [2000]u8 = @splat(0);
-    try t.expectError(error.FrameTooLarge, codec.encode(t.allocator, &out, .{ .text_input = .{ .view = 1, .text = &big } }, 1024));
+    try t.expectError(
+        error.FrameTooLarge,
+        codec.encode(t.allocator, &out, .{ .text_input = .{ .view = 1, .text = &big } }, 1024),
+    );
     try t.expectEqual(before, out.items.len);
 }
 
@@ -225,7 +256,8 @@ test "fuzz: random and mutated frames never crash, only error" {
         for (0..300) |_| {
             const copy = try t.allocator.dupe(u8, bytes.items);
             defer t.allocator.free(copy);
-            for (0..rnd.intRangeAtMost(usize, 1, 4)) |_| copy[8 + rnd.uintLessThan(usize, copy.len - 8 + @intFromBool(copy.len == 8))] ^= rnd.int(u8);
+            for (0..rnd.intRangeAtMost(usize, 1, 4)) |_|
+                copy[8 + rnd.uintLessThan(usize, copy.len - 8 + @intFromBool(copy.len == 8))] ^= rnd.int(u8);
             _ = arena.reset(.retain_capacity);
             _ = codec.decode(arena.allocator(), frameOf(copy)) catch {};
         }

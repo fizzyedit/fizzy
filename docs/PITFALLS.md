@@ -65,8 +65,8 @@ Three that the release builds (`zig build package`, MSVC) hit and the macOS buil
   it for `abi == .msvc`; any other MSVC exe built from this tree needs the same line.
 - **The `translate-c` tool takes `--libc=<ini>` before its `--`.** Everything after `--` goes to
   the C front end, which doesn't know the flag, so a `--libc` appended at the end is lost and the
-  MSVC headers aren't found. `build/msvc.zig` inserts it ahead of the `--`. (The deprecated
-  `addTranslateC` step has no way to pass a libc file at all; it gets the include dirs instead.)
+  MSVC headers aren't found. `build/msvc.zig` inserts it ahead of the `--`. Every translation here
+  (SDL, Velopack, dvui's) is a `translate_c` package `Translator` now, so this is the only path.
 - **sdl_zig must leave SDL's `core/linux/` out of a Windows build.** SDL lists those sources as
   generic because they compile to nothing off Linux, but `core/linux/SDL_dbus.c` includes
   `<unistd.h>` before its guard, and MSVC has no `unistd.h`. fizzyedit/sdl_zig filters them

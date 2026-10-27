@@ -21,6 +21,8 @@ const std = @import("std");
 const builtin = @import("builtin");
 const Io = std.Io;
 
+pub const Link = @import("Link.zig");
+
 /// The most a request body may hold. A command's arguments can be a whole drawing, but not this.
 pub const max_body = 64 * 1024 * 1024;
 /// The most a stream may fall behind: a client that reads no faster than events come is closed
@@ -60,19 +62,19 @@ accept_task: ?Io.Future(void) = null,
 /// Set by `start` before the accept task exists, so the task and `stop` only ever read it.
 listener: ?Io.net.Server = null,
 /// The connections being served, under `lock`, so `stop` can end their reads and wait for them.
-conns: std.ArrayListUnmanaged(*Conn) = .empty,
+conns: std.ArrayList(*Conn) = .empty,
 stopping: std.atomic.Value(bool) = .init(false),
 /// The socket file this server made, by inode: `stop` removes the path only while it is still
 /// this one, not the socket a fizzy taking over has made there since.
 socket_inode: ?Io.File.INode = null,
 /// Requests waiting for the UI thread, under `lock`.
 lock: Io.Mutex = .init,
-pending: std.ArrayListUnmanaged(*Request) = .empty,
+pending: std.ArrayList(*Request) = .empty,
 /// Requests the UI thread took and has not answered yet (a command answering in a later frame),
 /// under `lock`: `stop` answers them too.
-outstanding: std.ArrayListUnmanaged(*Request) = .empty,
+outstanding: std.ArrayList(*Request) = .empty,
 /// Connections streaming events (`publish`), under `lock`.
-streams: std.ArrayListUnmanaged(*Stream) = .empty,
+streams: std.ArrayList(*Stream) = .empty,
 /// How many: read without the lock, so a frame with no stream takes none (`streamsNaming`'s
 /// callers ask this first).
 stream_count: std.atomic.Value(usize) = .init(0),
@@ -84,7 +86,7 @@ pub const Stream = struct {
     topics: []const []const u8,
     /// Under the server's `lock`: whole SSE messages, appended by `publish`, written and emptied
     /// by the connection's thread. `gpa`-owned.
-    backlog: std.ArrayListUnmanaged(u8) = .empty,
+    backlog: std.ArrayList(u8) = .empty,
     /// It fell more than `max_backlog` behind: nothing more is buffered for it, and it ends once its
     /// write returns (at once on POSIX, where `publish` shuts the socket down) or at `stop`.
     overrun: bool = false,
@@ -157,6 +159,8 @@ pub const Request = struct {
     content_type: ?[]const u8,
     /// The `Mcp-Session-Id` header, as sent (`routes`, `mcp.Sessions`).
     mcp_session: ?[]const u8 = null,
+    /// The `Upgrade` header, as sent: what the client asks the connection to become (`/remote`).
+    upgrade: ?[]const u8 = null,
     /// The `Mcp-Session-Id` to answer with, formatted by the routes (`mcp.formatSession`).
     mcp_session_reply: ?[16]u8 = null,
     body: []const u8,
@@ -196,6 +200,15 @@ pub const Request = struct {
         self.done.set(server.io);
     }
 
+    /// Answer by handing the connection to `link` from now on (`101 Switching Protocols`, then the
+    /// peer's bytes into `link` and what the app queues on it out), from the UI thread. The link
+    /// is the app's to free once `isGone`.
+    pub fn answerUpgrade(self: *Request, server: *Server, link: *Link) void {
+        self.response = .{ .status = .switching_protocols, .upgrade = link };
+        server.settle(self);
+        self.done.set(server.io);
+    }
+
     /// Answer, from the UI thread. `body` is copied with the server's `gpa`.
     pub fn answer(self: *Request, server: *Server, status: std.http.Status, content_type: []const u8, body: []const u8) void {
         self.response = .{
@@ -210,6 +223,8 @@ pub const Request = struct {
 };
 
 pub const Response = struct {
+    /// Answered by turning the connection into `link`'s bytes (`answerUpgrade`).
+    upgrade: ?*Link = null,
     /// Answered by turning the connection into an event stream (`GET /events`): the status and
     /// body are not sent, the connection stays open and `publish` writes to it.
     stream: bool = false,
@@ -259,7 +274,7 @@ pub fn start(self: *Server) !void {
 
 /// Requests the UI thread should answer now, each of which must be answered, and how many
 /// connections stream events. On the UI thread, each frame.
-pub fn take(self: *Server, out: *std.ArrayListUnmanaged(*Request)) usize {
+pub fn take(self: *Server, out: *std.ArrayList(*Request)) usize {
     self.lock.lockUncancelable(self.io);
     defer self.lock.unlock(self.io);
     // Out of memory: left queued for the next frame, never dropped unanswered.
@@ -345,19 +360,19 @@ pub fn stop(self: *Server) void {
     self.stopping.store(true, .release);
     // The connections whose requests this answers ("fizzy is closing"): each writes it and ends.
     // Queued, or taken and still to be answered (a command answering later).
-    var answered: std.ArrayListUnmanaged(*Conn) = .empty;
+    var answered: std.ArrayList(*Conn) = .empty;
     defer answered.deinit(self.gpa);
     // Moved out whole, not copied: running out of memory here must not drop one unanswered, whose
     // task would then wait for good.
-    var queued: std.ArrayListUnmanaged(*Request) = .empty;
+    var queued: std.ArrayList(*Request) = .empty;
     defer queued.deinit(self.gpa);
-    var taken: std.ArrayListUnmanaged(*Request) = .empty;
+    var taken: std.ArrayList(*Request) = .empty;
     defer taken.deinit(self.gpa);
     {
         self.lock.lockUncancelable(self.io);
         defer self.lock.unlock(self.io);
-        std.mem.swap(std.ArrayListUnmanaged(*Request), &queued, &self.pending);
-        std.mem.swap(std.ArrayListUnmanaged(*Request), &taken, &self.outstanding);
+        std.mem.swap(std.ArrayList(*Request), &queued, &self.pending);
+        std.mem.swap(std.ArrayList(*Request), &taken, &self.outstanding);
     }
     for ([_][]const *Request{ queued.items, taken.items }) |owed| for (owed) |r| {
         answered.append(self.gpa, r.conn) catch {};
@@ -483,7 +498,8 @@ fn serve(self: *Server, conn: *Conn) void {
             .method = head.head.method,
             .target = arena.dupe(u8, head.head.target) catch return,
             .content_type = if (head.head.content_type) |t| arena.dupe(u8, t) catch return else null,
-            .mcp_session = mcpSession(&head, arena) catch return,
+            .mcp_session = headerValue(&head, arena, "mcp-session-id") catch return,
+            .upgrade = headerValue(&head, arena, "upgrade") catch return,
             .body = "",
             .conn = conn,
             .arena = arena,
@@ -507,6 +523,12 @@ fn serve(self: *Server, conn: *Conn) void {
         // into a frame that is gone.
         req.done.waitUncancelable(self.io);
         if (req.response.stream) return self.serveStream(&head, &req.stream);
+        if (req.response.upgrade) |link| {
+            self.lock.lockUncancelable(self.io);
+            conn.waiting = false;
+            self.lock.unlock(self.io);
+            return self.serveLink(link, conn.stream, &reader.interface, &writer.interface, req.upgrade orelse "");
+        }
         const body = req.response.body orelse "out of memory\n";
         defer if (req.response.body) |b| self.gpa.free(b);
         const headers = [_]std.http.Header{
@@ -527,11 +549,55 @@ fn serve(self: *Server, conn: *Conn) void {
     }
 }
 
-/// The request's `Mcp-Session-Id`, copied into `arena`, or null.
-fn mcpSession(head: *std.http.Server.Request, arena: std.mem.Allocator) error{OutOfMemory}!?[]const u8 {
+/// The request's header `name` (lowercase), copied into `arena`, or null.
+fn headerValue(head: *std.http.Server.Request, arena: std.mem.Allocator, name: []const u8) error{OutOfMemory}!?[]const u8 {
     var it = head.iterateHeaders();
-    while (it.next()) |h| if (std.ascii.eqlIgnoreCase(h.name, "mcp-session-id")) return try arena.dupe(u8, h.value);
+    while (it.next()) |h| if (std.ascii.eqlIgnoreCase(h.name, name)) return try arena.dupe(u8, h.value);
     return null;
+}
+
+/// The connection is `link`'s from here: the `101`, then what the peer sends into the link while a
+/// task of its own writes what the app queues on it. Ends when the peer goes, the app closes the
+/// link, or the server stops; the link is finished last, whichever, and not touched after.
+fn serveLink(self: *Server, link: *Link, stream: Io.net.Stream, reader: *Io.Reader, writer: *Io.Writer, token: []const u8) void {
+    defer link.finish();
+    link.lock.lockUncancelable(self.io);
+    link.stream = stream;
+    link.lock.unlock(self.io);
+    // Cleared before `finish`, under the lock `abort` shuts the socket down in: the connection
+    // closes it as soon as this returns.
+    defer {
+        link.lock.lockUncancelable(self.io);
+        link.stream = null;
+        link.lock.unlock(self.io);
+    }
+    writer.print("HTTP/1.1 101 Switching Protocols\r\nconnection: Upgrade\r\nupgrade: {s}\r\n\r\n", .{token}) catch return;
+    writer.flush() catch return;
+    var sender = self.io.concurrent(writeLink, .{ self, link, stream, writer }) catch return;
+    defer sender.cancel(self.io);
+    while (!self.stopping.load(.acquire)) {
+        const bytes = reader.peekGreedy(1) catch return;
+        link.push(bytes) catch return;
+        reader.toss(bytes.len);
+    }
+}
+
+/// Write what the app queues on `link` until it closes it or a write fails, then shut the socket
+/// down, which ends the read that `serveLink` is blocked in.
+fn writeLink(self: *Server, link: *Link, stream: Io.net.Stream, writer: *Io.Writer) void {
+    while (true) {
+        // Read first: what was queued before `close` is still written.
+        const closing = link.closing.load(.acquire);
+        if (link.drain() catch break) |bytes| {
+            defer link.gpa.free(bytes);
+            writer.writeAll(bytes) catch break;
+            writer.flush() catch break;
+            continue;
+        }
+        if (closing) break;
+        link.out_ready.wait(self.io) catch break;
+    }
+    stream.shutdown(self.io, .both) catch {};
 }
 
 /// Write events to the connection until the client goes, falls too far behind, or the server
@@ -558,7 +624,7 @@ fn serveStream(self: *Server, head: *std.http.Server.Request, stream: *Stream) v
         },
     } }) catch return;
     body.flush() catch return;
-    var out: std.ArrayListUnmanaged(u8) = .empty;
+    var out: std.ArrayList(u8) = .empty;
     defer out.deinit(self.gpa);
     while (true) {
         const quiet = if (stream.ready.waitTimeout(self.io, .{ .duration = .{ .raw = .fromMilliseconds(keep_alive_ms), .clock = .awake } })) |_| false else |err| switch (err) {
@@ -570,7 +636,7 @@ fn serveStream(self: *Server, head: *std.http.Server.Request, stream: *Stream) v
             defer self.lock.unlock(self.io);
             if (self.stopping.load(.acquire) or stream.overrun) return;
             // Taken whole: `publish` goes on appending to an empty list while this one is written.
-            std.mem.swap(std.ArrayListUnmanaged(u8), &out, &stream.backlog);
+            std.mem.swap(std.ArrayList(u8), &out, &stream.backlog);
             stream.ready.reset();
         }
         if (out.items.len > 0) {
@@ -594,7 +660,7 @@ fn wantsDiff(target: []const u8) bool {
 /// `?topics=a,b` as a list; everything when absent or empty.
 fn topicsOf(arena: std.mem.Allocator, target: []const u8) ![]const []const u8 {
     const query = target[(std.mem.findScalar(u8, target, '?') orelse return &.{"*"}) + 1 ..];
-    var list: std.ArrayListUnmanaged([]const u8) = .empty;
+    var list: std.ArrayList([]const u8) = .empty;
     var params = std.mem.tokenizeScalar(u8, query, '&');
     while (params.next()) |param| {
         const eq = std.mem.findScalar(u8, param, '=') orelse continue;
@@ -610,10 +676,53 @@ fn topicsOf(arena: std.mem.Allocator, target: []const u8) ![]const []const u8 {
 
 fn noWake() void {}
 
+/// Ends the test binary, naming the test, when a test is still running after `limit_ms`: every
+/// test here that spawns a client blocks `join` on it, and a client whose connection the OS
+/// never closes (Windows' AF_UNIX, a connection still in the backlog at `stop`) would otherwise
+/// hold the whole `zig build test` until its runner is killed. `zig build` has no per-test limit
+/// of its own that a step can set.
+const Watchdog = struct {
+    const limit_ms = 60_000;
+
+    gpa: std.mem.Allocator,
+    io: Io,
+    name: []const u8,
+    done: Io.Event = .unset,
+    thread: std.Thread = undefined,
+
+    /// Starts a watch on the test `name` (`@src().fn_name`); the test ends it with `stop`.
+    fn start(gpa: std.mem.Allocator, io: Io, name: []const u8) !*Watchdog {
+        const self = try gpa.create(Watchdog);
+        errdefer gpa.destroy(self);
+        self.* = .{ .io = io, .name = name, .gpa = gpa };
+        self.thread = try std.Thread.spawn(.{}, watch, .{self});
+        return self;
+    }
+
+    fn stop(self: *Watchdog) void {
+        self.done.set(self.io);
+        self.thread.join();
+        self.gpa.destroy(self);
+    }
+
+    fn watch(self: *Watchdog) void {
+        self.done.waitTimeout(self.io, .{ .duration = .{ .raw = .fromMilliseconds(limit_ms), .clock = .awake } }) catch |err| switch (err) {
+            error.Timeout => {
+                std.debug.print("\nfizzy-control-server-tests: {s} still running after {d} s: a client or the server is blocked; aborting\n", .{ self.name, limit_ms / 1000 });
+                std.process.abort();
+            },
+            // Nothing cancels this thread; a cancellation would mean the test is already ending.
+            error.Canceled => {},
+        };
+    }
+};
+
 const TestClient = struct {
     io: Io,
     path: []const u8,
     request: []const u8,
+    /// A complete final SSE message: streams have no Content-Length or reliable EOF.
+    event_end: ?[]const u8 = null,
     reply: [8192]u8 = undefined,
     reply_len: usize = 0,
 
@@ -628,9 +737,8 @@ const TestClient = struct {
         w.interface.flush() catch return;
         var rbuf: [1024]u8 = undefined;
         var r = stream.reader(self.io, &rbuf);
-        // As an HTTP client does: the head, then `Content-Length` bytes when it says, else to the
-        // end (a stream). Never to the end when it need not: whether Windows' AF_UNIX tells a
-        // reader the other side closed is not something to test here.
+        // Read the HTTP body by its length, an SSE stream through its expected final message, else to the end.
+        // Windows AF_UNIX does not reliably notify readers when the peer closes.
         while (self.reply_len < self.reply.len) {
             const n = r.interface.readSliceShort(self.reply[self.reply_len..][0..1]) catch return;
             if (n == 0) return;
@@ -645,6 +753,13 @@ const TestClient = struct {
             const want = @min(len, self.reply.len - self.reply_len);
             r.interface.readSliceAll(self.reply[self.reply_len..][0..want]) catch return;
             self.reply_len += want;
+        } else if (self.event_end) |end| {
+            while (self.reply_len < self.reply.len) {
+                const n = r.interface.readSliceShort(self.reply[self.reply_len..][0..1]) catch return;
+                if (n == 0) return;
+                self.reply_len += 1;
+                if (std.mem.endsWith(u8, self.reply[0..self.reply_len], end)) return;
+            }
         } else {
             self.reply_len += r.interface.readSliceShort(self.reply[self.reply_len..]) catch 0;
         }
@@ -655,13 +770,14 @@ test "a request reaches the UI thread and its answer goes back" {
     if (!Io.net.has_unix_sockets) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const io = std.testing.io;
+    const dog = try Watchdog.start(gpa, io, @src().fn_name);
+    defer dog.stop();
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const dir = try tmp.dir.realPathFileAlloc(io, ".", gpa);
-    defer gpa.free(dir);
     // In a folder of its own that `start` makes, as the app's is (`control/control.sock`).
-    const path = try std.fs.path.join(gpa, &.{ dir, "control", "c.sock" });
+    const path = try testSocket(gpa, &tmp);
     defer gpa.free(path);
+    defer removeTestSocket(path);
 
     var server: Server = .{ .gpa = gpa, .io = io, .socket_path = path, .wake = noWake };
     try server.start();
@@ -676,7 +792,7 @@ test "a request reaches the UI thread and its answer goes back" {
     const thread = try std.Thread.spawn(.{}, TestClient.run, .{&client});
 
     // The UI thread's side: take what came, answer it.
-    var taken: std.ArrayListUnmanaged(*Request) = .empty;
+    var taken: std.ArrayList(*Request) = .empty;
     defer taken.deinit(gpa);
     var waited: usize = 0;
     while (taken.items.len == 0 and waited < 2000) : (waited += 1) {
@@ -706,20 +822,37 @@ test "a request reaches the UI thread and its answer goes back" {
     try std.testing.expectEqual(@as(std.posix.mode_t, 0o700), folder.permissions.toMode() & 0o777);
 }
 
+/// A socket path for a test, in a folder of its own that `start` makes and `removeTestSocket`
+/// removes. Short: the tmp dir lives under the build's cache, which a deep checkout (a worker's
+/// sibling workspace) pushes past what the OS takes (`max_path`). Named by the tmp dir's random
+/// name so tests do not meet.
 fn testSocket(gpa: std.mem.Allocator, tmp: *std.testing.TmpDir) ![]u8 {
-    const dir = try tmp.dir.realPathFileAlloc(std.testing.io, ".", gpa);
-    defer gpa.free(dir);
-    return std.fs.path.join(gpa, &.{ dir, "c.sock" });
+    if (builtin.target.os.tag == .windows) {
+        const dir = try tmp.dir.realPathFileAlloc(std.testing.io, ".", gpa);
+        defer gpa.free(dir);
+        return std.fs.path.join(gpa, &.{ dir, "control", "c.sock" });
+    }
+    // `/tmp` itself is a link on macOS, which `start` refuses as a folder.
+    const root = if (builtin.target.os.tag.isDarwin()) "/private/tmp" else "/tmp";
+    return std.fmt.allocPrint(gpa, "{s}/fz-{s}/c.sock", .{ root, tmp.sub_path });
+}
+
+fn removeTestSocket(path: []const u8) void {
+    if (builtin.target.os.tag == .windows) return;
+    Io.Dir.cwd().deleteTree(std.testing.io, std.fs.path.dirname(path).?) catch {};
 }
 
 test "a request still queued at quit is answered: the server is stopping" {
     if (!Io.net.has_unix_sockets) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const io = std.testing.io;
+    const dog = try Watchdog.start(gpa, io, @src().fn_name);
+    defer dog.stop();
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const path = try testSocket(gpa, &tmp);
     defer gpa.free(path);
+    defer removeTestSocket(path);
 
     var server: Server = .{ .gpa = gpa, .io = io, .socket_path = path, .wake = noWake };
     try server.start();
@@ -745,10 +878,13 @@ test "what cannot be served is refused before its body, and never reaches the ap
     if (!Io.net.has_unix_sockets) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const io = std.testing.io;
+    const dog = try Watchdog.start(gpa, io, @src().fn_name);
+    defer dog.stop();
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const path = try testSocket(gpa, &tmp);
     defer gpa.free(path);
+    defer removeTestSocket(path);
 
     var server: Server = .{ .gpa = gpa, .io = io, .socket_path = path, .wake = noWake };
     try server.start();
@@ -767,7 +903,7 @@ test "what cannot be served is refused before its body, and never reaches the ap
         try std.testing.expect(std.mem.startsWith(u8, reply, case.status));
         try std.testing.expect(std.mem.find(u8, reply, "100 Continue") == null);
     }
-    var taken: std.ArrayListUnmanaged(*Request) = .empty;
+    var taken: std.ArrayList(*Request) = .empty;
     defer taken.deinit(gpa);
     _ = server.take(&taken);
     try std.testing.expectEqual(@as(usize, 0), taken.items.len);
@@ -807,10 +943,13 @@ test "a server that took over the path keeps it when the old one stops" {
     if (!Io.net.has_unix_sockets) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const io = std.testing.io;
+    const dog = try Watchdog.start(gpa, io, @src().fn_name);
+    defer dog.stop();
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const path = try testSocket(gpa, &tmp);
     defer gpa.free(path);
+    defer removeTestSocket(path);
 
     // A restart's handover: the new fizzy listens on the profile's socket while the old runs.
     var old: Server = .{ .gpa = gpa, .io = io, .socket_path = path, .wake = noWake };
@@ -823,7 +962,7 @@ test "a server that took over the path keeps it when the old one stops" {
 
     var client: TestClient = .{ .io = io, .path = path, .request = "GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n" };
     const thread = try std.Thread.spawn(.{}, TestClient.run, .{&client});
-    var taken: std.ArrayListUnmanaged(*Request) = .empty;
+    var taken: std.ArrayList(*Request) = .empty;
     defer taken.deinit(gpa);
     var waited: usize = 0;
     while (taken.items.len == 0 and waited < 2000) : (waited += 1) {
@@ -836,22 +975,30 @@ test "a server that took over the path keeps it when the old one stops" {
     try std.testing.expect(std.mem.endsWith(u8, client.reply[0..client.reply_len], "\r\n\r\nnew"));
 }
 
-test "a stream gets the events it asked for, once each, until the server stops" {
+test "a stream gets only the events it asked for, once each" {
     if (!Io.net.has_unix_sockets) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const io = std.testing.io;
+    const dog = try Watchdog.start(gpa, io, @src().fn_name);
+    defer dog.stop();
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const path = try testSocket(gpa, &tmp);
     defer gpa.free(path);
+    defer removeTestSocket(path);
 
     var server: Server = .{ .gpa = gpa, .io = io, .socket_path = path, .wake = noWake };
     try server.start();
     errdefer server.stop();
-    var client: TestClient = .{ .io = io, .path = path, .request = "GET /events?topics=fizzy.document.*,chat.turn_ended HTTP/1.1\r\nHost: x\r\n\r\n" };
+    var client: TestClient = .{
+        .io = io,
+        .path = path,
+        .request = "GET /events?topics=fizzy.document.*,chat.turn_ended HTTP/1.1\r\nHost: x\r\n\r\n",
+        .event_end = "event: chat.turn_ended\ndata: {}\n\n",
+    };
     const thread = try std.Thread.spawn(.{}, TestClient.run, .{&client});
 
-    var taken: std.ArrayListUnmanaged(*Request) = .empty;
+    var taken: std.ArrayList(*Request) = .empty;
     defer taken.deinit(gpa);
     var streams: usize = 0;
     var waited: usize = 0;
@@ -865,10 +1012,9 @@ test "a stream gets the events it asked for, once each, until the server stops" 
     server.publish("fizzy.document.saved", "{\"path\":\"/a\"}");
     server.publish("fizzy.folder.opened", "{\"path\":\"/p\"}");
     server.publish("chat.turn_ended", "{}");
-    // Let the stream write before the stop ends it.
-    io.sleep(.fromMilliseconds(50), .awake) catch {};
-    server.stop();
+    // Wait for the final expected message before stopping can cancel the writer.
     thread.join();
+    server.stop();
 
     const reply = client.reply[0..client.reply_len];
     try std.testing.expect(std.mem.startsWith(u8, reply, "HTTP/1.1 200 OK\r\n"));
@@ -922,7 +1068,7 @@ fn openStreams(server: *Server) usize {
 }
 
 fn answerStreams(server: *Server, want: usize) !void {
-    var taken: std.ArrayListUnmanaged(*Request) = .empty;
+    var taken: std.ArrayList(*Request) = .empty;
     defer taken.deinit(server.gpa);
     var waited: usize = 0;
     while (openStreams(server) < want and waited < 2000) : (waited += 1) {
@@ -938,10 +1084,13 @@ test "a client that stops reading neither holds up the quit nor buffers without 
     if (!Io.net.has_unix_sockets) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const io = std.testing.io;
+    const dog = try Watchdog.start(gpa, io, @src().fn_name);
+    defer dog.stop();
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const path = try testSocket(gpa, &tmp);
     defer gpa.free(path);
+    defer removeTestSocket(path);
 
     var server: Server = .{ .gpa = gpa, .io = io, .socket_path = path, .wake = noWake };
     try server.start();
@@ -979,10 +1128,13 @@ test "a stopped server ends a stream whose client stopped reading" {
     if (!Io.net.has_unix_sockets) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const io = std.testing.io;
+    const dog = try Watchdog.start(gpa, io, @src().fn_name);
+    defer dog.stop();
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const path = try testSocket(gpa, &tmp);
     defer gpa.free(path);
+    defer removeTestSocket(path);
 
     var server: Server = .{ .gpa = gpa, .io = io, .socket_path = path, .wake = noWake };
     try server.start();
@@ -1003,20 +1155,28 @@ test "a stopped server ends a stream whose client stopped reading" {
     server.stop();
 }
 
-test "an event published as the stream is answered is not lost" {
+test "an event published as the stream is answered arrives while the stream stays open" {
     if (!Io.net.has_unix_sockets) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const io = std.testing.io;
+    const dog = try Watchdog.start(gpa, io, @src().fn_name);
+    defer dog.stop();
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const path = try testSocket(gpa, &tmp);
     defer gpa.free(path);
+    defer removeTestSocket(path);
 
     var server: Server = .{ .gpa = gpa, .io = io, .socket_path = path, .wake = noWake };
     try server.start();
-    var client: TestClient = .{ .io = io, .path = path, .request = "GET /events HTTP/1.1\r\nHost: x\r\n\r\n" };
+    var client: TestClient = .{
+        .io = io,
+        .path = path,
+        .request = "GET /events HTTP/1.1\r\nHost: x\r\n\r\n",
+        .event_end = "event: first\ndata: 1\n\n",
+    };
     const thread = try std.Thread.spawn(.{}, TestClient.run, .{&client});
-    var taken: std.ArrayListUnmanaged(*Request) = .empty;
+    var taken: std.ArrayList(*Request) = .empty;
     defer taken.deinit(gpa);
     var waited: usize = 0;
     while (taken.items.len == 0 and waited < 2000) : (waited += 1) {
@@ -1027,9 +1187,9 @@ test "an event published as the stream is answered is not lost" {
     // though its connection has not written the headers yet.
     taken.items[0].answerStream(&server);
     server.publish("first", "1");
-    io.sleep(.fromMilliseconds(50), .awake) catch {};
-    server.stop();
+    // The client must finish on the message, while the server still holds the stream open.
     thread.join();
+    server.stop();
     try std.testing.expect(std.mem.endsWith(u8, client.reply[0..client.reply_len], "\r\n\r\nevent: first\ndata: 1\n\n"));
 }
 
@@ -1037,10 +1197,13 @@ test "a stopped server ends a keep-alive connection waiting for its next request
     if (!Io.net.has_unix_sockets) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const io = std.testing.io;
+    const dog = try Watchdog.start(gpa, io, @src().fn_name);
+    defer dog.stop();
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const path = try testSocket(gpa, &tmp);
     defer gpa.free(path);
+    defer removeTestSocket(path);
 
     var server: Server = .{ .gpa = gpa, .io = io, .socket_path = path, .wake = noWake };
     try server.start();
@@ -1078,7 +1241,7 @@ test "a stopped server ends a keep-alive connection waiting for its next request
         client.release.set(io);
         thread.join();
     }
-    var taken: std.ArrayListUnmanaged(*Request) = .empty;
+    var taken: std.ArrayList(*Request) = .empty;
     defer taken.deinit(gpa);
     var waited: usize = 0;
     while (taken.items.len == 0 and waited < 2000) : (waited += 1) {
@@ -1090,4 +1253,150 @@ test "a stopped server ends a keep-alive connection waiting for its next request
     // Its task is back reading the next request when the server stops: that read ends.
     io.sleep(.fromMilliseconds(50), .awake) catch {};
     server.stop();
+}
+
+/// A client that asks for `GET /remote` to become a byte stream: reads the `101`, writes `ping`
+/// right behind its request, reads four bytes, then reads to the end unless `leave`, which closes
+/// the socket as soon as it has the head.
+const UpgradePeer = struct {
+    io: Io,
+    path: []const u8,
+    leave: bool = false,
+    head: [160]u8 = undefined,
+    head_len: usize = 0,
+    reply: [4]u8 = undefined,
+    ended: bool = false,
+
+    fn run(self: *UpgradePeer) void {
+        const addr = Io.net.UnixAddress.init(self.path) catch return;
+        const stream = addr.connect(self.io) catch return;
+        defer stream.close(self.io);
+        var wbuf: [256]u8 = undefined;
+        var w = stream.writer(self.io, &wbuf);
+        w.interface.writeAll("GET /remote HTTP/1.1\r\nHost: x\r\nConnection: Upgrade\r\nUpgrade: fizzy-remote-view/1\r\n\r\nping") catch return;
+        w.interface.flush() catch return;
+        var rbuf: [256]u8 = undefined;
+        var r = stream.reader(self.io, &rbuf);
+        while (self.head_len < self.head.len) {
+            const n = r.interface.readSliceShort(self.head[self.head_len..][0..1]) catch return;
+            if (n == 0) return;
+            self.head_len += 1;
+            if (std.mem.endsWith(u8, self.head[0..self.head_len], "\r\n\r\n")) break;
+        }
+        if (self.leave) return;
+        r.interface.readSliceAll(&self.reply) catch return;
+        var more: [1]u8 = undefined;
+        self.ended = if (r.interface.readSliceShort(&more)) |n| n == 0 else |_| true;
+    }
+};
+
+/// Frames, as the UI thread's, until `taken` holds a request.
+fn takeOne(server: *Server, taken: *std.ArrayList(*Request)) !*Request {
+    var waited: usize = 0;
+    while (taken.items.len == 0 and waited < 2000) : (waited += 1) {
+        _ = server.take(taken);
+        if (taken.items.len == 0) server.io.sleep(.fromMilliseconds(1), .awake) catch {};
+    }
+    try std.testing.expectEqual(@as(usize, 1), taken.items.len);
+    return taken.items[0];
+}
+
+test "an upgraded connection carries bytes both ways until the app closes it" {
+    if (!Io.net.has_unix_sockets) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    const dog = try Watchdog.start(gpa, io, @src().fn_name);
+    defer dog.stop();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try testSocket(gpa, &tmp);
+    defer gpa.free(path);
+    defer removeTestSocket(path);
+    var server: Server = .{ .gpa = gpa, .io = io, .socket_path = path, .wake = noWake };
+    try server.start();
+    defer server.stop();
+
+    var peer: UpgradePeer = .{ .io = io, .path = path };
+    const thread = try std.Thread.spawn(.{}, UpgradePeer.run, .{&peer});
+    var taken: std.ArrayList(*Request) = .empty;
+    defer taken.deinit(gpa);
+    const req = try takeOne(&server, &taken);
+    try std.testing.expectEqualStrings("fizzy-remote-view/1", req.upgrade.?);
+    var link: Link = .init(gpa, io, noWake);
+    defer link.deinit();
+    req.answerUpgrade(&server, &link);
+
+    // What the client wrote behind its request is the link's.
+    var got: std.ArrayList(u8) = .empty;
+    defer got.deinit(gpa);
+    var waited: usize = 0;
+    while (got.items.len < 4 and waited < 2000) : (waited += 1) {
+        try link.take(&got);
+        io.sleep(.fromMilliseconds(1), .awake) catch {};
+    }
+    try std.testing.expectEqualStrings("ping", got.items);
+    try link.send("pong");
+    // Closing ends the client's read, after what was queued is written.
+    link.close();
+    thread.join();
+    try std.testing.expect(std.mem.startsWith(u8, peer.head[0..peer.head_len], "HTTP/1.1 101 Switching Protocols\r\n"));
+    try std.testing.expect(std.mem.find(u8, peer.head[0..peer.head_len], "upgrade: fizzy-remote-view/1\r\n") != null);
+    try std.testing.expectEqualStrings("pong", &peer.reply);
+    try std.testing.expect(peer.ended);
+    waited = 0;
+    while (!link.isGone() and waited < 2000) : (waited += 1) io.sleep(.fromMilliseconds(1), .awake) catch {};
+    try std.testing.expect(link.isGone());
+}
+
+test "a client that leaves an upgraded connection finishes its link" {
+    if (!Io.net.has_unix_sockets) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    const dog = try Watchdog.start(gpa, io, @src().fn_name);
+    defer dog.stop();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try testSocket(gpa, &tmp);
+    defer gpa.free(path);
+    defer removeTestSocket(path);
+    var server: Server = .{ .gpa = gpa, .io = io, .socket_path = path, .wake = noWake };
+    try server.start();
+    defer server.stop();
+
+    var peer: UpgradePeer = .{ .io = io, .path = path, .leave = true };
+    const thread = try std.Thread.spawn(.{}, UpgradePeer.run, .{&peer});
+    var taken: std.ArrayList(*Request) = .empty;
+    defer taken.deinit(gpa);
+    const req = try takeOne(&server, &taken);
+    var link: Link = .init(gpa, io, noWake);
+    defer link.deinit();
+    req.answerUpgrade(&server, &link);
+    thread.join();
+    var waited: usize = 0;
+    while (!link.isGone() and waited < 2000) : (waited += 1) io.sleep(.fromMilliseconds(1), .awake) catch {};
+    try std.testing.expect(link.isGone());
+}
+
+test {
+    _ = Link;
+}
+
+test "a thousand listeners stop without a client waking accept" {
+    if (!Io.net.has_unix_sockets) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    const dog = try Watchdog.start(gpa, io, @src().fn_name);
+    defer dog.stop();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try testSocket(gpa, &tmp);
+    defer gpa.free(path);
+    defer removeTestSocket(path);
+
+    // Reuse the path, as repeated launches in one profile do.
+    for (0..1000) |_| {
+        var server: Server = .{ .gpa = gpa, .io = io, .socket_path = path, .wake = noWake };
+        try server.start();
+        server.stop();
+    }
 }

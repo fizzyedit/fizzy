@@ -22,7 +22,7 @@ gpa: std.mem.Allocator,
 io: std.Io,
 /// `<config>/secrets` — on the web, the page-storage key `core.fs` files it under.
 path: []const u8,
-values: std.StringArrayHashMapUnmanaged([]u8) = .empty,
+values: std.array_hash_map.String([]u8) = .empty,
 loaded: bool = false,
 
 pub fn init(gpa: std.mem.Allocator, io: std.Io, config_folder: []const u8) !Secrets {

@@ -3,22 +3,21 @@
 //! The player delivers a tape's input; this decides what fizzy's state *is* to a demo. A keyframe
 //! closes every document of the demo's without saving, mounts the keyframe's files in memory at its root
 //! (`demo://<name>`, a `core.vfs.Mem`, so nothing touches disk and every replay starts from the
-//! same bytes), makes that the project folder on the explorer's Files view, resets the layout, and
-//! opens the files the keyframe names. Seeking back is that, then a replay.
+//! same bytes), makes that the project folder on the explorer's Files view, and opens the files
+//! the keyframe names in the group the person is in. Seeking back is that, then a replay.
 //!
-//! A `focused` keyframe (the default) leaves only the documents showing — no bottom panel, the
-//! explorer put away — and a demo opens the explorer from the rail when it is about to use it and
-//! puts it away after (`catalog.openFile`), as a person short of room would.
+//! A keyframe never arranges the window (`Keyframe.layout` is not read here): the person's places,
+//! panes and floats are theirs, and a tape finds its targets in them by what they are
+//! (`resolveRole`). A step that needs the explorer shown is skipped when it already is
+//! (`catalog.openFile`), as a person who finds it open does not press the rail again.
 //!
-//! A demo plays inside the person's own copy of fizzy, on a stage of its own, so it costs them
-//! nothing and waits for nothing: `begin` sets their session aside — their panes, which the
-//! workbench holds whole (`Workbench.holdPanes`), the documents in them, which stay open behind
-//! them untouched (hidden, never closed, saved, reloaded or put back by a snapshot), the project
-//! folder, the explorer's open folders and the keyboard focus — and flushes any pending layout and
-//! settings writes. Nothing is persisted while the demo is loaded (`active`). The demo's documents
-//! are only its own: its mounted files (`demo://…`) and any it makes. `end` closes those, reloads
-//! the layout from `layout.zon`, and gives the person back their panes, their documents as they
-//! left them (unsaved edits and history with them), their folder and their focus.
+//! A demo plays inside the person's own copy of fizzy, so it costs them nothing and waits for
+//! nothing: `begin` notes their session — their documents, which stay open and visible beside the
+//! demo's, the project folder, the explorer's open folders and the keyboard focus — and flushes
+//! any pending layout and settings writes. Nothing is persisted while the demo is loaded
+//! (`active`). The demo's documents are only its own: its mounted files (`demo://…`) and any it
+//! makes. `end` closes those and gives the person back their folder, explorer and focus; the
+//! window stays as it is.
 //!
 //! **Snapshots** (`automation.Stage.capture`) hold what a scene changes as it plays: the mounted
 //! files as saved, each of the demo's open documents' state from its owner (`captureDocumentState` — contents,
@@ -28,7 +27,7 @@
 //! documents' panes. Restoring one puts them back in place — documents opened since are closed,
 //! the rest restored where they sit, a split or a float made since undone — so a seek back within
 //! a scene costs no reload and no replay from the keyframe. One is taken only while nothing is
-//! loading and the palette is shut, and restored only into the scene it came from with its
+//! loading and the palette and a place's menu are shut, and restored only into the scene it came from with its
 //! documents still open; otherwise the seek cuts to the keyframe.
 //!
 //! Demos start from the command palette ("Demo: …"), the Help menu, `FIZZY_DEMO=<name>` natively,
@@ -42,6 +41,7 @@ const core = fizzy.core;
 const sdk = fizzy.sdk;
 const automation = @import("app").automation;
 const dvui_adapter = @import("app").keymap.dvui_adapter;
+const SplitTree = @import("app").layout.State.SplitTree;
 const Editor = @import("Editor.zig");
 const Popout = @import("Popout.zig");
 const Keybinds = @import("Keybinds.zig");
@@ -73,10 +73,10 @@ mount: ?[]u8 = null,
 pending: ?Pending = null,
 /// Shutting down: `end` frees, and gives nothing back to a session that is going away.
 quitting: bool = false,
-/// How a keyframe that reset the layout wants the window arranged, done on the frame after the
-/// cut: the reset forgets every region's size, and a split with no size has nothing to open or
-/// shut until the shape has drawn it once.
-arrange: ?automation.Tape.Keyframe.Layout = null,
+/// The window as the person had it when each scene first began (a window's arrangement only), by
+/// keyframe: a seek that replays a scene starts from there, since a keyframe does not arrange the
+/// window itself. Freed when the demo lets go (`freeSaved`).
+entries: std.AutoArrayHashMapUnmanaged(*const automation.Tape.Keyframe, *Arrangement) = .empty,
 /// Every plugin's settings as the demo found them, as ZON, to give back at the end.
 settings_saved: std.ArrayListUnmanaged(SavedSettings) = .empty,
 /// The app's own settings a tape can change, as the demo found them: only the window's material
@@ -107,9 +107,10 @@ const Pending = union(enum) {
 
 const Saved = struct {
     folder: ?[]u8,
-    /// The person's open documents, by id: set aside, open all along. Every other document is the
-    /// demo's (`ownsDocument`).
-    docs: []const u64,
+    /// The window as the person had it (places, floats, seed tree, the documents' panes), put back
+    /// at the tape's end by closing what the tape made (`end`); the panes meanwhile are kept from
+    /// `panes.zon` (`Workbench.panes_held`). Null where it could not be noted.
+    arrangement: ?*Arrangement,
     /// The one they were in.
     active: ?u64,
     /// The explorer's open folders, and whether its root had opened (`Workbench.file_tree_root_opened`).
@@ -182,6 +183,7 @@ pub fn play(self: *Demo, name: []const u8) !void {
     var script: automation.Script = .init(self.editor.app.gpa, entry.name, entry.title);
     errdefer script.deinit();
     script.check = automation.Input.check;
+    script.compact = core.platform.formFactor() == .mobile;
     try entry.build(&script);
     self.player.load(try script.finish(), .{});
 }
@@ -283,23 +285,8 @@ pub fn frame(self: *Demo) void {
             .tape => |bytes| self.playTape(bytes) catch {},
         }
     }
-    if (self.arrange) |layout| {
-        self.arrange = null;
-        switch (layout) {
-            .keep => {},
-            // The app's default: the explorer open on the demo's folder, even on a window narrow
-            // enough to fold it away.
-            .reset => self.editor.explorer.open(self.editor),
-            // The documents and nothing else: the room is the editor's until the demo asks for
-            // the explorer from the rail.
-            .focused => {
-                self.editor.explorer.close(self.editor);
-                if (self.editor.regionFor(sdk.keywords.ide.panel)) |panel| {
-                    if (!panel.isClosed()) panel.close();
-                }
-            },
-        }
-    }
+    // A drop beside is aimed at where the workbench would split the target place, as its room is now.
+    self.editor.app.layout.beside = if (self.active()) .{ .ctx = self, .edge = besideEdge } else null;
     self.snapshot.beginFrame();
     self.live.frame();
     self.player.frame();
@@ -378,11 +365,13 @@ fn listWindows(ctx: *anyopaque, _: std.mem.Allocator) []const automation.Snapsho
 const stage_vtable: automation.Stage.VTable = .{
     .begin = begin,
     .end = end,
+    .keep = keep,
     .keyframe = keyframe,
     .idle = idle,
     .command = command,
     .chordFor = chordFor,
     .commandTitle = commandTitle,
+    .resolveRole = resolveRole,
     .fastForward = fastForward,
     .capture = capture,
     .restore = restore,
@@ -470,21 +459,22 @@ fn begin(ctx: *anyopaque, _: *const automation.Tape) void {
     editor.flushLayout();
     editor.flushSettings();
     self.saveSettings();
-    // The one they are in, before their panes go: the demo's has none.
-    const in_front = if (editor.activeDoc()) |d| d.id else null;
-    // Their panes go aside whole, the demo playing in one of its own.
-    editor.workbench.holdPanes();
+    // The one they are in. (Not a document of a demo kept before (`keep`): that one closes with the
+    // next keyframe.)
+    const in_front = if (editor.activeDoc()) |d|
+        (if (std.mem.startsWith(u8, d.owner.documentPath(d), "demo://")) null else d.id)
+    else
+        null;
 
-    // Their documents stay open behind them, hidden: no place shows them while the demo has the
-    // window, and nothing of the demo's closes, saves or restores them (`ownsDocument`). A demo's
-    // left open by the last (one whose close failed) is not theirs.
+    // Their documents stay open where they are, and nothing of the demo's closes, saves or
+    // restores them (`ownsDocument`).
     const gpa = editor.app.gpa;
-    var docs: std.ArrayList(u64) = .empty;
-    for (editor.app.open_files.values()) |doc| {
-        if (std.mem.startsWith(u8, doc.owner.documentPath(doc), "demo://")) continue;
-        docs.append(gpa, doc.id) catch continue;
-    }
-    const held = docs.toOwnedSlice(gpa) catch &.{};
+    const arrangement: ?*Arrangement = Arrangement.create(editor) catch |err| blk: {
+        dvui.log.warn("demo: could not note the window: {t}", .{err});
+        break :blk null;
+    };
+    // Held only when there is something to put back: the panes would be saved as the person's.
+    editor.workbench.panes_held = arrangement != null;
     const branches: []const dvui.Id = if (gpa.alloc(dvui.Id, editor.workbench.open_branches.count())) |out| blk: {
         var it = editor.workbench.open_branches.keyIterator();
         for (out) |*b| b.* = it.next().?.*;
@@ -496,60 +486,58 @@ fn begin(ctx: *anyopaque, _: *const automation.Tape) void {
     const folder = editor.app.folder orelse "";
     self.saved = .{
         .folder = if (folder.len > 0 and !std.mem.startsWith(u8, folder, "demo://")) gpa.dupe(u8, folder) catch null else null,
-        .docs = held,
-        .active = in_front,
+        .arrangement = arrangement,
+        .active = in_front orelse blk: {
+            var last: ?u64 = null;
+            for (editor.app.open_files.values()) |doc| {
+                if (!isDemoPath(doc.owner.documentPath(doc))) last = doc.id;
+            }
+            break :blk last;
+        },
         .branches = branches,
         .root_opened = editor.workbench.file_tree_root_opened,
         .focus = dvui.focusedWidgetId() orelse .zero,
         .focus_subwindow = dvui.focusedSubwindowId(),
     };
-    for (held) |id| self.hideDocument(id, true);
 }
 
-/// Whether `doc` is the demo's: one it opened or made, not one of the person's — open at `begin`,
-/// or landing since in a pane of theirs (an open on its way as the demo started, a document their
-/// plugin's reload brought back), which the workbench holds (`Workbench.holdsDocument`).
-pub fn ownsDocument(self: *const Demo, doc: sdk.DocHandle) bool {
-    const saved = self.saved orelse return true;
-    if (std.mem.findScalar(u64, saved.docs, doc.id) != null) return false;
-    return !self.editor.workbench.holdsDocument(doc);
+/// Whether `doc` is the demo's: one of its mounted files (`demo://…`). A document of a file the
+/// person opens while it plays is theirs, however late it lands.
+pub fn ownsDocument(_: *const Demo, doc: sdk.DocHandle) bool {
+    return isDemoPath(doc.owner.documentPath(doc));
 }
 
-/// Hide the person's document `id` from every place while the demo has the window, or show it.
-/// One whose surface is made again meanwhile (a rename) is hidden by `Editor.registerDocSurface`.
-fn hideDocument(self: *Demo, id: u64, hidden: bool) void {
-    const ds = self.editor.doc_surfaces.get(id) orelse return;
-    self.editor.app.host.setSurfaceHidden(ds.id, hidden);
+fn isDemoPath(path: []const u8) bool {
+    return std.mem.startsWith(u8, path, "demo://");
 }
 
 fn end(ctx: *anyopaque) void {
     const self = from(ctx);
     const editor = self.editor;
-    const gpa = editor.app.gpa;
     self.fast = false;
     if (self.quitting) {
-        for (editor.app.open_files.keys()) |id| self.hideDocument(id, false);
+        editor.workbench.panes_held = false;
         self.freeSaved();
         self.freeSavedSettings();
-        editor.workbench.restorePanes();
         return;
     }
     self.restoreSettings();
     self.closeDemoDocuments();
     self.unmountFiles();
 
-    // The layout as the user left it: `begin` flushed it, and nothing has been written since.
-    editor.app.layout.resetLayout(gpa);
-    editor.loadSavedLayout();
+    // The window as the person had it, by closing what the tape made: floats fly shut, splits and
+    // the explorer glide away. None of it is saved (`begin` flushed what was waiting), and the
+    // documents' panes are the workbench's own, kept from `panes.zon` while the tape played
+    // (`Workbench.panes_held`).
+    const saved = self.saved orelse return;
+    if (saved.arrangement) |arrangement| {
+        restoreArrangement(editor, arrangement, true) catch |err| dvui.log.warn("demo: could not put the window back: {t}", .{err});
+        arrangement.restoreExplorer(editor);
+    }
     editor.app.layout.dirty = false;
     editor.command_palette.finishClose();
-    // Their panes, each holding what it held: after the layout's reload, which would otherwise
-    // put back only what the file had of them.
-    editor.workbench.restorePanes();
-
-    const saved = self.saved orelse return;
-    // What is open now is all theirs: the demo's have closed.
-    for (editor.app.open_files.keys()) |id| self.hideDocument(id, false);
+    editor.workbench.panes_held = false;
+    editor.workbench.panes_dirty = false;
     if (saved.folder) |f| {
         editor.setProjectFolder(f) catch |err| dvui.log.warn("demo: could not reopen {s}: {t}", .{ f, err });
     } else {
@@ -566,11 +554,33 @@ fn end(ctx: *anyopaque) void {
     dvui.refresh(null, @src(), null);
 }
 
+/// The demo is let go and the app stays as it is (`Player.keep`): its documents, folder (still
+/// mounted in memory), layout and focus are now simply the app's. What was never the demo's comes
+/// back: the person's settings. Their documents never left. Persistence resumes (`active`) with
+/// what is on screen.
+fn keep(ctx: *anyopaque) void {
+    const self = from(ctx);
+    const editor = self.editor;
+    self.fast = false;
+    if (self.quitting) return end(ctx);
+    self.restoreSettings();
+    self.freeSaved();
+    // The panes on screen are the person's now, and saved with them.
+    editor.workbench.panes_held = false;
+    editor.workbench.panes_dirty = true;
+    editor.app.layout.dirty = true;
+    dvui.refresh(null, @src(), null);
+}
+
 fn freeSaved(self: *Demo) void {
     const gpa = self.editor.app.gpa;
+    for (self.entries.values()) |entry| {
+        entry.destroy(gpa);
+    }
+    self.entries.clearAndFree(gpa);
     const saved = self.saved orelse return;
     if (saved.folder) |f| gpa.free(f);
-    gpa.free(saved.docs);
+    if (saved.arrangement) |arrangement| arrangement.destroy(gpa);
     gpa.free(saved.branches);
     self.saved = null;
 }
@@ -583,8 +593,7 @@ fn keyframe(ctx: *anyopaque, kf: *const automation.Tape.Keyframe) void {
 
     editor.command_palette.finishClose();
     self.closeDemoDocuments();
-    // One pane: a split a later moment made is gone at a cut, as on the first pass.
-    editor.workbench.onePane();
+    self.enterScene(kf);
     self.applySettings(kf.settings);
     // The app's settings a tape changes are the person's again at a cut: a keyframe declares its
     // state outright, and declares none of them.
@@ -602,14 +611,6 @@ fn keyframe(ctx: *anyopaque, kf: *const automation.Tape.Keyframe) void {
     editor.workbench.file_tree_root_opened = null;
     editor.setProjectFolder(kf.root) catch |err| dvui.log.err("demo: could not open {s}: {t}", .{ kf.root, err });
     editor.app.host.setSelectionFor(sdk.keywords.ide.sidebar, Editor.workbench_files_view);
-    switch (kf.layout) {
-        .keep => {},
-        .reset, .focused => {
-            editor.app.layout.resetLayout(gpa);
-            self.arrange = kf.layout;
-            dvui.refresh(null, @src(), null);
-        },
-    }
 
     for (kf.open) |rel| {
         const path = core.paths.join(gpa, kf.root, rel) catch continue;
@@ -617,6 +618,21 @@ fn keyframe(ctx: *anyopaque, kf: *const automation.Tape.Keyframe) void {
         _ = editor.openFilePath(path, editor.workbench.currentGroupingID()) catch |err|
             dvui.log.warn("demo: could not open {s}: {t}", .{ path, err });
     }
+}
+
+/// The window as the person has it as `kf` begins: taken the first time, put back on the ones
+/// after (a seek replaying the scene), so the replay meets the arrangement the first pass did.
+fn enterScene(self: *Demo, kf: *const automation.Tape.Keyframe) void {
+    const editor = self.editor;
+    const gpa = editor.app.gpa;
+    if (self.entries.get(kf)) |entry| {
+        restoreArrangement(editor, entry, false) catch |err|
+            dvui.log.warn("demo: could not put the window back to where the scene began: {t}", .{err});
+        entry.restoreExplorer(editor);
+        return;
+    }
+    const entry = Arrangement.create(editor) catch return;
+    self.entries.put(gpa, kf, entry) catch entry.destroy(gpa);
 }
 
 // ---- settings --------------------------------------------------------------------------------
@@ -757,14 +773,32 @@ fn unmountFiles(self: *Demo) void {
     }
 }
 
+/// Drop the loads and openings of the demo's files still on their way; the person's go on.
+fn cancelDemoLoads(editor: *Editor) void {
+    var jobs = editor.loading_jobs.iterator();
+    while (jobs.next()) |job| {
+        if (isDemoPath(job.key_ptr.*)) job.value_ptr.*.cancelled.store(true, .monotonic);
+    }
+    var l = editor.doc_io.loads.count();
+    while (l > 0) {
+        l -= 1;
+        const path = editor.doc_io.loads.keys()[l];
+        if (isDemoPath(path)) editor.doc_io.cancel(path);
+    }
+    var o = editor.openings.entries.count();
+    while (o > 0) {
+        o -= 1;
+        const path = editor.openings.entries.keys()[o];
+        if (isDemoPath(path)) editor.openings.drop(editor, path);
+    }
+}
+
 /// Close every document of the demo's, discarding changes: none is the person's, whose are set
 /// aside (`ownsDocument`). Loads still on their way are dropped too, or they would land in the
 /// next keyframe.
 fn closeDemoDocuments(self: *Demo) void {
     const editor = self.editor;
-    editor.cancelAllLoadingJobs();
-    while (editor.doc_io.loads.count() > 0) editor.doc_io.cancel(editor.doc_io.loads.keys()[0]);
-    while (editor.openings.entries.count() > 0) editor.openings.drop(editor, editor.openings.entries.keys()[0]);
+    cancelDemoLoads(editor);
     var i = editor.app.open_files.count();
     while (i > 0) {
         i -= 1;
@@ -820,6 +854,42 @@ fn commandTitle(ctx: *anyopaque, id: []const u8) ?[]const u8 {
     return c.title;
 }
 
+/// The edge a drop beside aims at over place `name`: where the workbench would split the pane
+/// shown there (a pane of its own tree is named for its grouping). A pane the layout's keywords
+/// show is in no list, so Main is the person's pane.
+pub fn besideEdge(ctx: *anyopaque, name: []const u8) ?SplitTree.Side {
+    const editor = from(ctx).editor;
+    const wb = &editor.workbench;
+    const grouping = Editor.Workspace.groupingOfName(name) orelse editor.workspaces.groupingIn(name) orelse blk: {
+        const main = editor.regionFor(sdk.keywords.ide.main) orelse return null;
+        if (!std.mem.eql(u8, main.name, name)) return null;
+        var layout = Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, editor.app.host.arena());
+        var buf: [64]u8 = undefined;
+        const id = std.mem.print(&buf, Editor.Workspaces.id_prefix ++ "{d}", .{wb.open_workspace_grouping}) catch return null;
+        if (Editor.Layout.ViewDrag.holderOf(&layout, id)) |holder| {
+            if (!std.mem.eql(u8, holder, name)) return null;
+        }
+        break :blk wb.open_workspace_grouping;
+    };
+    return wb.besideEdge(grouping);
+}
+
+/// The place a role names, by what it is rather than what the person's layout calls it.
+fn resolveRole(ctx: *anyopaque, role: []const u8, buf: []u8) ?[]const u8 {
+    const keywords = if (std.mem.eql(u8, role, "documents"))
+        sdk.keywords.ide.main
+    else if (std.mem.eql(u8, role, "explorer"))
+        sdk.keywords.ide.sidebar
+    else if (std.mem.eql(u8, role, "panel"))
+        sdk.keywords.ide.panel
+    else
+        return null;
+    const name = (from(ctx).editor.regionFor(keywords) orelse return null).name;
+    if (name.len > buf.len) return null;
+    @memcpy(buf[0..name.len], name);
+    return buf[0..name.len];
+}
+
 fn fastForward(ctx: *anyopaque, on: bool) void {
     from(ctx).fast = on;
 }
@@ -827,6 +897,37 @@ fn fastForward(ctx: *anyopaque, on: bool) void {
 // ---- snapshots ---------------------------------------------------------------------------------
 
 /// A moment of a scene, for a seek to come back to (see the file comment). Everything in `arena`.
+/// A snapshot of the app as it is now, less what `fill` writes. Takes `arrangement`, which a failed
+/// call frees.
+fn newSnapshot(editor: *Editor, arrangement: Arrangement) ?*Snapshot {
+    const gpa = editor.app.gpa;
+    const snap = gpa.create(Snapshot) catch {
+        arrangement.arena.deinit();
+        return null;
+    };
+    snap.* = .{
+        .arena = .init(gpa),
+        .root = "",
+        .nodes = &.{},
+        .docs = &.{},
+        .active = null,
+        .arrangement = arrangement,
+        .branches = &.{},
+        .root_opened = editor.workbench.file_tree_root_opened,
+        .settings = &.{},
+        .material = editor.app.settings.window_material,
+        .focus = dvui.focusedWidgetId() orelse .zero,
+        .focus_subwindow = dvui.focusedSubwindowId(),
+    };
+    return snap;
+}
+
+fn destroySnapshot(editor: *Editor, snap: *Snapshot) void {
+    snap.arrangement.arena.deinit();
+    snap.arena.deinit();
+    editor.app.gpa.destroy(snap);
+}
+
 const Snapshot = struct {
     arena: std.heap.ArenaAllocator,
     /// The scene's folder: a snapshot is restored only into the scene it came from.
@@ -836,7 +937,7 @@ const Snapshot = struct {
     /// Open documents, in the order they were opened, and which was active.
     docs: []const Doc,
     active: ?usize,
-    explorer_closed: bool,
+    arrangement: Arrangement,
     branches: []const dvui.Id,
     /// Whether the tree had opened its root on its own yet (`Workbench.file_tree_root_opened`),
     /// put back with `branches`: a root shut because the tree had not been drawn yet would stay
@@ -846,16 +947,26 @@ const Snapshot = struct {
     material: core.material.Kind,
     focus: dvui.Id,
     focus_subwindow: dvui.Id,
-    /// How the window was arranged: the app's places as `layout.zon` would remember them
-    /// (`Editor.collectSavedRegions`, ZON, by name), its seed tree (ZON, null with none), each
-    /// place's widget state and view, and the documents' panes.
+
+    const Node = struct { path: []const u8, kind: @FieldType(core.vfs.Mem.Node, "kind"), bytes: []const u8 };
+    const Doc = struct { path: []const u8, grouping: u64, state: []const u8 };
+};
+
+/// The app's places as `Arrangement.regions` holds them.
+const RegionsZon = struct { regions: []const fizzy.backend.SavedRegion };
+
+/// How the window is arranged: what a scene's start, a snapshot and the tape's end put back.
+const Arrangement = struct {
+    arena: std.heap.ArenaAllocator,
+    /// The app's places as `layout.zon` would remember them (`Editor.collectSavedRegions`, ZON, by
+    /// name), its seed tree (ZON, null with none), each place's widget state and view, and the
+    /// documents' panes.
     regions: [:0]const u8,
     tree: ?[:0]const u8,
     places: []const Place,
     panes: Editor.Workbench.Arrangement,
+    explorer_closed: bool,
 
-    const Node = struct { path: []const u8, kind: @FieldType(core.vfs.Mem.Node, "kind"), bytes: []const u8 };
-    const Doc = struct { path: []const u8, grouping: u64, state: []const u8 };
     /// A place as it was drawn: how wide (`_size`; zero is shut), where it opens back to (`_open`),
     /// whether it was opened on a window too narrow for it (`_peek`), and the view it showed. The
     /// explorer's place keeps only its view: a restore opens or shuts the explorer itself
@@ -870,10 +981,65 @@ const Snapshot = struct {
         open: ?f32,
         peek: ?bool,
     };
-};
 
-/// The app's places and seed tree as `Snapshot.regions` and `Snapshot.tree` hold them.
-const Arrangement = struct { regions: []const fizzy.backend.SavedRegion };
+    /// The window as it is now, on its own arena; `destroy` frees it.
+    fn create(editor: *Editor) !*Arrangement {
+        const gpa = editor.app.gpa;
+        const self = try gpa.create(Arrangement);
+        errdefer gpa.destroy(self);
+        self.* = try take(editor, gpa);
+        return self;
+    }
+
+    /// The window as it is now, by value; its arena is in `gpa` and the owner frees it with
+    /// `arena.deinit()` (`destroy` does, for one made by `create`).
+    fn take(editor: *Editor, gpa: std.mem.Allocator) !Arrangement {
+        var arena: std.heap.ArenaAllocator = .init(gpa);
+        errdefer arena.deinit();
+        const a = arena.allocator();
+        const explorer = if (editor.regionFor(sdk.keywords.ide.sidebar)) |r| r.name else "";
+        const regions = editor.app.layout.regions.items;
+        const places = try a.alloc(Place, regions.len);
+        var n: usize = 0;
+        for (regions) |r| {
+            if (r.name.len == 0 or r.id == .zero) continue;
+            const view = editor.app.host.selectionForKey(r.selectionKey());
+            places[n] = .{
+                .id = r.id,
+                .key = r.selectionKey(),
+                .view = if (view) |v| try a.dupe(u8, v) else null,
+                .sized = !r.by_name and !std.mem.eql(u8, r.name, explorer),
+                .size = dvui.dataGet(null, r.id, "_size", f32),
+                .open = dvui.dataGet(null, r.id, "_open", f32),
+                .peek = dvui.dataGet(null, r.id, "_peek", bool),
+            };
+            n += 1;
+        }
+        const saved_regions = try regionsZon(editor, a);
+        const tree = try treeZon(editor, a);
+        const panes = try editor.workbench.arrangement(a);
+        // Copy the arena only after every allocation has updated its buffer list.
+        return .{
+            .arena = arena,
+            .regions = saved_regions,
+            .tree = tree,
+            .places = places[0..n],
+            .panes = panes,
+            .explorer_closed = editor.explorer.closed,
+        };
+    }
+
+    fn destroy(self: *Arrangement, gpa: std.mem.Allocator) void {
+        self.arena.deinit();
+        gpa.destroy(self);
+    }
+
+    /// Open or shut the explorer as it was.
+    fn restoreExplorer(self: *const Arrangement, editor: *Editor) void {
+        if (self.explorer_closed == editor.explorer.closed) return;
+        if (self.explorer_closed) editor.explorer.close(editor) else editor.explorer.open(editor);
+    }
+};
 
 /// The app's places as ZON, by name, in `gpa`: what a snapshot compares and puts back.
 fn regionsZon(editor: *Editor, gpa: std.mem.Allocator) ![:0]u8 {
@@ -887,7 +1053,7 @@ fn regionsZon(editor: *Editor, gpa: std.mem.Allocator) ![:0]u8 {
     }.less);
     var aw: std.Io.Writer.Allocating = .init(gpa);
     errdefer aw.deinit();
-    try std.zon.stringify.serializeMaxDepth(Arrangement{ .regions = regions }, .{}, &aw.writer, 16);
+    try std.zon.stringify.serializeMaxDepth(RegionsZon{ .regions = regions }, .{}, &aw.writer, 16);
     return aw.toOwnedSliceSentinel(0);
 }
 
@@ -906,30 +1072,13 @@ fn treeZon(editor: *Editor, gpa: std.mem.Allocator) !?[:0]u8 {
 fn capture(ctx: *anyopaque) ?*anyopaque {
     const self = from(ctx);
     const editor = self.editor;
-    const gpa = editor.app.gpa;
-    if (!idle(ctx) or editor.command_palette.open) return null;
+    if (!idle(ctx) or editor.command_palette.open or editor.app.layout.picker.is_open) return null;
     const root = self.mount orelse return null;
     const mem = self.mem orelse return null;
 
-    const snap = gpa.create(Snapshot) catch return null;
-    snap.* = .{
-        .arena = .init(gpa),
-        .root = undefined,
-        .nodes = &.{},
-        .docs = &.{},
-        .active = null,
-        .explorer_closed = editor.explorer.closed,
-        .branches = &.{},
-        .root_opened = editor.workbench.file_tree_root_opened,
-        .settings = &.{},
-        .material = editor.app.settings.window_material,
-        .focus = dvui.focusedWidgetId() orelse .zero,
-        .focus_subwindow = dvui.focusedSubwindowId(),
-        .regions = "",
-        .tree = null,
-        .places = &.{},
-        .panes = undefined,
-    };
+    const arrangement = Arrangement.take(editor, editor.app.gpa) catch return null;
+    const snap = newSnapshot(editor, arrangement) orelse return null;
+    snap.root = root;
     const ok = fill(self, snap, root, mem) catch false;
     if (!ok) {
         release(ctx, snap);
@@ -977,66 +1126,44 @@ fn fill(self: *Demo, snap: *Snapshot, root: []const u8, mem: *core.vfs.Mem) !boo
     }
     snap.settings = settings.items;
 
-    snap.regions = try regionsZon(editor, a);
-    snap.tree = try treeZon(editor, a);
-    const explorer = if (editor.regionFor(sdk.keywords.ide.sidebar)) |r| r.name else "";
-    const regions = editor.app.layout.regions.items;
-    const places = try a.alloc(Snapshot.Place, regions.len);
-    var n: usize = 0;
-    for (regions) |r| {
-        if (r.name.len == 0 or r.id == .zero) continue;
-        const view = editor.app.host.selectionForKey(r.selectionKey());
-        places[n] = .{
-            .id = r.id,
-            .key = r.selectionKey(),
-            .view = if (view) |v| try a.dupe(u8, v) else null,
-            .sized = !r.by_name and !std.mem.eql(u8, r.name, explorer),
-            .size = dvui.dataGet(null, r.id, "_size", f32),
-            .open = dvui.dataGet(null, r.id, "_open", f32),
-            .peek = dvui.dataGet(null, r.id, "_peek", bool),
-        };
-        n += 1;
-    }
-    snap.places = places[0..n];
-    snap.panes = try editor.workbench.arrangement(a);
     return true;
 }
 
-/// Put the window back to how `snap` found it (`Snapshot.regions` and on): the app's places, the
+/// Put the window back to how `arrangement` found it: the app's places, the
 /// floats, the seed tree, the documents' panes and each place's size and view. What is the same
 /// already is left alone, so a restore within one arrangement touches nothing of it. An error —
 /// having changed nothing — when it could not be read back: everything that can fail is done
-/// before anything changes.
-fn restoreArrangement(editor: *Editor, snap: *const Snapshot) !void {
+/// before anything changes. `graceful`: a float made since flies shut rather than going at once.
+fn restoreArrangement(editor: *Editor, arrangement: *const Arrangement, graceful: bool) !void {
     const gpa = editor.app.gpa;
     const state = &editor.app.layout;
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
     var diag: std.zon.parse.Diagnostics = undefined;
 
-    // The app's places as the snapshot had them, where they differ from now.
+    // The app's places as the arrangement had them, where they differ from now.
     const regions: ?[]const fizzy.backend.SavedRegion = blk: {
         const now = try regionsZon(editor, gpa);
         defer gpa.free(now);
-        if (std.mem.eql(u8, now, snap.regions)) break :blk null;
-        break :blk (try std.zon.parse.fromSlice(Arrangement, .{ .gpa = gpa, .arena = arena.allocator(), .source = snap.regions, .diagnostics = &diag })).regions;
+        if (std.mem.eql(u8, now, arrangement.regions)) break :blk null;
+        break :blk (try std.zon.parse.fromSlice(RegionsZon, .{ .gpa = gpa, .arena = arena.allocator(), .source = arrangement.regions, .diagnostics = &diag })).regions;
     };
     // Its seed tree, built, where it differs: null for none at all.
     const same_tree = blk: {
         const now = try treeZon(editor, gpa);
         defer if (now) |t| gpa.free(t);
-        if (now == null or snap.tree == null) break :blk now == null and snap.tree == null;
-        break :blk std.mem.eql(u8, now.?, snap.tree.?);
+        if (now == null or arrangement.tree == null) break :blk now == null and arrangement.tree == null;
+        break :blk std.mem.eql(u8, now.?, arrangement.tree.?);
     };
     var dock: ?core.widgets.DockLayout = null;
-    if (!same_tree) if (snap.tree) |source| {
+    if (!same_tree) if (arrangement.tree) |source| {
         const tree = try std.zon.parse.fromSlice(core.widgets.DockLayout.Snapshot, .{ .gpa = gpa, .arena = arena.allocator(), .source = source, .diagnostics = &diag });
         dock = try core.widgets.DockLayout.fromSnapshot(gpa, tree);
         dock.?.animated = true;
     };
     errdefer if (dock) |*d| d.deinit();
     // The panes: all or nothing, and the last thing that can fail.
-    try editor.workbench.arrange(snap.panes);
+    try editor.workbench.arrange(arrangement.panes);
 
     if (regions) |saved| {
         state.clearArrangement(gpa);
@@ -1059,7 +1186,18 @@ fn restoreArrangement(editor: *Editor, snap: *const Snapshot) !void {
             if (!std.mem.eql(u8, was.name, f.name) or at.x != f.rect.x or at.y != f.rect.y or at.w != f.rect.w or at.h != f.rect.h) break;
             kept += 1;
         }
-        while (state.floats.items.items.len > kept) state.floats.removeAt(state.floats.items.items.len - 1);
+        // Past `kept` they go: at once for a seek, flying shut for the tape's end (`graceful`),
+        // but only a float the snapshot lacks flies shut. One it has goes at once, or its closing
+        // self would still hold the name and `applySavedRegions` would not bring it back.
+        var i = state.floats.items.items.len;
+        while (i > kept) {
+            i -= 1;
+            const name = state.floats.items.items[i].name;
+            const saved_float = for (floats.items) |r| {
+                if (std.mem.eql(u8, r.name, name)) break true;
+            } else false;
+            if (graceful and !saved_float) @import("app").layout.Layout.Floats.flyShut(state, i) else state.floats.removeAt(i);
+        }
         editor.applySavedRegions(saved);
     }
     if (!same_tree) {
@@ -1071,12 +1209,12 @@ fn restoreArrangement(editor: *Editor, snap: *const Snapshot) !void {
     // forgotten too, or a split of that name made again would open at the size this one was left.
     for (state.regions.items) |r| {
         if (r.by_name or r.id == .zero) continue;
-        const had = for (snap.places) |p| {
+        const had = for (arrangement.places) |p| {
             if (p.id == r.id) break true;
         } else false;
         if (!had) @import("app").layout.Layout.State.forgetWidgetSize(r.id);
     }
-    for (snap.places) |p| {
+    for (arrangement.places) |p| {
         if (p.sized) {
             putData(f32, p.id, "_size", p.size);
             // At rest at that size, not easing toward it.
@@ -1114,16 +1252,14 @@ fn restore(ctx: *anyopaque, raw: *anyopaque) bool {
     for (snap.docs) |d| _ = openDoc(editor, d.path) orelse return false;
     // The window as it was, before anything else is put back: it can fail, and fails changing
     // nothing.
-    restoreArrangement(editor, snap) catch |err| {
+    restoreArrangement(editor, &snap.arrangement, false) catch |err| {
         dvui.log.warn("demo: could not put the window's layout back: {t}", .{err});
         return false;
     };
 
     // What has started since — loads, documents opened after it — goes.
     editor.command_palette.finishClose();
-    editor.cancelAllLoadingJobs();
-    while (editor.doc_io.loads.count() > 0) editor.doc_io.cancel(editor.doc_io.loads.keys()[0]);
-    while (editor.openings.entries.count() > 0) editor.openings.drop(editor, editor.openings.entries.keys()[0]);
+    cancelDemoLoads(editor);
     var i = editor.app.open_files.count();
     while (i > 0) {
         i -= 1;
@@ -1148,9 +1284,7 @@ fn restore(ctx: *anyopaque, raw: *anyopaque) bool {
         if (openIndex(editor, snap.docs[a].path)) |index| editor.workbench.setActiveDocIndex(index);
     }
 
-    if (snap.explorer_closed != editor.explorer.closed) {
-        if (snap.explorer_closed) editor.explorer.close(editor) else editor.explorer.open(editor);
-    }
+    snap.arrangement.restoreExplorer(editor);
     editor.workbench.open_branches.clearRetainingCapacity();
     for (snap.branches) |id| editor.workbench.setBranchOpen(id, true);
     editor.workbench.file_tree_root_opened = snap.root_opened;
@@ -1170,8 +1304,7 @@ fn restore(ctx: *anyopaque, raw: *anyopaque) bool {
 
 fn release(ctx: *anyopaque, raw: *anyopaque) void {
     const snap: *Snapshot = @ptrCast(@alignCast(raw));
-    snap.arena.deinit();
-    from(ctx).editor.app.gpa.destroy(snap);
+    destroySnapshot(from(ctx).editor, snap);
 }
 
 /// The model a snapshot holds (the demo's own documents, never the person's), less what may differ between passes — scroll, focus, and which

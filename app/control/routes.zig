@@ -10,6 +10,8 @@
 //!   POST /mcp              the Model Context Protocol, its tools the commands (`app/mcp.zig`)
 //!   GET  /events           the app's events as Server-Sent Events, `?topics=a,b` to choose
 //!                          (a name, or a prefix ending in `*`); every event when absent
+//!   GET  /remote           upgrades to the remote-view protocol (`Upgrade: fizzy-remote-view/1`):
+//!                          a client opens views of the app and gets frames (`app/remote/`)
 //!
 //! Bodies are JSON, converted at this edge (`json.zig`). A request sent as `application/zon` is
 //! passed through as ZON and answered in ZON. Errors are HTTP's: 404 for an unknown command, 400
@@ -22,6 +24,7 @@ const json = @import("json.zig");
 const openapi = @import("openapi.zig");
 const mcp = @import("../mcp.zig");
 const Server = @import("Server.zig");
+const Service = @import("../remote/Service.zig");
 
 pub const Answer = struct {
     /// Stream the app's events to this connection instead (`GET /events`).
@@ -41,10 +44,14 @@ const zon_type = "application/zon";
 /// Answer what waits on `server`. On the UI thread, once a frame, before plugins' `beginFrame`, so
 /// a command run here is seen by the frame that follows.
 pub fn answerPending(server: *Server, state: *State, host: *sdk.Host) void {
-    var taken: std.ArrayListUnmanaged(*Server.Request) = .empty;
+    var taken: std.ArrayList(*Server.Request) = .empty;
     defer taken.deinit(server.gpa);
     var streaming = server.take(&taken) > 0;
     for (taken.items) |req| {
+        if (std.mem.eql(u8, std.mem.trimEnd(u8, req.path(), "/"), "/remote")) {
+            upgradeRemote(server, state, host, req);
+            continue;
+        }
         var arena: std.heap.ArenaAllocator = .init(server.gpa);
         defer arena.deinit();
         // Ready for a command that answers later; let go of when it answers now.
@@ -90,6 +97,12 @@ pub fn answerPending(server: *Server, state: *State, host: *sdk.Host) void {
             req.answer(server, a.status, a.content_type, a.body);
         }
     }
+    if (state.remote) |*remote| {
+        remote.pump();
+        // A close waits `Link.close_grace_ms` for a peer to read; an idle app has no frame to cut
+        // it off, so ask for one until none is waiting.
+        if (remote.anyClosing()) server.wake();
+    }
     if (state.sessions.list.items.len > 0) state.sessions.expire(server.gpa, host, std.Io.Clock.awake.now(server.io).nanoseconds);
     state.follow(host, server, streaming);
 }
@@ -109,6 +122,35 @@ pub fn stop(server: *Server, state: *State, host: *sdk.Host) void {
     state.sessions = .{};
     state.follow(host, server, false);
     server.stop();
+    // After the server: stopping it shuts every connection down, so no link is left blocked.
+    if (state.remote) |*remote| {
+        remote.closeAll();
+        remote.deinit(host);
+        state.remote = null;
+    }
+}
+
+/// `GET /remote`: the connection becomes the remote-view protocol's stream (`Service`).
+fn upgradeRemote(server: *Server, state: *State, host: *sdk.Host, req: *Server.Request) void {
+    if (req.method != .GET) return req.answer(server, .method_not_allowed, "application/json", "{\"error\":\"use GET\"}");
+    const wants = req.upgrade orelse "";
+    if (!std.ascii.eqlIgnoreCase(std.mem.trim(u8, wants, " "), Service.upgrade_token))
+        return req.answer(server, .upgrade_required, "application/json", "{\"error\":\"send Upgrade: " ++ Service.upgrade_token ++ "\"}");
+    const oom = "{\"error\":\"out of memory\"}";
+    const link = server.gpa.create(Server.Link) catch return req.answer(server, .internal_server_error, "application/json", oom);
+    link.* = .init(server.gpa, server.io, server.wake);
+    if (state.remote == null) state.remote = Service.init(server.gpa, .{
+        .app_id = AppInfo.current.name,
+        .app_version = AppInfo.current.version,
+        .tiers_offered = .{ .draw_list = true },
+        .mode = .standalone,
+    });
+    state.remote.?.accept(host, link) catch |err| {
+        server.gpa.destroy(link);
+        if (err == error.TooManySessions) return req.answer(server, .service_unavailable, "application/json", "{\"error\":\"too many remote clients\"}");
+        return req.answer(server, .internal_server_error, "application/json", oom);
+    };
+    req.answerUpgrade(server, link);
 }
 
 /// A request whose command answers in a later frame: answered by the host's call to `done`
@@ -161,9 +203,11 @@ pub const State = struct {
     },
     on: bool = false,
     /// Requests whose commands answer in a later frame (`Waiter`). UI thread.
-    waiters: std.ArrayListUnmanaged(*Waiter) = .empty,
+    waiters: std.ArrayList(*Waiter) = .empty,
     /// The MCP clients that initialized (`mcp.Sessions`). UI thread.
     sessions: mcp.Sessions = .{},
+    /// The remote-view clients (`GET /remote`), once one has connected. UI thread.
+    remote: ?Service = null,
 
     const relay_vtable: sdk.Plugin.VTable = .{};
 
@@ -218,7 +262,7 @@ fn route(host: *sdk.Host, method: std.http.Method, path: []const u8, content_typ
     }
     if (std.mem.eql(u8, trimmed, "/commands")) {
         if (method != .GET and method != .HEAD) return notAllowed(arena, "GET");
-        var list: std.ArrayListUnmanaged(CommandInfo) = .empty;
+        var list: std.ArrayList(CommandInfo) = .empty;
         for (host.commands.items) |*c| try list.append(arena, try describe(c, arena));
         return ok(arena, list.items);
     }
@@ -283,7 +327,7 @@ fn route(host: *sdk.Host, method: std.http.Method, path: []const u8, content_typ
 fn call(host: *sdk.Host, c: *const sdk.Command, content_type: ?[]const u8, body: []const u8, arena: std.mem.Allocator, waiter: ?*Waiter) error{OutOfMemory}!Answer {
     const as_zon = isZon(content_type);
     const args = if (as_zon) body else args: {
-        var enum_keys: std.ArrayListUnmanaged([]const u8) = .empty;
+        var enum_keys: std.ArrayList([]const u8) = .empty;
         for (c.params) |p| if (p.kind == .enumeration) try enum_keys.append(arena, p.key);
         break :args json.zonFromJson(arena, body, enum_keys.items) catch |err| return switch (err) {
             error.OutOfMemory => error.OutOfMemory,
@@ -396,6 +440,7 @@ fn describe(c: *const sdk.Command, arena: std.mem.Allocator) error{OutOfMemory}!
     };
 }
 
+// anytype: Response bodies have route-specific shapes serialized to JSON.
 fn ok(arena: std.mem.Allocator, value: anytype) error{OutOfMemory}!Answer {
     return .{ .status = .ok, .body = try std.json.Stringify.valueAlloc(arena, value, .{ .emit_null_optional_fields = false }) };
 }

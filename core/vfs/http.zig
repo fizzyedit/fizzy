@@ -138,6 +138,7 @@ pub fn Completions(comptime Payload: type) type {
         /// start new jobs (they wait for the next drain) or cancel later ones in this batch
         /// (they are skipped). Re-entered from a callback, it does nothing: the outer drain is
         /// still walking the batch.
+        // anytype: Each consumer supplies its own delivery callback context type.
         pub fn drain(self: *Self, ctx: anytype, comptime deliver: fn (@TypeOf(ctx), Payload) void) void {
             if (self.delivering.items.len != 0) return;
             self.delivering = self.items;

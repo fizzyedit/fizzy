@@ -56,6 +56,10 @@ pub const Options = struct {
     /// its own process group, so the hangup when this process's terminal closes never reaches
     /// it. For a child meant to outlive whatever started this one, the way `open` would.
     new_session: bool = false,
+    /// Names of extra variables to forward from this process's environment, on top of the fixed
+    /// allowlist below. Empty by default; a caller passes a name only when the user opted in
+    /// (an API key). A name this process does not have set is skipped; values are never logged.
+    extra_env: []const []const u8 = &.{},
 };
 
 /// Environment variables forwarded to the child, looked up individually via `getenv()` rather
@@ -74,7 +78,7 @@ pub fn spawn(gpa: std.mem.Allocator, opts: Options, path_override: ?[]const u8) 
         for (argv_z) |a| if (a) |p| gpa.free(std.mem.span(p));
         gpa.free(argv_z);
     }
-    const envp_z = buildEnvp(gpa, path_override) catch return error.OutOfMemory;
+    const envp_z = buildEnvp(gpa, opts.extra_env, path_override) catch return error.OutOfMemory;
     defer {
         for (envp_z) |e| if (e) |p| gpa.free(std.mem.span(p));
         gpa.free(envp_z);
@@ -188,23 +192,63 @@ fn buildArgv(gpa: std.mem.Allocator, items: []const []const u8) ![:null]?[*:0]co
     return argv;
 }
 
-fn buildEnvp(gpa: std.mem.Allocator, path_override: ?[]const u8) ![:null]?[*:0]const u8 {
-    var tmp: [forwarded_env_keys.len + 1]?[*:0]const u8 = undefined;
-    var n: usize = 0;
-    errdefer for (tmp[0..n]) |e| if (e) |p| gpa.free(std.mem.span(p));
+fn buildEnvp(gpa: std.mem.Allocator, extra_env: []const []const u8, path_override: ?[]const u8) ![:null]?[*:0]const u8 {
+    var list: std.ArrayList(?[*:0]const u8) = .empty;
+    defer list.deinit(gpa);
+    errdefer for (list.items) |e| if (e) |p| gpa.free(std.mem.span(p));
+    try list.ensureTotalCapacity(gpa, forwarded_env_keys.len + extra_env.len + 1);
 
     for (forwarded_env_keys) |key| {
         const value = c.getenv(key) orelse continue;
-        tmp[n] = (try gpa.printSentinel("{s}={s}", .{ key, std.mem.span(value) }, 0)).ptr;
-        n += 1;
+        list.appendAssumeCapacity((try gpa.printSentinel("{s}={s}", .{ key, std.mem.span(value) }, 0)).ptr);
+    }
+    extra: for (extra_env) |name| {
+        if (name.len == 0 or std.mem.eql(u8, name, "PATH")) continue;
+        for (forwarded_env_keys) |key| if (std.mem.eql(u8, name, key)) continue :extra;
+        const key_z = try gpa.dupeSentinel(u8, name, 0);
+        defer gpa.free(key_z);
+        const value = c.getenv(key_z) orelse continue;
+        list.appendAssumeCapacity((try gpa.printSentinel("{s}={s}", .{ name, std.mem.span(value) }, 0)).ptr);
     }
     const path_value = path_override orelse if (c.getenv("PATH")) |p| std.mem.span(p) else null;
     if (path_value) |p| {
-        tmp[n] = (try gpa.printSentinel("PATH={s}", .{p}, 0)).ptr;
-        n += 1;
+        list.appendAssumeCapacity((try gpa.printSentinel("PATH={s}", .{p}, 0)).ptr);
     }
 
-    const envp = try gpa.allocSentinel(?[*:0]const u8, n, null);
-    @memcpy(envp, tmp[0..n]);
+    const envp = try gpa.allocSentinel(?[*:0]const u8, list.items.len, null);
+    @memcpy(envp, list.items);
     return envp;
+}
+
+test "buildEnvp forwards only listed extra names" {
+    if (@import("builtin").os.tag != .macos) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const libc = struct {
+        extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
+        extern "c" fn unsetenv(name: [*:0]const u8) c_int;
+    };
+    _ = libc.setenv("FIZZY_TEST_EXTRA_KEY", "v", 1);
+    defer _ = libc.unsetenv("FIZZY_TEST_EXTRA_KEY");
+
+    const without = try buildEnvp(gpa, &.{}, "/bin");
+    defer {
+        for (without) |e| gpa.free(std.mem.span(e.?));
+        gpa.free(without);
+    }
+    for (without) |e| try std.testing.expect(!std.mem.startsWith(u8, std.mem.span(e.?), "FIZZY_TEST_EXTRA_KEY="));
+
+    const with = try buildEnvp(gpa, &.{ "FIZZY_TEST_EXTRA_KEY", "PATH", "FIZZY_TEST_UNSET" }, "/bin");
+    defer {
+        for (with) |e| gpa.free(std.mem.span(e.?));
+        gpa.free(with);
+    }
+    var found: usize = 0;
+    var paths: usize = 0;
+    for (with) |e| {
+        const s = std.mem.span(e.?);
+        if (std.mem.eql(u8, s, "FIZZY_TEST_EXTRA_KEY=v")) found += 1;
+        if (std.mem.startsWith(u8, s, "PATH=")) paths += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), found);
+    try std.testing.expectEqual(@as(usize, 1), paths);
 }

@@ -1523,6 +1523,8 @@ pub fn viewportOpenMenu(self: *SDLBackend, at: viewport_map.Rect, radius: f32, r
     switch (comptime builtin.target.os.tag) {
         .macos => {
             _ = fizzy_macos_viewport_menu(cocoaWindow(vp.window), cocoaWindow(self.window), platform.window.ns_visual_effect_material, radius, @intFromBool(dialog));
+            // Gone while the app is left (a quiet run is never active: its menus stay).
+            if (!dialog and !quiet) fizzy_macos_viewport_menu_hides(cocoaWindow(vp.window));
             vp.ride = switch (ride) {
                 .none => null,
                 .main => self.window,
@@ -2178,6 +2180,7 @@ extern fn fizzy_macos_window_bring_forward(nswindow: ?*anyopaque) void;
 extern fn fizzy_macos_viewport_still(nswindow: ?*anyopaque) void;
 extern fn fizzy_macos_viewport_menu(nswindow: ?*anyopaque, main: ?*anyopaque, material: c_long, radius: f64, dialog: c_int) c_int;
 extern fn fizzy_macos_viewport_menu_attached(nswindow: ?*anyopaque) void;
+extern fn fizzy_macos_viewport_menu_hides(nswindow: ?*anyopaque) void;
 extern fn fizzy_macos_viewport_order_above(nswindow: ?*anyopaque, other: ?*anyopaque) void;
 extern fn fizzy_macos_viewport_lift(nswindow: ?*anyopaque, other: ?*anyopaque) void;
 extern fn fizzy_macos_viewport_settle(nswindow: ?*anyopaque, main_nswindow: ?*anyopaque) void;
@@ -3578,6 +3581,9 @@ pub fn addEvent(self: *SDLBackend, win: *dvui.Window, event: c.SDL_Event) !bool 
             if (self.log_events) {
                 log.debug("event FOCUS_LOST\n", .{});
             }
+            // A frame to see it: the app's menus close on leaving it (`appActive`), and an idle
+            // loop runs none on its own.
+            self.refresh();
             try self.releaseTouches(win);
             if (dvui.accesskit_enabled and builtin.target.os.tag == .linux) {
                 dvui.AccessKit.c.accesskit_unix_adapter_update_window_focus_state(win.accesskit.adapter, false);

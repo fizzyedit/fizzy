@@ -147,6 +147,9 @@ arena: std.mem.Allocator,
 state: *State,
 /// Long-lived allocations the state makes (a remembered extent's name).
 gpa: std.mem.Allocator,
+/// What the device is, read from `core.platform` when the frame's layout is made: a shape reads
+/// this to choose its arrangement (mobile's single place, a desktop's rail and splits).
+form_factor: core.platform.FormFactor = .desktop,
 /// The card a place wears when it asks for one (`Region.InitOptions.card`): its fill, corners and
 /// padding. Set by the shape before it declares its places, and worn by the floats' places too,
 /// which are drawn after the shape — so a view, and the places a split makes, look the same in a
@@ -157,13 +160,13 @@ card: ?dvui.Options = null,
 extents_changed: bool = false,
 /// Every surface `draw` ran this frame, so `captureUnplaced` knows which ones genuinely drew
 /// nowhere — as opposed to drew before the picker asked. Arena-backed, per frame.
-drawn: std.ArrayListUnmanaged(*Surface) = .empty,
+drawn: std.ArrayList(*Surface) = .empty,
 /// Views a plugin asked to put away during this frame (`hideLater`), put away once it has drawn
 /// (`applyHides`). Arena-backed, per frame.
-hides: std.ArrayListUnmanaged([]const u8) = .empty,
+hides: std.ArrayList([]const u8) = .empty,
 /// Surfaces drawn this frame in a place with no room, so not captured (`drawCaptured`): no frame
 /// is asked for them until they have some. Arena-backed, per frame.
-unsized: std.ArrayListUnmanaged(*Surface) = .empty,
+unsized: std.ArrayList(*Surface) = .empty,
 
 /// Open regions, innermost last. Every region pushes; its `deinit` pops. This is what lets
 /// `split` know which axis it divides and which neighbour it resizes, without a shape having to
@@ -198,7 +201,7 @@ pub const Container = struct {
     base_min: f32 = 0,
     /// Every resizable region in this container. A split needs them all so `push_out` can
     /// shrink the trays behind the one being dragged. Arena-backed, this frame only — no count cap.
-    resizables: std.ArrayListUnmanaged(dvui.Id) = .empty,
+    resizables: std.ArrayList(dvui.Id) = .empty,
     /// Packed splits in this container, each `Split.handle_size`. The drag
     /// budget subtracts this so a handle is never eaten by a tray.
     handles: f32 = 0,
@@ -251,7 +254,7 @@ pub const slot_keywords: []const []const u8 = &.{"slot"};
 /// a split's arrow.
 pub fn init(host: *sdk.Host, state: *State, gpa: std.mem.Allocator, arena: std.mem.Allocator) Layout {
     if (state.view_drag.active()) dvui.cursorSetPriority(ViewDrag.cursor, .drag);
-    return .{ .host = host, .state = state, .gpa = gpa, .arena = arena };
+    return .{ .host = host, .state = state, .gpa = gpa, .arena = arena, .form_factor = core.platform.formFactor() };
 }
 
 fn innermost(self: *Layout) ?*Container {
@@ -380,7 +383,7 @@ fn containsId(ids: []const []const u8, id: []const u8) bool {
 }
 
 fn matchingWith(self: *Layout, keywords: []const []const u8, assigned: ?[]const []const u8, require_fit: bool, order_name: []const u8) []const *Surface {
-    var out: std.ArrayListUnmanaged(*Surface) = .empty;
+    var out: std.ArrayList(*Surface) = .empty;
     const a = self.arena;
     if (assigned) |ids| {
         for (ids) |id| {
@@ -423,7 +426,7 @@ fn visibleNow(self: *Layout, s: *const Surface) bool {
 /// `matchingIn` with takeovers left out — the list a *trigger* is chosen from.
 fn plainMatchingIn(self: *Layout, r: *const Region) []const *Surface {
     const assigned = if (r.by_name) self.state.assignment(r.name) else self.assignedFor(r.keywords);
-    var out: std.ArrayListUnmanaged(*Surface) = .empty;
+    var out: std.ArrayList(*Surface) = .empty;
     const a = self.arena;
     if (assigned) |ids| {
         for (ids) |id| {
@@ -673,7 +676,7 @@ pub fn applyHides(self: *Layout) bool {
 /// attracted by keywords to an unassigned one. Never silently lost: the settings UI lists these
 /// so a user (or the plugin author) can see the gap and fix it.
 pub fn unplaced(self: *Layout) []const *Surface {
-    var out: std.ArrayListUnmanaged(*Surface) = .empty;
+    var out: std.ArrayList(*Surface) = .empty;
     const a = self.arena;
     outer: for (self.host.surfaces.items) |*s| {
         if (s.hidden) continue;
@@ -1075,6 +1078,7 @@ test {
     _ = @import("Drop.zig");
     _ = @import("ViewDrag.zig");
     _ = @import("Picker.zig");
+    _ = @import("State.zig");
 }
 /// Declare a region — the verb form of `Region.init`, so a shape writes `f.region(...)` beside
 /// `f.split(...)` and never names the type. Same arrangement as `dvui.box` over `BoxWidget.init`.
@@ -1083,6 +1087,8 @@ pub const region = Region.init;
 pub const splitNamed = Region.splitNamed;
 /// Divide a named place from a specific edge — a view-drag drop onto that side.
 pub const splitOn = Region.splitOn;
+/// Mark the split that minted a place as fizzy's own, so it follows its space's shape (`core.placement`).
+pub const markAdaptive = Region.markAdaptive;
 /// Move the visible surface from one place to another — a view-drag drop.
 pub const placeVisible = ViewDrag.place;
 
@@ -1533,9 +1539,30 @@ const ScrollWatch = struct {
 
 /// A surface's draw, timed in the frame profiler under its owner (fizzy's own when it has none)
 /// and its id.
-fn surfaceDraw(s: *Surface) anyerror!dvui.App.Result {
+fn surfaceDraw(s: *Surface) Region.Error!dvui.App.Result {
     const prof = core.profile.begin(if (s.owner) |o| o.id else "fizzy", s.id);
     defer prof.end();
-    const owner = s.owner orelse return s.draw(s.ctx);
-    return s.draw(s.ctx) catch |err| owner.failed(s.id, err);
+    return s.draw(s.ctx) catch |err| if (s.owner) |o| o.failed(s.id, err) else switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        else => {
+            dvui.log.err("{s}: draw failed: {s}", .{ s.id, @errorName(err) });
+            return error.Failed;
+        },
+    };
+}
+
+test "a surface's draw failure reaches a caller as Region.Error; an allocation keeps its name" {
+    const fns = struct {
+        // lint-allow(anyerror): `Surface.draw`'s own type.
+        fn starved(_: ?*anyopaque) anyerror!dvui.App.Result {
+            return error.OutOfMemory;
+        }
+    };
+    var s: Surface = .{ .id = "test.surface", .title = "Test", .draw = fns.starved };
+    const why: []const u8 = if (surfaceDraw(&s)) |_| "ok" else |err| switch (err) {
+        error.OutOfMemory => "oom",
+        error.PluginFailed => "plugin",
+        error.Failed => "failed",
+    };
+    try std.testing.expectEqualStrings("oom", why);
 }

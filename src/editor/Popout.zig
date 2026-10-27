@@ -428,6 +428,9 @@ pub const Shown = struct {
     h: u32,
     /// Where its window lies over the main window's frame, physical pixels from its top left.
     in_main: dvui.Point.Physical,
+    /// The window's rect there, whole: its size over the main window, which can differ from its
+    /// `part`'s (a float scaled or clipped to its viewport).
+    over: dvui.Rect.Physical,
 };
 
 /// Each OS window shown this frame besides the main one, into `buf`, bottom to top as the OS
@@ -440,7 +443,7 @@ pub fn windowsShown(buf: []Shown) []Shown {
         const p = o.part orelse continue;
         const t = o.target orelse continue;
         if (n == buf.len) break;
-        buf[n] = .{ .kind = .float, .title = o.title_buf[0..o.title_len], .part = physical(p), .subwindow = o.subwindow, .target = t, .w = o.drawn[0], .h = o.drawn[1], .in_main = physical(viewports.inMain(o.viewport)).topLeft() };
+        buf[n] = .{ .kind = .float, .title = o.title_buf[0..o.title_len], .part = physical(p), .subwindow = o.subwindow, .target = t, .w = o.drawn[0], .h = o.drawn[1], .in_main = physical(viewports.inMain(o.viewport)).topLeft(), .over = physical(viewports.inMain(o.viewport)) };
         n += 1;
     }
     for (menus) |slot| {
@@ -449,7 +452,7 @@ pub fn windowsShown(buf: []Shown) []Shown {
         const t = m.target orelse continue;
         if (n == buf.len) break;
         const title = if (m.dialog) fizzy.core.dialogs.dialogTitle(m.id) orelse "" else "";
-        buf[n] = .{ .kind = if (m.dialog) .dialog else .menu, .title = title, .part = physical(p), .subwindow = m.id, .target = t, .w = t.width, .h = t.height, .in_main = physical(viewports.inMain(m.viewport)).topLeft() };
+        buf[n] = .{ .kind = if (m.dialog) .dialog else .menu, .title = title, .part = physical(p), .subwindow = m.id, .target = t, .w = t.width, .h = t.height, .in_main = physical(viewports.inMain(m.viewport)).topLeft(), .over = physical(viewports.inMain(m.viewport)) };
         n += 1;
     }
     return buf[0..n];
@@ -741,7 +744,7 @@ fn glassBase(shapes: []const fizzy.core.native_glass.Shape, area: dvui.Rect.Phys
             nd += 1;
         } else if (c.a > 0) {
             // A card or a tab: a rounded rect of its own, nothing to run into.
-            r.insetAll(inset).fill(.all(@max(0, sh.radius - inset)), .{ .color = .{ .color = c } });
+            r.insetAll(inset).fill(.all(@max(0, sh.radius - inset)), .{ .color = .{ .color = c }, .fade = 1 });
         }
     }
     fizzy.core.liquid_blob.fill(discs[0..nd], spacing * s, s, color, 0, .white, fizzy.core.liquid_blob.cell_points * @max(s, 0.5));
@@ -767,7 +770,7 @@ const glass_lit: f32 = 0.12;
 /// display's rate (60 frames a second where it could have 120). With the room to spare it moves
 /// only when the glass reaches past it, or it is far bigger than the glass needs, rather than
 /// every frame the drop moves. Null with no glass to cover.
-fn overlayArea(display: anytype, main_px: dvui.Rect.Physical, s: f32) ?dvui.Rect.Physical {
+fn overlayArea(display: viewports.Rect, main_px: dvui.Rect.Physical, s: f32) ?dvui.Rect.Physical {
     var glass: ?dvui.Rect.Physical = null;
     for (fizzy.core.native_glass.shapes()) |sh| {
         const r = inMainFrame(sh.rect, main_px) orelse continue;
@@ -842,7 +845,7 @@ fn carryBegin(c: *Carry, place: dvui.Rect.Physical, shape: dvui.Rect.Physical, r
         if (fill > 0) {
             var color = base(false);
             color.a = @intFromFloat(@round(255 * std.math.clamp(fill, 0, 1)));
-            shape.fill(.round(radius), .{ .color = .{ .color = color } });
+            shape.fill(.round(radius), .{ .color = .{ .color = color }, .fade = 1 });
         }
     }
     return .{ .picture = picture, .shown = shown };
@@ -1244,7 +1247,7 @@ fn backing(target: dvui.Rect.Physical, window: dvui.Rect.Physical, color: dvui.C
     defer dvui.alphaSet(prev_alpha);
     const theme = dvui.themeGet();
     const corners = fizzy.core.dialogs.surfaceCorners().finalize(&theme).scale(cw.natural_scale, dvui.CornerRect.Physical);
-    bounds.fill(corners, .{ .color = .{ .color = color } });
+    bounds.fill(corners, .{ .color = .{ .color = color }, .fade = 1 });
 }
 
 /// Whether menus are windows of their own (`menuFrame`): where the OS can show them (macOS; Windows,
@@ -1310,9 +1313,12 @@ fn menuFrame() void {
     const s = dvui.windowNaturalScale();
     const theme = dvui.themeGet();
     const radius = fizzy.core.dialogs.surfaceCorners().finalize(&theme).tl.radius();
+    const menus_out = nativeMenus();
     for (cw.subwindows.stack.items) |*sw| {
         const as_dialog = fizzy.core.screens.dialog(sw.id);
-        if (as_dialog == null and !fizzy.core.screens.isMenu(sw.id)) continue;
+        // A menu is a window of its own only while menus are (`nativeMenus`), as the float
+        // replay decides: with only dialogs on, a menu stays in the window it opened in.
+        if (as_dialog == null and !(menus_out and fizzy.core.screens.isMenu(sw.id))) continue;
         const corner = if (as_dialog) |d| d.radius else radius;
         const frame = sw.rect_pixels;
         if (frame.w < 1 or frame.h < 1) continue;
@@ -1379,12 +1385,38 @@ fn menuFrame() void {
             const prev_alpha = cw.alpha;
             dvui.alphaSet(1);
             defer dvui.alphaSet(prev_alpha);
-            frame.fill(dvui.CornerRect.Physical.all(corner * s), .{ .color = .{ .color = Editor.windowBase(op) } });
+            frame.fill(dvui.CornerRect.Physical.all(corner * s), .{ .color = .{ .color = Editor.windowBase(op) }, .fade = 1 });
         }
         dvui.currentWindow().renderSubwindow(sw, .{ .take = true });
+        // What opened from it and stays above it (a tooltip on one of its buttons) is drawn in its
+        // window, over it: left to the main window's replay it lay under this OS window, unseen.
+        // The stack keeps a parent before its children.
+        for (cw.subwindows.stack.items) |*child| {
+            if (child == sw or !ownedBy(cw, child, sw.id)) continue;
+            // Another window's to draw: a carried view, one shown everywhere, the main window's, or
+            // a menu or dialog of its own (a dropdown out of this menu), which `menuFrame` reaches
+            // in turn; drawn here it would be cut at this menu's edge.
+            const id = child.id;
+            if (fizzy.core.screens.isCarried(id) or fizzy.core.screens.isEverywhere(id) or fizzy.core.screens.isMain(id)) continue;
+            if ((menus_out and fizzy.core.screens.isMenu(id)) or fizzy.core.screens.dialog(id) != null) continue;
+            cw.renderSubwindow(child, .{ .take = true });
+        }
         picture.end();
         viewports.present(m.viewport, target);
     }
+}
+
+/// Whether `sw` is a subwindow that stays above `root` (`stay_above_parent_window`), directly or
+/// through others that do: a tooltip over a menu's button, a menu over that tooltip's own.
+fn ownedBy(cw: *dvui.Window, sw: *const dvui.Subwindows.Subwindow, root: dvui.Id) bool {
+    var at = sw.stay_above_parent_window;
+    var depth: u8 = 0;
+    while (at) |id| : (depth += 1) {
+        if (id == root) return true;
+        if (depth >= 8) return false;
+        at = (cw.subwindows.get(id) orelse return false).stay_above_parent_window;
+    }
+    return false;
 }
 
 /// A dialog opened in a float that is out goes with it, as a dialog belongs to the window it opened

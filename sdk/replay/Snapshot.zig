@@ -7,7 +7,10 @@
 //!
 //! ```
 //! .{
-//!     .{ .role = "tab", .name = "Files", .tag = "fizzy.rail:files", .rect = .{ .x = 8, .y = 52, .w = 40, .h = 40 } },
+//!     .{
+//!         .role = "tab", .name = "Files", .tag = "fizzy.rail:files",
+//!         .rect = .{ .x = 8, .y = 52, .w = 40, .h = 40 },
+//!     },
 //!     .{ .role = "button", .name = "Close Tab", .rect = .{ … }, .parent = 3 },
 //! }
 //! ```
@@ -271,7 +274,23 @@ pub const Node = struct {
 /// The roles a person acts on: a widget with one is a node even with no tag.
 pub fn acted(role: dvui.AccessKit.Role) bool {
     return switch (role) {
-        .button, .default_button, .tab, .check_box, .radio_button, .link, .menu_item, .list_box_option, .tree_item, .text_input, .multiline_text_input, .search_input, .slider, .combo_box, .dialog, .alert_dialog => true,
+        .button,
+        .default_button,
+        .tab,
+        .check_box,
+        .radio_button,
+        .link,
+        .menu_item,
+        .list_box_option,
+        .tree_item,
+        .text_input,
+        .multiline_text_input,
+        .search_input,
+        .slider,
+        .combo_box,
+        .dialog,
+        .alert_dialog,
+        => true,
         else => false,
     };
 }
@@ -344,7 +363,12 @@ pub fn build(arena: std.mem.Allocator, widgets: []const CapturedWidget, windows:
         const owner = index_of.get(p.data.id);
         const within = if (owner) |i| node_of[i] else null;
         const subwindow = if (owner) |i| widgets[i].subwindow_id else null;
-        try nodes.append(arena, .{ .tag = p.name, .rect = round(p.data.rect), .parent = within, .window = windowOf(windows, p.data.id, subwindow, p.data.rect.center()) });
+        try nodes.append(arena, .{
+            .tag = p.name,
+            .rect = round(p.data.rect),
+            .parent = within,
+            .window = windowOf(windows, p.data.id, subwindow, p.data.rect.center()),
+        });
     }
     return nodes.items;
 }
@@ -361,7 +385,12 @@ pub fn write(nodes: []const Node, w: *std.Io.Writer) !void {
 }
 
 fn round(r: dvui.Rect.Physical) Node.Rect {
-    return .{ .x = @intFromFloat(@round(r.x)), .y = @intFromFloat(@round(r.y)), .w = @intFromFloat(@round(r.w)), .h = @intFromFloat(@round(r.h)) };
+    return .{
+        .x = @intFromFloat(@round(r.x)),
+        .y = @intFromFloat(@round(r.y)),
+        .w = @intFromFloat(@round(r.w)),
+        .h = @intFromFloat(@round(r.h)),
+    };
 }
 
 /// The name widget `i` goes by, or null when it has none: its `label` text, the label widget it
@@ -413,7 +442,11 @@ fn testFrame() !dvui.App.Result {
     defer box.deinit();
     _ = dvui.button(@src(), "Save", .{}, .{ .tag = "demo.save" });
     // An icon-only button: named by its label, not by anything it shows.
-    var close = dvui.box(@src(), .{}, .{ .role = .button, .label = .{ .text = "Close" }, .min_size_content = .{ .w = 10, .h = 10 } });
+    var close = dvui.box(@src(), .{}, .{
+        .role = .button,
+        .label = .{ .text = "Close" },
+        .min_size_content = .{ .w = 10, .h = 10 },
+    });
     close.deinit();
     // A mark, named from data, only while someone asked.
     var area = dvui.box(@src(), .{}, .{ .min_size_content = .{ .w = 20, .h = 20 } });
@@ -445,7 +478,12 @@ test "a snapshot names what a person acts on, and what a tape aims at" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     var diag: std.zon.parse.Diagnostics = undefined;
-    const nodes = try std.zon.parse.fromSlice([]const Node, .{ .gpa = std.testing.allocator, .arena = arena.allocator(), .source = try arena.allocator().dupeSentinel(u8, text, 0), .diagnostics = &diag });
+    const nodes = try std.zon.parse.fromSlice([]const Node, .{
+        .gpa = std.testing.allocator,
+        .arena = arena.allocator(),
+        .source = try arena.allocator().dupeSentinel(u8, text, 0),
+        .diagnostics = &diag,
+    });
     var buttons: usize = 0;
     var save = false;
     var close = false;
@@ -475,7 +513,11 @@ var test_band: dvui.Rect.Physical = .{};
 fn testDialog(id: dvui.Id) anyerror!void {
     const began = scopeBegin();
     defer scopeEnd(began);
-    var win = dvui.floatingWindow(@src(), .{}, .{ .id_extra = id.asUsize(), .rect = .{ .x = 10, .y = 10, .w = 80, .h = 40 } });
+    // lint-allow(raw-transient-surface): snapshot test fixture, not a shown surface
+    var win = dvui.floatingWindow(@src(), .{}, .{
+        .id_extra = id.asUsize(),
+        .rect = .{ .x = 10, .y = 10, .w = 80, .h = 40 },
+    });
     defer win.deinit();
     test_dialog_window = win.data().id;
     _ = dvui.button(@src(), "Go ahead", .{}, .{});
@@ -488,6 +530,7 @@ fn testWindowsFrame() !dvui.App.Result {
         defer box.deinit();
         _ = dvui.button(@src(), "Main", .{}, .{});
         // Drawn in a part of the frame another window shows: in that window, by where it is.
+        // lint-allow(raw-transient-surface): snapshot test fixture, not a shown surface
         var band = dvui.floatingWindow(@src(), .{}, .{ .rect = .{ .x = 200, .y = 200, .w = 80, .h = 40 } });
         defer band.deinit();
         test_band = band.data().rectScale().r;
@@ -504,7 +547,12 @@ fn testWindows(_: *anyopaque, arena: std.mem.Allocator) []const Window {
     const list = arena.dupe(Window, &.{
         .{ .tag = "app.window:main", .title = "App", .rect = dvui.windowRectPixels() },
         .{ .tag = "app.window:band", .rect = test_band, .area = true },
-        .{ .tag = "app.window:dialog", .title = "Ask", .rect = .{ .x = 0, .y = 0, .w = 100, .h = 100 }, .subwindow = test_dialog_window },
+        .{
+            .tag = "app.window:dialog",
+            .title = "Ask",
+            .rect = .{ .x = 0, .y = 0, .w = 100, .h = 100 },
+            .subwindow = test_dialog_window,
+        },
     }) catch return &.{};
     return list;
 }
@@ -530,7 +578,12 @@ test "a snapshot has the dialogs dvui shows after its capture, and says which wi
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     var diag: std.zon.parse.Diagnostics = undefined;
-    const nodes = try std.zon.parse.fromSlice([]const Node, .{ .gpa = std.testing.allocator, .arena = arena.allocator(), .source = try arena.allocator().dupeSentinel(u8, text, 0), .diagnostics = &diag });
+    const nodes = try std.zon.parse.fromSlice([]const Node, .{
+        .gpa = std.testing.allocator,
+        .arena = arena.allocator(),
+        .source = try arena.allocator().dupeSentinel(u8, text, 0),
+        .diagnostics = &diag,
+    });
     // The windows first, each a node.
     try std.testing.expect(nodes.len > 3);
     for (nodes[0..3], [_][]const u8{ "app.window:main", "app.window:band", "app.window:dialog" }) |node, tag| {

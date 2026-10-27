@@ -8,6 +8,11 @@ once, and these rules are what keep their work from colliding.
 would need adds it to this file in a PR. Agent memory is for one person's context: their
 preferences, findings still in flight.
 
+Agent adapters use the single worker contract in [`docs/AGENT_WORK.md`](docs/AGENT_WORK.md).
+`scripts/agent-prepare <branch>` creates the isolated checkout; `scripts/agent-finish <issue>`
+verifies and publishes a draft with evidence. Keep worker rules there rather than copying them
+into kickoff prompts, wrappers or runners.
+
 ## One plan step, one branch, one PR
 
 - **A plan is an issue** with a checklist of steps, or a plan doc merged on its own and linked
@@ -37,10 +42,10 @@ The open PR list is the board of who is working on what.
    touches the same files or the same plan step, coordinate on it (comment, or stack on top of
    it) instead of starting a parallel version.
 2. **Open a draft PR on your first push** (`gh pr create --draft --body-file <file>`), with the
-   template filled in as far as you know it. A draft runs CI, so claim early.
+   template filled in as far as you know it. A draft runs only the light `changes` job (the full matrix starts at `gh pr ready`), so claim early.
 3. **Take it to ready yourself; don't hand back a draft.** When the change is done and the gates
    pass, review your own diff (in Claude Code, the `code-review` skill at `high` on the PR), fix
-   what holds up, push, and wait for CI to go green. Then `gh pr ready`, and end the session
+   what holds up, push, then `gh pr ready`, which starts the full CI, and wait for it to go green. End the session
    with one question: merge it? Say what was reviewed and what was left, so the answer can be
    yes without opening the PR.
 4. **Merging is the maintainer's.** On a yes, merge with `gh pr merge --squash`. Never push to
@@ -127,6 +132,10 @@ turns.
   have taken its load past 17 and crashed it; don't poll `uptime` and start anyway. Every gate
   below runs as `scripts/zb build …` (`scripts/zb build test-integration`). Not for `zig build run`
   of the editor, which would hold the slot until it quits; `FIZZY_BUILD_SKIP=1` runs at once.
+- **Edit with `scripts/watch`.** It runs `zig build -fincremental --watch` (the app, or one
+  plugin: `scripts/watch plugins/text`), so a saved `.zig` file rebuilds in well under a second.
+  Restart it after changing a `build.zig`, which costs a slow rebuild; `docs/PERF.md` has the
+  numbers and `scripts/perf-incremental` measures them. It is not a gate.
 - **Gates:** `scripts/check-fmt.sh` (`--fix` formats), `zig build`, `zig build test`,
   `zig build test-integration`, `zig build check-web`, `zig build test-sdk-version`,
   `zig build lint` (or `zig run scripts/lint.zig`), `zig build check-tests-reached`. CI runs all of them, `test-integration` on
@@ -148,6 +157,11 @@ turns.
   (`pip install ziglang`) and unpacks that cache into `~/.cache/zig/p`. The environment's setup
   script is the one line `curl -fsSL https://github.com/fizzyedit/fizzy/releases/download/deps-cache/cloud-setup.sh | bash`.
   A dependency bump reaches cloud sessions when the workflow has run on the merge.
+  The same asset holds the current `fizzy-sdk` package and the dependencies of each store plugin
+  (`scripts/store-plugin-repos.sh`), so a session sourced from a plugin repo builds too: put the
+  variable on the `bash` side of the pipe, `curl -fsSL <url> | PLUGIN_REPO=<checkout> bash` (before `curl` it
+  reaches only curl), and it checks that repo's `zig build --fetch` against the cache. `1` means the
+  current directory, which may not be the checkout, so pass the checkout's path.
 - **A plugin's plain `zig build` also installs** into the real plugins directory. For a sandbox
   run, set `FIZZY_PROFILE` to a directory of its own, for the build and for the fizzy you start
   (or `fizzy --profile <dir>`): the plugin installs into `<dir>/plugins`, and that fizzy keeps its
@@ -197,7 +211,7 @@ maintainer makes the SDK **live** on the site (below).
 | What | Where |
 |---|---|
 | What fizzy is, and its architecture rules | `AGENTS.md` |
-| How Zig and comments are written | `docs/STYLE.md` |
+| How Zig and comments are written | `docs/STYLE.md`, `docs/ZIG.md` |
 | How we work | this file |
 | The plugin contract | `docs/PLUGINS.md` |
 | Letting any agent claim a labelled issue | `docs/AGENT_WORK.md` |
@@ -228,7 +242,7 @@ copied from elsewhere must carry a license compatible with MIT, and keeps its no
   general primitive (an event its owner fires, a host-owned copy) rather than a fix for this one
   plugin (a per-frame poll, a slice borrowed from plugin memory). Moving the fingerprint for the
   clearer shape is fine.
-- **Comments follow [`docs/STYLE.md`](docs/STYLE.md).** `//` says why, not what; `///` states
+- **Code and comments follow [`docs/STYLE.md`](docs/STYLE.md) and [`docs/ZIG.md`](docs/ZIG.md).** `//` says why, not what; `///` states
   the contract and ownership; no comment narrates history; `TODO(seam)` names its seam.
 - **Pitfalls go where they bite.** A trap that cost real time is written down in the
   `AGENTS.md` of the directory it lives in, or `docs/PITFALLS.md` if it has none.

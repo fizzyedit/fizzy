@@ -1,11 +1,11 @@
-// The editor in a worker: dvui's `web.js`, unchanged, driving WebGL on the page's canvas through
-// an `OffscreenCanvas`, with the page (`index.html`, worker mode) forwarding input and doing what
-// only a page can.
+// The editor in a worker: dvui's `web.js` (`patches/dvui`) driving WebGL on the page's canvas
+// through an `OffscreenCanvas`, with the page (`index.html`, worker mode) forwarding input and
+// doing what only a page can.
 //
 // Why: Chrome on Android throttles main-thread frames (`requestAnimationFrame` on the page) to
 // 60 Hz on a 120 Hz screen unless input is driving them, so every animation — a sidebar
 // sliding, a dialog forming — ran at half the display's rate. A worker's own frame loop is not
-// throttled. Everything here is the page's `index.html` bootstrap, moved: the fizzy imports, the
+// throttled. Everything here is the page's bootstrap (`fizzy.js`), moved: the fizzy imports, the
 // plugin loader. What needs the page is a message to it and back.
 
 const utf8 = new TextDecoder();
@@ -23,11 +23,12 @@ const env = {
     prefs: { dark: false, light: false, reduce: false },
     storage: {},
     // The page's `storageName`: what this copy of the app files its storage under — the build's
-    // name, or that and an embed's own (`?storage=`).
+    // name, or that and an embed's own (`storage`).
     storageName: "fizzy",
     // The build's own name, which plugin bytes are kept under whatever the embed's is.
     buildStorageName: "fizzy",
-    search: "",
+    // The page's `startup`: what to load, open and play once the editor is up.
+    startup: { plugins: [], open: [], show: "", demos: [], tape: "" },
     baseURI: "",
 };
 const inputStub = { style: {}, value: "", setAttribute() {}, addEventListener() {}, focus() {}, select() {} };
@@ -89,7 +90,7 @@ function ask(msg, transfer) {
     });
 }
 
-// ---- the fizzy imports (was `index.html`'s `fizzyImports`) ------------------------------------
+// ---- the fizzy imports (as `fizzy.js`'s `fizzyImports`) -----------------------------------------
 function mem() {
     return wasmInstance.exports.memory.buffer;
 }
@@ -206,7 +207,7 @@ const fizzyImports = (target) => ({
         const sha256 = shaLen ? str(shaPtr, shaLen) : "";
         loadPlugin(req, url, id, sha256).then(render).catch((err) => {
             console.error("fizzy: plugin load failed:", url, err);
-            inst.exports.FizzyWebPluginFailed(req);
+            reportPluginFailed(inst, req, err);
             render();
         });
     },
@@ -274,7 +275,7 @@ const fizzyImports = (target) => ({
     },
 });
 
-// ---- plugins at runtime (was `index.html`'s loader; see there for the why) --------------------
+// ---- plugins at runtime (as `fizzy.js`'s loader; see there for the why) -------------------------
 const rememberedKey = () => env.storageName + ".web_plugins";
 function rememberedPlugins() {
     try { return JSON.parse(storageGet(rememberedKey()) || "{}"); } catch (_) { return {}; }
@@ -348,14 +349,13 @@ function requestPlugin(id, url) {
 function requestUrlPlugins() {
     const inst = wasmInstance;
     if (!inst || !inst.exports.FizzyWebPluginRequest) return;
-    const params = new URLSearchParams(env.search);
-    // A `?plugin=` build stands in for a remembered one of the same id.
-    const devPlugins = params.getAll("plugin");
+    // A dev build stands in for a remembered one of the same id.
+    const devPlugins = env.startup.plugins;
     for (const [id, url] of Object.entries(rememberedPlugins())) if (!devPlugins.includes(id)) requestPlugin(id, url);
     for (const id of devPlugins) requestPlugin(id, "");
     if (inst.exports.FizzyWebStartupPluginsRequested) inst.exports.FizzyWebStartupPluginsRequested();
     render();
-    for (const url of params.getAll("open")) {
+    for (const url of env.startup.open) {
         fetch(new URL(url, env.baseURI), { cache: "no-store" }).then((r) => r.arrayBuffer()).then((buf) => {
             const name = utf8encode(url.split("/").pop().split("?")[0]);
             const namePtr = wasmInstance.exports.FizzyWebPluginAlloc(name.length, 1);
@@ -365,8 +365,7 @@ function requestUrlPlugins() {
             new Uint8Array(mem(), namePtr, name.length).set(name);
             new Uint8Array(mem(), bytesPtr, bytes.length).set(bytes);
             wasmInstance.exports.FizzyWebOpenBytes(namePtr, name.length, bytesPtr, bytes.length);
-            // `&show=<path>`: then open that file from inside the folder just opened.
-            const show = params.get("show");
+            const show = env.startup.show;
             if (show && wasmInstance.exports.FizzyWebShowInRoot) {
                 const showBytes = utf8encode(show);
                 const showPtr = wasmInstance.exports.FizzyWebPluginAlloc(showBytes.length, 1);
@@ -378,13 +377,8 @@ function requestUrlPlugins() {
             render();
         }).catch((err) => console.error("fizzy: could not open", url, err));
     }
-    // `?demo=tour` plays a bundled demo; `?demo=<url>.zon` (or `.tape`, the binary form) fetches a
-    // tape and plays that.
-    for (const demo of params.getAll("demo")) playDemo(demo, env.baseURI);
-    // `?tape=<url>` plays a shared tape: the plugins it needs come from the store, and the page
-    // shows only the tape.
-    const tape = params.get("tape");
-    if (tape) playTape(tape, env.baseURI);
+    for (const demo of env.startup.demos) playDemo(demo, env.baseURI);
+    if (env.startup.tape) playTape(env.startup.tape, env.baseURI);
 }
 
 function playTape(url, base) {
@@ -459,18 +453,63 @@ function readDylinkNeeds(module) {
     return needs;
 }
 
+// fetchPluginBytes and reportPluginFailed have a matching copy in web/fizzy.js; change both.
 async function fetchPluginBytes(url) {
+  // Each fetch (the body included) gets a deadline: a request the network swallows would
+  // otherwise leave the store's row on "Updating..." for good, with nothing to say why.
+  const timeoutMs = 30000;
+  const attempt = async (target) => {
     try {
-        const direct = await fetch(url, { cache: "no-store" });
-        if (direct.ok) return await direct.arrayBuffer();
-        if (direct.status === 404) throw new Error("not found: " + url);
+      return await fetch(target, { cache: "no-store", signal: AbortSignal.timeout(timeoutMs) });
     } catch (err) {
-        if (String(err).includes("not found")) throw err;
+      if (err && err.name === "TimeoutError") throw new Error("timed out after " + timeoutMs / 1000 + " s");
+      throw err;
     }
-    if (!pluginFingerprint) throw new Error("cannot reach " + url + " and no catalog shard to ask the proxy for");
-    const viaProxy = await fetch(pluginProxy + pluginFingerprint + "/" + encodeURIComponent(url), { cache: "no-store" });
-    if (!viaProxy.ok) throw new Error("could not fetch " + url + " (proxy said " + viaProxy.status + ")");
-    return await viaProxy.arrayBuffer();
+  };
+  // The bytes of a response whose headers arrived: the body is under the same deadline. Worst case before a failure shows is three asks (direct, proxy, proxy again), 90 s.
+  const body = async (response) => {
+    try {
+      return await response.arrayBuffer();
+    } catch (err) {
+      if (err && err.name === "TimeoutError") throw new Error("timed out after " + timeoutMs / 1000 + " s");
+      throw err;
+    }
+  };
+  let directWhy = "";
+  try {
+    const direct = await attempt(url);
+    if (direct.ok) return await body(direct);
+    // A real 404 is worth reporting as itself; anything else is worth a second try.
+    if (direct.status === 404) { console.error("fizzy: plugin not found (404):", url); throw new Error("not found (404)"); }
+    directWhy = "status " + direct.status;
+  } catch (err) {
+    if (String(err).includes("not found (404)")) throw err;
+    directWhy = String(err && err.message ? err.message : err);
+  }
+  if (!pluginFingerprint) throw new Error(directWhy + " (and no catalog shard to ask the proxy)");
+  // The proxy is asked twice: one dropped or stalled request should not cost the user the update.
+  let why = "";
+  for (let tries = 0; tries < 2; tries++) {
+    try {
+      const viaProxy = await attempt(pluginProxy + pluginFingerprint + "/" + encodeURIComponent(url));
+      if (viaProxy.ok) return await body(viaProxy);
+      why = "proxy said " + viaProxy.status;
+      // Another ask cannot change a refusal of this URL; only a server-side hiccup is retried.
+      if (viaProxy.status < 500 && viaProxy.status !== 408 && viaProxy.status !== 429) break;
+    } catch (err) {
+      why = String(err && err.message ? err.message : err);
+    }
+  }
+  throw new Error(why); // the cause alone: the store shows it in a narrow row, the URL is in the console
+}
+
+// Tell the host a load failed, and why: the store shows the text beside Retry. The text is
+// copied into the host's heap, and the host frees it.
+function reportPluginFailed(inst, req, err) {
+    const msg = new TextEncoder().encode(String(err && err.message ? err.message : err).slice(0, 300));
+    const ptr = msg.length ? inst.exports.FizzyWebPluginAlloc(msg.length, 1) : 0;
+    if (ptr) new Uint8Array(inst.exports.memory.buffer, ptr, msg.length).set(msg);
+    inst.exports.FizzyWebPluginFailed(req, ptr, ptr ? msg.length : 0);
 }
 
 async function sha256Hex(bytes) {
@@ -491,7 +530,7 @@ async function loadPlugin(req, url, id, sha256) {
         bytes = await fetchPluginBytes(new URL(url, env.baseURI).href);
         if (sha256) {
             const got = await sha256Hex(bytes);
-            if (got !== sha256.toLowerCase()) throw new Error("sha256 mismatch for " + id + ": expected " + sha256 + ", got " + got);
+            if (got !== sha256.toLowerCase()) { console.error("fizzy: sha256 mismatch for " + id + ": expected " + sha256 + ", got " + got); throw new Error("download did not match the published checksum"); }
         }
         if (keepablePluginUrl(url)) unkeptPluginBytes.set(url, bytes);
     }
@@ -571,7 +610,7 @@ function postBoundKeys() {
 
 // ---- start -------------------------------------------------------------------------------
 async function start(init) {
-    Object.assign(env, { size: init.size, prefs: init.prefs, storage: init.storage, storageName: init.storageName, buildStorageName: init.buildStorageName || init.storageName, search: init.search, baseURI: init.baseURI });
+    Object.assign(env, { size: init.size, prefs: init.prefs, storage: init.storage, storageName: init.storageName, buildStorageName: init.buildStorageName || init.storageName, startup: init.startup, baseURI: init.baseURI });
     adoptCanvas(init.canvas);
     warmRememberedPlugins();
 
@@ -621,6 +660,7 @@ async function start(init) {
     wasmInstance = result.instance;
     app.setInstance(result.instance);
     app.setCanvas(env.canvas);
+    applyForm();
     app.run();
     dvuiApp = app;
     app.requestRender();
@@ -629,6 +669,22 @@ async function start(init) {
         requestUrlPlugins();
         postBoundKeys();
     }, 0);
+}
+
+// The page's device measurement (`env.size.form`) into `core.platform.formFactor()`, and one
+// console line saying what was measured and chosen (at startup, and whenever it changes).
+let appliedForm = "";
+function applyForm() {
+    const f = env.size.form;
+    if (!f || !wasmInstance || !wasmInstance.exports.FizzyWebSetFormFactor) return;
+    const key = `${f.coarse}|${f.w}|${f.h}|${f.override}`;
+    if (key === appliedForm) return;
+    appliedForm = key;
+    const chosen = wasmInstance.exports.FizzyWebSetFormFactor(f.coarse, f.w, f.h, f.override);
+    console.log(
+        `form-factor: coarse=${f.pointerCoarse} hover=${f.hoverHover} w=${f.w} h=${f.h} ` +
+        `override=${f.overrideName || "none"} -> ${["desktop", "tablet", "mobile"][chosen]}`,
+    );
 }
 
 // ---- from the page ----------------------------------------------------------------------------
@@ -654,6 +710,7 @@ onmessage = (e) => {
             break;
         case "size":
             env.size = m.size;
+            applyForm();
             if (dvuiApp) dvuiApp.requestRender();
             break;
         case "prefs":

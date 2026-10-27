@@ -163,7 +163,7 @@ const fizzy_commands = [_]FizzyCommand{
     .{ .id = "fizzy.redo", .title = "Redo", .bind = "redo", .run = cmdRedo, .isEnabled = anyDocOpen, .params = HistoryStep.params, .runWith = HistoryStep.bind(cmdRedoWith), .icon = icons.tvg.lucide.redo },
     .{ .id = "fizzy.copy", .title = "Copy", .bind = "copy", .run = cmdCopy, .isEnabled = cmdCopyEnabled, .icon = icons.tvg.lucide.copy },
     .{ .id = "fizzy.paste", .title = "Paste", .bind = "paste", .run = cmdPaste, .isEnabled = cmdPasteEnabled, .icon = icons.tvg.lucide.@"clipboard-paste" },
-    .{ .id = "fizzy.toggleExplorer", .title = "Toggle Explorer", .bind = "explorer", .run = cmdToggleExplorer, .icon = icons.tvg.lucide.@"panel-left" },
+    .{ .id = "fizzy.toggleExplorer", .title = "Toggle Explorer", .bind = "explorer", .run = cmdToggleExplorer, .icon = if (Editor.Chrome.configured.sidebar_edge == .right) icons.tvg.lucide.@"panel-right" else icons.tvg.lucide.@"panel-left" },
     .{ .id = "fizzy.resetLayout", .title = "Reset Layout", .bind = null, .run = cmdResetLayout, .icon = icons.tvg.lucide.@"rotate-ccw" },
     .{ .id = "fizzy.toggleFullScreen", .title = "Toggle Full Screen", .bind = null, .run = cmdToggleFullScreen, .icon = icons.tvg.lucide.maximize },
     .{ .id = "fizzy.fitView", .title = "Fit to View", .bind = null, .run = cmdFitView, .isEnabled = cmdFitViewEnabled, .icon = icons.tvg.lucide.scan },
@@ -300,18 +300,18 @@ fn setWindowMaterial(editor: *Editor, kind: fizzy.core.material.Kind) void {
 }
 
 const DemoSpeed = sdk.Command.Params(struct {
-    rate: sdk.Command.Arg(f32, .{ .description = "How many times the tape's own pace: 0.25, 0.5, 1, 2 or 4. 0 steps to the next.", .min = 0, .max = 4 }) = .init(0),
+    rate: sdk.Command.Arg(f32, .{ .description = "How many times the tape's own pace: 0.5 to 4 (0.5, 0.75, 1, 1.5, 2, 3, 4 on the transport); anything between 0 and 0.5 plays at 0.5. 0 steps to the next.", .min = 0, .max = 4 }) = .init(0),
 });
 
 fn cmdDemoSpeedStep(state: *anyopaque) anyerror!void {
-    editorFromState(state).demo.player.stepRate();
+    editorFromState(state).demo.player.seq.stepSpeed();
 }
 
 /// How fast the loaded tape plays, as the transport's speed does.
 fn cmdDemoSpeed(state: *anyopaque, args: DemoSpeed.Args, call: *sdk.Command.Call) anyerror!void {
     const player = &editorFromState(state).demo.player;
-    if (args.rate == 0) player.stepRate() else player.setRate(args.rate);
-    try call.returns(.{ .rate = player.rate });
+    if (args.rate == 0) player.seq.stepSpeed() else player.seq.setSpeed(args.rate);
+    try call.returns(.{ .rate = player.seq.speed });
 }
 
 fn demoCatalogCommands() [Editor.Demo.catalog.entries.len]FizzyCommand {
@@ -345,7 +345,7 @@ fn cmdDemoRestart(state: *anyopaque) anyerror!void {
 }
 
 fn cmdDemoStop(state: *anyopaque) anyerror!void {
-    editorFromState(state).demo.player.unload();
+    editorFromState(state).demo.player.stop();
 }
 
 /// Debug builds only: see `Editor.dvui_demo`.
@@ -1532,7 +1532,7 @@ pub var web_key_buf: [16]u8 = undefined;
 /// editor exists.
 var web_keys_ready = false;
 
-/// Asked by `web/index.html` from inside a `keydown` listener, before the browser acts on the key:
+/// Asked by `web/fizzy.js` from inside a `keydown` listener, before the browser acts on the key:
 /// true means "this key is the app's", and the page cancels the browser's default (⌘S saving the
 /// page, ⌘P printing it, ⌘O opening a file of the browser's own). It has to be answered here and
 /// synchronously — by the time dvui sees the event on the next frame the browser has already

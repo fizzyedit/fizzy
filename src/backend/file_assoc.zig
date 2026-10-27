@@ -295,7 +295,9 @@ const WindowsImpl = struct {
         );
         if (status != .NO_ERROR or hkey == null) return;
         defer _ = registry.RegCloseKey(hkey);
-        _ = expected_progid; // Best-effort: just clear the default; a UserChoice in HKCU\…\Explorer\FileExts will win regardless.
+        // Best-effort: just clear the default; a UserChoice in HKCU\…\Explorer\FileExts will win
+        // regardless.
+        _ = expected_progid;
         // Clear the (default) value by writing empty REG_SZ.
         var empty: [1]u16 = .{0};
         _ = registry.RegSetValueExW(hkey, null, 0, .SZ, @ptrCast(&empty), @sizeOf(u16));

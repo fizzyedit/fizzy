@@ -1,0 +1,217 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Michael Belousov <michael.belousov98@gmail.com>
+Date: Sat, 24 Oct 2026 16:13:15 -0400
+Subject: [PATCH] web: textureBlend
+
+The web backend implements Backend.textureBlend: wasm_textureBlend records a
+texture's blend (over, add, copy), and each draw of the texture sets it, since WebGL's
+blend state is global. web.zig flushes its batch first, so draws already batched keep
+the blend they were made with.
+---
+ src/backends/web.js  | 27 +++++++++++++++++++++++++--
+ src/backends/web.zig | 10 ++++++++++
+ 2 files changed, 35 insertions(+), 2 deletions(-)
+
+diff --git a/src/backends/web.js b/src/backends/web.js
+index 200e34f..dbae62d 100644
+--- a/src/backends/web.js
++++ b/src/backends/web.js
+@@ -185,16 +185,19 @@ export class Dvui {
+             uSampler: WebGLUniformLocation | null;
+             useTex: WebGLUniformLocation | null;
+         };
+     }} */
+     programInfo;
+     /** @type {Map<number, [WebGLTexture, number, number, number]>} */
+     // texture, width, height, interp
+     textures = new Map();
++    /// texture id -> blend mode set by wasm_textureBlend: 0 source-over (the default), 1 add,
++    /// 2 copy. WebGL blend state is global, so it is applied per draw when the texture binds.
++    textureBlends = new Map();
+     newTextureId = 1;
+     /// GL state as last set, so a draw sends only what changed. Every GL call is a trip to the
+     /// GPU process in some browsers (Firefox), and a draw sent the whole state each time —
+     /// program, layout, texture, blend, matrix, scissor — some 25 calls where 3 or 4 change.
+     /// `undefined` is unknown, and sends it.
+     gls = {};
+     /// One framebuffer per render-target texture, attached once (texture id -> framebuffer):
+     /// re-attaching a texture to the one shared framebuffer on every switch made the driver
+@@ -225,16 +228,28 @@ export class Dvui {
+         this.gl.scissor(x, y, w, h);
+         g.sx = x; g.sy = y; g.sw = w; g.sh = h;
+     }
+     setViewport(w, h) {
+         if (this.gls.vw === w && this.gls.vh === h) return;
+         this.gl.viewport(0, 0, w, h);
+         this.gls.vw = w; this.gls.vh = h;
+     }
++    /// 0 source-over, 1 add, 2 copy (`wasm_textureBlend`).
++    setBlend(mode) {
++        if (this.gls.blend === mode) return;
++        if (mode === 2) {
++            this.gl.disable(this.gl.BLEND);
++        } else {
++            if (this.gls.blend === 2 || this.gls.blend === undefined) this.gl.enable(this.gl.BLEND);
++            if (mode === 1) this.gl.blendFunc(this.gl.ONE, this.gl.ONE);
++            else this.gl.blendFunc(this.gl.ONE, this.gl.ONE_MINUS_SRC_ALPHA);
++        }
++        this.gls.blend = mode;
++    }
+     setUseTex(on) {
+         if (this.gls.useTex === on) return;
+         this.gl.uniform1i(this.programInfo.uniformLocations.useTex, on);
+         this.gls.useTex = on;
+     }
+     /// The projection for the current render target: its size, and flipped for the screen.
+     setMatrix() {
+         const w = this.renderTargetSize[0], h = this.renderTargetSize[1], fb = this.using_fb;
+@@ -755,16 +770,22 @@ export class Dvui {
+                 }
+ 
+                 this.bindTex(null);
+ 
+                 this.imports.wasm_textureClearTarget(id);
+ 
+                 return id;
+             },
++            // See dvui.Backend.textureBlend. Returns 0 for an unknown texture.
++            wasm_textureBlend: (id, mode) => {
++                if (this.textureEntry(id) === null) return 0;
++                this.textureBlends.set(id, mode);
++                return 1;
++            },
+             // Restores whatever target was bound before: a target is often created and
+             // cleared while another one is being rendered into (a Picture inside a frame
+             // target), and landing on the screen there sends the rest of that drawing to the
+             // wrong place.
+             wasm_textureClearTarget: (textureId) => {
+                 const prev = this.renderTargetId;
+                 this.imports.wasm_renderTarget(textureId);
+                 this.gl.clearColor(0.0, 0.0, 0.0, 0.0); // fully transparent
+@@ -830,16 +851,17 @@ export class Dvui {
+                 this.setViewport(this.renderTargetSize[0], this.renderTargetSize[1]);
+                 this.setScissor(0, 0, this.renderTargetSize[0], this.renderTargetSize[1]);
+             },
+             wasm_textureDestroy: (id) => {
+                 //console.log("deleting texture " + id);
+                 const entry = this.textureEntry(id);
+                 if (entry === null) return;
+                 this.textures.delete(id);
++                this.textureBlends.delete(id);
+                 const fb = this.targetFramebuffers.get(id);
+                 if (fb !== undefined) {
+                     if (this.gls.fb === fb) this.bindFb(null);
+                     this.gl.deleteFramebuffer(fb);
+                     this.targetFramebuffers.delete(id);
+                 }
+                 if (this.gls.tex === entry[0]) this.bindTex(null);
+                 this.gl.deleteTexture(entry[0]);
+@@ -872,21 +894,23 @@ export class Dvui {
+                 this.setLayout(sizeof_vertex, offset_pos, offset_col, offset_uv);
+                 this.setMatrix();
+ 
+                 const tex = textureId != 0 ? this.textureEntry(textureId) : null;
+                 if (textureId != 0 && tex === null) console.warn(`wasm_renderGeometry: missing texture id ${textureId}`);
+                 if (tex !== null) {
+                     this.bindTex(tex[0]);
+                     this.setUseTex(1);
++                    this.setBlend(this.textureBlends.get(textureId) ?? 0);
+                 } else {
+                     // Not left bound: a target texture still bound while drawing into it is a
+                     // feedback loop to some drivers, sampled or not.
+                     this.bindTex(null);
+                     this.setUseTex(0);
++                    this.setBlend(0);
+                 }
+ 
+                 this.gl.drawElements(this.gl.TRIANGLES, indices.length, this.gl.UNSIGNED_SHORT, 0);
+             },
+             wasm_cursor: (name_ptr, name_len) => {
+                 const cursor_name = this.stringFromPointer(name_ptr, name_len);
+                 this.gl.canvas.style.cursor = cursor_name;
+             },
+@@ -1171,18 +1195,17 @@ export class Dvui {
+         // sends only its data and whatever else changed (`gls`).
+         this.gl.useProgram(this.shaderProgram);
+         this.gl.bindBuffer(this.gl.ELEMENT_ARRAY_BUFFER, this.indexBuffer);
+         this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.vertexBuffer);
+         this.gl.activeTexture(this.gl.TEXTURE0);
+         this.gl.uniform1i(this.programInfo.uniformLocations.uSampler, 0);
+ 
+         this.gls = {};
+-        this.gl.enable(this.gl.BLEND);
+-        this.gl.blendFunc(this.gl.ONE, this.gl.ONE_MINUS_SRC_ALPHA);
++        this.setBlend(0);
+         this.gl.enable(this.gl.SCISSOR_TEST);
+         this.setScissor(
+             0,
+             0,
+             this.gl.canvas.clientWidth,
+             this.gl.canvas.clientHeight,
+         );
+     }
+diff --git a/src/backends/web.zig b/src/backends/web.zig
+index b019009..d05caa4 100644
+--- a/src/backends/web.zig
++++ b/src/backends/web.zig
+@@ -57,16 +57,17 @@ pub const wasm = if (!builtin.is_test) struct {
+     pub extern "dvui" fn wasm_canvas_height() f32;
+ 
+     pub extern "dvui" fn wasm_frame_buffer() u8;
+     pub extern "dvui" fn wasm_textureCreate(pixels: [*]const u8, width: u32, height: u32, interp: u8, wrap_u: u8, wrap_v: u8) u32;
+     pub extern "dvui" fn wasm_textureCreateTarget(width: u32, height: u32, interp: u8, wrap_u: u8, wrap_v: u8) u32;
+     pub extern "dvui" fn wasm_textureUpdate(texture: u32, pixels: [*]const u8) u8;
+     pub extern "dvui" fn wasm_textureUpdateSubRect(texture: u32, pixels: [*]const u8, x: u32, y: u32, w: u32, h: u32) u8;
+     pub extern "dvui" fn wasm_textureClearTarget(u32) void;
++    pub extern "dvui" fn wasm_textureBlend(texture: u32, mode: u8) u8;
+     pub extern "dvui" fn wasm_textureRead(texture: u32, pixels_out: [*]u8, width: u32, height: u32) void;
+     pub extern "dvui" fn wasm_renderTarget(u32) void;
+     pub extern "dvui" fn wasm_textureDestroy(u32) void;
+     pub extern "dvui" fn wasm_renderGeometry(texture: u32, index_ptr: [*]const u8, index_len: usize, vertex_ptr: [*]const u8, vertex_len: usize, sizeof_vertex: u8, offset_pos: u8, offset_col: u8, offset_uv: u8, clip: u8, x: i32, y: i32, w: i32, h: i32) void;
+ 
+     pub extern "dvui" fn wasm_cursor(name: [*]const u8, name_len: usize) void;
+     pub extern "dvui" fn wasm_text_input(x: f32, y: f32, w: f32, h: f32) void;
+     pub extern "dvui" fn wasm_open_url(ptr: [*]const u8, len: usize, new_window: bool) void;
+@@ -122,16 +123,19 @@ pub const wasm = if (!builtin.is_test) struct {
+     }
+     pub fn wasm_textureUpdate(_: u32, _: [*]const u8) u8 {
+         return 0;
+     }
+     pub fn wasm_textureUpdateSubRect(_: u32, _: [*]const u8, _: u32, _: u32, _: u32, _: u32) u8 {
+         return 0;
+     }
+     pub fn wasm_textureClearTarget(_: u32) void {}
++    pub fn wasm_textureBlend(_: u32, _: u8) u8 {
++        return 0;
++    }
+     pub fn wasm_textureRead(_: u32, _: [*]u8, _: u32, _: u32) void {}
+     pub fn wasm_renderTarget(_: u32) void {}
+     pub fn wasm_textureDestroy(_: u32) void {}
+     pub fn wasm_renderGeometry(_: u32, _: [*]const u8, _: usize, _: [*]const u8, _: usize, _: u8, _: u8, _: u8, _: u8, _: u8, _: i32, _: i32, _: i32, _: i32) void {}
+ 
+     pub fn wasm_cursor(_: [*]const u8, _: usize) void {}
+     pub fn wasm_text_input(_: f32, _: f32, _: f32, _: f32) void {}
+     pub fn wasm_open_url(_: [*]const u8, _: usize, _: bool) void {}
+@@ -751,16 +755,22 @@ pub fn textureCreateTarget(_: *WebBackend, options: dvui.Texture.CreateOptions)
+         .height = options.height,
+         .format = options.format,
+         .interpolation = options.interpolation,
+         .wrap_u = options.wrap_u,
+         .wrap_v = options.wrap_v,
+     };
+ }
+ 
++/// See `dvui.Backend.textureBlend`. Draws already batched keep the blend they were made with.
++pub fn textureBlend(_: *WebBackend, texture: dvui.Texture, blend: dvui.Backend.TextureBlend) !void {
++    flushBatch();
++    if (wasm.wasm_textureBlend(@intCast(@intFromPtr(texture.ptr)), @intFromEnum(blend)) == 0) return dvui.Backend.TextureError.TextureUpdate;
++}
++
+ pub fn textureClearTarget(_: *WebBackend, tex: dvui.TextureTarget) void {
+     flushBatch();
+     wasm.wasm_textureClearTarget(@intCast(@intFromPtr(tex.ptr)));
+ }
+ 
+ pub fn textureFromTarget(_: *WebBackend, texture: dvui.TextureTarget) !dvui.Texture {
+     flushBatch();
+     return .cast(texture);

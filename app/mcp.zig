@@ -37,7 +37,7 @@ const versions = [_][]const u8{ "2025-06-18", "2025-03-26" };
 /// one shared author, as every call was before sessions; one naming a session that ended is
 /// answered 404, as the protocol says, so the client starts a new one.
 pub const Sessions = struct {
-    list: std.ArrayListUnmanaged(Session) = .empty,
+    list: std.ArrayList(Session) = .empty,
 
     pub const Session = struct {
         id: u64,
@@ -290,8 +290,8 @@ const Tool = struct {
 /// over what it replaces), with their names. Built per request: a plugin's commands come and go
 /// as it loads and reloads.
 fn tools(host: *sdk.Host, arena: std.mem.Allocator) error{OutOfMemory}![]Tool {
-    var commands: std.ArrayListUnmanaged(*const sdk.Command) = .empty;
-    var ids: std.ArrayListUnmanaged([]const u8) = .empty;
+    var commands: std.ArrayList(*const sdk.Command) = .empty;
+    var ids: std.ArrayList([]const u8) = .empty;
     for (host.commands.items) |*c| {
         if (c.owner == null or host.command(c.id) != c) continue;
         try commands.append(arena, c);
@@ -359,7 +359,7 @@ fn callTool(host: *sdk.Host, arena: std.mem.Allocator, id: []const u8, params: ?
     // The arguments, through the same JSON-to-ZON edge as a REST call (`json.zig`).
     // Absent and null are none.
     const arguments = if (p.get("arguments")) |a| if (a == .null) "{}" else try Stringify.valueAlloc(arena, a, .{}) else "{}";
-    var enum_keys: std.ArrayListUnmanaged([]const u8) = .empty;
+    var enum_keys: std.ArrayList([]const u8) = .empty;
     for (c.params) |param| if (param.kind == .enumeration) try enum_keys.append(arena, param.key);
     const args = json.zonFromJson(arena, arguments, enum_keys.items) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,

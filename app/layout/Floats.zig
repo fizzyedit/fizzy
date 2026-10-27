@@ -209,6 +209,11 @@ const ghost_blur: f32 = 0.55;
 /// Where `Float.aside` goes for a ghost closing — its last view landed elsewhere: past the ghost,
 /// to nothing.
 const gone: f32 = 2;
+/// The leading traffic light of a titled macOS window, points: its diameter, and how far its left
+/// edge sits in from the window's. A tape presses the same spot in the frame, since the OS draws
+/// the button outside it.
+const traffic_light_diameter: f32 = 12;
+const traffic_light_inset: f32 = 7;
 
 /// How a float looks `v` of the way aside (`Float.aside`): itself at 0, its ghost at 1, nothing
 /// at `gone` — how much of it shows, and how far out of focus.
@@ -226,7 +231,7 @@ fn smoothstep(t: f32) f32 {
 }
 
 /// Bottom to top: the last is the float in front.
-items: std.ArrayListUnmanaged(Float) = .empty,
+items: std.ArrayList(Float) = .empty,
 /// The last serial handed out (`Float.serial`).
 serial: u64 = 0,
 
@@ -314,6 +319,7 @@ pub fn reorder(self: *Floats, order: []const usize) void {
 pub const max = 32;
 
 /// A rect as `float_rules` takes it.
+// anytype: Both untagged and natural-space dvui rects convert to the same rule coordinates.
 pub fn toRules(r: anytype) rules.Rect {
     return .{ .x = r.x, .y = r.y, .w = r.w, .h = r.h };
 }
@@ -409,7 +415,14 @@ pub fn close(l: *Layout, name: []const u8, how: Closing) void {
         if (state.forgetPlace(l.gpa, leaf)) l.extents_changed = true;
     }
     state.splits.forget(l.gpa, name);
+    flyShut(state, i);
+}
+
+/// Float `i` flies shut, its views left where they are: whoever calls has placed them already
+/// (`close` sent them home; a restored arrangement assigned them again).
+pub fn flyShut(state: *Layout.State, i: usize) void {
     const f = &state.floats.items.items[i];
+    if (f.closing) return;
     endLanding(f);
     // Marked, not removed: `draw` may be walking the list, and drops it when it comes to it —
     // at once if it never drew a window or was a ghost, after the flight shut if it did.
@@ -667,6 +680,22 @@ fn drawOne(l: *Layout, i: usize) bool {
     // For demo tapes (`docs/AUTOMATION.md`): its header, to move it by, and its close button.
     core.anchor.markRect(win_id, header, true, "float-header:{s}", .{first.name});
     if (header_close) |r| core.anchor.markRect(win_id, r, true, "float-close:{s}", .{first.name});
+    // The OS draws the close button of a float that is its own window, outside the frame: a real
+    // click there never reaches it. A tape aims at the same spot in the frame (the leading
+    // traffic light), and a press there closes the float as the OS button does.
+    if (header_close == null and osButtons(first) and core.anchor.wanted()) {
+        const side = traffic_light_diameter * scale;
+        const spot: dvui.Rect.Physical = .{ .x = header.x + traffic_light_inset * scale, .y = header.y + (header.h - side) / 2, .w = side, .h = side };
+        core.anchor.markRect(win_id, spot, true, "float-close:{s}", .{first.name});
+        for (dvui.events()) |*e| {
+            if (e.evt != .mouse or e.handled) continue;
+            const me = e.evt.mouse;
+            if (me.action != .press or !me.button.pointer()) continue;
+            if (!dvui.eventMatch(e, .{ .id = win_id, .r = spot })) continue;
+            e.handle(@src(), win.data());
+            open = false;
+        }
+    }
     // Moved by its header only: the rest is the view's. Not while it lands — it is going where
     // the drop put it — nor while it is out of the way. Not over its OS window's own buttons
     // either, which are theirs: the move cursor showed over the traffic lights.

@@ -393,6 +393,8 @@ var host_causes: ?*FrameCauses = null;
 var was_active = false;
 /// The host's spans, made like `host_lookback`.
 var host_spans: ?*Spans = null;
+/// What made the three above, which `hostDeinit` frees them with.
+var host_gpa: ?std.mem.Allocator = null;
 /// The host's span for the frame in progress, so a trace shows the UI thread's frames beside the
 /// work on other threads.
 var frame_span: OpenSpan = .{};
@@ -545,27 +547,29 @@ pub fn host() *Profiler {
 /// Host only, at the start of every frame, before anything is timed: start the frame, and
 /// publish the profiler to the plugins through the shared window. `prev_submit_ns` is how long
 /// the backend took to end the last frame after fizzy's part of it (`FrameStats.submit_ns`),
-/// where the backend measures that; `gpu_total` the backend's running GPU totals (`Gpu`), where
+/// where the backend measures that; `gpa` makes the lookback, causes and spans the first frame
+/// the profiler records (the same allocator every frame, freed by `hostDeinit`); `gpu_total` the backend's running GPU totals (`Gpu`), where
 /// it counts them.
-pub fn hostFrameBegin(prev_submit_ns: ?u64, gpu_total: ?Gpu) void {
+pub fn hostFrameBegin(gpa: std.mem.Allocator, prev_submit_ns: ?u64, gpu_total: ?Gpu) void {
     is_host = true;
     host_profiler.frameBegin(prev_submit_ns, gpu_total);
     dvui.dataSet(null, publish_id, publish_key, @as(usize, @intFromPtr(&host_profiler)));
     // The glass's scopes (`glass.prof`): the host's copy takes them here, a plugin's from the store.
     glass_prof.host = &glass_hooks;
     dvui.dataSet(null, glass_prof.publish_id, glass_prof.publish_key, @as(usize, @intFromPtr(&glass_hooks)));
-    if (host_lookback == null and host_profiler.active) host_lookback = Lookback.create(std.heap.page_allocator, max_entries) catch null;
+    host_gpa = gpa;
+    if (host_lookback == null and host_profiler.active) host_lookback = Lookback.create(gpa, max_entries) catch null;
     if (host_lookback) |lb| dvui.dataSet(null, publish_id, lookback_key, @as(usize, @intFromPtr(lb)));
     dvui.dataSet(null, publish_id, phases_key, @as(usize, @intFromPtr(&host_phases)));
     const active = host_profiler.active;
-    if (host_causes == null and active) host_causes = std.heap.page_allocator.create(FrameCauses) catch null;
+    if (host_causes == null and active) host_causes = gpa.create(FrameCauses) catch null;
     if (host_causes) |c| {
         if (active and !was_active) c.* = .{};
         if (active) c.frameBegin(causingEvents());
         dvui.dataSet(null, publish_id, causes_key, @as(usize, @intFromPtr(c)));
     }
     was_active = active;
-    if (host_spans == null and active) host_spans = Spans.create(std.heap.page_allocator) catch null;
+    if (host_spans == null and active) host_spans = Spans.create(gpa) catch null;
     if (host_spans) |sp| {
         sp.on.store(active, .monotonic);
         sp.ui_thread.store(Spans.threadId(), .monotonic);
@@ -573,6 +577,20 @@ pub fn hostFrameBegin(prev_submit_ns: ?u64, gpu_total: ?Gpu) void {
         dvui.dataSet(null, publish_id, spans_key, @as(usize, @intFromPtr(sp)));
     }
     frame_span = span("frame");
+}
+
+/// Host only, at shutdown after the last frame and every thread that records spans: free what
+/// `hostFrameBegin` made.
+pub fn hostDeinit() void {
+    const gpa = host_gpa orelse return;
+    Spans.image.store(0, .release);
+    if (host_spans) |sp| sp.destroy();
+    if (host_causes) |c| gpa.destroy(c);
+    if (host_lookback) |lb| lb.destroy();
+    host_spans = null;
+    host_causes = null;
+    host_lookback = null;
+    host_gpa = null;
 }
 
 /// Host only, at the end of every frame.
@@ -601,7 +619,7 @@ pub const spans = Spans.current;
 /// JSON that Perfetto (ui.perfetto.dev) and chrome://tracing open, one row a thread.
 pub fn writeTrace(w: *std.Io.Writer, ms: u32) (std.Io.Writer.Error || error{OutOfMemory})!void {
     const sp = spans() orelse return w.writeAll("{\"traceEvents\":[]}\n");
-    var arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
+    var arena: std.heap.ArenaAllocator = .init(sp.gpa);
     defer arena.deinit();
     const since: i64 = if (ms == 0) std.math.minInt(i64) else Spans.now() - @as(i64, ms) * std.time.ns_per_ms;
     try Spans.writeTrace(w, try sp.collect(arena.allocator(), since), sp.ui_thread.load(.monotonic));
@@ -762,7 +780,7 @@ pub fn report(p: *const Profiler, w: *std.Io.Writer, opts: ReportOptions) std.Io
 
 /// The kept spans summed by name: how many, their total and longest, on how many threads.
 fn writeSpans(sp: *const Spans, w: *std.Io.Writer, top: usize) std.Io.Writer.Error!void {
-    var arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
+    var arena: std.heap.ArenaAllocator = .init(sp.gpa);
     defer arena.deinit();
     const kept = sp.collect(arena.allocator(), std.math.minInt(i64)) catch return;
     const sums = Spans.summarize(arena.allocator(), kept) catch return;
@@ -969,4 +987,29 @@ test "a frame's GPU counts land in its own slot and the window's average, not be
     p.win_start -= window_ns;
     p.frameEnd();
     try std.testing.expectEqual(@as(f64, 2), p.stats.gpu.?.targets);
+}
+
+test "hostDeinit frees what recording made, and a second call does nothing" {
+    dvui.io = std.testing.io;
+    const gpa = std.testing.allocator;
+    // `hostFrameBegin` publishes through a dvui window a test has none of, so this makes what it
+    // makes the first recording frame, with the same allocator.
+    host_profiler = .{ .enabled = true };
+    defer host_profiler = .{};
+    host_gpa = gpa;
+    host_lookback = try Lookback.create(gpa, max_entries);
+    host_causes = try gpa.create(FrameCauses);
+    host_causes.?.* = .{};
+    host_spans = try Spans.create(gpa);
+
+    host_profiler.frameBegin(null, null);
+    try std.testing.expect(host_profiler.active);
+    const s = host_profiler.open("fizzy", "frame").?;
+    host_profiler.close(s);
+    host_profiler.frameEnd();
+
+    hostDeinit();
+    try std.testing.expect(host_lookback == null and host_causes == null and host_spans == null and host_gpa == null);
+    try std.testing.expectEqual(@as(usize, 0), Spans.image.load(.acquire));
+    hostDeinit();
 }

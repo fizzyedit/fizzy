@@ -39,9 +39,8 @@ unread: ?Unread = null,
 /// while the history moves frame after frame (a held undo, a scrub), so each step is a copy into
 /// it rather than a new pane-sized target; let go of the first frame no picture is asked for.
 whole: ?dvui.TextureTarget = null,
-/// The size of the pane's part a picture is taken from as the pane stands (`take`, each frame): a
-/// step's picture from another size (the window resized since) is of another view of it, and a
-/// visit takes it again.
+/// The size of the pane's part a picture is taken from as the pane stands (`take`, each frame).
+/// Kept pictures retain their original size even when the pane resizes.
 pane_source: [2]u32 = .{ 0, 0 },
 
 const Unread = struct {
@@ -113,8 +112,8 @@ pub const max_w: u32 = 384;
 /// document drew) are seen the frame after, which draws them.
 pub fn moved(self: *HistoryFrames, gpa: std.mem.Allocator, top: u64, below: ?u64, change: Change) void {
     if (change == .restarted) self.forget(gpa);
-    // Only visited, and it has its picture of the pane as it stands: kept as it was taken.
-    if (change == .visited) if (self.frames.get(top)) |pic| if (std.mem.eql(u32, &pic.source, &self.pane_source)) return;
+    // A visit keeps the original pixels and change box, even after the pane resizes.
+    if (change == .visited and self.frames.contains(top)) return;
     self.due = .{ .top = top, .below = below, .made = change != .visited };
     // Keep the frame in a texture to read from, on a backend that would draw it straight to the
     // window (the web).
@@ -124,9 +123,10 @@ pub fn moved(self: *HistoryFrames, gpa: std.mem.Allocator, top: u64, below: ?u64
 
 /// Before the document draws: take the picture asked for (`moved`) from what the last frame drew of
 /// `pane` (physical), above `bar_h` (physical) of its bottom, where the transport and the feed
-/// are drawn over it: the bar's height as it stands, its strip included, so a picture never holds
-/// the strip itself. `strip` is the strip's size in physical pixels (`HistoryTransport.stripPixels`):
-/// the crop's; null where the pane has no room for the bar, and no picture is taken.
+/// are drawn over it: `HistoryTransport.cover`, a size that holds however open the strip is, so a
+/// picture never holds the strip itself and every picture is of the same part of the pane.
+/// `strip` is the strip's size in physical pixels (`HistoryTransport.stripPixels`): the crop's;
+/// null where the pane has no room for the bar, and no picture is taken.
 pub fn take(self: *HistoryFrames, gpa: std.mem.Allocator, pane: dvui.Rect.Physical, bar_h: f32, strip: ?[2]u32) void {
     self.land(gpa);
     // On whole pixels, so the copy at its own size is the pane's pixels, not a blend of two.
@@ -190,12 +190,11 @@ fn land(self: *HistoryFrames, gpa: std.mem.Allocator) void {
         } else |_| {}
     } else |_| {}
     const top = u.step.top;
-    // A visit's picture of a step that has one of this view by now (made since it was asked for)
-    // is not the step's: it keeps its own.
-    if (!u.step.made) if (self.frames.get(top)) |old| if (std.mem.eql(u32, &old.source, &pic.source)) {
+    // A picture may have landed since this visit was requested: keep that original.
+    if (!u.step.made and self.frames.contains(top)) {
         gpa.free(pic.prints);
         return;
-    };
+    }
     // Round what the step changed; one that changed nothing visible, round the document's content,
     // or the pane's middle.
     const round = pic.change orelse content orelse rules.Frac{};
@@ -379,7 +378,9 @@ test "scrubbing across the steps leaves each step's picture as it was taken" {
     }
     // Back to the start and forward again, then to and fro: undo, redo, a scrub's jumps.
     const stops = [_]u64{ 4, 3, 2, 1, 0, 1, 2, 3, 4, 0, 4, 2 };
-    for (stops) |top| {
+    for (stops, 0..) |top, visit| {
+        // Opening the strip or resizing the pane must not retake a kept picture.
+        hf.pane_source = if (visit % 2 == 0) .{ 800, 500 } else .{ 800, 430 };
         hf.moved(gpa, top, if (top == 0) null else top - 1, changeOf(&.{}, top));
         try std.testing.expectEqual(@as(?Step, null), hf.due);
     }

@@ -124,8 +124,8 @@ pub fn diff(arena: std.mem.Allocator, old: []const Keyed, new: []const Keyed) !D
     var before: std.StringHashMapUnmanaged(*const Keyed) = .empty;
     for (old) |*n| try before.put(arena, n.key, n);
     var after: std.StringHashMapUnmanaged(void) = .empty;
-    var added: std.ArrayListUnmanaged(Keyed) = .empty;
-    var changed: std.ArrayListUnmanaged(Change) = .empty;
+    var added: std.ArrayList(Keyed) = .empty;
+    var changed: std.ArrayList(Change) = .empty;
     for (new) |n| {
         try after.put(arena, n.key, {});
         const o = before.get(n.key) orelse {
@@ -160,7 +160,7 @@ pub fn diff(arena: std.mem.Allocator, old: []const Keyed, new: []const Keyed) !D
         }
         if (any) try changed.append(arena, c);
     }
-    var removed: std.ArrayListUnmanaged([]const u8) = .empty;
+    var removed: std.ArrayList([]const u8) = .empty;
     for (old) |n| if (!after.contains(n.key)) try removed.append(arena, n.key);
     return .{ .added = added.items, .removed = removed.items, .changed = changed.items };
 }
