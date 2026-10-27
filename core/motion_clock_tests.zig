@@ -45,7 +45,7 @@ const Rig = struct {
 
 const Sample = struct { t_ms: f64, anim: f32, spring: f32, tween: f32 };
 
-const anim_id: dvui.Id = @enumFromInt(0x6d6f_7469);
+const anim_id: dvui.Id = @fromBackingInt(@intCast(0x6d6f_7469));
 
 /// `lead` frames at `lead_gaps_ms` (the first long), an idle gap of 3 s, then everything starts
 /// at that frame and `gaps_ms` follow. One `Sample` per frame from the start, by motion time.
