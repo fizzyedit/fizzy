@@ -37,7 +37,7 @@ const LiquidField = @This();
 pub const max_shapes = 16;
 
 /// Uniform vec4s before the shapes (`Uniforms`), and per shape.
-const header_vec4s = 11;
+const header_vec4s = 9;
 const shape_vec4s = 3;
 
 /// A piece of glass. Physical pixels, window coordinates.
@@ -223,13 +223,7 @@ pub const Uniforms = extern struct {
     /// The look's brightness curves (`applyLook`): the wash at the shape's top and at its bottom,
     /// the sweep, the luminance ceiling. Identity: no wash, no sweep, a ceiling of 1.
     curves: [4]f32 = .{ 0, 0, 0, 1 },
-    /// The lit edge's light: its direction (`glass_look.lightDir`), how high it stands, the catch on
-    /// the far side.
-    light: [4]f32 = .{ -0.70710678, -0.70710678, 0, 0 },
-    /// The lit edge's line, glow, shade and floor.
-    edge: [4]f32 = @splat(0),
-    /// How dark the window's hairline edge is, then the lit edge's line and glow widths in physical
-    /// pixels.
+    /// How dark the window's hairline edge is; remaining lanes reserved.
     widths: [4]f32 = .{ 0.85, 0, 0, 0 },
     shapes: [max_shapes][shape_vec4s][4]f32,
 
@@ -388,13 +382,10 @@ pub fn applyLook(self: *const LiquidField, u: *Uniforms, l: glass_look.Look) voi
         u.face[1] = 0;
         u.curves[0] = std.math.clamp(l.wash_top, 0, 1);
         u.curves[1] = std.math.clamp(l.wash_bottom, 0, 1);
+        u.curves[2] = std.math.clamp(l.sweep, 0, 1);
     }
-    u.curves[2] = std.math.clamp(l.sweep, 0, 1);
     u.curves[3] = std.math.clamp(l.ceiling, 0, 1);
-    const dir = glass_look.lightDir(l);
-    u.light = .{ dir[0], dir[1], l.light_height, l.rim_back };
-    u.edge = .{ l.rim_line, l.rim_glow, l.rim_shade, l.rim_floor };
-    u.widths = .{ l.edge_dark, l.rim_width * self.scale, l.glow_width * self.scale, 0 };
+    u.widths = .{ l.edge_dark, 0, 0, 0 };
     for (u.shapes[0..self.len]) |*sh| sh[2][0] *= l.frost;
     if (self.edge != null) u.shapes[max_shapes - 1][2][0] *= l.frost;
 }

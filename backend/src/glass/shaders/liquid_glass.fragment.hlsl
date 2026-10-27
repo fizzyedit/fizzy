@@ -15,7 +15,7 @@
 // sharp picture at 1, the uniforms as one array. On the web the same, by the names
 // `core.gfx.programs` gives them (the generator renames them).
 
-#define G 11
+#define G 9
 #define MAX_SHAPES 16
 // How far past its place's outline the outside of the place begins, in pixels: far enough that no
 // sliver of it shows inside, near enough that a shape at the outline still runs into it.
@@ -96,8 +96,7 @@ float4 main(PSInput input) : SV_Target0
     float4 g4 = uData[4];
     float4 g5 = uData[5]; // dither; the lens: its band's share of the shape, its bend, its shade
     float4 g7 = uData[7]; // the look's curves (`glass_look.Look`): the wash at the shape's top and at its bottom, the sweep, the luminance ceiling (1: off)
-    // uData[8] and [9], the lit edge's light and line (`Look.light_angle`, `rim_line`), are the next step's
-    float4 g10 = uData[10]; // how dark the window's hairline edge is
+    float4 g8 = uData[8]; // how dark the window's hairline edge is
     float4 g6 = uData[6]; // opaque window (+1) and the light turned to the top right (+2); the lens: dispersion, a drop's diagonal light (0: a window's hairline), the band's cap
     // Apple's lens (`glass_look.inApp`): the picture pulled inward from a band near the rim,
     // magnified and, past a bend of 1, folded there. Off, the earlier glass: pulled from outside.
@@ -278,7 +277,7 @@ float4 main(PSInput input) : SV_Target0
     float af = abs(facing);
     bool diagonal = inward && dg > 0.0;
     float edge_dark = diagonal ? dg * (1.0 - smoothstep(0.2, 0.7, af)) * exp(-max(0.0, -D) / (2.0 * px))
-                               : g10.x * (1.0 - smoothstep(0.0, 0.5 * px, -D));
+                               : g8.x * (1.0 - smoothstep(0.0, 0.5 * px, -D));
     // As much as the edge has formed (`lens`), as its bend, clearing and light are: glass that is
     // barely a lens yet — a drop sunk into its place's edge — draws no dark line round itself.
     float shade = inward ? max(g5.w * t * t, edge_dark) * min(lens, 1.0) : 0.0;

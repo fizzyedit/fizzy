@@ -235,27 +235,12 @@ pub const Look = struct {
     wash_top: f32,
     wash_bottom: f32,
     /// A specular band over the top ~38% of the shape, strongest at its top edge: white added, 0…1.
-    sweep: f32,
+    sweep: f32 = 0,
     /// A luminance cap, 0…1, on what the glass shows before the wash: brighter than this is soft-clipped
     /// so text over a bright backdrop stays readable. 1 is off.
-    ceiling: f32,
+    ceiling: f32 = 1,
     /// How dark the window's hairline edge is, 0…1 (`diagonal` 0).
-    edge_dark: f32,
-    /// The lit edge, computed in the shader from the edge's normal (`rim_line` 0 is off, and the
-    /// edge is the one above). The light's direction in degrees from the left, turning toward the
-    /// top (`lightDir`), and how high it stands off the surface…
-    light_angle: f32,
-    light_height: f32,
-    /// …the line along the lit side, its width in points, and the least of it on the unlit side…
-    rim_line: f32,
-    rim_width: f32,
-    rim_floor: f32,
-    /// …the glow inside it and how far in it reaches, in points, the shade on the sides square to
-    /// the light, and the catch on the far side.
-    rim_glow: f32,
-    glow_width: f32,
-    rim_shade: f32,
-    rim_back: f32,
+    edge_dark: f32 = 0.85,
     /// The bending band's width: a share of the shape's shorter half…
     bevel: f32,
     /// …and at most this many points.
@@ -290,15 +275,6 @@ pub fn inApp(opacity: f32) Look {
         .sweep = 0,
         .ceiling = 1,
         .edge_dark = 0.85,
-        .light_angle = 45,
-        .light_height = 0,
-        .rim_line = 0,
-        .rim_width = 0,
-        .rim_floor = 0,
-        .rim_glow = 0,
-        .glow_width = 0,
-        .rim_shade = 0,
-        .rim_back = 0,
         .bevel = bevel,
         .bevel_cap = bevel_cap,
         // The lens whole at its edge whatever the frost, as Liquid Glass's is (and the OS's drops,
@@ -369,13 +345,6 @@ pub fn forLens(look: Look) Look {
     return l;
 }
 
-/// The light's direction on screen (y down) for `l.light_angle`: degrees from the left turning
-/// toward the top, so 45 is the top left every glass has always been lit from.
-pub fn lightDir(l: Look) [2]f32 {
-    const a = std.math.degreesToRadians(l.light_angle);
-    return .{ -@cos(a), -@sin(a) };
-}
-
 /// What a glass is for, which picks its look (`Looks`): a drop's bubble or the carried view, a
 /// surface carrying text, a card, a bar, a lens over a picture of the caller's own.
 pub const Role = enum { drop, text, card, bar, lens };
@@ -405,8 +374,8 @@ pub const Looks = struct {
     }
 };
 
-/// Where the published `Looks` live in dvui's data (`core.material.publishLook`, read by
-/// `LiquidField`), the one id both name.
+/// Shared dvui data id for glass looks, renderer enablement and window opacity.
+/// The keys distinguish these values within each window.
 pub const data_id_backing: u64 = 0x6c69_7166;
 pub const data_key = "_liquid_look";
 
@@ -604,17 +573,6 @@ test "both forms share the way" {
     }
 }
 
-test "the light's angle packs to a direction toward the top left" {
-    var l = inApp(1);
-    l.light_angle = 51.7;
-    const d = lightDir(l);
-    try std.testing.expectApproxEqAbs(@as(f32, -0.62), d[0], 0.005);
-    try std.testing.expectApproxEqAbs(@as(f32, -0.78), d[1], 0.005);
-    l.light_angle = 45;
-    try std.testing.expectApproxEqAbs(@as(f32, -0.70710678), lightDir(l)[0], 1e-6);
-    try std.testing.expectApproxEqAbs(@as(f32, -0.70710678), lightDir(l)[1], 1e-6);
-}
-
 test "fizzy's looks keep every new curve at its identity" {
     var i: usize = 0;
     while (i <= 20) : (i += 1) {
@@ -624,7 +582,6 @@ test "fizzy's looks keep every new curve at its identity" {
             try std.testing.expectEqual(@as(f32, 0), l.sweep);
             try std.testing.expectEqual(@as(f32, 1), l.ceiling);
             try std.testing.expectEqual(@as(f32, 0.85), l.edge_dark);
-            try std.testing.expectEqual(@as(f32, 0), l.rim_line);
             try std.testing.expectEqual(l.wash_top, l.wash_bottom);
         }
         // Cards and bars are a drop's until an app says otherwise.

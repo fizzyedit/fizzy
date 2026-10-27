@@ -2,7 +2,7 @@
 precision highp float;
 precision highp int;
 
-uniform highp vec4 uData[59];
+uniform highp vec4 uData[57];
 uniform highp sampler2D uSampler;
 uniform highp sampler2D uTex1;
 
@@ -69,11 +69,11 @@ void main()
             if (_165)
             {
                 int _167 = 3 * _156;
-                int _168 = 11 + _167;
-                int _174 = _167 + 13;
+                int _168 = 9 + _167;
+                int _174 = _167 + 11;
                 highp vec2 _178 = vTextureCoord - uData[_168 * 1 + 0].xy;
                 highp float _182 = min(uData[_168 * 1 + 0].z, uData[_168 * 1 + 0].w);
-                highp vec4 _184 = min(uData[(_167 + 12) * 1 + 0], vec4(_182));
+                highp vec4 _184 = min(uData[(_167 + 10) * 1 + 0], vec4(_182));
                 highp float _185 = _178.x;
                 highp float _206;
                 if (_185 > 0.0)
@@ -225,14 +225,14 @@ void main()
                 break;
             }
         }
-        bool _320 = uData[58].w > 2.5;
-        bool _321 = uData[58].w > 1.5;
+        bool _320 = uData[56].w > 2.5;
+        bool _321 = uData[56].w > 1.5;
         highp float _394;
         highp vec2 _395;
         if (_321)
         {
-            highp vec2 _327 = vTextureCoord - uData[56].xy;
-            highp vec4 _333 = min(uData[57], vec4(min(uData[56].z, uData[56].w)));
+            highp vec2 _327 = vTextureCoord - uData[54].xy;
+            highp vec4 _333 = min(uData[55], vec4(min(uData[54].z, uData[54].w)));
             highp float _334 = _327.x;
             highp float _355;
             if (_334 > 0.0)
@@ -261,7 +261,7 @@ void main()
                 }
                 _355 = _354;
             }
-            highp vec2 _359 = (abs(_327) - uData[56].zw) + vec2(_355);
+            highp vec2 _359 = (abs(_327) - uData[54].zw) + vec2(_355);
             highp float _361 = (_334 < 0.0) ? (-1.0) : 1.0;
             highp float _364 = (_327.y < 0.0) ? (-1.0) : 1.0;
             highp float _366 = _359.x;
@@ -332,7 +332,7 @@ void main()
             if (_403)
             {
                 _417 = _146;
-                _418 = uData[56].yw;
+                _418 = uData[54].yw;
                 _419 = _154;
                 _420 = _148;
                 _421 = _152;
@@ -343,7 +343,7 @@ void main()
                 highp vec2 _412;
                 if (_408)
                 {
-                    _412 = uData[56].yw;
+                    _412 = uData[54].yw;
                 }
                 else
                 {
@@ -353,7 +353,7 @@ void main()
                 _417 = _412;
                 _418 = _146;
                 _419 = _408 ? _154 : _134;
-                _420 = vec4(_414.x ? uData[58].x : _138.x, _414.y ? uData[58].y : _138.y, _414.z ? uData[58].z : _138.z, _414.w ? uData[58].w : _138.w);
+                _420 = vec4(_414.x ? uData[56].x : _138.x, _414.y ? uData[56].y : _138.y, _414.z ? uData[56].z : _138.z, _414.w ? uData[56].w : _138.w);
                 _421 = _408 ? _402 : _150;
             }
             bvec4 _422 = bvec4(_403);
@@ -380,7 +380,7 @@ void main()
             _442 = _434;
             _443 = vec2(_436.x ? _425.x : _140.x, _436.y ? _425.y : _140.y);
             _444 = _420;
-            _445 = vec4(_422.x ? uData[58].x : _148.x, _422.y ? uData[58].y : _148.y, _422.z ? uData[58].z : _148.z, _422.w ? uData[58].w : _148.w);
+            _445 = vec4(_422.x ? uData[56].x : _148.x, _422.y ? uData[56].y : _148.y, _422.z ? uData[56].z : _148.z, _422.w ? uData[56].w : _148.w);
             _446 = _435;
             _447 = _426 ? _402 : _144;
             _448 = _421;
@@ -664,7 +664,7 @@ void main()
         }
         else
         {
-            _796 = uData[10].x * (1.0 - smoothstep(0.0, uData[2].z * 0.625, -_487));
+            _796 = uData[8].x * (1.0 - smoothstep(0.0, uData[2].z * 0.625, -_487));
         }
         highp float _806;
         if (_129)

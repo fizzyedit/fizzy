@@ -6089,7 +6089,7 @@ test "liquid field: groups are the shapes that touch, each drawn as its own quad
     try std.testing.expectEqual(@as(u8, 2), g.size[0]);
     try std.testing.expectEqual(@as(u8, 1), g.size[1]);
     // The uniforms are the shader's `uData`: its header, then three vec4s a shape.
-    try std.testing.expectEqual(@as(usize, (11 + 3 * LF.max_shapes) * 16), @sizeOf(LF.Uniforms));
+    try std.testing.expectEqual(@as(usize, (9 + 3 * LF.max_shapes) * 16), @sizeOf(LF.Uniforms));
     const u = f.pack(.{ .x = 0, .y = 0, .w = 400, .h = 100 }, false, g.order[0..f.len]);
     try std.testing.expectEqual(@as(f32, 22), u.shapes[1][0][0]);
 }
@@ -6125,8 +6125,8 @@ test "liquid field: fizzy's default look packs to today's uniforms for every rol
             try std.testing.expectEqual(@as(f32, 0), u.curves[2]);
             try std.testing.expectEqual(@as(f32, 1), u.curves[3]);
             try std.testing.expectEqual(@as(f32, 0.85), u.widths[0]);
-            try std.testing.expectEqual(@as(f32, 0), u.edge[0]);
-            try std.testing.expectEqual(@as(f32, 0.70710678), -u.light[0]);
+            const old_lift: f32 = if (t.role == .lens) 0 else 0.03 * gl.way(opacity).shine;
+            try std.testing.expectEqual(old_lift, u.curves[0]);
             try std.testing.expectEqual(@max(l.bevel, 0.0001), u.dither[1]);
             try std.testing.expectEqual(l.bend * 0.5, u.dither[2]);
             try std.testing.expectEqual(l.shade, u.dither[3]);
@@ -6146,8 +6146,6 @@ test "liquid field: an app look's curves reach the uniforms, a surface keeps its
     look.wash_top = 0.107;
     look.wash_bottom = 0.04;
     look.edge_dark = 0.3;
-    look.light_angle = 51.7;
-    look.rim_line = 0.5;
     var f: LF = .{ .tint = .{ .r = 0, .g = 0, .b = 0, .a = 255 }, .lift = 0.2, .role = .card };
     f.add(LF.Shape.circle(.{ .x = 50, .y = 50 }, 40));
     const order = [_]u8{0};
@@ -6155,9 +6153,6 @@ test "liquid field: an app look's curves reach the uniforms, a surface keeps its
     f.applyLook(&u, look);
     try std.testing.expectEqual([4]f32{ 0.107, 0.04, 0.11, 0.6 }, u.curves);
     try std.testing.expectEqual(@as(f32, 0.3), u.widths[0]);
-    try std.testing.expectEqual(@as(f32, 0.5), u.edge[0]);
-    try std.testing.expectApproxEqAbs(@as(f32, -0.62), u.light[0], 0.005);
-    try std.testing.expectApproxEqAbs(@as(f32, -0.78), u.light[1], 0.005);
     // A surface's colour is its own: its lift stays, and the look's wash does not reach it.
     var surface = f;
     surface.surface = true;
@@ -6165,7 +6160,12 @@ test "liquid field: an app look's curves reach the uniforms, a surface keeps its
     surface.applyLook(&us, look);
     try std.testing.expectEqual(@as(f32, 0.2), us.face[1]);
     try std.testing.expectEqual(@as(f32, 0), us.curves[0]);
-    try std.testing.expectEqual(@as(f32, 0.11), us.curves[2]);
+    try std.testing.expectEqual(@as(f32, 0), us.curves[2]);
+    surface.surface = false;
+    surface.window = true;
+    var uw = surface.pack(.{ .x = 0, .y = 0, .w = 100, .h = 100 }, false, &order);
+    surface.applyLook(&uw, look);
+    try std.testing.expectEqual(@as(f32, 0), uw.curves[2]);
 }
 
 test "liquid field: a lens's picture reaches as far past its shapes as the earlier glass's rim pulls from" {
