@@ -285,11 +285,8 @@ pub fn frame(self: *Demo) void {
             .tape => |bytes| self.playTape(bytes) catch {},
         }
     }
-    // A drop beside is aimed at where the workbench would split, as the room is now.
-    self.editor.app.layout.beside = if (self.active())
-        if (self.editor.workbench.besideEdge()) |side| std.meta.stringToEnum(SplitTree.Side, @tagName(side)) else null
-    else
-        null;
+    // A drop beside is aimed at where the workbench would split the target place, as its room is now.
+    self.editor.app.layout.beside = if (self.active()) .{ .ctx = self, .edge = besideEdge } else null;
     self.snapshot.beginFrame();
     self.live.frame();
     self.player.frame();
@@ -583,7 +580,7 @@ fn freeSaved(self: *Demo) void {
     self.entries.clearAndFree(gpa);
     const saved = self.saved orelse return;
     if (saved.folder) |f| gpa.free(f);
-    if (saved.arrangement) |arrangement| arrangement.destroy(self.editor.app.gpa);
+    if (saved.arrangement) |arrangement| arrangement.destroy(gpa);
     gpa.free(saved.branches);
     self.saved = null;
 }
@@ -857,6 +854,26 @@ fn commandTitle(ctx: *anyopaque, id: []const u8) ?[]const u8 {
     return c.title;
 }
 
+/// The edge a drop beside aims at over place `name`: where the workbench would split the pane
+/// shown there (a pane of its own tree is named for its grouping). A pane the layout's keywords
+/// show is in no list, so Main is the person's pane.
+pub fn besideEdge(ctx: *anyopaque, name: []const u8) ?SplitTree.Side {
+    const editor = from(ctx).editor;
+    const wb = &editor.workbench;
+    const grouping = Editor.Workspace.groupingOfName(name) orelse editor.workspaces.groupingIn(name) orelse blk: {
+        const main = editor.regionFor(sdk.keywords.ide.main) orelse return null;
+        if (!std.mem.eql(u8, main.name, name)) return null;
+        var layout = Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, editor.app.host.arena());
+        var buf: [64]u8 = undefined;
+        const id = std.mem.print(&buf, Editor.Workspaces.id_prefix ++ "{d}", .{wb.open_workspace_grouping}) catch return null;
+        if (Editor.Layout.ViewDrag.holderOf(&layout, id)) |holder| {
+            if (!std.mem.eql(u8, holder, name)) return null;
+        }
+        break :blk wb.open_workspace_grouping;
+    };
+    return wb.besideEdge(grouping);
+}
+
 /// The place a role names, by what it is rather than what the person's layout calls it.
 fn resolveRole(ctx: *anyopaque, role: []const u8, buf: []u8) ?[]const u8 {
     const keywords = if (std.mem.eql(u8, role, "documents"))
@@ -974,6 +991,8 @@ const Arrangement = struct {
         return self;
     }
 
+    /// The window as it is now, by value; its arena is in `gpa` and the owner frees it with
+    /// `arena.deinit()` (`destroy` does, for one made by `create`).
     fn take(editor: *Editor, gpa: std.mem.Allocator) !Arrangement {
         var arena: std.heap.ArenaAllocator = .init(gpa);
         errdefer arena.deinit();
@@ -1016,7 +1035,7 @@ const Arrangement = struct {
     }
 
     /// Open or shut the explorer as it was.
-    fn restoreExplorer(self: Arrangement, editor: *Editor) void {
+    fn restoreExplorer(self: *const Arrangement, editor: *Editor) void {
         if (self.explorer_closed == editor.explorer.closed) return;
         if (self.explorer_closed) editor.explorer.close(editor) else editor.explorer.open(editor);
     }

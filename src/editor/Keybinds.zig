@@ -163,7 +163,7 @@ const fizzy_commands = [_]FizzyCommand{
     .{ .id = "fizzy.redo", .title = "Redo", .bind = "redo", .run = cmdRedo, .isEnabled = anyDocOpen, .params = HistoryStep.params, .runWith = HistoryStep.bind(cmdRedoWith), .icon = icons.tvg.lucide.redo },
     .{ .id = "fizzy.copy", .title = "Copy", .bind = "copy", .run = cmdCopy, .isEnabled = cmdCopyEnabled, .icon = icons.tvg.lucide.copy },
     .{ .id = "fizzy.paste", .title = "Paste", .bind = "paste", .run = cmdPaste, .isEnabled = cmdPasteEnabled, .icon = icons.tvg.lucide.@"clipboard-paste" },
-    .{ .id = "fizzy.toggleExplorer", .title = "Toggle Explorer", .bind = "explorer", .run = cmdToggleExplorer, .icon = icons.tvg.lucide.@"panel-left" },
+    .{ .id = "fizzy.toggleExplorer", .title = "Toggle Explorer", .bind = "explorer", .run = cmdToggleExplorer, .icon = if (Editor.Chrome.configured.sidebar_edge == .right) icons.tvg.lucide.@"panel-right" else icons.tvg.lucide.@"panel-left" },
     .{ .id = "fizzy.resetLayout", .title = "Reset Layout", .bind = null, .run = cmdResetLayout, .icon = icons.tvg.lucide.@"rotate-ccw" },
     .{ .id = "fizzy.toggleFullScreen", .title = "Toggle Full Screen", .bind = null, .run = cmdToggleFullScreen, .icon = icons.tvg.lucide.maximize },
     .{ .id = "fizzy.fitView", .title = "Fit to View", .bind = null, .run = cmdFitView, .isEnabled = cmdFitViewEnabled, .icon = icons.tvg.lucide.scan },

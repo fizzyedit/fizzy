@@ -103,25 +103,28 @@ def measure(command, log, env, peer=False, idle_seconds=30):
                                    env=env, start_new_session=True)
         try:
             first_frame_ms = None
+            after_main_ms = None
             while time.monotonic() - started < idle_seconds:
                 if process.poll() is not None:
                     raise RuntimeError(f'app exited ({process.returncode}): {log.read_text()}')
                 if first_frame_ms is None:
                     content = log.read_text()
-                    if peer:
-                        if 'HELLO_FIRST_FRAME' in content:
-                            first_frame_ms = (time.monotonic() - started) * 1000
-                    else:
-                        match = FIRST_FRAME.search(content)
+                    # One clock for every app: spawn to the poll that saw the marker.
+                    match = None if peer else FIRST_FRAME.search(content)
+                    if match or (peer and 'HELLO_FIRST_FRAME' in content):
+                        first_frame_ms = (time.monotonic() - started) * 1000
                         if match:
-                            first_frame_ms = float(match[1])
+                            after_main_ms = float(match[1])
                 time.sleep(min(0.01, max(0, idle_seconds - (time.monotonic() - started))))
             sample_at = time.monotonic() - started
             if first_frame_ms is None:
                 raise RuntimeError(f'first-frame marker missing: {log.read_text()}')
             rss = rss_bytes(process.pid)
-            return {'first_frame_ms': first_frame_ms, 'idle_rss_bytes': rss,
-                    'rss_sample_after_s': sample_at, 'rss_scope': 'process_tree'}
+            result = {'first_frame_ms': first_frame_ms, 'idle_rss_bytes': rss,
+                      'rss_sample_after_s': sample_at, 'rss_scope': 'process_tree'}
+            if after_main_ms is not None:
+                result['first_frame_after_main_ms'] = after_main_ms
+            return result
         finally:
             # A peer may spawn helpers; tear down the entire private process group.
             for sig in (signal.SIGTERM, signal.SIGKILL):
@@ -189,7 +192,7 @@ def benchmark(args):
                            'binary_bytes': binary.stat().st_size, 'installer_bytes': installer.stat().st_size,
                            'installer_format': installer.suffix, 'wasm_gzip_bytes': len(gzip.compress(wasm.read_bytes(), compresslevel=9, mtime=0)),
                            'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(),
-                           'first_frame_source': 'core.profile main -> first frame'})
+                           'first_frame_source': 'process spawn -> stderr startup marker (10 ms polling)'})
             env = dict(os.environ, FIZZY_PROFILE=str(work / f'profile-{mode}'), FIZZY_QUIET='1',
                        FIZZY_STARTUP_REPORT='1')
             if not args.sizes_only:

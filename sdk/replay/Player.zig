@@ -42,14 +42,15 @@
 //! and the backend's clock is moved on by as much (`frames`' `clock`) so dvui's stays monotonic
 //! and continuous after. The player's own chrome (the transport bar) runs on the wall (`wallNs`).
 //!
-//! **Closing** always leaves the app as it is (`Stage.keep`), and "Revert to before" (`revert`) is the one way back to the session
-//! the demo set aside. `play` after a person changed things carries on from there as a new branch
-//! (`branched`) rather than replaying over their work; seeking back is the history.
+//! **Closing** always leaves the app as it is (`Stage.keep`), and "Revert to before" (`revert`) is
+//! the one way back to the session the demo set aside. `play` after a person changed things carries
+//! on from there as a new branch (`branched`) rather than replaying over their work; seeking back
+//! is the history.
 //!
 //! **Interruption**: while playing, a real click, tap, scroll or key pauses the demo — a pointer
 //! event goes on to do what the person meant, the first key is only taken as "stop". Real pointer
-//! motion is held off (the tape owns the pointer while it plays). Anything real that reaches the app
-//! while paused marks the app `diverged` from the tape.
+//! motion is held off (the tape owns the pointer while it plays). Anything real that reaches the
+//! app while paused marks the app `diverged` from the tape.
 const Player = @This();
 
 const std = @import("std");
@@ -227,8 +228,8 @@ pub const Transport = struct {
     /// physical, as far round it as the pointer is on it: what the bar hides into, and a press
     /// there brings it back. Null when it was not drawn.
     rest: ?dvui.Rect.Physical = null,
-    /// Sent into where it rests (its tab): the bar stays there, playing or not, until that brings it
-    /// back (a press here, the pointer held on it in the overlay).
+    /// Sent into where it rests (its tab): the bar stays there, playing or not, until that brings
+    /// it back (a press here, the pointer held on it in the overlay).
     tucked: bool = false,
     /// The speed slider, label and line (`Sequencer.speed`), whose notches are `Sequencer.speeds`.
     speed: dvui.Rect.Physical = .{},
@@ -373,7 +374,8 @@ pub fn revert(self: *Player) void {
     self.dismiss(.revert);
 }
 
-/// Stop at once and keep the app as it is, as `close` does: the command's way, with no bar to run back.
+/// Stop at once and keep the app as it is, as `close` does: the command's way, with no bar to run
+/// back.
 pub fn stop(self: *Player) void {
     self.release(.keep);
 }
@@ -717,7 +719,10 @@ fn verify(self: *Player, s: Snapshot) void {
     if (got == want) return;
     self.mismatches += 1;
     const name = if (self.tape()) |t| t.name else "?";
-    log.warn("demo '{s}': replaying to {d:.0} ms did not reach what playing did — the tape does not replay exactly", .{ name, s.at });
+    log.warn("demo '{s}': replaying to {d:.0} ms did not reach what playing did — the tape does not replay exactly", .{
+        name,
+        s.at,
+    });
 }
 
 fn dropSnapshots(self: *Player) void {
@@ -733,7 +738,10 @@ fn dropSnapshots(self: *Player) void {
 pub fn frame(self: *Player) void {
     // Whether this run is seen, once the seek it asks for (or lands) is known: a run while a seek
     // catches up draws nothing, but the one `frames` ends it with.
-    defer self.run_unseen = if (self.set_unseen) |set| set((self.state == .seeking or self.catching_up) and !self.showing) else false;
+    defer self.run_unseen = if (self.set_unseen) |set|
+        set((self.state == .seeking or self.catching_up) and !self.showing)
+    else
+        false;
     if (self.owned == null) return;
     // Widgets name themselves for the tape while one is loaded (`anchor`).
     anchor.want();
@@ -814,7 +822,12 @@ pub fn frame(self: *Player) void {
 /// the runs took the app's clock past the wall — and, a seek still in flight, to the moment it
 /// goes on from — so the next frame carries on from there. Without one a silent run steps the
 /// clock the least dvui accepts, a microsecond, and timers wait for the wall.
-pub fn frames(self: *Player, win: *dvui.Window, frame_fn: *const fn () anyerror!dvui.App.Result, clock: ?*i128) anyerror!dvui.App.Result {
+pub fn frames(
+    self: *Player,
+    win: *dvui.Window,
+    frame_fn: *const fn () anyerror!dvui.App.Result,
+    clock: ?*i128,
+) anyerror!dvui.App.Result {
     // Counted before the run, which may land the seek, and after it, which may have asked for one.
     const was_seeking = self.state == .seeking;
     if (was_seeking) self.seek_stats.shown += 1;
@@ -869,7 +882,10 @@ fn runAt(self: *const Player, win: *dvui.Window, clock: ?*i128, base_ns: i128, b
     // Waiting on a glide's target to stop moving (`targetStill`), a run is a frame of motion where
     // the backend's clock can be moved on: on a microsecond's clock, a place sliding open would
     // never move between runs, and look still.
-    const soonest = win.frame_time_ns + if (self.aiming != null and clock != null) msToNs(Sequencer.path_step_ms) else std.time.ns_per_us;
+    const soonest = win.frame_time_ns + if (self.aiming != null and clock != null)
+        msToNs(Sequencer.path_step_ms)
+    else
+        std.time.ns_per_us;
     if (clock == null or self.state != .seeking) return soonest;
     return @max(soonest, base_ns + msToNs(self.nextMoment() - base_ms));
 }
@@ -1057,7 +1073,10 @@ fn transportTakes(self: *Player, e: *dvui.Event, me: dvui.Event.Mouse) bool {
             self.seq.setSpeedIndex(tr.speedAt(me.p.x));
         } else if (tr.track.contains(me.p)) {
             tr.scrub = tr.timeAt(me.p.x, self.duration());
-            self.scrub_after = if (self.state == .playing or (self.state == .seeking and self.after_seek == .play)) .play else .pause;
+            self.scrub_after = if (self.state == .playing or (self.state == .seeking and self.after_seek == .play))
+                .play
+            else
+                .pause;
             self.scrubbed_to = null;
         } else if (tr.prev.contains(me.p)) {
             self.stepChapter(-1);
@@ -1204,11 +1223,27 @@ fn failed(ctx: *anyopaque, failure: Sequencer.Failure) void {
     const at = if (self.tape()) |t| t.ops[failure.op].at else 0;
     switch (failure.what) {
         .wait => |until| switch (until) {
-            .idle => dvui.log.warn("demo '{s}': gave up waiting for the app to settle (op {d}, {d} ms); skipping {d} ops to the next chapter", .{ name, failure.op, at, failure.skipped }),
-            .shown => |tag| dvui.log.warn("demo '{s}': gave up waiting for '{s}' to be drawn (op {d}, {d} ms); skipping {d} ops to the next chapter", .{ name, tag, failure.op, at, failure.skipped }),
-            .gone => |tag| dvui.log.warn("demo '{s}': gave up waiting for '{s}' to go (op {d}, {d} ms); skipping {d} ops to the next chapter", .{ name, tag, failure.op, at, failure.skipped }),
+            .idle => dvui.log.warn(
+                "demo '{s}': gave up waiting for the app to settle (op {d}, {d} ms); " ++
+                    "skipping {d} ops to the next chapter",
+                .{ name, failure.op, at, failure.skipped },
+            ),
+            .shown => |tag| dvui.log.warn(
+                "demo '{s}': gave up waiting for '{s}' to be drawn (op {d}, {d} ms); " ++
+                    "skipping {d} ops to the next chapter",
+                .{ name, tag, failure.op, at, failure.skipped },
+            ),
+            .gone => |tag| dvui.log.warn(
+                "demo '{s}': gave up waiting for '{s}' to go (op {d}, {d} ms); " ++
+                    "skipping {d} ops to the next chapter",
+                .{ name, tag, failure.op, at, failure.skipped },
+            ),
         },
-        .target => |t| dvui.log.warn("demo '{s}': '{s}' was never drawn to move to (op {d}, {d} ms); skipping {d} ops to the next chapter", .{ name, t.tag, failure.op, at, failure.skipped }),
+        .target => |t| dvui.log.warn(
+            "demo '{s}': '{s}' was never drawn to move to (op {d}, {d} ms); " ++
+                "skipping {d} ops to the next chapter",
+            .{ name, t.tag, failure.op, at, failure.skipped },
+        ),
     }
 }
 

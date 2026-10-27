@@ -6,8 +6,10 @@
 //! picker fills them. Closing an empty leaf collapses the branch.
 const std = @import("std");
 const dvui = @import("dvui");
+const core = @import("core");
 
-pub const Side = enum { left, right, top, bottom };
+/// The docking widget's side: a pane tree and a place tree name an edge the same way.
+pub const Side = core.widgets.DockLayout.Side;
 
 pub fn axisOf(side: Side) dvui.enums.Direction {
     return switch (side) {
@@ -54,6 +56,10 @@ pub const Branch = struct {
     /// Fizzy made this split, not the person: it runs the way its space's shape asks and turns
     /// with it (`turn`). `dir` and `side` are how it runs now.
     adaptive: bool = false,
+    /// An adaptive split's new half as a share of its box along the axis, 0 to 1. Saved because
+    /// the half's pixel extent is along the axis it was last chosen on, which a box of another
+    /// shape (a restart in portrait) no longer has. Null until the person has sized it.
+    share: ?f32 = null,
     a: *Node,
     b: *Node,
 };
@@ -208,6 +214,7 @@ pub const Forest = struct {
         parent: []const u8,
         side: Side,
         adaptive: bool = false,
+        share: ?f32 = null,
     };
 
     /// The split that minted `created` is fizzy's own (`Branch.adaptive`). False when no split did.
@@ -215,6 +222,27 @@ pub const Forest = struct {
         var it = self.roots.valueIterator();
         while (it.next()) |n| if (markIn(n.*, created)) return true;
         return false;
+    }
+
+    /// Record the share of the adaptive split that minted `created`. True when it changed.
+    pub fn setShare(self: *Forest, created: []const u8, share: f32) bool {
+        var it = self.roots.valueIterator();
+        while (it.next()) |n| if (shareIn(n.*, created, share)) |changed| return changed;
+        return false;
+    }
+
+    fn shareIn(node: *Node, created: []const u8, share: f32) ?bool {
+        switch (node.kind) {
+            .leaf => return null,
+            .branch => |*b| {
+                if (std.mem.eql(u8, b.created, created)) {
+                    if (b.share == share) return false;
+                    b.share = share;
+                    return true;
+                }
+                return shareIn(b.a, created, share) orelse shareIn(b.b, created, share);
+            },
+        }
     }
 
     fn markIn(node: *Node, created: []const u8) bool {
@@ -244,7 +272,7 @@ pub const Forest = struct {
         switch (node.kind) {
             .leaf => {},
             .branch => |b| {
-                out.append(gpa, .{ .name = b.created, .parent = b.origin, .side = b.side, .adaptive = b.adaptive }) catch {};
+                out.append(gpa, .{ .name = b.created, .parent = b.origin, .side = b.side, .adaptive = b.adaptive, .share = b.share }) catch {};
                 collectFrom(b.a, gpa, out);
                 collectFrom(b.b, gpa, out);
             },
