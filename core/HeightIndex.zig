@@ -244,8 +244,6 @@ fn add(self: *HeightIndex, index: usize, delta: f64) void {
     while (i < self.tree.items.len) : (i += i & (0 -% i)) self.tree.items[i] += delta;
 }
 
-// ---- tests ----------------------------------------------------------------------------------
-
 const testing = std.testing;
 
 /// Rows in newest-last order: row `i` is message `first_id + i`, all estimated at 40.

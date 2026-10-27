@@ -139,10 +139,11 @@ pub fn deinit(self: *VirtualList) void {
     const id = self.scroll.data().id;
     self.scroll.deinit();
 
-    // Anything but our own placement is the reader scrolling: carry the move over to the row the
-    // reader was on, whose place the measurements above it may just have changed.
+    // Anything but our own placement is the reader scrolling, however small a step (a slow coast
+    // moves a fraction of a pixel a frame): carry the move over to the row the reader was on,
+    // whose place the measurements above it may just have changed.
     const moved = st.si.viewport.y - st.frame_y;
-    if (@abs(moved) > HeightIndex.epsilon) {
+    if (moved != 0) {
         const from = if (st.anchor) |a| st.index.resolve(a) orelse st.frame_y else st.frame_y;
         st.anchor = st.index.anchorAt(from + moved);
         st.pinned = st.index.atEnd(st.si.viewport.y, st.si.viewport.h);
@@ -207,8 +208,6 @@ fn drawTrail(self: *VirtualList) void {
     _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 0, .h = @min(below, dvui.max_float_safe) } });
 }
 
-// ---- tests ----------------------------------------------------------------------------------
-
 const testing = std.testing;
 
 /// Messages numbered from `first_id`, each `1 + id % 4` lines tall, estimated at three.
@@ -216,6 +215,8 @@ const Messages = struct {
     first_id: u64 = 0,
     count: usize = 0,
     follow_end: bool = false,
+    /// Pixels the reader scrolls in the next frame.
+    nudge: f32 = 0,
     state: State = State.init(testing.allocator),
     drawn: usize = 0,
     /// The first row whose top is on screen, and where.
@@ -261,6 +262,8 @@ const Messages = struct {
                 self.top_key = id;
             }
         }
+        // What the scroll area does with wheel and touch input, before the list is deinitialized.
+        self.state.si.viewport.y += self.nudge;
         return .ok;
     }
 };
@@ -331,6 +334,23 @@ test "State.scrollTo puts a row at the top, and an unknown key does nothing" {
     m.state.scrollTo(99_999);
     try settleOn(&m);
     try testing.expectEqual(@as(u64, 300), m.top_key);
+}
+
+test "a scroll of a fraction of a pixel accumulates instead of being put back" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    var m: Messages = .{ .count = 500 };
+    defer m.state.deinit();
+    try settleOn(&m);
+    m.state.scrollTo(100);
+    try settleOn(&m);
+    const start = m.state.si.viewport.y;
+    for (0..10) |_| {
+        m.nudge = 0.2;
+        _ = try dvui.testing.step(currentFrame);
+    }
+    m.nudge = 0;
+    try testing.expectApproxEqAbs(start + 2, m.state.si.viewport.y, 0.05);
 }
 
 test "follow_end holds the last row at the bottom as rows are appended" {
