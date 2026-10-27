@@ -996,12 +996,16 @@ const Arrangement = struct {
             };
             n += 1;
         }
+        const saved_regions = try regionsZon(editor, a);
+        const tree = try treeZon(editor, a);
+        const panes = try editor.workbench.arrangement(a);
+        // Copy the arena only after every allocation has updated its buffer list.
         return .{
             .arena = arena,
-            .regions = try regionsZon(editor, a),
-            .tree = try treeZon(editor, a),
+            .regions = saved_regions,
+            .tree = tree,
             .places = places[0..n],
-            .panes = try editor.workbench.arrangement(a),
+            .panes = panes,
             .explorer_closed = editor.explorer.closed,
         };
     }
