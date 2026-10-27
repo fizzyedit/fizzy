@@ -94,11 +94,11 @@ pub fn noteRefresh(self: *FrameCauses, file: []const u8, line: u32, from_thread:
 pub const Verdict = enum { events, refresh, other };
 
 /// Count a frame and return its cause. On the UI thread.
-pub fn frameBegin(self: *FrameCauses, events: usize) Verdict {
+pub fn frameBegin(self: *FrameCauses, has_events: bool) Verdict {
     self.acquire();
     defer self.release();
     self.frames +|= 1;
-    const verdict: Verdict = if (events > 0) blk: {
+    const verdict: Verdict = if (has_events) blk: {
         self.by_events +|= 1;
         break :blk .events;
     } else if (self.pending > 0) blk: {
@@ -139,12 +139,12 @@ pub fn write(self: *FrameCauses, w: *std.Io.Writer, indent: []const u8, top: usi
 
 test "a frame is put down to its events, else the refreshes before it, else something else" {
     var c: FrameCauses = .{};
-    _ = c.frameBegin(2);
+    _ = c.frameBegin(true);
     c.noteRefresh("src/editor/Editor.zig", 120, false);
     c.noteRefresh("src/editor/Editor.zig", 120, false);
     c.noteRefresh("plugins/text/src/Doc.zig", 9, true);
-    _ = c.frameBegin(0);
-    _ = c.frameBegin(0);
+    _ = c.frameBegin(false);
+    _ = c.frameBegin(false);
     try std.testing.expectEqual(@as(u32, 3), c.frames);
     try std.testing.expectEqual(@as(u32, 1), c.by_events);
     try std.testing.expectEqual(@as(u32, 1), c.by_refresh);

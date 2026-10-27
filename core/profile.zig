@@ -593,7 +593,7 @@ pub fn hostFrameBegin(gpa: std.mem.Allocator, prev_submit_ns: ?u64, gpu_total: ?
         if (active and !was_active) c.* = .{};
         if (active) {
             var cause = causingEvents(dvui.events());
-            switch (c.frameBegin(@intFromBool(@as(u8, @bitCast(cause)) != 0))) {
+            switch (c.frameBegin(@as(u8, @bitCast(cause)) != 0)) {
                 .events => {},
                 .refresh => cause.refresh = true,
                 .other => cause.other = true,
@@ -814,8 +814,8 @@ pub fn report(p: *const Profiler, w: *std.Io.Writer, opts: ReportOptions) std.Io
         for (0..@min(opts.hitches, p.history_filled)) |ago| {
             const f = p.historyFrame(ago).?;
             try w.print("        .{{ .work_ns = {d}, .cause = .{{", .{f.work_ns});
-            inline for (.{ "press", "release", "key", "text", "scroll", "window", "other", "refresh" }) |name| {
-                if (@field(f.cause, name)) try w.writeAll(" ." ++ name ++ " = true,");
+            inline for (@typeInfo(Cause).@"struct".fields) |field| {
+                if (@field(f.cause, field.name)) try w.writeAll(" ." ++ field.name ++ " = true,");
             }
             try w.writeAll(" } },\n");
         }
