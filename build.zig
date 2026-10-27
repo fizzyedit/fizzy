@@ -230,7 +230,9 @@ pub fn framework(fizzy_dep: *std.Build.Dependency, platform: Platform) Framework
 /// ```
 ///
 /// `linked` is everything the app links, in registration order (the order of the sidebar's
-/// views): fizzy's own (`fizzy.plugins`) and the app's. For an app's, `name` is the plugin's id
+/// views): fizzy's own (`fizzy.plugins`) and the app's, and nothing else is added. Until
+/// fizzyedit/plans#16 makes it optional the list must include `fizzy.plugins.workbench`; one
+/// without it, the empty list too, fails the build. For an app's, `name` is the plugin's id
 /// (its root's `plugin_id`) and `module` its static module, which the plugin package exports and
 /// which fizzy wires to `dvui`, `core`, `fizzy_sdk` and `icons`.
 pub fn buildApp(fizzy_dep: *std.Build.Dependency, linked: []const BundledPlugin) !void {
@@ -274,7 +276,7 @@ pub const App = struct {
 pub fn addApp(fizzy_dep: *std.Build.Dependency, linked: []const BundledPlugin) !App {
     const d = deferred orelse @panic("fizzy.addApp: pass `.@\"defer-app\" = true` to b.dependency(\"fizzy\", …) first");
     var opts = d.base;
-    opts.app_plugins = try withFizzys(fizzy_dep.builder, linked);
+    opts.app_plugins = linked;
     const built = try @import("build/app.zig").construct(
         fizzy_dep.builder,
         d.target,
@@ -292,14 +294,6 @@ pub fn addApp(fizzy_dep: *std.Build.Dependency, linked: []const BundledPlugin) !
         .web_page = built.web.page,
         .web_files = built.web.files,
     };
-}
-
-/// Until fizzyedit/example-app lists fizzy's plugins itself (its CI and fizzy's build each other's
-/// main): a list naming none of fizzy's gets all of them ahead of its own, as before. Goes in
-/// fizzyedit/plans#13 step 2.
-fn withFizzys(b: *std.Build, linked: []const BundledPlugin) ![]const BundledPlugin {
-    for (linked) |p| if (p.isFizzys()) return linked;
-    return std.mem.concat(b.allocator, BundledPlugin, &.{ &plugins.all, linked });
 }
 
 /// `zig build package` (and its alias `desktop`) and `zig build packageall` for an app built with
