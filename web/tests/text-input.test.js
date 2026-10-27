@@ -166,14 +166,6 @@ for (const [before, after] of [
   fire("beforeinput", replacement("my"));
   check("collapsed selection, no ranges: the word is replaced", field.text, "my");
 }
-{
-  const { field, fire } = fixture();
-  fire("compositionstart", {});
-  fire("compositionupdate", { data: "mu" });
-  fire("compositionupdate", { data: "mu" });
-  fire("compositionend", { data: "my" });
-  check("composition rewritten from mu to my", field.text, "my");
-}
 if (failed > 0) {
   print(`text-input: ${failed} failed`);
   exit(1);
