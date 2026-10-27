@@ -27,6 +27,11 @@
         .fizzy_sdk = .{
             .path = "sdk/",
         },
+        // A plugin that imports `tape` and `replay`, linked into the test build as an app would.
+        .tape_fixture = .{
+            .path = "tests/fixtures/tape-plugin",
+            .lazy = true,
+        },
         // Fizzy's native backend (SDL3, its GPU renderer, the platform pieces), with SDL,
         // zig-objc and zigwin32 pinned there. App-only: plugins never link it.
         .fizzy_backend = .{

@@ -1101,6 +1101,9 @@ fn addTests(
         // A motion's clock stepped by its frames, a long one held to a step. std-only (see
         // FrameClock.zig); the floats' landing and ghost run on it.
         .{ "fizzy-frame-clock-tests", "core/FrameClock.zig" },
+        // Variable-height row bookkeeping for a virtualized list. std-only, so anchors, measurements
+        // and width changes are tested without a Window.
+        .{ "fizzy-height-index-tests", "core/HeightIndex.zig" },
         // Ring buffering and dot-segment filtering for the folder watcher. std-only so it can
         // be tested here; FolderWatcher.zig itself needs a live editor.
         .{ "fizzy-folder-events-tests", "app/watch/folder_events.zig" },
@@ -1108,8 +1111,6 @@ fn addTests(
         // /Applications, and what happens to the copy it leaves. std-only (see
         // install_location.zig); `macos_bundle.zig` asks the system and acts on it.
         .{ "fizzy-install-location-tests", "app/update/install_location.zig" },
-        // Quit's bounded wait on the launch update check's thread. std-only (see bounded_join.zig).
-        .{ "fizzy-bounded-join-tests", "app/update/bounded_join.zig" },
         // The command palette's recently used commands: order, re-use, the cap. std-only
         // (see RecentCommands.zig); `Recents` holds it and stores it in recents.zon.
         .{ "fizzy-recent-commands-tests", "app/RecentCommands.zig" },
@@ -1516,6 +1517,39 @@ fn addTests(
         const fixture_test = b.addTest(.{ .name = "rehome-fixture", .root_module = module });
         test_step.dependOn(&b.addRunArtifact(fixture_test).step);
     }
+    // What a plugin does with `tape` and `replay` (`tests/fixtures/tape-plugin/play.zig`), through
+    // the path an application's plugin takes: its own `staticModule`, then `rehome` onto this
+    // executable's framework. The fixture's own build tests the same file as a dylib.
+    // Fizzy's own build only: the fixture is not in `.paths`, so an app fetching fizzy lacks it.
+    if (cfg.app_is_fizzy) if (b.lazyDependency("tape_fixture", .{})) |fixture_dep| {
+        const source = b.lazyImport(@This(), "tape_fixture").?.staticModule(fixture_dep.builder, .{
+            .target = target,
+            .optimize = optimize,
+            .dvui = dvui_testing_dep.module("dvui_testing"),
+            .core = core_module_test,
+            .sdk = sdk_module_test,
+            .icons = icons_test,
+        });
+        const consumer = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true });
+        const module = @import("plugins.zig").rehome(b, .{
+            .target = target,
+            .optimize = optimize,
+            .dvui = dvui_testing_dep.module("dvui_testing"),
+            .core = core_module_test,
+            .sdk = sdk_module_test,
+            .icons = icons_test,
+            .backend = null,
+            .workbench_opts = workbench_opts,
+            .consumer = consumer,
+        }, "tape_fixture", source);
+        const play_tests = b.addTest(.{
+            .name = "fizzy-tape-plugin-bundled-tests",
+            .root_module = module,
+            .filters = test_filters,
+        });
+        test_integration_step.dependOn(&b.addRunArtifact(play_tests).step);
+        check_integration_step.dependOn(&play_tests.step);
+    };
     const workbench_module_test = workbench_plugin.addStaticModule(b, target, optimize, .{
         .dvui = dvui_testing_dep.module("dvui_testing"),
         .core = core_module_test,
