@@ -103,7 +103,7 @@ showing: bool = false,
 /// draws every run.
 run_unseen: bool = false,
 /// The motion clock's debt at the last frame (`wall.gapMs`).
-debt_seen_ns: i128 = 0,
+debt_seen_ns: ?i128 = null,
 /// The displayed frame's wall time, which `wallNs` keeps to through its catch-up runs.
 shown_wall_ns: i128 = 0,
 /// The last displayed frame drove the tape, so the app has been drawing since: the time to this

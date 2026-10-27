@@ -174,8 +174,11 @@ test "real time still counts a stall the motion clock held" {
 test "a replay wait's timeout counts the wall the motion clock held" {
     var rig = try Rig.init(true);
     defer rig.deinit();
-    var seen: i128 = 0;
-    _ = wall.gapMs(&seen);
+    // Stalls from before the replay started are not its wait's time.
+    try rig.frame(3000);
+    try rig.frame(3000);
+    var seen: ?i128 = null;
+    try std.testing.expectEqual(dvui.secondsSinceLastFrame() * 1000, wall.gapMs(&seen));
     const ops = [_]tape.Tape.Op{
         .{ .at = 0, .do = .{ .wait = .{ .until = .idle, .timeout = 10_000 } } },
     };

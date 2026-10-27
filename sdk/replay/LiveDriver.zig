@@ -48,7 +48,7 @@ owned: ?Tape.Owned = null,
 seq: Sequencer = undefined,
 input: Input = .{},
 /// The motion clock's debt at the last frame (`wall.gapMs`).
-debt_seen_ns: i128 = 0,
+debt_seen_ns: ?i128 = null,
 /// How the last tape ended; null while one plays, or before any has.
 outcome: ?Outcome = null,
 /// A wait gave up during this frame's advance: the op index it gave up at.
