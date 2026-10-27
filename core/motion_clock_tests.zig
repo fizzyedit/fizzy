@@ -5,8 +5,9 @@
 const std = @import("std");
 const dvui = @import("dvui");
 const glass = @import("glass");
-const FrameClock = @import("FrameClock.zig");
+const FrameClock = @import("glass").FrameClock;
 const Spring = @import("Spring.zig");
+const tape = @import("tape");
 const wall = @import("replay").wall;
 
 const MotionClock = glass.MotionClock;
@@ -175,12 +176,66 @@ test "a replay wait's timeout counts the wall the motion clock held" {
     defer rig.deinit();
     var seen: i128 = 0;
     _ = wall.gapMs(&seen);
-    // Ten seconds at 10 fps: each 100 ms frame moves motion by a step, but the wait ran for all of it.
-    var waited_ms: f64 = 0;
-    for (0..100) |_| {
+    const ops = [_]tape.Tape.Op{
+        .{ .at = 0, .do = .{ .wait = .{ .until = .idle, .timeout = 10_000 } } },
+    };
+    const demo: tape.Tape = .{ .name = "timeout", .ops = &ops };
+    var seq: tape.Sequencer = .init(&demo);
+    var sink_state: TimeoutSink = .{};
+    const sink: tape.Sequencer.Sink = .{ .ctx = &sink_state, .vtable = &TimeoutSink.vtable };
+    try std.testing.expectEqual(.holding, seq.advance(0, 0, sink));
+    // At 10 fps, a ten-second timeout expires on frame 100, despite 34 ms motion steps.
+    for (0..100) |i| {
         try rig.frame(100);
-        waited_ms += wall.gapMs(&seen);
+        const progress = seq.advance(0, wall.gapMs(&seen), sink);
+        try std.testing.expectEqual(if (i == 99) tape.Sequencer.Progress.yielded else .holding, progress);
     }
-    try std.testing.expectApproxEqAbs(@as(f64, 10_000), waited_ms, 1e-6);
+    try std.testing.expectEqual(@as(usize, 1), sink_state.failures);
+    try std.testing.expect(seq.done());
     try std.testing.expect(dvui.secondsSinceLastFrame() * 1000 <= 34 + 1e-6);
 }
+
+const TimeoutSink = struct {
+    failures: usize = 0,
+    const vtable: tape.Sequencer.Sink.VTable = .{
+        .locate = locate,
+        .moveTo = moveTo,
+        .button = button,
+        .scroll = scroll,
+        .key = bytes,
+        .text = bytes,
+        .command = command,
+        .keyframe = keyframe,
+        .holds = holds,
+        .failed = failed,
+    };
+    fn locate(_: *anyopaque, _: tape.Tape.Target) ?tape.Sequencer.Point {
+        unreachable;
+    }
+    fn moveTo(_: *anyopaque, _: tape.Sequencer.Point) void {
+        unreachable;
+    }
+    fn button(_: *anyopaque, _: tape.Tape.Button, _: bool) void {
+        unreachable;
+    }
+    fn scroll(_: *anyopaque, _: tape.Tape.Scroll) void {
+        unreachable;
+    }
+    fn bytes(_: *anyopaque, _: []const u8) void {
+        unreachable;
+    }
+    fn command(_: *anyopaque, _: tape.Tape.Command) void {
+        unreachable;
+    }
+    fn keyframe(_: *anyopaque, _: *const tape.Tape.Keyframe) void {
+        unreachable;
+    }
+    fn holds(_: *anyopaque, _: tape.Tape.Until) bool {
+        return false;
+    }
+    fn failed(ctx: *anyopaque, failure: tape.Sequencer.Failure) void {
+        const self: *TimeoutSink = @ptrCast(@alignCast(ctx));
+        std.debug.assert(failure.what == .wait);
+        self.failures += 1;
+    }
+};

@@ -21,7 +21,7 @@ const MotionClock = @This();
 
 /// The most one frame moves motion on, ns: a frame at 30 Hz, so a device drawing that often keeps
 /// its motions' speed and only a frame longer than that holds them.
-pub const max_step_ns: i128 = 34 * std.time.ns_per_ms;
+pub const max_step_ns: i128 = @import("FrameClock.zig").max_step_ns;
 
 /// How far the motion clock is behind the wall. Only grows.
 debt_ns: i128 = 0,

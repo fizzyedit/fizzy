@@ -1097,7 +1097,7 @@ fn addTests(
         .{ "fizzy-crossfade-tests", "core/crossfade.zig" },
         // A motion's clock stepped by its frames, a long one held to a step. std-only (see
         // FrameClock.zig); the floats' landing and ghost run on it.
-        .{ "fizzy-frame-clock-tests", "core/FrameClock.zig" },
+        .{ "fizzy-frame-clock-tests", "backend/src/glass/FrameClock.zig" },
         // Ring buffering and dot-segment filtering for the folder watcher. std-only so it can
         // be tested here; FolderWatcher.zig itself needs a live editor.
         .{ "fizzy-folder-events-tests", "app/watch/folder_events.zig" },
@@ -2048,6 +2048,7 @@ fn addTests(
         split_tests_module.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
         if (icons_test) |icons| split_tests_module.addImport("icons", icons);
         // `core/widgets.zig` names widgets through `replay`'s anchors; the test `core`'s own.
+        split_tests_module.addImport("tape", core_module_test.import_table.get("tape").?);
         split_tests_module.addImport("replay", core_module_test.import_table.get("replay").?);
         split_tests_module.addImport("glass_look", core_module_test.import_table.get("glass_look").?);
         split_tests_module.addImport("glass", core_module_test.import_table.get("glass").?);

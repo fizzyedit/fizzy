@@ -15,6 +15,7 @@ pub const liquid_glass = @import("liquid_glass.zig");
 pub const liquid_blob = @import("liquid_blob.zig");
 pub const programs = @import("programs.zig");
 pub const motion = @import("motion.zig");
+pub const FrameClock = @import("FrameClock.zig");
 pub const MotionClock = @import("MotionClock.zig");
 pub const prof = @import("prof.zig");
 
