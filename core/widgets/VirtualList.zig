@@ -54,7 +54,7 @@ pub const State = struct {
     }
 
     /// Puts the row with `key` at the top of the view from the next frame; a key not in the list
-    /// does nothing.
+    /// does nothing. Requires a current dvui window (between `Window.begin` and `Window.end`).
     pub fn scrollTo(self: *State, key: u64) void {
         if (self.index.indexOf(key) == null) return;
         self.anchor = .{ .key = key, .offset = 0 };
@@ -84,6 +84,7 @@ pub const InitOptions = struct {
 
 /// The height assumed for the view on the first frame, before the scroll area has one.
 const first_frame_height: f32 = 600;
+/// The width assumed for estimates before the scroll area has a viewport.
 const first_frame_width: f32 = 400;
 
 /// A reader within this many viewport heights of the first row is near the start.
@@ -172,9 +173,8 @@ pub fn row(self: *VirtualList, index: usize) Row {
         .index = index,
         .box = dvui.box(@src(), .{}, .{
             .expand = .horizontal,
-            // The whole key where `usize` holds it. On a 32-bit target (wasm32) the low 32 bits:
-            // two drawn rows whose keys differ only above them would share a dvui id.
-            .id_extra = @truncate(key),
+            // Hash both halves before narrowing to the target's widget-id extra.
+            .id_extra = @truncate(std.hash.Wyhash.hash(0, std.mem.asBytes(&key))),
         }),
     };
 }
@@ -375,14 +375,20 @@ test "follow_end holds the last row at the bottom as rows are appended" {
 }
 
 test "keys that differ only above 32 bits draw boxes with distinct ids" {
-    // usize is 32 bits on wasm32, where the low bits alone would collide.
-    if (@bitSizeOf(usize) < 64) return error.SkipZigTest;
     var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
     defer t.deinit();
-    // Keys 1 and 1 + (2^32 - 1) * 1 = 2^32: an XOR fold of the high half onto the low maps both to 1.
-    var m: Messages = .{ .first_id = 1, .stride = (1 << 32) - 1, .count = 5 };
+    var m: Messages = .{ .first_id = 1, .count = 2 };
     defer m.state.deinit();
-    try settleOn(&m);
-    try testing.expect(m.drawn >= 2);
-    try testing.expect(m.box_ids[0] != m.box_ids[1]);
+    // Exercise truncation and XOR-fold collision pairs, including 32-bit id extras on any host.
+    for ([_]u64{ 1 << 32, (1 << 32) - 1 }) |stride| {
+        m.stride = stride;
+        const a: u64 = 1;
+        const b = a + stride;
+        const a_extra: u32 = @truncate(std.hash.Wyhash.hash(0, std.mem.asBytes(&a)));
+        const b_extra: u32 = @truncate(std.hash.Wyhash.hash(0, std.mem.asBytes(&b)));
+        try testing.expect(a_extra != b_extra);
+        try settleOn(&m);
+        try testing.expect(m.drawn >= 2);
+        try testing.expect(m.box_ids[0] != m.box_ids[1]);
+    }
 }
