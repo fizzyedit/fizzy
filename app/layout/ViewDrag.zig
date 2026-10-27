@@ -58,7 +58,8 @@ texture_rect: dvui.Rect.Physical = .{},
 photo_box: dvui.Rect = .{ .x = 0, .y = 0, .w = 1, .h = 1 },
 /// Its pixels, premultiplied RGBA rows of `photo_size`, kept where the app shows the picture under
 /// the OS's glass (`core.dialogs.carry_windows`) — handed over once, as an image (`photo_gen` new
-/// with each picture) — and freed with the drag (`discard`). Null elsewhere.
+/// with each picture) — and freed with the drag (`discard`), both given the one allocator the layout
+/// owns it with. Null elsewhere.
 photo_pixels: ?[]dvui.Color.PMA = null,
 photo_size: [2]u32 = .{ 0, 0 },
 photo_gen: u32 = 0,
@@ -482,11 +483,11 @@ fn takes(d: *const ViewDrag, o: Offer) bool {
     return false;
 }
 
-pub fn discard(self: *ViewDrag) void {
+pub fn discard(self: *ViewDrag, gpa: std.mem.Allocator) void {
     // Destroyed with a frame, and only in one: discarded at teardown (quitting mid-drag) there is
     // no window, and the GPU goes with the process.
     if (self.texture) |tex| if (dvui.current_window != null) dvui.Texture.destroyLater(tex);
-    self.forgetPixels();
+    self.forgetPixels(gpa);
     // The drops still showing outlive the drag: they run back together where they were drawn
     // (`drawOverlay`), whatever the drop has just done to their places.
     const finishing = self.last_pending;
@@ -496,10 +497,10 @@ pub fn discard(self: *ViewDrag) void {
     self.last_pending_count = finishing_count;
 }
 
-pub fn takePicture(self: *ViewDrag, pic: *dvui.Picture) void {
+pub fn takePicture(self: *ViewDrag, gpa: std.mem.Allocator, pic: *dvui.Picture) void {
     pic.stop();
     self.photo_box = .{ .x = 0, .y = 0, .w = 1, .h = 1 };
-    self.forgetPixels();
+    self.forgetPixels(gpa);
     if (dvui.Texture.readTarget(dvui.currentWindow().arena(), pic.texture)) |px| {
         const w = pic.texture.width;
         const h = pic.texture.height;
@@ -507,7 +508,7 @@ pub fn takePicture(self: *ViewDrag, pic: *dvui.Picture) void {
         // What the drop shows of it, closer where it is too wide to read shrunk into the drop.
         self.photo_box = focusBox(dvui.currentWindow().arena(), px, w, h, self.photo_box, 2 * drop_r * dvui.currentWindow().natural_scale * std.math.sqrt1_2);
         if (core.dialogs.carry_windows and px.len >= @as(usize, w) * h) {
-            if (std.heap.page_allocator.dupe(dvui.Color.PMA, px[0 .. @as(usize, w) * h])) |kept| {
+            if (gpa.dupe(dvui.Color.PMA, px[0 .. @as(usize, w) * h])) |kept| {
                 self.photo_pixels = kept;
                 self.photo_size = .{ w, h };
                 self.photo_gen +%= 1;
@@ -521,8 +522,8 @@ pub fn takePicture(self: *ViewDrag, pic: *dvui.Picture) void {
     self.texture_rect = pic.r;
 }
 
-fn forgetPixels(self: *ViewDrag) void {
-    if (self.photo_pixels) |px| std.heap.page_allocator.free(px);
+fn forgetPixels(self: *ViewDrag, gpa: std.mem.Allocator) void {
+    if (self.photo_pixels) |px| gpa.free(px);
     self.photo_pixels = null;
 }
 
@@ -678,7 +679,7 @@ pub fn shotWanted(l: *Layout, is_source: bool) Shot {
 pub fn keepShot(l: *Layout, shot: Shot, pic: *dvui.Picture) void {
     const d = &l.state.view_drag;
     if (shot.card) {
-        d.takePicture(pic);
+        d.takePicture(l.gpa, pic);
         if (d.texture) |tex| {
             // Over what the frame already has under the place, as its draw would have gone: the
             // capture is clear where the place draws nothing — the window's base shows there — and

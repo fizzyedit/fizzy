@@ -1,0 +1,266 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Fizzy macos worker <fizzy-macos@users.noreply.github.com>
+Date: Mon, 26 Oct 2026 12:00:00 -0400
+Subject: [PATCH] web: a keyboard's correction replaces the typed word
+
+A phone keyboard corrects the word before the caret, but the hidden input stayed empty and
+every beforeinput/compositionend was sent as new text, so "im" became "imI'm". TextInput keeps
+the word typed since the last space in the hidden input, caret at its end, and turns an
+insertReplacementText (its target range, or the selection the keyboard made, when a range is
+empty as it is for an input) or a composition that rewrote the word into backspaces and the
+new text. A pointer, a navigation key, a delete it cannot follow, a blur or another field
+clears the word.
+---
+ src/backends/web.js | 159 ++++++++++++++++
+ 1 file changed, 128 insertions(+), 31 deletions(-)
+
+diff --git a/src/backends/web.js b/src/backends/web.js
+index cecf29a..cc084e5 100644
+--- a/src/backends/web.js
++++ b/src/backends/web.js
+@@ -162,16 +162,138 @@ const StylusAction = Object.freeze({
+     /** motion only */
+     move: 1,
+     /** motion, then the left button pressed */
+     press: 2,
+     /** motion, then the left button released */
+     release: 3,
+ });
+ 
++/**
++ * Keeps the hidden input showing the word before the caret, and turns what a phone keyboard
++ * does to that word into the edits dvui's text widgets understand.
++ *
++ * The widgets draw their own text, so the input is empty and a keyboard has nothing to
++ * correct: autocorrect or a suggestion then arrives as plain new text ("im" becomes "imI'm").
++ * The input holds the word typed since the last space instead, the caret at its end, so a
++ * keyboard replaces it, and a replacement is sent as that many backspaces and then the new
++ * text. The word is only what this class has seen typed; a caret moved by a pointer or a key,
++ * or a delete it cannot follow, clears it.
++ */
++export class TextInput {
++    /** The word before the caret, as the hidden input shows it. */
++    word = "";
++    /** @type {boolean} */
++    composing = false;
++    /** A Backspace keydown not yet matched by its `deleteContentBackward`. */
++    backspaceKey = false;
++
++    /**
++     * @param {HTMLInputElement} hidden
++     * @param {{text: (text: string) => void, backspace: () => void}} sink Where the edits go.
++     */
++    constructor(hidden, sink) {
++        this.hidden = hidden;
++        this.sink = sink;
++        hidden.addEventListener("beforeinput", (ev) => this.beforeInput(ev));
++        hidden.addEventListener("compositionstart", () => { this.composing = true; });
++        hidden.addEventListener("compositionend", (ev) => this.compositionEnd(ev));
++        hidden.addEventListener("blur", () => this.clear());
++    }
++
++    /** Forget the word: the caret moved, or the field changed. */
++    clear() {
++        this.word = "";
++        if (!this.composing && this.hidden.value !== "") this.hidden.value = "";
++    }
++
++    /** Called for every keydown on the canvas or the hidden input. */
++    keydown(ev) {
++        if (this.composing || ["Shift", "Control", "Alt", "Meta", "CapsLock", "Unidentified", "Process", "Dead"].includes(ev.key)) return;
++        if (ev.key === "Backspace" && !ev.ctrlKey && !ev.altKey && !ev.metaKey) {
++            this.backspaceKey = true;
++            this.set(Array.from(this.word).slice(0, -1).join(""));
++        } else if (ev.key.length > 1 || ev.ctrlKey || ev.metaKey) {
++            this.clear();
++        }
++    }
++
++    set(word) {
++        this.word = word;
++        if (!this.composing && this.hidden.value !== word) this.hidden.value = word;
++    }
++
++    /** The word after `text` is typed at the caret. */
++    typed(text) {
++        this.set((this.word + text).split(/\s/).pop());
++    }
++
++    /** Replace [start, end) of the word with `text`: the deleted tail, then the text. */
++    replace(start, end, text) {
++        // The DOM counts UTF-16 code units, so slice the string by them; the keyboard erases code points.
++        start = Math.max(0, Math.min(start, this.word.length));
++        end = Math.max(start, Math.min(end, this.word.length));
++        // The caret is at the end of the word, so what follows `end` goes too and comes back.
++        const after = this.word.slice(end);
++        const kept = this.word.slice(0, start);
++        const deleted = Array.from(this.word.slice(start)).length;
++        for (let i = 0; i < deleted; i++) this.sink.backspace();
++        this.sink.text(text + after);
++        this.set(kept);
++        this.typed(text + after);
++    }
++
++    beforeInput(ev) {
++        ev.preventDefault();
++        if (ev.isComposing) return;
++        const type = ev.inputType;
++        if (type === "deleteContentBackward") {
++            // Soft keyboards usually send the Backspace key as well, which has popped the word.
++            if (this.backspaceKey) this.backspaceKey = false;
++            else this.set(Array.from(this.word).slice(0, -1).join(""));
++            return;
++        }
++        if (type && type.startsWith("delete")) {
++            this.clear();
++            return;
++        }
++        let text = ev.data;
++        if (text == null && type === "insertReplacementText" && ev.dataTransfer) text = ev.dataTransfer.getData("text/plain");
++        if (!text) return;
++        if (type === "insertReplacementText") {
++            // For an input the target ranges are empty; the keyboard selects what it replaces.
++            const ranges = ev.getTargetRanges ? ev.getTargetRanges() : [];
++            const start = ranges.length > 0 ? ranges[0].startOffset : this.hidden.selectionStart;
++            const end = ranges.length > 0 ? ranges[0].endOffset : this.hidden.selectionEnd;
++            if (start != null && end != null && start < end) {
++                this.replace(start, end, text);
++                return;
++            }
++        }
++        this.sink.text(text);
++        this.typed(text);
++    }
++
++    compositionEnd(ev) {
++        this.composing = false;
++        // The input now holds the word as the keyboard composed it. Whatever it shares with the
++        // word the widgets have is untouched; the rest of ours is deleted and theirs typed.
++        const had = Array.from(this.word);
++        let now = Array.from(this.hidden.value);
++        if (now.length === 0 && had.length === 0 && ev.data) now = Array.from(ev.data);
++        let same = 0;
++        while (same < had.length && same < now.length && had[same] === now[same]) same++;
++        for (let i = same; i < had.length; i++) this.sink.backspace();
++        const text = now.slice(same).join("");
++        if (text) this.sink.text(text);
++        this.word = "";
++        this.typed(now.join(""));
++    }
++}
++
+ export class Dvui {
+     /** @type {WebGL2RenderingContext | WebGLRenderingContext} */
+     gl;
+     /** @type {WebGLBuffer} */
+     indexBuffer;
+     /** @type {WebGLBuffer} */
+     vertexBuffer;
+     /** @type {WebGLProgram} */
+@@ -1164,21 +1286,24 @@ export class Dvui {
+                 }
+                 if (this.cur !== this.stock) this.useProgram(0, null, 0, 0);
+             },
+             wasm_cursor: (name_ptr, name_len) => {
+                 const cursor_name = this.stringFromPointer(name_ptr, name_len);
+                 this.gl.canvas.style.cursor = cursor_name;
+             },
+             wasm_text_input: (x, y, w, h) => {
++                const was = this.textInputRect;
+                 if (w > 0 && h > 0) {
+                     this.textInputRect = [x, y, w, h];
+                 } else {
+                     this.textInputRect = [];
+                 }
++                // Another field: the word typed in the last is not this one's.
++                if (was.length !== this.textInputRect.length) this.textInput?.clear();
+             },
+             wasm_open_url: (ptr, len, new_win) => {
+                 const url = this.stringFromPointer(ptr, len);
+ 
+                 if (new_win) {
+                     window.open(url);
+                 } else {
+                     window.location.href = url;
+@@ -1725,16 +1850,17 @@ export class Dvui {
+                     0,
+                 );
+             }
+             this.requestRender();
+         });
+ 
+         let keydown = (ev) => {
+             if (this.stopped) return;
++            this.textInput.keydown(ev);
+             if (ev.key == "Tab") {
+ 
+                 // In most browsers we don't even see a control-tab, the
+                 // browser uses it to switch tabs.  But Vivaldi sends it to us
+                 // first, so bail (before preventDefault) so that Vivaldi
+                 // switches tabs and we don't do anything.
+                 if (ev.ctrlKey) return;
+ 
+@@ -1771,49 +1897,32 @@ export class Dvui {
+                 (ev.metaKey << 3) + (ev.altKey << 2) + (ev.ctrlKey << 1) +
+                 (ev.shiftKey << 0),
+             );
+             this.requestRender();
+         };
+         this.gl.canvas.addEventListener("keyup", keyup.bind(this));
+         this.hidden_input.addEventListener("keyup", keyup.bind(this));
+ 
+-        this.hidden_input.addEventListener("beforeinput", (ev) => {
+-            if (this.stopped) return;
+-            ev.preventDefault();
+-            if (ev.data && !ev.isComposing) {
+-                const str = utf8encoder.encode(ev.data);
+-                const ptr = this.allocBuffer(this.instance.exports.arena_u8, str);
+-                this.instance.exports.add_event(
+-                    7,
+-                    ptr,
+-                    str.length,
+-                    0,
+-                    0,
+-                );
+-                this.requestRender();
+-            }
+-        });
+-        this.hidden_input.addEventListener("compositionend", (ev) => {
++        const addString = (kind, str) => {
+             if (this.stopped) return;
+-            if (ev.data) {
+-                const str = utf8encoder.encode(ev.data);
+-                const ptr = this.allocBuffer(this.instance.exports.arena_u8, str);
+-                this.instance.exports.add_event(
+-                    7,
+-                    ptr,
+-                    str.length,
+-                    0,
+-                    0,
+-                );
+-                this.requestRender();
+-            }
+-            // Reset value to empty after composition maybe put text there
+-            ev.target.value = "";
++            const bytes = utf8encoder.encode(str);
++            const ptr = this.allocBuffer(this.instance.exports.arena_u8, bytes);
++            this.instance.exports.add_event(kind, ptr, bytes.length, 0, 0);
++            this.requestRender();
++        };
++        this.textInput = new TextInput(this.hidden_input, {
++            text: (text) => addString(7, text),
++            backspace: () => {
++                addString(5, "Backspace");
++                addString(6, "Backspace");
++            },
+         });
++        this.gl.canvas.addEventListener("pointerdown", () => this.textInput.clear());
++
+         this.gl.canvas.addEventListener("touchstart", (ev) => {
+             if (this.stopped) return;
+             ev.preventDefault();
+             let rect = this.gl.canvas.getBoundingClientRect();
+             for (let i = 0; i < ev.changedTouches.length; i++) {
+                 let touch = ev.changedTouches[i];
+                 if (touch.touchType === "stylus") {
+                     this.stylusEvent(ev, touch, StylusAction.press);

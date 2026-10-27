@@ -67,7 +67,7 @@ reason='could not write the pull request summary'
 if [[ -f $summary_file ]]; then
     cat "$summary_file" >"$tmp/summary"
 elif grep -qxF "$marker" <<<"$pr_body"; then
-    awk -v m="$marker" '$0 == m { exit } NR == 1 && /^Part of / { next } !started && /^$/ { next } { started = 1; print }' <<<"$pr_body" >"$tmp/summary"
+    awk -v m="$marker" '$0 == m { exit } !started && (/^Part of / || /^Rework: / || /^$/) { next } { started = 1; print }' <<<"$pr_body" >"$tmp/summary"
 elif $claim; then
     printf "$headings\n" '' '' '' 'Draft: work in progress' >"$tmp/summary"
 else
@@ -118,8 +118,15 @@ else
     done
     gates_label="$gates_passed of $gates_total passed"
 fi
+# A rework run on an existing PR keeps the PR's own work issue: its running: lock and
+# close-merged find the PR by that line.
+part_of=$(grep -m1 -E '^Part of fizzyedit/work#[1-9][0-9]*$' <<<"$pr_body" || true)
 {
-    printf 'Part of fizzyedit/work#%s\n\n' "$issue"
+    if [[ -n $part_of && $part_of != "Part of fizzyedit/work#$issue" ]]; then
+        printf '%s\nRework: work#%s\n\n' "$part_of" "$issue"
+    else
+        printf 'Part of fizzyedit/work#%s\n\n' "$issue"
+    fi
     sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' "$tmp/summary"
     printf '\n\n%s\n\n<details><summary>Changes (%s)</summary>\n\n```text\n' "$marker" "$changes"
     head -n 100 "$tmp/stat"

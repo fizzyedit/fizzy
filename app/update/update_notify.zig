@@ -9,6 +9,7 @@ const core = @import("core");
 const auto_update = @import("auto_update.zig");
 const update_install = @import("update_install.zig");
 const move_offer = @import("move_offer.zig");
+const bounded_join = @import("bounded_join.zig");
 const restart = @import("../restart.zig");
 
 const Phase = enum(u8) {
@@ -94,16 +95,36 @@ fn startCheck() void {
         return;
     }
 
-    const thread = std.Thread.spawn(.{}, worker, .{io}) catch {
+    // The worker may outlive `deinit` (see there), so it cannot borrow the app's allocator.
+    check_thread = std.Thread.spawn(.{}, worker, .{ io, std.heap.page_allocator }) catch {
         phase.store(@backingInt(Phase.done_no), .release);
         return;
     };
-    thread.detach();
 }
 
-fn worker(io: std.Io) void {
+/// The launch check's thread, joined by `deinit`. Written on the GUI thread only. Builds without
+/// an updater (the web has no threads) never name `std.Thread`.
+var check_thread: if (auto_update.impl) ?std.Thread else void = if (auto_update.impl) null else {};
+
+/// Set by the check's thread as its last act.
+var check_done: std.atomic.Value(bool) = .init(false);
+
+/// How long quit waits on a check still in flight: Velopack's request blocks in C and cannot be
+/// cancelled, so past this the thread is detached and the process exit ends it.
+const quit_wait_ms = 250;
+
+/// Waits for the launch check, up to `quit_wait_ms`. The check's thread runs on its own allocator,
+/// so the one given to `setAllocator` may be torn down after this returns.
+pub fn deinit(io: std.Io) void {
+    if (comptime !auto_update.impl) return;
+    if (check_thread) |thread| _ = bounded_join.joinWithin(io, thread, &check_done, quit_wait_ms);
+    check_thread = null;
+}
+
+fn worker(io: std.Io, gpa: std.mem.Allocator) void {
+    defer check_done.store(true, .release);
     var ver_buf: [128]u8 = undefined;
-    const summary = auto_update.checkRemoteVersionSummary(io, std.heap.page_allocator, &ver_buf) catch {
+    const summary = auto_update.checkRemoteVersionSummary(io, gpa, &ver_buf) catch {
         phase.store(@backingInt(Phase.done_no), .release);
         return;
     };

@@ -179,13 +179,13 @@ fn lockOpenedPaths() void {
 /// once per plugin (~480ms for three plugins); loading the stable installed file in place pays
 /// it once, on the launch right after an install.
 ///
-/// Entries (and their duped keys) are intentionally kept for the process lifetime — the set is
+/// Entries (and their duped keys) are kept until the app quits (`deinitOpenedPaths`) — the set is
 /// bounded by the number of distinct plugin paths, and its whole purpose is to outlive
 /// individual load attempts.
-fn markPathOpened(path: []const u8) bool {
-    // Its own allocator, not a caller's: the set outlives every individual load attempt (and
-    // the probe helpers that also mark paths have no allocator to hand in).
-    const gpa = std.heap.page_allocator;
+///
+/// `gpa` owns the set's keys for that lifetime, so it is the application's long-lived allocator,
+/// never an arena or a per-call one.
+fn markPathOpened(gpa: std.mem.Allocator, path: []const u8) bool {
     lockOpenedPaths();
     defer opened_paths_lock.unlock();
     if (opened_paths.contains(path)) return true;
@@ -195,6 +195,17 @@ fn markPathOpened(path: []const u8) bool {
         return true;
     };
     return false;
+}
+
+/// Frees the opened-path set. At shutdown, with the allocator every caller of `markPathOpened`
+/// passed.
+pub fn deinitOpenedPaths(gpa: std.mem.Allocator) void {
+    lockOpenedPaths();
+    defer opened_paths_lock.unlock();
+    var keys = opened_paths.keyIterator();
+    while (keys.next()) |key| gpa.free(key.*);
+    opened_paths.deinit(gpa);
+    opened_paths = .empty;
 }
 
 /// `{dirname(path)}/.load-tmp` — where fresh-copy load attempts land, beside the plugin itself.
@@ -376,7 +387,7 @@ pub fn open(allocator: std.mem.Allocator, path: []const u8, expected_id: []const
     //     re-uses across launches (so this costs nothing on a normal launch).
     //   * re-open of a path this process already opened → a unique throwaway copy, the only
     //     case where the loader's stale-image behavior is actually in play.
-    const reopen = markPathOpened(path);
+    const reopen = markPathOpened(allocator, path);
     const src_stat: ?std.Io.File.Stat = std.Io.Dir.cwd().statFile(dvui.io, path, .{}) catch null;
     const load_path: []const u8 = if (reopen)
         copyToFreshLoadPath(allocator, path) catch return error.DylibOpenFailed
@@ -524,10 +535,11 @@ fn allowAbiWarn() bool {
 /// Best-effort read of a plugin's user-facing display name straight from the dylib, **without
 /// registering it**. Prefers the embedded `plugin.zig.zon` (`fizzy_plugin_manifest_zon`); falls
 /// back to the `fizzy_plugin_name` export. Caller owns the returned slice.
+/// `allocator` also keeps the opened-path set (`markPathOpened`), so it is the long-lived one.
 pub fn probeName(allocator: std.mem.Allocator, path: []const u8) ?[]u8 {
     // Counts as an open for stale-image purposes: after this, a load of the same path must go
     // through `copyToFreshLoadPath` even if it is the first *load*.
-    _ = markPathOpened(path);
+    _ = markPathOpened(allocator, path);
     var lib = DynLib.open(path) catch return null;
     defer lib.close();
     if (lib.lookup(dylib_api.GetManifestZonFn, dylib_api.symbol_manifest_zon)) |get_zon| {
@@ -566,7 +578,7 @@ pub const ProbedManifest = struct {
 /// dylib or its manifest couldn't be read at all, which callers can distinguish from a
 /// successfully-read manifest whose fields happen to be empty.
 pub fn probeManifestInfo(allocator: std.mem.Allocator, path: []const u8) ?ProbedManifest {
-    _ = markPathOpened(path); // see `probeName`
+    _ = markPathOpened(allocator, path); // see `probeName`
     var lib = DynLib.open(path) catch return null;
     defer lib.close();
     const get_zon = lib.lookup(dylib_api.GetManifestZonFn, dylib_api.symbol_manifest_zon) orelse return null;
@@ -609,18 +621,18 @@ fn dupeTags(allocator: std.mem.Allocator, tags: []const []const u8) ![][]u8 {
 
 /// Best-effort read of version exports from a dylib (for failure diagnostics).
 /// Prefers semver from the embedded manifest zon when present.
-pub fn probeVersionInfo(path: []const u8) ?PluginVersionInfo {
-    _ = markPathOpened(path); // see `probeName`
+pub fn probeVersionInfo(gpa: std.mem.Allocator, path: []const u8) ?PluginVersionInfo {
+    _ = markPathOpened(gpa, path); // see `probeName`
     var lib = DynLib.open(path) catch return null;
     defer lib.close();
     var plugin_version = readVersionTriplet(lookupVersionFn(&lib, dylib_api.symbol_plugin_version));
     if (lib.lookup(dylib_api.GetManifestZonFn, dylib_api.symbol_manifest_zon)) |get_zon| {
         const zon = std.mem.span(get_zon());
         if (zon.len > 0) {
-            // A short-lived Manifest, in an arena over the page allocator.
-            var arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
+            // A short-lived Manifest, in an arena over `gpa`.
+            var arena: std.heap.ArenaAllocator = .init(gpa);
             defer arena.deinit();
-            if (sdk.Manifest.parse(std.heap.page_allocator, arena.allocator(), zon)) |parsed| {
+            if (sdk.Manifest.parse(gpa, arena.allocator(), zon)) |parsed| {
                 if (std.SemanticVersion.parse(parsed.version)) |sv| {
                     plugin_version = .{ .major = @intCast(sv.major), .minor = @intCast(sv.minor), .patch = @intCast(sv.patch) };
                 } else |_| {}
@@ -635,8 +647,12 @@ pub fn probeVersionInfo(path: []const u8) ?PluginVersionInfo {
 }
 
 test "builtin plugin path joins exe_dir/plugins/<name>/<name>.<ext>" {
-    const path = try builtinPluginPath(std.testing.allocator, "/app", "pixi");
+    const joined = try builtinPluginPath(std.testing.allocator, "/app", "pixi");
+    defer std.testing.allocator.free(joined);
+    // `join` keeps `exe_dir` as given and separates the rest with the native separator.
+    const path = try std.testing.allocator.dupe(u8, joined);
     defer std.testing.allocator.free(path);
+    std.mem.replaceScalar(u8, path, std.fs.path.sep, '/');
     switch (builtin.target.os.tag) {
         .windows => try std.testing.expectEqualStrings("/app/plugins/pixi/pixi.dll", path),
         .macos => try std.testing.expectEqualStrings("/app/plugins/pixi/pixi.dylib", path),
