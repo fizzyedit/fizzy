@@ -899,8 +899,7 @@ pub fn closeFloatingDialogAnchored() void {
     dvui.dataSet(null, sub.id, "_close_rect", close_rect);
 }
 
-// lint-allow(anyerror): this is `dvui.Dialog.DisplayFn`, dvui's own type, which a dialog window must match.
-pub fn dialogWindow(id: dvui.Id) anyerror!void {
+pub fn dialogWindow(id: dvui.Id) !void {
     // Shown after dvui has stopped capturing the frame: in one an agent is taking a snapshot of,
     // the dialog captures itself (`replay.Snapshot.scopeBegin`).
     const scoped = Snapshot.scopeBegin();
@@ -1943,4 +1942,9 @@ test "a dialog's failure is one of Error, and only an allocation failure keeps i
     };
     try std.testing.expectEqualStrings("failed", why);
     try std.testing.expectEqual(@as(Error, error.OutOfMemory), failed("test", error.OutOfMemory));
+}
+
+test "the dialog window handles callback errors without propagating them" {
+    const display: *const fn (dvui.Id) error{}!void = dialogWindow;
+    _ = display;
 }
