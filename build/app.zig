@@ -2145,7 +2145,6 @@ fn addTests(
         check_integration_step.dependOn(&dashboard_plugin_tests.step);
     }
 
-
     // Give the file extension tests a root; the plugin's lazy exports do not collect them.
     {
         const files_tests_module = b.createModule(.{
