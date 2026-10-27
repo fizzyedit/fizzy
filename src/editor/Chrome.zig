@@ -1,8 +1,9 @@
-//! What of fizzy's own shape an application keeps: where the sidebar sits, and whether the panel,
-//! the menu bar and the infobar exist, and whether places draw a corner button. An application sets them as build options
-//! (`-Dchrome-sidebar-edge=right`, `-Dchrome-panel=false`, ...); the defaults are fizzy's own
-//! frame, so nothing changes for fizzy or an app that sets none. Read by the desktop and mobile shapes; an
-//! app-supplied layout (`-Dapp-layout=`) draws its own frame and ignores them.
+//! What of fizzy's own shape an application keeps: where the sidebar sits, whether the panel, the
+//! menu bar and the infobar exist, and whether places draw a corner button. An application sets
+//! them as build options (`-Dchrome-sidebar-edge=right`, `-Dchrome-panel=false`, ...); the
+//! defaults are fizzy's own frame, so nothing changes for fizzy or an app that sets none. Read by
+//! the desktop and mobile shapes; an app-supplied layout (`-Dapp-layout=`) draws its own frame and
+//! ignores them.
 const build_opts = @import("build_opts");
 
 const Chrome = @This();

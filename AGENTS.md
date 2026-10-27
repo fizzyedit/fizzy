@@ -110,7 +110,7 @@ Output view, `-Dchrome-menu-bar=false` and `-Dchrome-infobar=false` leave out th
 (macOS keeps its native menu), and `-Dchrome-corner-buttons=false` draws no corner button on any
 place (a drag begun elsewhere still lands). The defaults are fizzy's own frame. An app-supplied layout
 (`-Dapp-layout=`) draws its own frame. The phone shape reads only `sidebar_edge` (landscape
-sheets) and `panel`.
+sheets), `panel` and `corner_buttons`.
 
 ## Plugin store: built, not forward-looking
 
