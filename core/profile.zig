@@ -310,6 +310,7 @@ pub const Profiler = struct {
     }
 
     fn frameEnd(self: *Profiler) void {
+        defer self.frame_cause = .{};
         if (!self.active or self.paused or self.frozen) {
             // Still clear the frame's times, or a held frame's add to the next one recorded.
             for (self.slice()) |*e| {
@@ -808,14 +809,13 @@ pub fn report(p: *const Profiler, w: *std.Io.Writer, opts: ReportOptions) std.Io
         try c.write(w, "    ", opts.causes);
         try w.writeAll(",\n");
     };
-    // TODO(seam): work#179 consumers can append per-cause aggregates to the perf store.
     if (opts.hitches > 0 and opts.causes > 0) {
         try w.writeAll("    .frames = .{\n");
         for (0..@min(opts.hitches, p.history_filled)) |ago| {
             const f = p.historyFrame(ago).?;
             try w.print("        .{{ .work_ns = {d}, .cause = .{{", .{f.work_ns});
-            inline for (@typeInfo(Cause).@"struct".fields) |field| {
-                if (@field(f.cause, field.name)) try w.writeAll(" ." ++ field.name ++ " = true,");
+            inline for (comptime std.meta.fieldNames(Cause)) |name| {
+                if (@field(f.cause, name)) try w.writeAll(" ." ++ name ++ " = true,");
             }
             try w.writeAll(" } },\n");
         }
@@ -1110,4 +1110,24 @@ test "recorded frames retain their input or refresh cause and reset forgets them
     current().?.reset();
     try std.testing.expect(host_profiler.historyFrame(0) == null);
     try std.testing.expectEqual(@as(u8, 0), @as(u8, @bitCast(host_profiler.frame_cause)));
+}
+
+test "paused and frozen frames discard pending causes before recording resumes" {
+    dvui.io = std.testing.io;
+    var p: Profiler = .{};
+    p.enabled = true;
+    for (0..2) |held| {
+        p.frameBegin(null, null);
+        p.paused = held == 0;
+        p.frozen = held == 1;
+        p.frame_cause = .{ .press = true };
+        p.frameEnd();
+        try std.testing.expectEqual(@as(u8, 0), @as(u8, @bitCast(p.frame_cause)));
+        try std.testing.expectEqual(@as(usize, held), p.history_filled);
+        p.paused = false;
+        p.frozen = false;
+        p.frameBegin(null, null);
+        p.frameEnd();
+        try std.testing.expect(!p.historyFrame(0).?.cause.press);
+    }
 }
