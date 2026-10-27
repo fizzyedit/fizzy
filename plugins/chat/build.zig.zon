@@ -1,0 +1,19 @@
+.{
+    .name = .chat,
+    .version = "0.1.0",
+    .minimum_zig_version = "0.17.0",
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "plugin.zig",
+        "plugin.zig.zon",
+        "src",
+        "static",
+    },
+    .fingerprint = 0x0,
+    .dependencies = .{
+        .fizzy = .{
+            .path = "../../sdk",
+        },
+    },
+}

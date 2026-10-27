@@ -18,6 +18,7 @@ const fizzy = @import("fizzy");
 const Tracks = @import("app").Tracks;
 const shim = @import("fizzy_shim.zig");
 const TextEntryWidget = @import("text").TextEntryWidget;
+const chat = @import("chat");
 const sdk = @import("fizzy_sdk");
 
 test "shim brings up a dvui.testing window with usable fizzy globals" {
@@ -92,6 +93,109 @@ test "a shell command shadowed by a user binding gives up its native chord" {
     try std.testing.expect(fizzy.Editor.Keybinds.menuKeybindFor(editor, "fizzy.openFolder").key == null);
     try std.testing.expect(!fizzy.Editor.Keybinds.chordShadowed(editor, "text.format"));
     try std.testing.expect(fizzy.Editor.Keybinds.chordShadowed(editor, "fizzy.openFolder"));
+}
+
+// -- chat composer -----------------------------------------------------------------------------
+//
+// The composer is a dvui text entry that grows with its text to a cap; Enter sends on a desktop and
+// breaks the line on a phone or with Shift. What it decides is unit-tested in
+// `plugins/chat/src/composer.zig`; these run it in real frames with real key and text events.
+
+var chat_view: chat.View = .{};
+var chat_provider: chat.DemoProvider = .{ .allocator = std.testing.allocator };
+var chat_api: sdk.services.chat.Api = undefined;
+
+fn chatFrame() !dvui.App.Result {
+    chat_view.draw(std.testing.allocator, &chat_api);
+    return .ok;
+}
+
+fn chatCtx() !dvui.testing {
+    chat_view = .{};
+    chat_provider = .{ .allocator = std.testing.allocator };
+    chat_api = chat_provider.api();
+    var t = try dvui.testing.init(.{ .allocator = std.testing.allocator });
+    errdefer t.deinit();
+    try dvui.testing.settle(chatFrame);
+    dvui.focusWidget(chat_view.entry_id, null, null);
+    try dvui.testing.settle(chatFrame);
+    return t;
+}
+
+fn deinitChat(t: *dvui.testing) void {
+    t.deinit();
+    chat_view.deinit(std.testing.allocator);
+    chat_provider.deinit();
+}
+
+test "the composer grows with its lines to the cap, then scrolls" {
+    var t = try chatCtx();
+    defer deinitChat(&t);
+
+    const one = chat_view.entry_rect.h;
+    var heights: [12]f32 = undefined;
+    for (&heights) |*h| {
+        try dvui.testing.writeText("line\n");
+        try dvui.testing.settle(chatFrame);
+        h.* = chat_view.entry_rect.h;
+    }
+    // Each new line makes it taller until the cap; 8 lines (7 typed newlines on top of the
+    // first) is the last that does.
+    try std.testing.expect(heights[2] > one);
+    try std.testing.expect(heights[5] > heights[2]);
+    const cap = heights[11];
+    try std.testing.expect(cap > heights[5]);
+    try std.testing.expectApproxEqAbs(cap, heights[8], 0.5);
+    try std.testing.expectApproxEqAbs(cap, heights[10], 0.5);
+    try std.testing.expect(chat_view.entry_scroll.virtual_size.h > chat_view.entry_scroll.viewport.h);
+}
+
+test "Enter sends on a desktop and Shift+Enter breaks the line" {
+    var t = try chatCtx();
+    defer deinitChat(&t);
+
+    try dvui.testing.writeText("hi");
+    try dvui.testing.settle(chatFrame);
+    try dvui.testing.pressKey(.enter, .lshift);
+    try dvui.testing.settle(chatFrame);
+    try std.testing.expectEqual(@as(usize, 0), chat_api.messages().len);
+    try std.testing.expectEqualStrings("hi\n", chat_view.text.items);
+
+    try dvui.testing.pressKey(.enter, .none);
+    try dvui.testing.settle(chatFrame);
+    try std.testing.expectEqual(@as(usize, 2), chat_api.messages().len);
+    try std.testing.expectEqualStrings("hi", chat_api.messages()[0].text);
+    try std.testing.expectEqual(@as(usize, 0), chat_view.text.items.len);
+}
+
+test "Enter is a new line on a phone" {
+    fizzy.core.platform.cached_form_factor = .mobile;
+    defer fizzy.core.platform.cached_form_factor = .desktop;
+    var t = try chatCtx();
+    defer deinitChat(&t);
+
+    try dvui.testing.writeText("hi");
+    try dvui.testing.settle(chatFrame);
+    try dvui.testing.pressKey(.enter, .none);
+    try dvui.testing.settle(chatFrame);
+    try std.testing.expectEqual(@as(usize, 0), chat_api.messages().len);
+    try std.testing.expectEqualStrings("hi\n", chat_view.text.items);
+}
+
+test "three messages go through the demo provider and each is answered" {
+    var t = try chatCtx();
+    defer deinitChat(&t);
+
+    for ([_][]const u8{ "one", "two", "three" }) |word| {
+        try dvui.testing.writeText(word);
+        try dvui.testing.settle(chatFrame);
+        try dvui.testing.pressKey(.enter, .none);
+        try dvui.testing.settle(chatFrame);
+    }
+    const log = chat_api.messages();
+    try std.testing.expectEqual(@as(usize, 6), log.len);
+    try std.testing.expectEqualStrings("three", log[4].text);
+    try std.testing.expectEqualStrings("You said: three", log[5].text);
 }
 
 // -- text editing: auto-closing pairs + auto-indent Enter ---------------------------------------
