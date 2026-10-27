@@ -2,6 +2,7 @@ const std = @import("std");
 const fizzy = @import("fizzy");
 
 /// The plugin as an application links it (`build/app.zig` builds it this way and plays its tests).
+// anytype: the app's framework struct, whose type `fizzy.plugin.staticModule` owns.
 pub fn staticModule(b: *std.Build, framework: anytype) *std.Build.Module {
     return fizzy.plugin.staticModule(b, framework, .{});
 }
