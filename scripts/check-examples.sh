@@ -151,7 +151,10 @@ echo "ok    app-only (failed as expected)"
 fixtures="scripts/fixtures/build-api"
 for id in fixture_both fixture_native; do
   mkdir -p "$work/$id"
-  cp "$fixtures"/plugin/{build.zig,build.zig.zon,plugin.zig,lib.zig,lib.c} "$work/$id/"
+  cp "$fixtures"/plugin/{build.zig,build.zig.zon,plugin.zig} "$work/$id/"
+  # The C dependency's symbol carries the id, so dropping either package's C source fails the link.
+  sed "s/@ID@/$id/g" "$fixtures/plugin/lib.zig.tmpl" > "$work/$id/lib.zig"
+  sed "s/@ID@/$id/g" "$fixtures/plugin/lib.c.tmpl" > "$work/$id/lib.c"
   sed "s/@ID@/$id/g" "$fixtures/plugin/plugin.zig.zon.tmpl" > "$work/$id/plugin.zig.zon"
   (cd "$work/$id" && zig fetch --save=fizzy "$sdk_tarball" >/dev/null)
 done
