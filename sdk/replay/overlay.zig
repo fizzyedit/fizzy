@@ -36,7 +36,12 @@ pub fn drawLive(driver: *const LiveDriver, opts: Options) void {
     // A cursor the app draws itself where the pointer is (a paint tool's pencil) is the pointer
     // there: two at one place would be one too many, so this one gives way (`anchor.own_cursor`).
     const own = dvui.currentWindow().tags.containsUsed(anchor.own_cursor) orelse false;
-    paintPointer(driver.seq.pointer, ripple, if (own) 0 else if (hand.typing) 1 - in else in, driver.input.held.count() > 0);
+    paintPointer(
+        driver.seq.pointer,
+        ripple,
+        if (own) 0 else if (hand.typing) 1 - in else in,
+        driver.input.held.count() > 0,
+    );
 }
 
 /// A demo's pointer, while it drives, timed in demo time: a seek shows what playing showed.
@@ -44,10 +49,16 @@ pub fn drawPlayer(player: *Player, opts: Options) void {
     if (!player.driving()) return;
     const fw = layer(@src(), .{ .rect = pointerRect(player.seq.pointer), .name = "DemoPointer" }, .{});
     defer fw.deinit();
-    const ripple: ?Ripple = if (player.last_press) |press| .{ .pt = press.pt, .age_ms = player.seq.now - press.at } else null;
+    const ripple: ?Ripple = if (player.last_press) |press| .{
+        .pt = press.pt,
+        .age_ms = player.seq.now - press.at,
+    } else null;
     // Out of the way of the words while the tape types, as a desktop's pointer is, and of a
     // cursor the app draws itself (`drawLive`).
-    const shown = if (dvui.currentWindow().tags.containsUsed(anchor.own_cursor) orelse false) 0 else player.pointerShown(opts.fade_ms);
+    const shown = if (dvui.currentWindow().tags.containsUsed(anchor.own_cursor) orelse false)
+        0
+    else
+        player.pointerShown(opts.fade_ms);
     paintPointer(player.seq.pointer, ripple, shown, player.input.held.count() > 0);
 }
 
@@ -63,7 +74,11 @@ fn pointerRect(p: Sequencer.Point) dvui.Rect {
 /// A floating widget that takes no input, raised to the top. A floating widget otherwise stays
 /// just above the window it was made in, under anything opened after it; re-added as a subwindow
 /// of its own it can be raised, and each call puts the new one above the last.
-pub fn layer(src: std.lang.SourceLocation, opts: dvui.Options, init: dvui.FloatingWidget.InitOptions) *dvui.FloatingWidget {
+pub fn layer(
+    src: std.lang.SourceLocation,
+    opts: dvui.Options,
+    init: dvui.FloatingWidget.InitOptions,
+) *dvui.FloatingWidget {
     var init_opts = init;
     init_opts.mouse_events = false;
     const fw = dvui.widgetAlloc(dvui.FloatingWidget);
@@ -118,7 +133,11 @@ pub fn paintPointer(p: Sequencer.Point, ripple: ?Ripple, shown: f32, pressed: bo
             dvui.Path.fill(&.{built}, .{ .color = .{ .color = dvui.Color.black.opacity(0.28) }, .fade = 2.5 * s });
         } else {
             dvui.Path.fill(&.{built}, .{ .color = .{ .color = .white }, .fade = 1 });
-            built.stroke(.{ .thickness = 1.1 * s, .color = .{ .color = dvui.Color.black.opacity(0.85) }, .closed = true });
+            built.stroke(.{
+                .thickness = 1.1 * s,
+                .color = .{ .color = dvui.Color.black.opacity(0.85) },
+                .closed = true,
+            });
         }
     }
 }

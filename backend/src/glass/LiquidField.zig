@@ -26,6 +26,7 @@
 //! Layers do not join each other: a dialog over a drop is two layers, the dialog's capture taken
 //! with the drop already on the frame.
 const std = @import("std");
+const builtin = @import("builtin");
 const dvui = @import("dvui");
 const programs = @import("programs.zig");
 const liquid_glass = @import("liquid_glass.zig");
@@ -371,8 +372,19 @@ fn applyLook(self: *const LiquidField, u: *Uniforms, l: glass_look.InApp) void {
     if (self.edge != null) u.shapes[max_shapes - 1][2][0] *= l.frost;
 }
 
+/// Test seam: the testing backend has no glass program, so `ready` is false there and every
+/// branch that turns on it goes unexercised. This makes `ready` answer `on` for the current
+/// window (the flag lives in its data, so each test window starts unset). Draws nothing.
+pub fn readyInTest(on: bool) void {
+    if (!builtin.is_test) @compileError("LiquidField.readyInTest is for tests");
+    dvui.dataSet(null, enabled_id, "_ready_in_test", on);
+}
+
 /// Whether `draw` would draw now: programs here, switched on, compiled.
 pub fn ready() bool {
+    if (builtin.is_test) {
+        if (dvui.dataGet(null, enabled_id, "_ready_in_test", bool)) |on| return on;
+    }
     if (!enabled()) return false;
     const h = programs.hooks() orelse return false;
     return program.ready(h) != null;

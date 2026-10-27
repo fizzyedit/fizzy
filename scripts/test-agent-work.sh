@@ -36,6 +36,7 @@ cat >"$tmp/bin/gh" <<'FAKE'
 set -e
 printf '%s\n' "$*" >>"$AGENT_TEST_DIR/calls"
 if [[ $1 == pr && $2 == list && ${AGENT_TEST_EXISTING:-} == 1 ]]; then echo 12; fi
+if [[ $1 == pr && $2 == view && -n ${AGENT_TEST_BODY:-} ]]; then printf '%s\n' "$AGENT_TEST_BODY"; fi
 if [[ $1 == pr && ( $2 == create || $2 == edit ) ]]; then
     while [[ $# -gt 0 ]]; do
         if [[ $1 == --body-file ]]; then cp "$2" "$AGENT_TEST_DIR/body"; break; fi
@@ -134,6 +135,17 @@ AGENT_TEST_GIT=1 "$finish" --claim 42 >"$tmp/output"
 ! grep -q 'allow-empty' "$tmp/calls" || fail 'empty commit despite commits ahead'
 AGENT_TEST_EXISTING=1 "$finish" 42 >"$tmp/output"
 grep -q 'pr edit 12 --body-file' "$tmp/calls" || fail 'existing PR refresh'
+# A rework run keeps the PR's own work issue; a fresh PR takes the issue being worked.
+AGENT_TEST_EXISTING=1 AGENT_TEST_BODY=$'Part of fizzyedit/work#7\n\n## Goal\n\nold' "$finish" 99 >"$tmp/output"
+[[ $(head -n 1 "$tmp/body") == 'Part of fizzyedit/work#7' ]] || fail 'rework replaced Part of line'
+grep -qx 'Rework: work#99' "$tmp/body" || fail 'rework line missing'
+! grep -q 'Part of fizzyedit/work#99' "$tmp/body" || fail 'rework issue became Part of'
+AGENT_TEST_EXISTING=1 AGENT_TEST_BODY=$'Part of fizzyedit/work#7\nRework: work#5\n\nsummary\n\n<!-- agent-finish: generated below -->' "$finish" 99 >"$tmp/output"
+[[ $(grep -c '^Rework:' "$tmp/body") == 1 ]] || fail 'old rework line carried into summary'
+AGENT_TEST_EXISTING=1 AGENT_TEST_BODY=$'Part of fizzyedit/work#42\n\nx' "$finish" 42 >"$tmp/output"
+! grep -q '^Rework:' "$tmp/body" || fail 'rework line on a same-issue run'
+AGENT_TEST_EXISTING=1 "$finish" 42 >"$tmp/output"
+grep -q '^Part of fizzyedit/work#42$' "$tmp/body" || fail 'fresh PR issue line'
 cat >"$tmp/bin/uname" <<'FAKE'
 #!/usr/bin/env bash
 echo Linux

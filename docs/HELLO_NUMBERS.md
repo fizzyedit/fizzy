@@ -1,9 +1,10 @@
 # Minimal app measurements
 
-[`hello-numbers.yml`](../.github/workflows/hello-numbers.yml) runs on every push to main and on manual
-dispatch, never on pull requests (two release builds and a package on two OSes is too much load
-for each one). `python3 scripts/test-hello-numbers.py` and the `--sizes-only` mode are the checks
-a pull request runs itself. Each macOS/Linux artifact contains
+[`hello-numbers.yml`](../.github/workflows/hello-numbers.yml) runs on every push to main, on manual
+dispatch, and on a pull request that touches the harness (its script, tests, workflow, this doc or
+`src/Entry.zig`'s marker); other pull requests skip it, since two release builds and a package on
+two OSes is too much load for each one. CI's `python3 scripts/test-hello-numbers.py` step and the
+`--sizes-only` mode are the checks every pull request runs itself. Each macOS/Linux artifact contains
 `hello-numbers.jsonl`: one complete JSON object for each ReleaseFast/ReleaseSmall run.
 Download both artifacts from the [workflow runs](https://github.com/fizzyedit/fizzy/actions/workflows/hello-numbers.yml).
 A failed measurement fails the job; a partial artifact may contain only the first mode.
@@ -21,7 +22,7 @@ Scratch sources and build outputs are deleted even on failure.
 On a machine where opening a window is acceptable (not a window-free worker session):
 
 ```sh
-scripts/hello-numbers.sh --output "$PWD/hello-numbers.jsonl" \
+python3 scripts/hello-numbers.py --output "$PWD/hello-numbers.jsonl" \
   --revision '<fizzy commit; add dirty if edited>' fizzy \
   --example ../example-app --example-revision '<example-app commit>' \
   --plugin ../example-plugin --plugin-revision '<example-plugin commit>'
@@ -37,7 +38,7 @@ runner image, compiler version, all three source revisions and executable SHA-25
 | --- | --- |
 | `binary_bytes` | Installed `minimalapp`, after host `strip` (and ad-hoc signing on macOS). Excludes resources and plugin libraries. Packaging may link a separate executable with Velopack support. |
 | `installer_bytes` | Unsigned macOS `.pkg` or Linux `.AppImage` from the `package` output; includes packaged resources/libraries. A missing or ambiguous installer fails. |
-| `first_frame_ms` | `core.profile`'s `main` to `first frame` phase at the end of the first `AppFrame`. Excludes loader work before Zig main; GPU submission, display presentation and window reveal may follow. |
+| `first_frame_ms` | Process spawn to the 10 ms poll that saw the stderr marker `reportFirstFrame` prints at the end of the first `AppFrame`, the clock the peers use. Includes loader work before Zig main; GPU submission, display presentation and window reveal may follow. `first_frame_after_main_ms` is `core.profile`'s `main` to `first frame` phase, the app's own clock. |
 | `idle_rss_bytes` | Sum of `ps` RSS (KiB x 1024) for the process and descendants, sampled 30 seconds after spawn. Shared pages may be counted more than once. |
 | `wasm_gzip_bytes` | Installed `web.wasm`, gzip with mtime zero, default compression level 9. Excludes JS, fonts and runtime plugin downloads. |
 
@@ -50,7 +51,7 @@ terminated after the sample; a missing first-frame marker or an early exit fails
 
 ## Electron and Tauri comparison (manual only)
 
-`scripts/compare-hello.sh` measures already-built stock hello-world applications on the **same
+`python3 scripts/hello-numbers.py compare` measures already-built stock hello-world applications on the **same
 machine**, outside CI. Keep framework templates at their defaults, use production packaging,
 and record template/source revision and exact framework version. Do not use a development
 server or attach developer tools. Supply the executable inside the packaged app and its actual
@@ -64,7 +65,9 @@ For Electron, relay an IPC message from the renderer to `console.log` in the mai
 for Tauri, invoke a Rust command that uses `println!`. A webview console message alone does
 not reach the harness. Keep this instrumentation in the recorded source revision. Startup is
 measured externally from spawn to observing stdout (10 ms polling), so it includes loader/IPC
-work and is **not directly equivalent** to Fizzy's internal main-to-first-frame clock.
+work. Fizzy's `first_frame_ms` is measured the same way (spawn to the poll that saw its stderr
+marker), so the two compare; its own main-to-first-frame clock is kept beside it as
+`first_frame_after_main_ms`.
 
 Configure each application to put all user data under the `HELLO_PROFILE` environment variable
 before creating its window (Electron: `app.setPath('userData', ...)`; Tauri: configure the
@@ -73,10 +76,10 @@ The harness includes descendant RSS so Electron's renderer and GPU helpers count
 use OS webview services outside its process tree; disclose that limitation with the results.
 
 ```sh
-scripts/compare-hello.sh --output "$PWD/peers.jsonl" --revision '<instrumented source commit>' \
+python3 scripts/hello-numbers.py --output "$PWD/peers.jsonl" --revision '<instrumented source commit>' \
   compare --app electron --framework-version '<version>' \
   --binary '/path/to/Hello.app/Contents/MacOS/Hello' --installer '/path/to/Hello.dmg'
-scripts/compare-hello.sh --output "$PWD/peers.jsonl" --revision '<instrumented source commit>' \
+python3 scripts/hello-numbers.py --output "$PWD/peers.jsonl" --revision '<instrumented source commit>' \
   compare --app tauri --framework-version '<version>' \
   --binary '/path/to/hello' --installer '/path/to/hello.AppImage'
 ```
