@@ -94,16 +94,32 @@ fn startCheck() void {
         return;
     }
 
-    const thread = std.Thread.spawn(.{}, worker, .{io}) catch {
+    // `setAllocator` runs before the launch check; without it there is nothing to run on.
+    const gpa = install_gpa orelse {
         phase.store(@backingInt(Phase.done_no), .release);
         return;
     };
-    thread.detach();
+    check_thread = std.Thread.spawn(.{}, worker, .{ io, gpa }) catch {
+        phase.store(@backingInt(Phase.done_no), .release);
+        return;
+    };
 }
 
-fn worker(io: std.Io) void {
+/// The launch check's thread, joined by `deinit`. Written on the GUI thread only. Builds without
+/// an updater (the web has no threads) never name `std.Thread`.
+var check_thread: if (auto_update.impl) ?std.Thread else void = if (auto_update.impl) null else {};
+
+/// Waits for the launch check to finish. Call at shutdown, before the allocator given to
+/// `setAllocator` is torn down: the worker allocates from it until it returns.
+pub fn deinit() void {
+    if (comptime !auto_update.impl) return;
+    if (check_thread) |thread| thread.join();
+    check_thread = null;
+}
+
+fn worker(io: std.Io, gpa: std.mem.Allocator) void {
     var ver_buf: [128]u8 = undefined;
-    const summary = auto_update.checkRemoteVersionSummary(io, std.heap.page_allocator, &ver_buf) catch {
+    const summary = auto_update.checkRemoteVersionSummary(io, gpa, &ver_buf) catch {
         phase.store(@backingInt(Phase.done_no), .release);
         return;
     };

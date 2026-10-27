@@ -438,7 +438,10 @@ fn reportFirstFrame() void {
     const raw = std.c.getenv("FIZZY_STARTUP_REPORT") orelse return;
     if (std.mem.eql(u8, std.mem.span(raw), "0")) return;
     const ph = fizzy.core.profile.phases() orelse return;
-    std.debug.print("startup: first frame {d:.3} ms after main\n", .{ph.ms(ph.len - 1)});
+    var buf: [64]u8 = undefined;
+    var err = std.Io.File.stderr().writer(dvui.io, &buf);
+    err.interface.print("startup: first frame {d:.3} ms after main\n", .{ph.ms(ph.len - 1)}) catch return;
+    err.interface.flush() catch return;
 }
 
 /// Where the window's reveal is (`revealOnceDrawn`): drawing its first frame, then seen.
@@ -487,6 +490,8 @@ pub fn AppDeinit(_: *dvui.Window) void {
     // `editor.deinit` runs each plugin's `deinit` first (pixi's persists its `.fizproject` and
     // frees its own state + packer while `editor.app.host`/folder are still live).
     fizzy.editor().deinit() catch unreachable;
+    // The update check allocates from the app's allocator until it returns.
+    update_notify.deinit();
     // Tear down the singleton listener after the editor so any callback
     // currently in flight finishes before we free state it touches.
     singleton.deinit();

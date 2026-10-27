@@ -1145,14 +1145,21 @@ fn drawSeeking(player: *Player, win: dvui.Rect) void {
     done.fill(.all(r.h / 2), .{ .color = .{ .color = theme().color(.highlight, .fill) }, .fade = 1 });
 }
 
-test "a caption's card is made of the material tooltips and menus wear" {
+test "a caption's card is made of the material tooltips, menus and popovers wear" {
     const fns = struct {
         var blur: f32 = 0;
+        var glass_ready = false;
         var tooltip: ?f32 = null;
         var caption: ?f32 = null;
+        var popover: ?f32 = null;
+        var tooltip_field: ?bool = null;
+        var caption_field: ?bool = null;
+        var popover_field: ?bool = null;
         var menu: ?core.widgets.BlurBackdrop.Pane = null;
         var dialog: ?core.widgets.FloatingWindowWidget.Frost = null;
+        var popover_rect: dvui.Rect = .{};
         fn frame() !dvui.App.Result {
+            core.widgets.LiquidField.readyInTest(glass_ready);
             core.dialogs.publishStyle(.{ .blur = blur, .opacity = 0.5 });
             menu = core.widgets.menuFrost();
             dialog = core.dialogs.dialogFrost();
@@ -1161,6 +1168,7 @@ test "a caption's card is made of the material tooltips and menus wear" {
                 defer box.deinit();
                 core.dialogs.tooltipSurface(box.data());
                 tooltip = radiusOf(box.data().id);
+                tooltip_field = fieldOf(box.data().id);
                 dvui.labelNoFmt(@src(), "tooltip", .{}, .{});
             }
             {
@@ -1168,7 +1176,15 @@ test "a caption's card is made of the material tooltips and menus wear" {
                 defer box.deinit();
                 glass(box.data(), .{ .x = 0.5, .y = 0.5 }, .{});
                 caption = radiusOf(box.data().id);
+                caption_field = fieldOf(box.data().id);
                 dvui.labelNoFmt(@src(), "caption", .{}, .{});
+            }
+            {
+                var p = core.widgets.Popover.init(@src(), .{ .rect = &popover_rect, .anchor = .{ .x = 20, .y = 20 } });
+                defer p.deinit();
+                popover = radiusOf(p.win.data().id);
+                popover_field = fieldOf(p.win.data().id);
+                dvui.labelNoFmt(@src(), "popover", .{}, .{});
             }
             return .ok;
         }
@@ -1176,25 +1192,49 @@ test "a caption's card is made of the material tooltips and menus wear" {
             const f = dvui.dataGetPtr(null, id, "_frost", core.widgets.BlurBackdrop) orelse return null;
             return f.radius_px;
         }
+        /// Whether the pane queued under `id` is the glass program's (a field) rather than the
+        /// rounded rect's; null when none was queued.
+        fn fieldOf(id: dvui.Id) ?bool {
+            const job = dvui.dataGetPtr(null, id, "_frost_job", core.widgets.BlurBackdrop.FrostJob) orelse return null;
+            if (job.rect.w <= 0) return null;
+            return job.field != null;
+        }
         /// A window of its own each, so no frost is left over from the other's frame.
-        fn drawnAt(b: f32) !void {
+        fn drawnAt(b: f32, ready: bool) !void {
             var t = try dvui.testing.init(.{ .window_size = .{ .w = 400, .h = 300 } });
             defer t.deinit();
             blur = b;
-            _ = try dvui.testing.step(frame);
+            glass_ready = ready;
+            popover_rect = .{};
+            // Frames, for the popover to open out of nothing.
+            for (0..4) |_| _ = try dvui.testing.step(frame);
         }
     };
-    // Blur on: both are the dialog frost, at the style's radius.
-    try fns.drawnAt(20);
+    // Blur on: all three are the dialog frost, at the style's radius.
+    try fns.drawnAt(20, false);
     try std.testing.expectEqual(@as(?f32, 20), fns.tooltip);
     try std.testing.expectEqual(fns.tooltip, fns.caption);
+    // A popover wears the same frost (its window forms the radius its own way).
+    try std.testing.expect(fns.popover != null);
     // The menus ask for the same frost from the same place.
     try std.testing.expectEqual(fns.dialog.?.radius, fns.menu.?.radius);
     try std.testing.expectEqual(fns.dialog.?.mix, fns.menu.?.mix);
     try std.testing.expectEqual(fns.dialog.?.tint, fns.menu.?.tint);
-    // Blur off (and no glass program in the testing backend): a plain fill for both, no frost.
-    try fns.drawnAt(0);
+    // Blur off and no glass program: a plain fill for all, no frost.
+    try fns.drawnAt(0, false);
     try std.testing.expectEqual(@as(?f32, null), fns.tooltip);
     try std.testing.expectEqual(@as(?f32, null), fns.caption);
+    try std.testing.expectEqual(@as(?f32, null), fns.popover);
     try std.testing.expect(fns.menu == null);
+    // The glass program ready (blur on or off): every one is the rounded rect's frost the dialog
+    // style asks for. A caption that took its own Liquid Glass path (as it did before) queues
+    // the program's field here while the rest do not.
+    for ([_]f32{ 20, 0 }) |b| {
+        try fns.drawnAt(b, true);
+        try std.testing.expect(fns.menu != null);
+        try std.testing.expectEqual(@as(?bool, false), fns.tooltip_field);
+        try std.testing.expectEqual(@as(?bool, false), fns.caption_field);
+        try std.testing.expectEqual(@as(?bool, false), fns.popover_field);
+    }
+    try std.testing.expect(fns.menu.?.clear);
 }

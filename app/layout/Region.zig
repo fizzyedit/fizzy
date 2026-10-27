@@ -931,7 +931,7 @@ fn cornerButton(self: *Layout, opts: InitOptions, keywords: []const []const u8, 
                 ViewDrag.apply(self, opts.name, me.p);
                 dragged = true;
             }
-            self.state.view_drag.discard();
+            self.state.view_drag.discard(self.gpa);
             dvui.dataRemove(null, box.data().id, "_chooser_press");
             dvui.captureMouse(null, e.num);
             dvui.dragEnd();
@@ -1438,8 +1438,8 @@ fn initTree(
 /// target of zero), then easing open along the new one. Its share of the box is kept through the
 /// turn (`_share`, taken from the extent when that was last chosen, not from a box that has since
 /// changed shape), and follows a drag while turned. That drag is shown and nothing more: turning
-/// back takes the share from the saved extent again (`_seen` is unread while turned, so dvui drops
-/// it and the first frame back sees the extent anew).
+/// back takes the share from the saved one again (`_seen` is unread while turned, so dvui drops it
+/// and the first frame back reads the saved share anew).
 fn orientBranch(self: *Layout, saved: SplitTree.Branch, id: dvui.Id) SplitTree.Branch {
     if (!saved.adaptive) return saved;
     const dims = dvui.dataGet(null, id, "_dims", dvui.Size) orelse return saved;
@@ -1455,10 +1455,16 @@ fn orientBranch(self: *Layout, saved: SplitTree.Branch, id: dvui.Id) SplitTree.B
         const room = alongSize(saved.dir, dims);
         if (seen == null or seen.? != extent) {
             dvui.dataSet(null, id, "_seen", extent);
-            if (room > 0) dvui.dataSet(null, id, "_share", std.math.clamp(extent / room, 0, 1));
+            // The first sight of a half that was saved keeps its saved share: its extent is
+            // along the axis it was left on, which this box may not have.
+            if (seen == null and saved.share != null) {
+                setShare(self, saved.created, id, saved.share.?);
+            } else if (room > 0) {
+                setShare(self, saved.created, id, std.math.clamp(extent / room, 0, 1));
+            }
         }
     } else if (chosen) |extent| {
-        // Dragged since the branch set it: the drag is the new share.
+        // Dragged since the branch set it: the drag is the share drawn, and is not saved.
         const set = dvui.dataGet(null, id, "_set", f32) orelse extent;
         const room = alongSize(drawn.dir, dims);
         if (set != extent and room > 0) dvui.dataSet(null, id, "_share", std.math.clamp(extent / room, 0, 1));
@@ -1503,6 +1509,13 @@ fn orientBranch(self: *Layout, saved: SplitTree.Branch, id: dvui.Id) SplitTree.B
     }
     dvui.refresh(null, @src(), id);
     return drawn;
+}
+
+/// The share an adaptive split's new half has now: drawn through the turn (`_share`), and saved
+/// with the split.
+fn setShare(self: *Layout, created: []const u8, id: dvui.Id, share: f32) void {
+    dvui.dataSet(null, id, "_share", share);
+    if (self.state.splits.setShare(created, share)) self.extents_changed = true;
 }
 
 fn alongSize(dir: dvui.enums.Direction, size: dvui.Size) f32 {
@@ -1703,10 +1716,14 @@ fn drawTreeNode(
                     dvui.dataSet(null, id, "_size", default);
                 }
                 const chosen = dvui.dataGet(null, id, "_size", f32) orelse default;
-                const shown = Split.eased(id, chosen);
+                // Folds and writes like a leaf (`orientBranch`): the half of an outer turn
+                // slides shut, and while it is drawn turned its extent is not the person's.
+                const folding = dvui.dataGet(null, id, "_fold", bool) orelse false;
+                const turned = dvui.dataGet(null, id, "_turned", bool) orelse false;
+                const shown = Split.eased(id, if (folding) 0 else chosen);
                 dvui.dataSet(null, id, "_size", chosen);
                 // Forgotten, its nodes are freed with it: nothing more of it to draw this frame.
-                if (persistExtent(self, .{ .name = b.origin, .forget_when_empty = true }, id, chosen, shown)) return;
+                if (!turned and persistExtent(self, .{ .name = b.origin, .forget_when_empty = true }, id, chosen, shown)) return;
                 box_opts.min_size_content = switch (parent_dir) {
                     .horizontal => .{ .w = shown },
                     .vertical => .{ .h = shown },

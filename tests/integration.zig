@@ -2853,7 +2853,7 @@ test "a hide_when_empty panel stays while its view is dragged onto main" {
     defer editor.app.layout.deinitQualified(editor.app.gpa);
     defer editor.app.layout.deinitAssignments(editor.app.gpa);
     defer editor.app.layout.deinitExtents(editor.app.gpa);
-    defer editor.app.layout.view_drag.discard();
+    defer editor.app.layout.view_drag.discard(editor.app.gpa);
 
     try editor.app.host.registerSurface(.{ .id = "test.main", .title = "Main", .keywords = fizzy.sdk.keywords.ide.main, .draw = EmptyPanelFrame.drawMain });
     try editor.app.host.registerSurface(.{ .id = "test.output", .title = "Output", .keywords = fizzy.sdk.keywords.ide.panel, .draw = EmptyPanelFrame.drawMain });
@@ -3836,6 +3836,78 @@ test "an adaptive split turns with the window, keeps its share and writes nothin
     try std.testing.expect(!editor.app.layout.dirty);
 }
 
+// The half of an adaptive split that is itself split is an outer branch, not a leaf: its turn
+// waits for it to slide shut, and while drawn turned its extent is not the person's to save.
+test "an adaptive split whose new half is split again turns and writes nothing" {
+    var case = try NestedSplitCase.init();
+    defer case.deinit();
+    const ctx = &case.ctx;
+    const editor = ctx.editor;
+    {
+        var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+        layout.markAdaptive("Main/r1");
+    }
+    ctx.t.backend.size = .{ .w = 1180, .h = 820 };
+    ctx.t.backend.size_pixels = .{ .w = 1180, .h = 820 };
+    for (0..40) |_| _ = try dvui.testing.step(ColumnCardFrame.frame);
+    const left = try ColumnCardFrame.sizeOf(editor, "Main");
+    try std.testing.expect(left.w < left.h * 1.15);
+    const saved_extent = editor.app.layout.extent("Main/r1", 0);
+    editor.app.layout.dirty = false;
+
+    ctx.t.backend.size = .{ .w = 820, .h = 1180 };
+    ctx.t.backend.size_pixels = .{ .w = 820, .h = 1180 };
+    for (0..60) |_| _ = try dvui.testing.step(ColumnCardFrame.frame);
+    const top = try ColumnCardFrame.sizeOf(editor, "Main");
+    const column = try ColumnCardFrame.sizeOf(editor, "Main/r1");
+    try std.testing.expect(column.h > 40);
+    try std.testing.expectApproxEqAbs(top.w, column.w, 40);
+    try std.testing.expect(!editor.app.layout.dirty);
+    try std.testing.expectEqual(saved_extent, editor.app.layout.extent("Main/r1", 0));
+}
+
+// A half saved in landscape is a pixel extent along the width. Over a portrait box that number is
+// another share, so the share is saved beside it and the turn uses that one.
+test "an adaptive split saved beside comes back as the same share stacked" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const editor = ctx.editor;
+    editor.app.gpa = std.testing.allocator;
+    defer editor.app.layout.regions.deinit(editor.app.gpa);
+    defer editor.app.layout.regions_building.deinit(editor.app.gpa);
+    defer editor.app.layout.deinitExtents(editor.app.gpa);
+    defer editor.app.layout.deinitAssignments(editor.app.gpa);
+    defer editor.app.layout.deinitQualified(editor.app.gpa);
+
+    ColumnCardFrame.editor = editor;
+    defer ColumnCardFrame.editor = null;
+
+    // A restart in portrait: the layout as loaded (`loadRuntimeSplits`) has the landscape half,
+    // 590 across a 1180 box, and its share of a half.
+    ctx.t.backend.size = .{ .w = 820, .h = 1180 };
+    ctx.t.backend.size_pixels = .{ .w = 820, .h = 1180 };
+    try dvui.testing.settle(ColumnCardFrame.frame);
+    const state = &editor.app.layout;
+    const intern = struct {
+        var st: *fizzy.Editor.Layout.State = undefined;
+        fn go(a: std.mem.Allocator, name: []const u8) []const u8 {
+            return st.internName(a, name);
+        }
+    };
+    intern.st = state;
+    try std.testing.expect(state.splits.split(editor.app.gpa, intern.go, "Main", .right, 590, "Main/r1") != null);
+    try std.testing.expect(state.splits.markAdaptive("Main/r1"));
+    try std.testing.expect(state.splits.setShare("Main/r1", 0.5));
+    _ = state.setExtent(editor.app.gpa, "Main/r1", 590);
+
+    for (0..60) |_| _ = try dvui.testing.step(ColumnCardFrame.frame);
+    const top = try ColumnCardFrame.sizeOf(editor, "Main");
+    const bottom = try ColumnCardFrame.sizeOf(editor, "Main/r1");
+    // Not 590 over the 820 width, which is the share the pixels alone would say.
+    try std.testing.expectApproxEqAbs(0.5, bottom.h / (top.h + bottom.h), 0.03);
+}
+
 // A sash dragged while an adaptive split is turned is shown and nothing more: the share the saved
 // extent gave comes back with the turn back, and the next turn uses it, not the drag's.
 test "a drag while an adaptive split is turned is not kept when it turns back" {
@@ -4217,10 +4289,10 @@ test "split: the trash is offered out of a place of several, not out of a lone d
     // Joined back, Center is the shape's one place again, showing one view.
     try case.place("Center", "Center", .remove);
     var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
-    defer editor.app.layout.view_drag.discard();
+    defer editor.app.layout.view_drag.discard(editor.app.gpa);
     VD.begin(&layout, "Center", .{ .w = 100, .h = 100 }, .{ .w = 100, .h = 100 });
     try std.testing.expect(!VD.removable(&layout));
-    editor.app.layout.view_drag.discard();
+    editor.app.layout.view_drag.discard(editor.app.gpa);
     // Holding several, the trash takes just the view carried.
     try editor.app.layout.assign(editor.app.gpa, "Center", &.{ "test.view", "test.other" });
     try dvui.testing.settle(EndlessFrame.frame);
@@ -4235,7 +4307,7 @@ test "drag: a strip whose place cannot take the view is not a chooser for it" {
     const editor = case.ctx.editor;
     const VD = fizzy.Editor.Layout.ViewDrag;
     var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
-    defer editor.app.layout.view_drag.discard();
+    defer editor.app.layout.view_drag.discard(editor.app.gpa);
     VD.begin(&layout, "Center", .{ .w = 100, .h = 100 }, .{ .w = 100, .h = 100 });
     const strip: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 200, .h = 30 };
     // A strip of a place the drag mapped no target for (a document pane, say) is passed over...
@@ -4597,7 +4669,7 @@ test "dragging a tab off a Multiple place's strip starts the view drag with it" 
     defer editor.app.layout.deinitExtents(editor.app.gpa);
     defer editor.app.layout.deinitAssignments(editor.app.gpa);
     defer editor.app.layout.deinitQualified(editor.app.gpa);
-    defer editor.app.layout.view_drag.discard();
+    defer editor.app.layout.view_drag.discard(editor.app.gpa);
     EndlessFrame.editor = editor;
     defer EndlessFrame.editor = null;
 
@@ -4627,7 +4699,7 @@ test "a tab carried off a Multiple place's strip and back along it goes in where
     defer editor.app.layout.deinitExtents(editor.app.gpa);
     defer editor.app.layout.deinitAssignments(editor.app.gpa);
     defer editor.app.layout.deinitQualified(editor.app.gpa);
-    defer editor.app.layout.view_drag.discard();
+    defer editor.app.layout.view_drag.discard(editor.app.gpa);
     EndlessFrame.editor = editor;
     defer EndlessFrame.editor = null;
 
@@ -4676,7 +4748,7 @@ test "a view let go over another place's chooser goes into its list where along 
     defer editor.app.layout.deinitExtents(editor.app.gpa);
     defer editor.app.layout.deinitAssignments(editor.app.gpa);
     defer editor.app.layout.deinitQualified(editor.app.gpa);
-    defer editor.app.layout.view_drag.discard();
+    defer editor.app.layout.view_drag.discard(editor.app.gpa);
     EndlessFrame.editor = editor;
     defer EndlessFrame.editor = null;
 
@@ -5032,7 +5104,7 @@ test "a drop runs back together after the release, whatever happened to its plac
         var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
         fizzy.Editor.Layout.ViewDrag.begin(&layout, "Panel", panel_at, panel_at);
     }
-    defer editor.app.layout.view_drag.discard();
+    defer editor.app.layout.view_drag.discard(editor.app.gpa);
     _ = try dvui.currentWindow().addEventMouseMotion(.{ .pt = main_at.center() });
     try dvui.testing.settle(DropFinishFrame.frame);
     try std.testing.expect(DropZones.showing(DropFinishFrame.key));
@@ -5045,7 +5117,7 @@ test "a drop runs back together after the release, whatever happened to its plac
     }
 
     // Released, and the place it was over is now called something else.
-    editor.app.layout.view_drag.discard();
+    editor.app.layout.view_drag.discard(editor.app.gpa);
     editor.app.layout.registerRegion(editor.app.gpa, .{ .name = "Main/b0", .keywords = main_kw, .bounds = main_at });
     editor.app.layout.registerRegion(editor.app.gpa, .{ .name = "Panel", .keywords = panel_kw, .bounds = panel_at });
     editor.app.layout.publishRegions();
@@ -5088,7 +5160,7 @@ test "a drag aims at the places that were there when it began" {
     var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
     const ViewDrag = fizzy.Editor.Layout.ViewDrag;
     ViewDrag.begin(&layout, "Panel", panel_at, panel_at);
-    defer editor.app.layout.view_drag.discard();
+    defer editor.app.layout.view_drag.discard(editor.app.gpa);
 
     try std.testing.expectEqualStrings("Main", ViewDrag.targetAt(&layout, middle, "Panel") orelse
         return error.TestExpectedEqual);
@@ -5308,7 +5380,7 @@ test "drag: a document not open yet goes only to a document's slot, whose drop g
     defer editor.app.layout.regions_building.deinit(editor.app.gpa);
     defer editor.app.layout.deinitQualified(editor.app.gpa);
     defer editor.app.layout.deinitAssignments(editor.app.gpa);
-    defer editor.app.layout.view_drag.discard();
+    defer editor.app.layout.view_drag.discard(editor.app.gpa);
 
     const state = &editor.app.layout;
     const gpa = editor.app.gpa;
@@ -5385,7 +5457,7 @@ test "float: a document tab dropped on its own pane's middle floats in a view ho
     defer editor.app.layout.deinitExtents(editor.app.gpa);
     defer editor.app.layout.deinitQualified(editor.app.gpa);
     defer editor.app.layout.deinitAssignments(editor.app.gpa);
-    defer editor.app.layout.view_drag.discard();
+    defer editor.app.layout.view_drag.discard(editor.app.gpa);
 
     const state = &editor.app.layout;
     const gpa = editor.app.gpa;
@@ -5419,7 +5491,7 @@ test "float: a document tab dropped on its own pane's middle floats in a view ho
     DropProbe.last = null;
     VD.beginLoose(&layout, "text.doc:/project/a.md", .{ .x = 110, .y = 44, .w = 120, .h = 24 }, null);
     VD.place(&layout, VD.loose_source, "Pane 0", .swap);
-    state.view_drag.discard();
+    state.view_drag.discard(gpa);
     try std.testing.expect(DropProbe.last == null);
     try std.testing.expectEqualStrings("text.doc:/project/a.md", DocViews.housed[0..DocViews.housed_len]);
     try std.testing.expectEqual(@as(usize, 1), state.floats.items.items.len);
@@ -5436,7 +5508,7 @@ test "float: a document tab dropped on its own pane's middle floats in a view ho
     DocViews.lone = "test.workspace.1";
     VD.beginLoose(&layout, "text.doc:/project/b.md", .{ .x = 110, .y = 44, .w = 120, .h = 24 }, null);
     VD.place(&layout, VD.loose_source, "Pane 0", .swap);
-    state.view_drag.discard();
+    state.view_drag.discard(gpa);
     try std.testing.expectEqual(@as(usize, 2), state.floats.items.items.len);
     try std.testing.expectEqualStrings("Main", state.floats.items.items[1].home);
     try std.testing.expectEqualStrings("test.workspace.1", (state.assignment("Float 2") orelse return error.TestExpectedEqual)[0]);
@@ -5446,7 +5518,7 @@ test "float: a document tab dropped on its own pane's middle floats in a view ho
     regions.publish(state, gpa, true);
     VD.beginLoose(&layout, "text.doc:/project/b.md", .{ .x = 110, .y = 44, .w = 120, .h = 24 }, null);
     VD.place(&layout, VD.loose_source, "Pane 0", .swap);
-    state.view_drag.discard();
+    state.view_drag.discard(gpa);
     try std.testing.expectEqual(@as(usize, 2), state.floats.items.items.len);
     try std.testing.expect(DropProbe.last != null);
 
@@ -5500,7 +5572,7 @@ test "dragging a view over its own place shows that place's drop zones" {
     defer editor.app.layout.deinitExtents(editor.app.gpa);
     defer editor.app.layout.deinitAssignments(editor.app.gpa);
     defer editor.app.layout.deinitQualified(editor.app.gpa);
-    defer editor.app.layout.view_drag.discard();
+    defer editor.app.layout.view_drag.discard(editor.app.gpa);
     EndlessFrame.editor = editor;
     defer EndlessFrame.editor = null;
 
@@ -7602,7 +7674,7 @@ test "float: a drag aims at a float's place over it, at nothing over its header,
     var layout = fizzy.Editor.Layout.init(&editor.app.host, state, gpa, dvui.currentWindow().arena());
     const ViewDrag = fizzy.Editor.Layout.ViewDrag;
     ViewDrag.begin(&layout, "Panel", panel_at, panel_at);
-    defer state.view_drag.discard();
+    defer state.view_drag.discard(gpa);
 
     // Over the float: its place, though Main is under it too.
     try std.testing.expectEqualStrings("Float 1", ViewDrag.targetAt(&layout, .{ .x = 350, .y = 250 }, "Panel") orelse
@@ -7671,7 +7743,7 @@ test "float: a place a float lies over has its drop in the part left clear, wher
     var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, gpa, dvui.currentWindow().arena());
     const ViewDrag = fizzy.Editor.Layout.ViewDrag;
     ViewDrag.begin(&layout, "Panel", FloatOverMain.panel_at, FloatOverMain.panel_at);
-    defer editor.app.layout.view_drag.discard();
+    defer editor.app.layout.view_drag.discard(editor.app.gpa);
 
     // Main's middle is under the float: its drop is in Main, clear of the float, all of it.
     const clear = ViewDrag.zoneBounds(&editor.app.layout, "Main") orelse return error.TestExpectedEqual;
@@ -7706,7 +7778,7 @@ test "float: a place a float lies all over has no drop" {
     var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, gpa, dvui.currentWindow().arena());
     const ViewDrag = fizzy.Editor.Layout.ViewDrag;
     ViewDrag.begin(&layout, "Panel", FloatOverMain.panel_at, FloatOverMain.panel_at);
-    defer editor.app.layout.view_drag.discard();
+    defer editor.app.layout.view_drag.discard(editor.app.gpa);
 
     try std.testing.expect(ViewDrag.zoneBounds(&editor.app.layout, "Main/r1") == null);
     try std.testing.expect(ViewDrag.wheelOf(&editor.app.layout, "Main/r1") == null);
@@ -7724,7 +7796,7 @@ test "float: dragging a place's view onto its own middle floats it, over a seed 
     defer editor.app.layout.deinitExtents(editor.app.gpa);
     defer editor.app.layout.deinitAssignments(editor.app.gpa);
     defer editor.app.layout.deinitQualified(editor.app.gpa);
-    defer editor.app.layout.view_drag.discard();
+    defer editor.app.layout.view_drag.discard(editor.app.gpa);
     EndlessFrame.editor = editor;
     defer EndlessFrame.editor = null;
 
@@ -7827,7 +7899,7 @@ test "float: the float a view is carried out of is a ghost while the view is aim
     // Lifted from its corner button, over the float: it is still itself.
     try pointTo(.{ .x = bounds.x + bounds.w - 16, .y = header.y + header.h + 16 }, ManyPanelFrame.frame, 1);
     ViewDrag.begin(&layout, "Float 1", bounds, bounds);
-    defer editor.app.layout.view_drag.discard();
+    defer editor.app.layout.view_drag.discard(editor.app.gpa);
     // Mapped with the others, marked as the one the view is carried out of.
     try std.testing.expectEqual(@as(usize, 1), editor.app.layout.view_drag.occluder_count);
     try std.testing.expect(editor.app.layout.view_drag.occluders[0].source);
@@ -7856,7 +7928,7 @@ test "float: the float a view is carried out of is a ghost while the view is aim
     // Off it again, and let go over nothing: back as it was.
     try pointTo(try offFloat(bounds), ManyPanelFrame.frame, ghost_frames);
     try std.testing.expectEqual(@as(f32, 1), asideOf(editor, 0));
-    editor.app.layout.view_drag.discard();
+    editor.app.layout.view_drag.discard(editor.app.gpa);
     try dvui.testing.settle(ManyPanelFrame.frame);
     try std.testing.expectEqual(@as(usize, 1), openFloats(editor));
     try std.testing.expectEqual(@as(f32, 0), asideOf(editor, 0));
@@ -7887,7 +7959,7 @@ test "float: the drops beneath a ghost sit clear of it, and it firms up as the v
     const ViewDrag = fizzy.Editor.Layout.ViewDrag;
     cw.mouse_pt = place.center();
     ViewDrag.begin(&layout, "Float 1", place, place);
-    defer state.view_drag.discard();
+    defer state.view_drag.discard(gpa);
 
     // Aimed off the float: a ghost, and beside it, what is beneath.
     const beside: dvui.Point.Physical = .{ .x = 650, .y = 200 };
@@ -7940,7 +8012,7 @@ test "float: a drop squeezed by the ghost stays whole under it, reached through 
     const ViewDrag = fizzy.Editor.Layout.ViewDrag;
     cw.mouse_pt = place.center();
     ViewDrag.begin(&layout, "Float 1", place, place);
-    defer state.view_drag.discard();
+    defer state.view_drag.discard(gpa);
 
     const prev_time = cw.frame_time_ns;
     defer cw.frame_time_ns = prev_time;
@@ -8012,7 +8084,7 @@ test "float: a float of two is a ghost too, and comes back without the view that
     // Landed in Panel, which takes it beside what it shows: the float comes back, holding the
     // other.
     ViewDrag.place(&layout, "Float 1", "Panel", .swap);
-    editor.app.layout.view_drag.discard();
+    editor.app.layout.view_drag.discard(editor.app.gpa);
     try dvui.testing.settle(ManyPanelFrame.frame);
     try std.testing.expectEqual(@as(usize, 1), openFloats(editor));
     try std.testing.expectEqual(@as(f32, 0), floats.items.items[0].aside.at());
@@ -8035,7 +8107,7 @@ test "float: a ghost for its last view goes when the view lands, without flying 
     try pointTo(try offFloat(bounds), ManyPanelFrame.frame, ghost_frames);
     // Released on Panel, as `apply` lands it, then the drag ends.
     ViewDrag.place(&layout, "Float 1", "Panel", .swap);
-    editor.app.layout.view_drag.discard();
+    editor.app.layout.view_drag.discard(editor.app.gpa);
     _ = try dvui.testing.step(ManyPanelFrame.frame);
     // Gone on the next frame: no glass reappearing to fly shut.
     try std.testing.expectEqual(@as(usize, 0), floats.items.items.len);
@@ -8081,7 +8153,7 @@ test "float: coming back without the view that landed elsewhere, it draws its vi
     ViewDrag.begin(&layout, "Float 1", bounds, bounds);
     try pointTo(try offFloat(bounds), ManyPanelFrame.frame, ghost_frames);
     ViewDrag.place(&layout, "Float 1", "Panel", .swap);
-    editor.app.layout.view_drag.discard();
+    editor.app.layout.view_drag.discard(editor.app.gpa);
 
     var faded = false;
     for (0..ghost_frames) |_| {
@@ -8121,7 +8193,7 @@ test "float: a drag's own layer is over every float" {
     // floating widget made in the app's own window would stay under.
     var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
     fizzy.Editor.Layout.ViewDrag.begin(&layout, "Main", main, main);
-    defer editor.app.layout.view_drag.discard();
+    defer editor.app.layout.view_drag.discard(editor.app.gpa);
     _ = try dvui.testing.step(OverlaidFrame.frame);
     _ = try dvui.testing.step(OverlaidFrame.frame);
     const float_id = editor.app.layout.floats.items.items[0].win_id;
@@ -8152,7 +8224,7 @@ test "float: a strip a float lies over is no chooser where the float is, and is 
     var layout = fizzy.Editor.Layout.init(&editor.app.host, state, gpa, dvui.currentWindow().arena());
     const ViewDrag = fizzy.Editor.Layout.ViewDrag;
     ViewDrag.begin(&layout, "Panel", FloatOverMain.panel_at, FloatOverMain.panel_at);
-    defer state.view_drag.discard();
+    defer state.view_drag.discard(gpa);
 
     // A strip across Main, drawn in the app's own window, running under the float's body — a tab
     // strip of a pane the float lies over, as a plugin offers one (`Host.Region.offerChooser`).
@@ -8546,11 +8618,15 @@ test "workbench: the Files explorer frame does not grow with a 300k-note folder"
     defer gpa.free(editor.app.folder.?);
     explorer_scroll = .{ .horizontal = .none };
 
-    const last = try std.fmt.allocPrint(gpa, "{s}/note-{d:0>6}.md", .{ root, n - 1 });
+    const last_name = try std.fmt.allocPrint(gpa, "note-{d:0>6}.md", .{n - 1});
+    defer gpa.free(last_name);
+    const last = try std.fs.path.join(gpa, &.{ root, last_name });
     defer gpa.free(last);
     const last_tag = try std.fmt.allocPrint(gpa, "workbench.file:{s}", .{last});
     defer gpa.free(last_tag);
-    const hit_tag = try std.fmt.allocPrint(gpa, "workbench.file:{s}/note-123456.md", .{root});
+    const hit = try std.fs.path.join(gpa, &.{ root, "note-123456.md" });
+    defer gpa.free(hit);
+    const hit_tag = try std.fmt.allocPrint(gpa, "workbench.file:{s}", .{hit});
     defer gpa.free(hit_tag);
 
     // Loading the folder: no frame waits for the disk, and the row says so meanwhile.
@@ -9846,6 +9922,15 @@ test "live: a wait that never holds stops the tape and says where" {
 // Taking `--profile` out of argv is `app/profile.zig`'s own unit tests; these are the single-instance
 // layer's half: the profile made absolute like any other path, and never forwarded as one.
 
+/// `expected` written with `/`, against a path the OS spelled with its own separator.
+fn expectPosixPath(expected: []const u8, actual: []const u8) !void {
+    const gpa = std.testing.allocator;
+    const posix = try gpa.dupe(u8, actual);
+    defer gpa.free(posix);
+    std.mem.replaceScalar(u8, posix, std.fs.path.sep, '/');
+    try std.testing.expectEqualStrings(expected, posix);
+}
+
 test "profile: argv names one, made absolute and taken out of what is opened" {
     const si = @import("app").single_instance;
     const gpa = std.testing.allocator;
@@ -9853,16 +9938,16 @@ test "profile: argv names one, made absolute and taken out of what is opened" {
     const named = try si.resolveArgs(gpa, "/work", &.{ "fizzy", "--profile", "sandbox/./one", "notes.md", "-v" }, "/from/env");
     defer si.freeResolvedArgv(gpa, named.argv);
     defer gpa.free(named.profile.?);
-    try std.testing.expectEqualStrings("/work/sandbox/one", named.profile.?);
+    try expectPosixPath("/work/sandbox/one", named.profile.?);
     try std.testing.expectEqual(@as(usize, 3), named.argv.len);
-    try std.testing.expectEqualStrings("/work/notes.md", named.argv[1]);
+    try expectPosixPath("/work/notes.md", named.argv[1]);
     try std.testing.expectEqualStrings("-v", named.argv[2]);
 
     // The flag absent, the environment names it; neither, there is none.
     const from_env = try si.resolveArgs(gpa, "/work", &.{"fizzy"}, "/from/env");
     defer si.freeResolvedArgv(gpa, from_env.argv);
     defer gpa.free(from_env.profile.?);
-    try std.testing.expectEqualStrings("/from/env", from_env.profile.?);
+    try expectPosixPath("/from/env", from_env.profile.?);
 
     const none = try si.resolveArgs(gpa, "/work", &.{ "fizzy", "a.md" }, null);
     defer si.freeResolvedArgv(gpa, none.argv);
@@ -9875,7 +9960,7 @@ test "profile: argv names one, made absolute and taken out of what is opened" {
     defer gpa.free(quiet.profile.?);
     try std.testing.expect(quiet.quiet);
     try std.testing.expectEqual(@as(usize, 2), quiet.argv.len);
-    try std.testing.expectEqualStrings("/work/a.md", quiet.argv[1]);
+    try expectPosixPath("/work/a.md", quiet.argv[1]);
 
     // Taking the lock with a profile is native startup, not something a test process can do
     // twice; it is compiled here, so a mistake in it fails this build rather than only the app's.
@@ -10015,6 +10100,11 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
     defer gpa.destroy(editor);
     fizzy.setInstances(entry, editor);
     editor.* = try fizzy.Editor.init(entry);
+    // A failing expect below returns early, and the watcher threads read the editor until
+    // `deinit` joins them: without this they outlive the `destroy` above and crash the run
+    // while it prints the failure.
+    var quit = false;
+    errdefer if (!quit) editor.deinit() catch {};
     workbench.runtime.setWorkbench(&editor.workbench);
     try editor.postInit();
     try dvui.testing.settle(headlessFrame);
@@ -12554,6 +12644,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
     const harness_window = dvui.current_window;
     dvui.current_window = null;
     defer dvui.current_window = harness_window;
+    quit = true;
     try editor.deinit();
 }
 

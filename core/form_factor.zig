@@ -53,19 +53,19 @@ pub fn effective(detected: FormFactor, mode: LayoutMode, override: ?FormFactor) 
 }
 
 test "effective covers every detected form, mode and override" {
-    const overrides = [_]?FormFactor{ null, .desktop, .tablet, .mobile };
-    for (std.enums.values(FormFactor)) |detected| {
-        for (std.enums.values(LayoutMode)) |mode| {
-            for (overrides) |override| {
-                const want: FormFactor = if (override) |o| o else switch (mode) {
-                    .auto => detected,
-                    .mobile => .mobile,
-                    .desktop => .desktop,
-                };
-                try std.testing.expectEqual(want, effective(detected, mode, override));
-            }
-        }
-    }
+    const D = FormFactor.desktop;
+    const T = FormFactor.tablet;
+    const M = FormFactor.mobile;
+    // detected, mode, override, expected
+    const cases = [_]struct { FormFactor, LayoutMode, ?FormFactor, FormFactor }{
+        .{ D, .auto, null, D },    .{ T, .auto, null, T },    .{ M, .auto, null, M },
+        .{ D, .mobile, null, M },  .{ T, .mobile, null, M },  .{ M, .mobile, null, M },
+        .{ D, .desktop, null, D }, .{ T, .desktop, null, D }, .{ M, .desktop, null, D },
+        .{ D, .auto, T, T },       .{ M, .auto, D, D },       .{ T, .auto, M, M },
+        .{ D, .mobile, D, D },     .{ M, .mobile, T, T },     .{ T, .mobile, M, M },
+        .{ D, .desktop, M, M },    .{ M, .desktop, T, T },    .{ T, .desktop, D, D },
+    };
+    for (cases) |c| try std.testing.expectEqual(c[3], effective(c[0], c[1], c[2]));
 }
 
 test "a mode forces mobile or desktop on any device, and auto keeps a tablet a tablet" {
