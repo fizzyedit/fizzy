@@ -47,29 +47,32 @@ pack "$root" | gzip > "$work/fizzy.tar.gz"
 bash scripts/pack-sdk.sh "$work/sdk" >/dev/null
 sdk_tarball="$(ls "$work"/sdk/fizzy-sdk-v*.tar.gz)"
 
-for repo in example-app example-plugin; do
-  if [[ -n "${EXAMPLES_DIR:-}" ]]; then
-    mkdir -p "$work/$repo"
-    pack "$EXAMPLES_DIR/$repo" | tar -x -C "$work/$repo"
-  else
-    git clone --quiet --depth 1 "https://github.com/fizzyedit/$repo" "$work/$repo"
-  fi
-done
-
-(cd "$work/example-plugin" && zig fetch --save=fizzy "$sdk_tarball" >/dev/null)
-# example-app bundles example-plugin (`hello`), pinned by URL: the copy here, on this tree's SDK.
-pack "$work/example-plugin" | gzip > "$work/example-plugin.tar.gz"
-(
-  cd "$work/example-app"
-  zig fetch --save=hello "$work/example-plugin.tar.gz" >/dev/null
-  zig fetch --save=fizzy "$work/fizzy.tar.gz" >/dev/null
-  # Its replay app depends on the plugin SDK alone: this tree's, packed as a release would be.
-  zig fetch --save=fizzy_sdk "$sdk_tarball" >/dev/null
-  # So do the plugins it carries, each pinning a released SDK of its own.
-  for plugin in plugins/*/; do
-    (cd "$plugin" && zig fetch --save=fizzy "$sdk_tarball" >/dev/null)
+builds="${EXAMPLES_BUILDS-plugin minimal studio endless studio-zon replay dvui dvui-sdl3}"
+if [[ -n $builds ]]; then
+  for repo in example-app example-plugin; do
+    if [[ -n "${EXAMPLES_DIR:-}" ]]; then
+      mkdir -p "$work/$repo"
+      pack "$EXAMPLES_DIR/$repo" | tar -x -C "$work/$repo"
+    else
+      git clone --quiet --depth 1 "https://github.com/fizzyedit/$repo" "$work/$repo"
+    fi
   done
-)
+
+  (cd "$work/example-plugin" && zig fetch --save=fizzy "$sdk_tarball" >/dev/null)
+  # example-app bundles example-plugin (`hello`), pinned by URL: the copy here, on this tree's SDK.
+  pack "$work/example-plugin" | gzip > "$work/example-plugin.tar.gz"
+  (
+    cd "$work/example-app"
+    zig fetch --save=hello "$work/example-plugin.tar.gz" >/dev/null
+    zig fetch --save=fizzy "$work/fizzy.tar.gz" >/dev/null
+    # Its replay app depends on the plugin SDK alone: this tree's, packed as a release would be.
+    zig fetch --save=fizzy_sdk "$sdk_tarball" >/dev/null
+    # So do the plugins it carries, each pinning a released SDK of its own.
+    for plugin in plugins/*/; do
+      (cd "$plugin" && zig fetch --save=fizzy "$sdk_tarball" >/dev/null)
+    done
+  )
+fi
 
 # The plugin build installs the plugin: into a profile of its own, not this machine's fizzy.
 export FIZZY_PROFILE="$work/profile"
@@ -105,8 +108,6 @@ build_one() {
   fi
 }
 export -f build_args build_one
-
-builds="${EXAMPLES_BUILDS-plugin minimal studio endless studio-zon replay dvui dvui-sdl3}"
 
 # Each build is one compile of an app that mostly keeps one core busy, so they run side by side,
 # EXAMPLES_JOBS at once (3: CI's runner has 4 cores and 16 GB). First each configuration is

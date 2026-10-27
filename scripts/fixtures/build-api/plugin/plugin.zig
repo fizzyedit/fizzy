@@ -19,6 +19,7 @@ comptime {
     }
 }
 
+// The host writes plugin lifecycle state on the main UI thread.
 var plugin: sdk.Plugin = .{
     .state = undefined,
     .vtable = &vtable,
