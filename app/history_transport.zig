@@ -184,9 +184,9 @@ pub fn stopAt(x: f32, x0: f32, x1: f32, n: usize) usize {
 }
 
 /// Where stop `i` of `n` sits on the line from `x0` to `x1`: evenly spaced, stop 0 at `x0` and
-/// stop `n` at `x1`, so the knob reaches both ends. With no history, the one stop is in the middle.
+/// stop `n` at `x1`, so the knob reaches both ends. With no history, the one stop is at `x0`.
 pub fn stopX(i: usize, x0: f32, x1: f32, n: usize) f32 {
-    if (n == 0) return (x0 + x1) / 2;
+    if (n == 0) return x0;
     return x0 + (x1 - x0) * @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(n));
 }
 
@@ -344,7 +344,7 @@ test "stop 0 is at the left end, stop n at the right, and stopAt inverts stopX" 
         try testing.expectApproxEqAbs(@as(f32, 220), stopX(n, 20, 220, n), 1e-3);
         for (0..n + 1) |i| try testing.expectEqual(i, stopAt(stopX(i, 20, 220, n), 20, 220, n));
     }
-    try testing.expectEqual(@as(f32, 120), stopX(0, 20, 220, 0));
+    try testing.expectEqual(@as(f32, 20), stopX(0, 20, 220, 0));
 }
 
 test "a bar told to go goes from where it is, and one left goes soon" {

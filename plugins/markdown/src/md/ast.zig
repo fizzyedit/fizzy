@@ -412,7 +412,18 @@ const Builder = struct {
 
     fn isInline(t: NodeType) bool {
         return switch (t) {
-            .text, .softbreak, .linebreak, .code, .html_inline, .emph, .strong, .strikethrough, .link, .image, .footnote_reference => true,
+            .text,
+            .softbreak,
+            .linebreak,
+            .code,
+            .html_inline,
+            .emph,
+            .strong,
+            .strikethrough,
+            .link,
+            .image,
+            .footnote_reference,
+            => true,
             else => false,
         };
     }
@@ -595,7 +606,10 @@ fn expectTree(source: []const u8, expected: []const u8) !void {
 }
 
 test "blocks and inlines" {
-    try expectTree("# Hi\n\nHow are *you*!", "document{heading{text[Hi]}paragraph{text[How are ]emph{text[you]}text[!]}}");
+    try expectTree(
+        "# Hi\n\nHow are *you*!",
+        "document{heading{text[Hi]}paragraph{text[How are ]emph{text[you]}text[!]}}",
+    );
 }
 
 test "a paragraph split by an escape is still one text node" {

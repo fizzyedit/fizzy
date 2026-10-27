@@ -331,7 +331,8 @@ test "a bare section marker disappears; one on a heading leaves the heading" {
 
 test "links resolve to where they point" {
     try expectRewrite(
-        "[Zine]($link.url('https://zine-ssg.io').new(true)) [Docs]($link.page('docs/supermd').ref('intro')) [Up]($link.ref('top'))",
+        "[Zine]($link.url('https://zine-ssg.io').new(true)) " ++
+            "[Docs]($link.page('docs/supermd').ref('intro')) [Up]($link.ref('top'))",
         "[Zine](https://zine-ssg.io) [Docs](/docs/supermd/#intro) [Up](#top)",
     );
 }
@@ -345,7 +346,8 @@ test "angle-bracketed directives may hold spaces" {
 
 test "images, blocks and media" {
     try expectRewrite(
-        "[A cat]($image.asset('cat.jpg').id('foo'))\n># [Draft]($block.attrs('note'))\n>[]($block.attrs('actions'))\n[]($video.asset('demo.mp4').loop(true))",
+        "[A cat]($image.asset('cat.jpg').id('foo'))\n># " ++
+            "[Draft]($block.attrs('note'))\n>[]($block.attrs('actions'))\n[]($video.asset('demo.mp4').loop(true))",
         "![A cat](cat.jpg)\n># Draft\n>\n[demo.mp4](demo.mp4)",
     );
 }
@@ -358,5 +360,8 @@ test "plain markdown links, code and fences are left as they are" {
 }
 
 test "CRLF line endings survive" {
-    try expectRewrite("---\r\n.title = \"x\",\r\n---\r\n[a]($link.ref('b'))\r\n", "```ziggy\r\n.title = \"x\",\r\n```\r\n[a](#b)\r\n");
+    try expectRewrite(
+        "---\r\n.title = \"x\",\r\n---\r\n[a]($link.ref('b'))\r\n",
+        "```ziggy\r\n.title = \"x\",\r\n```\r\n[a](#b)\r\n",
+    );
 }

@@ -18,6 +18,7 @@ const fizzy = @import("fizzy");
 const Tracks = @import("app").Tracks;
 const shim = @import("fizzy_shim.zig");
 const TextEntryWidget = @import("text").TextEntryWidget;
+const chat = @import("chat");
 const sdk = @import("fizzy_sdk");
 
 test "shim brings up a dvui.testing window with usable fizzy globals" {
@@ -92,6 +93,109 @@ test "a shell command shadowed by a user binding gives up its native chord" {
     try std.testing.expect(fizzy.Editor.Keybinds.menuKeybindFor(editor, "fizzy.openFolder").key == null);
     try std.testing.expect(!fizzy.Editor.Keybinds.chordShadowed(editor, "text.format"));
     try std.testing.expect(fizzy.Editor.Keybinds.chordShadowed(editor, "fizzy.openFolder"));
+}
+
+// -- chat composer -----------------------------------------------------------------------------
+//
+// The composer is a dvui text entry that grows with its text to a cap; Enter sends on a desktop and
+// breaks the line on a phone or with Shift. What it decides is unit-tested in
+// `plugins/chat/src/composer.zig`; these run it in real frames with real key and text events.
+
+var chat_view: chat.View = .{};
+var chat_provider: chat.DemoProvider = .{ .allocator = std.testing.allocator };
+var chat_api: sdk.services.chat.Api = undefined;
+
+fn chatFrame() !dvui.App.Result {
+    chat_view.draw(std.testing.allocator, &chat_api);
+    return .ok;
+}
+
+fn chatCtx() !dvui.testing {
+    chat_view = .{};
+    chat_provider = .{ .allocator = std.testing.allocator };
+    chat_api = chat_provider.api();
+    var t = try dvui.testing.init(.{ .allocator = std.testing.allocator });
+    errdefer t.deinit();
+    try dvui.testing.settle(chatFrame);
+    dvui.focusWidget(chat_view.entry_id, null, null);
+    try dvui.testing.settle(chatFrame);
+    return t;
+}
+
+fn deinitChat(t: *dvui.testing) void {
+    t.deinit();
+    chat_view.deinit(std.testing.allocator);
+    chat_provider.deinit();
+}
+
+test "the composer grows with its lines to the cap, then scrolls" {
+    var t = try chatCtx();
+    defer deinitChat(&t);
+
+    const one = chat_view.entry_rect.h;
+    var heights: [12]f32 = undefined;
+    for (&heights) |*h| {
+        try dvui.testing.writeText("line\n");
+        try dvui.testing.settle(chatFrame);
+        h.* = chat_view.entry_rect.h;
+    }
+    // Each new line makes it taller until the cap; 8 lines (7 typed newlines on top of the
+    // first) is the last that does.
+    try std.testing.expect(heights[2] > one);
+    try std.testing.expect(heights[5] > heights[2]);
+    const cap = heights[11];
+    try std.testing.expect(cap > heights[5]);
+    try std.testing.expectApproxEqAbs(cap, heights[8], 0.5);
+    try std.testing.expectApproxEqAbs(cap, heights[10], 0.5);
+    try std.testing.expect(chat_view.entry_scroll.virtual_size.h > chat_view.entry_scroll.viewport.h);
+}
+
+test "Enter sends on a desktop and Shift+Enter breaks the line" {
+    var t = try chatCtx();
+    defer deinitChat(&t);
+
+    try dvui.testing.writeText("hi");
+    try dvui.testing.settle(chatFrame);
+    try dvui.testing.pressKey(.enter, .lshift);
+    try dvui.testing.settle(chatFrame);
+    try std.testing.expectEqual(@as(usize, 0), chat_api.messages().len);
+    try std.testing.expectEqualStrings("hi\n", chat_view.text.items);
+
+    try dvui.testing.pressKey(.enter, .none);
+    try dvui.testing.settle(chatFrame);
+    try std.testing.expectEqual(@as(usize, 2), chat_api.messages().len);
+    try std.testing.expectEqualStrings("hi", chat_api.messages()[0].text);
+    try std.testing.expectEqual(@as(usize, 0), chat_view.text.items.len);
+}
+
+test "Enter is a new line on a phone" {
+    fizzy.core.platform.cached_form_factor = .mobile;
+    defer fizzy.core.platform.cached_form_factor = .desktop;
+    var t = try chatCtx();
+    defer deinitChat(&t);
+
+    try dvui.testing.writeText("hi");
+    try dvui.testing.settle(chatFrame);
+    try dvui.testing.pressKey(.enter, .none);
+    try dvui.testing.settle(chatFrame);
+    try std.testing.expectEqual(@as(usize, 0), chat_api.messages().len);
+    try std.testing.expectEqualStrings("hi\n", chat_view.text.items);
+}
+
+test "three messages go through the demo provider and each is answered" {
+    var t = try chatCtx();
+    defer deinitChat(&t);
+
+    for ([_][]const u8{ "one", "two", "three" }) |word| {
+        try dvui.testing.writeText(word);
+        try dvui.testing.settle(chatFrame);
+        try dvui.testing.pressKey(.enter, .none);
+        try dvui.testing.settle(chatFrame);
+    }
+    const log = chat_api.messages();
+    try std.testing.expectEqual(@as(usize, 6), log.len);
+    try std.testing.expectEqualStrings("three", log[4].text);
+    try std.testing.expectEqualStrings("You said: three", log[5].text);
 }
 
 // -- text editing: auto-closing pairs + auto-indent Enter ---------------------------------------
@@ -4026,11 +4130,135 @@ test "an adaptive split saved beside comes back as the same share stacked" {
     try std.testing.expect(state.splits.setShare("Main/r1", 0.5));
     _ = state.setExtent(editor.app.gpa, "Main/r1", 590);
 
+    // Exercise the same collection, ZON format and reconstruction as a saved layout.
+    const gpa = std.testing.allocator;
+    const regions = editor.collectSavedRegions(gpa);
+    defer gpa.free(regions);
+    var out: std.Io.Writer.Allocating = .init(gpa);
+    defer out.deinit();
+    try std.zon.stringify.serializeMaxDepth(regions, .{}, &out.writer, 64);
+    const text = try gpa.dupeSentinel(u8, out.written(), 0);
+    defer gpa.free(text);
+    var saved_arena: std.heap.ArenaAllocator = .init(gpa);
+    defer saved_arena.deinit();
+    var saved_diag: std.zon.parse.Diagnostics = undefined;
+    const saved = try std.zon.parse.fromSlice([]fizzy.backend.SavedRegion, .{
+        .gpa = gpa,
+        .arena = saved_arena.allocator(),
+        .source = text,
+        .diagnostics = &saved_diag,
+        .ignore_unknown_fields = true,
+    });
+    state.resetLayout(gpa);
+    editor.applySavedRegions(saved);
+    const links = state.splits.collectLinks(gpa);
+    defer gpa.free(links);
+    try std.testing.expectEqual(@as(usize, 1), links.len);
+    try std.testing.expectEqual(@as(?f32, 0.5), links[0].share);
+    try std.testing.expect(links[0].adaptive);
+
     for (0..60) |_| _ = try dvui.testing.step(ColumnCardFrame.frame);
     const top = try ColumnCardFrame.sizeOf(editor, "Main");
     const bottom = try ColumnCardFrame.sizeOf(editor, "Main/r1");
     // Not 590 over the 820 width, which is the share the pixels alone would say.
     try std.testing.expectApproxEqAbs(0.5, bottom.h / (top.h + bottom.h), 0.03);
+}
+
+// A sash dragged while an adaptive split is turned is shown and nothing more: the share the saved
+// extent gave comes back with the turn back, and the next turn uses it, not the drag's.
+test "a drag while an adaptive split is turned is not kept when it turns back" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const editor = ctx.editor;
+    editor.app.gpa = std.testing.allocator;
+    defer editor.app.layout.regions.deinit(editor.app.gpa);
+    defer editor.app.layout.regions_building.deinit(editor.app.gpa);
+    defer editor.app.layout.deinitExtents(editor.app.gpa);
+    defer editor.app.layout.deinitAssignments(editor.app.gpa);
+    defer editor.app.layout.deinitQualified(editor.app.gpa);
+
+    ColumnCardFrame.editor = editor;
+    defer ColumnCardFrame.editor = null;
+
+    ctx.t.backend.size = .{ .w = 1180, .h = 820 };
+    ctx.t.backend.size_pixels = .{ .w = 1180, .h = 820 };
+    _ = try dvui.testing.step(ColumnCardFrame.frame);
+    try dvui.testing.settle(ColumnCardFrame.frame);
+    {
+        var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+        try std.testing.expectEqualStrings("Main/r1", layout.splitOn("Main", .right) orelse return error.TestExpectedEqual);
+        layout.markAdaptive("Main/r1");
+    }
+    try dvui.testing.settle(ColumnCardFrame.frame);
+    const old = try ColumnCardFrame.sizeOf(editor, "Main");
+    const new = try ColumnCardFrame.sizeOf(editor, "Main/r1");
+    const share = new.w / (old.w + new.w);
+    const saved_extent = editor.app.layout.extent("Main/r1", 0);
+    editor.app.layout.dirty = false;
+
+    ctx.t.backend.size = .{ .w = 820, .h = 1180 };
+    ctx.t.backend.size_pixels = .{ .w = 820, .h = 1180 };
+    for (0..40) |_| _ = try dvui.testing.step(ColumnCardFrame.frame);
+
+    // The sash dragged to a third of the room, as `Split` writes a drag.
+    const room = (try ColumnCardFrame.sizeOf(editor, "Main")).h + (try ColumnCardFrame.sizeOf(editor, "Main/r1")).h;
+    const leaf = for (editor.app.layout.regions.items) |r| {
+        if (std.mem.eql(u8, r.name, "Main/r1")) break r.id;
+    } else return error.TestExpectedEqual;
+    dvui.dataSet(null, leaf, "_size", room / 3);
+    dvui.dataSet(null, leaf, "_shown", room / 3);
+    for (0..4) |_| _ = try dvui.testing.step(ColumnCardFrame.frame);
+    const dragged = try ColumnCardFrame.sizeOf(editor, "Main/r1");
+    try std.testing.expectApproxEqAbs(room / 3, dragged.h, room * 0.05);
+    try std.testing.expect(!editor.app.layout.dirty);
+    try std.testing.expectEqual(saved_extent, editor.app.layout.extent("Main/r1", 0));
+
+    // Back across: the saved share, not the drag's.
+    ctx.t.backend.size = .{ .w = 1180, .h = 820 };
+    ctx.t.backend.size_pixels = .{ .w = 1180, .h = 820 };
+    for (0..40) |_| _ = try dvui.testing.step(ColumnCardFrame.frame);
+    const left = try ColumnCardFrame.sizeOf(editor, "Main");
+    const right = try ColumnCardFrame.sizeOf(editor, "Main/r1");
+    try std.testing.expectApproxEqAbs(share, right.w / (left.w + right.w), 0.03);
+
+    // And upright again: the share is still the saved one.
+    ctx.t.backend.size = .{ .w = 820, .h = 1180 };
+    ctx.t.backend.size_pixels = .{ .w = 820, .h = 1180 };
+    for (0..40) |_| _ = try dvui.testing.step(ColumnCardFrame.frame);
+    const top = try ColumnCardFrame.sizeOf(editor, "Main");
+    const bottom = try ColumnCardFrame.sizeOf(editor, "Main/r1");
+    try std.testing.expectApproxEqAbs(share, bottom.h / (top.h + bottom.h), 0.03);
+    try std.testing.expect(!editor.app.layout.dirty);
+}
+
+test "an adaptive split saved without a share loads with the ratio absent" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+    const gpa = std.testing.allocator;
+    const editor = ctx.editor;
+    editor.app.gpa = gpa;
+    defer editor.app.layout.deinitExtents(gpa);
+    defer editor.app.layout.deinitQualified(gpa);
+
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    var diagnostics: std.zon.parse.Diagnostics = undefined;
+    const saved = try std.zon.parse.fromSlice([]fizzy.backend.SavedRegion, .{
+        .gpa = gpa,
+        .arena = arena.allocator(),
+        .source = ".{.{ .name = \"Main/r1\", .parent = \"Main\", .from = \"right\", .extent = 590, .adaptive = true }}",
+        .diagnostics = &diagnostics,
+        .ignore_unknown_fields = true,
+    });
+    try std.testing.expectEqual(@as(?f32, null), saved[0].share);
+    editor.applySavedRegions(saved);
+    const links = editor.app.layout.splits.collectLinks(gpa);
+    defer gpa.free(links);
+    try std.testing.expectEqual(@as(usize, 1), links.len);
+    try std.testing.expect(links[0].adaptive);
+    try std.testing.expectEqual(@as(?f32, null), links[0].share);
+    try std.testing.expectEqual(@as(f32, 590), editor.app.layout.extent("Main/r1", 0));
 }
 
 /// Main | (Main/r1 over Main/r1/b1) in fizzy's split forest, each holding one view. Main/r1 is two
@@ -7694,6 +7922,38 @@ test "float: a float in an OS window with its own buttons still has a close a ta
     try std.testing.expectEqual(@as(usize, 0), editor.app.layout.floats.items.items.len);
 }
 
+test "float: a press on the header of a float in an OS window, off its buttons, does not close it" {
+    var case = try ManyPanelCase.init();
+    defer case.deinit();
+    const editor = case.ctx.editor;
+    try case.place("Panel", "Panel", .swap);
+    const floats = editor.app.layout.floats.items.items;
+    try std.testing.expectEqual(@as(usize, 1), floats.len);
+    floats[0].viewport = .{ .rect = floats[0].rect, .os_buttons = true, .buttons_w = 60 };
+
+    const WantFrame = struct {
+        fn frame() !dvui.App.Result {
+            fizzy.core.anchor.want();
+            return ManyPanelFrame.frame();
+        }
+    };
+    try dvui.testing.settle(WantFrame.frame);
+    try dvui.testing.settle(WantFrame.frame);
+
+    const close = dvui.tagGet("float-close:Float 1") orelse return error.TestUnexpectedResult;
+    const header = dvui.tagGet("float-header:Float 1") orelse return error.TestUnexpectedResult;
+    // The header's far end, well clear of the leading traffic light.
+    const pt: dvui.Point.Physical = .{ .x = header.rect.x + header.rect.w - 8, .y = close.rect.y + close.rect.h / 2 };
+    try std.testing.expect(pt.x > close.rect.x + close.rect.w);
+    const cw = dvui.currentWindow();
+    _ = try cw.addEventMouseMotion(.{ .pt = pt });
+    _ = try cw.addEventMouseButton(.left, .press);
+    _ = try cw.addEventMouseButton(.left, .release);
+    try dvui.testing.settle(WantFrame.frame);
+    try dvui.testing.settle(WantFrame.frame);
+    try std.testing.expectEqual(@as(usize, 1), editor.app.layout.floats.items.items.len);
+}
+
 test "float: closing it loses no view its keywords would show nowhere" {
     var case = try ManyPanelCase.init();
     defer case.deinit();
@@ -11262,6 +11522,16 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         // With another pane there, it takes the view; without, the person's own does.
         const taken = wb.besideGrouping();
         if (others > 0) try std.testing.expect(taken != here) else try std.testing.expectEqual(here, taken);
+        // A pane that has not drawn is no place to send the view: it joins the person's pane.
+        if (others > 0) {
+            const other = for (wb.workspaces.values()) |*o| {
+                if (o.grouping != here) break o;
+            } else return error.TestUnexpectedResult;
+            const other_rect = other.pane_rect_physical;
+            defer other.pane_rect_physical = other_rect;
+            other.pane_rect_physical = null;
+            try std.testing.expectEqual(here, wb.besideGrouping());
+        }
         // A demo's `drop:beside` is the answer for the place it is aimed at, not the person's pane's
         // for every place: Main's is the pane's edge in its own room, which turns with the room,
         // and a place that holds no documents has none.

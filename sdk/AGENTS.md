@@ -9,6 +9,10 @@ file is the rules for changing it.
   `sdk_version.zig` outside a release PR (`CONTRIBUTING.md`, "Changing the SDK").
 - **A new boundary type goes in `sdk_boundary_types`** (`src/dylib.zig`), or the fingerprint never
   sees it change.
+- **`tape` and `replay` are boundary too.** `tape.binary.version` is folded into the shape
+  fingerprint and the tape data types are in `tape_boundary_types` (`src/dylib.zig`): bump the version or
+  change one, and the fingerprint moves. A store plugin imports both, as a bundled one does
+  (`plugin.create`; `tests/fixtures/tape-plugin`).
 - **This directory ships on its own** as `fizzy-sdk-v*.tar.gz` (`scripts/pack-sdk.sh`), holding
   only what `build.zig.zon`'s `.paths` lists. A new top-level file here goes in that list too;
   `scripts/check-examples.sh` builds the example plugin from the packed tarball and catches it.

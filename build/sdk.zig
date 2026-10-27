@@ -59,6 +59,9 @@ pub fn wireSdkModule(
     sdk_module.addImport("dvui", dvui_module);
     sdk_module.addImport("proxy_bridge", proxy_bridge_module);
     sdk_module.addImport("core", core_module);
+    // Their data types are on the plugin boundary (`sdk/src/dylib.zig`).
+    sdk_module.addImport("tape", core_module.import_table.get("tape").?);
+    sdk_module.addImport("replay", core_module.import_table.get("replay").?);
     // `sdk_version` as a *named* module rather than a relative `@import`: `sdk/sdk_version.zig`
     // is the single edit site for the triplet, but it sits outside this module's root
     // (`sdk/src/`), and Zig confines a module's relative imports to its own root — a named
