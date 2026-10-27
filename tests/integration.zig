@@ -12213,6 +12213,42 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try std.testing.expect(!(fizzy.core.profile.current() orelse return error.TestUnexpectedResult).enabled);
     }
 
+    // The dashboard plugin's Needs-you carousel, over the demo provider of three cards: it draws one
+    // card at a time, and a card the person answers leaves the count.
+    {
+        const host = &editor.app.host;
+        const Status = struct { count: usize, index: usize, drawn: usize };
+        const Reader = struct {
+            fn read(h: *sdk.Host) !Status {
+                const zon = switch (h.callCommand("dashboard.status", "", h.arena())) {
+                    .ok => |r| r orelse return error.TestUnexpectedResult,
+                    else => return error.TestUnexpectedResult,
+                };
+                var diag: std.zon.parse.Diagnostics = undefined;
+                return std.zon.parse.fromSlice(Status, .{ .gpa = h.arena(), .arena = h.arena(), .source = try h.arena().dupeSentinel(u8, zon, 0), .diagnostics = &diag });
+            }
+        };
+        try std.testing.expect(host.callCommand("dashboard.show", "", host.arena()) == .ok);
+        for (0..4) |_| _ = try dvui.testing.step(headlessFrame);
+        try std.testing.expectEqualStrings("dashboard.view", host.selectionFor(sdk.keywords.ide.sidebar) orelse "");
+        const cards = host.getServiceTyped(sdk.services.dashboard_cards.Api) orelse return error.TestUnexpectedResult;
+        const before = try Reader.read(host);
+        try std.testing.expectEqual(@as(usize, 3), before.count);
+        try std.testing.expectEqual(@as(usize, 1), before.drawn);
+        try std.testing.expectEqual(@as(usize, 0), before.index);
+
+        cards.act(cards.list()[0].id, cards.list()[0].actions[0].id);
+        for (0..4) |_| _ = try dvui.testing.step(headlessFrame);
+        const after = try Reader.read(host);
+        try std.testing.expectEqual(@as(usize, 2), after.count);
+        try std.testing.expectEqual(@as(usize, 0), after.index);
+        // Settled again: the card that was answered is not drawn, and only one is.
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expectEqual(@as(usize, 1), (try Reader.read(host)).drawn);
+        _ = host.revealSurface("fizzy.output");
+        try dvui.testing.settle(headlessFrame);
+    }
+
     // The black box (`fizzy.capture`): the last frames' input written out exactly, and read back.
     {
         const host = &editor.app.host;
