@@ -737,10 +737,13 @@ const TestClient = struct {
         w.interface.flush() catch return;
         var rbuf: [1024]u8 = undefined;
         var r = stream.reader(self.io, &rbuf);
-        // Read the HTTP body by its length, an SSE stream through its expected final message, else to the end.
-        // Windows AF_UNIX does not reliably notify readers when the peer closes.
+        self.readReply(&r.interface);
+    }
+
+    fn readReply(self: *TestClient, reader: *Io.Reader) void {
+        // Read only a framed response: EOF is not reliable on Windows AF_UNIX.
         while (self.reply_len < self.reply.len) {
-            const n = r.interface.readSliceShort(self.reply[self.reply_len..][0..1]) catch return;
+            const n = reader.readSliceShort(self.reply[self.reply_len..][0..1]) catch return;
             if (n == 0) return;
             self.reply_len += 1;
             if (std.mem.endsWith(u8, self.reply[0..self.reply_len], "\r\n\r\n")) break;
@@ -751,20 +754,36 @@ const TestClient = struct {
             const end = std.mem.findPos(u8, head, i, "\r\n") orelse return;
             const len = std.fmt.parseInt(usize, head[i + key.len .. end], 10) catch return;
             const want = @min(len, self.reply.len - self.reply_len);
-            r.interface.readSliceAll(self.reply[self.reply_len..][0..want]) catch return;
+            reader.readSliceAll(self.reply[self.reply_len..][0..want]) catch return;
             self.reply_len += want;
         } else if (self.event_end) |end| {
             while (self.reply_len < self.reply.len) {
-                const n = r.interface.readSliceShort(self.reply[self.reply_len..][0..1]) catch return;
+                const n = reader.readSliceShort(self.reply[self.reply_len..][0..1]) catch return;
                 if (n == 0) return;
                 self.reply_len += 1;
                 if (std.mem.endsWith(u8, self.reply[0..self.reply_len], end)) return;
             }
-        } else {
-            self.reply_len += r.interface.readSliceShort(self.reply[self.reply_len..]) catch 0;
         }
     }
 };
+
+test "the HTTP test client stops at the response boundary without waiting for EOF" {
+    const cases = [_]struct { response: []const u8, event_end: ?[]const u8 = null }{
+        .{ .response = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi" },
+        .{ .response = "HTTP/1.1 204 No Content\r\n\r\n" },
+        .{ .response = "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\r\nevent: end\ndata: {}\n\n", .event_end = "event: end\ndata: {}\n\n" },
+    };
+    for (cases) |case| {
+        // Bytes after the response stand in for an open connection: none may be consumed.
+        const bytes = try std.mem.concat(std.testing.allocator, u8, &.{ case.response, "still open" });
+        defer std.testing.allocator.free(bytes);
+        var reader: Io.Reader = .fixed(bytes);
+        var client: TestClient = .{ .io = std.testing.io, .path = "", .request = "", .event_end = case.event_end };
+        client.readReply(&reader);
+        try std.testing.expectEqualStrings(case.response, client.reply[0..client.reply_len]);
+        try std.testing.expectEqualStrings("still open", reader.buffered());
+    }
+}
 
 test "a request reaches the UI thread and its answer goes back" {
     if (!Io.net.has_unix_sockets) return error.SkipZigTest;
