@@ -1516,6 +1516,39 @@ fn addTests(
         const fixture_test = b.addTest(.{ .name = "rehome-fixture", .root_module = module });
         test_step.dependOn(&b.addRunArtifact(fixture_test).step);
     }
+    // What a plugin does with `tape` and `replay` (`tests/fixtures/tape-plugin/play.zig`), through
+    // the path an application's plugin takes: its own `staticModule`, then `rehome` onto this
+    // executable's framework. The fixture's own build tests the same file as a dylib.
+    // Fizzy's own build only: the fixture is not in `.paths`, so an app fetching fizzy lacks it.
+    if (cfg.app_is_fizzy) if (b.lazyDependency("tape_fixture", .{})) |fixture_dep| {
+        const source = b.lazyImport(@This(), "tape_fixture").?.staticModule(fixture_dep.builder, .{
+            .target = target,
+            .optimize = optimize,
+            .dvui = dvui_testing_dep.module("dvui_testing"),
+            .core = core_module_test,
+            .sdk = sdk_module_test,
+            .icons = icons_test,
+        });
+        const consumer = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true });
+        const module = @import("plugins.zig").rehome(b, .{
+            .target = target,
+            .optimize = optimize,
+            .dvui = dvui_testing_dep.module("dvui_testing"),
+            .core = core_module_test,
+            .sdk = sdk_module_test,
+            .icons = icons_test,
+            .backend = null,
+            .workbench_opts = workbench_opts,
+            .consumer = consumer,
+        }, "tape_fixture", source);
+        const play_tests = b.addTest(.{
+            .name = "fizzy-tape-plugin-bundled-tests",
+            .root_module = module,
+            .filters = test_filters,
+        });
+        test_integration_step.dependOn(&b.addRunArtifact(play_tests).step);
+        check_integration_step.dependOn(&play_tests.step);
+    };
     const workbench_module_test = workbench_plugin.addStaticModule(b, target, optimize, .{
         .dvui = dvui_testing_dep.module("dvui_testing"),
         .core = core_module_test,
