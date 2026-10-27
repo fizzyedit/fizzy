@@ -1923,3 +1923,11 @@ fn splitDock(
     dvui.refresh(null, @src(), null);
     return interned;
 }
+
+test "region callback and initialization expose finite error sets" {
+    const Callback = @typeInfo(@FieldType(Content, "draw")).pointer.child;
+    inline for (.{ Callback, @TypeOf(init) }) |Function| {
+        const Return = @typeInfo(Function).@"fn".return_type.?;
+        try std.testing.expect(@typeInfo(@typeInfo(Return).error_union.error_set).error_set.error_names != null);
+    }
+}

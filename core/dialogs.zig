@@ -1948,3 +1948,11 @@ test "the dialog window handles callback errors without propagating them" {
     const display: *const fn (dvui.Id) error{}!void = dialogWindow;
     _ = display;
 }
+
+test "dialog callbacks expose finite error sets" {
+    inline for (.{ DisplayFn, CallAfterFn }) |Pointer| {
+        const Callback = @typeInfo(Pointer).pointer.child;
+        const Return = @typeInfo(Callback).@"fn".return_type.?;
+        try std.testing.expect(@typeInfo(@typeInfo(Return).error_union.error_set).error_set.error_names != null);
+    }
+}

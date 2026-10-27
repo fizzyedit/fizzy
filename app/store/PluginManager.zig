@@ -245,3 +245,15 @@ pub fn failure(self: PluginManager, id: []const u8) ?Failure {
     }
     return null;
 }
+
+test "store action slots and forwarders expose finite error sets" {
+    inline for (.{ "setAutoUpdate", "install", "installFromUrl", "loadFromUrl", "updateFromUrl", "update", "uninstall", "setEnabled" }) |name| {
+        const Slot = @FieldType(VTable, name);
+        const Pointer = if (@typeInfo(Slot) == .optional) @typeInfo(Slot).optional.child else Slot;
+        const Callback = @typeInfo(Pointer).pointer.child;
+        const callback_return = @typeInfo(Callback).@"fn".return_type.?;
+        const forwarder_return = @typeInfo(@TypeOf(@field(PluginManager, name))).@"fn".return_type.?;
+        try std.testing.expect(@typeInfo(@typeInfo(callback_return).error_union.error_set).error_set.error_names != null);
+        try std.testing.expect(@typeInfo(@typeInfo(forwarder_return).error_union.error_set).error_set.error_names != null);
+    }
+}
