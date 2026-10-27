@@ -1463,6 +1463,12 @@ pub fn materialMissing(self: *SDLBackend, material: MaterialKind) ?[]const u8 {
     return materials.missing(self.materialPlatform(), material);
 }
 
+fn dwmBackdropOffered(window: *c.SDL_Window) bool {
+    if (comptime builtin.target.os.tag != .windows) return false;
+    const hwnd = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(window), c.SDL_PROP_WINDOW_WIN32_HWND_POINTER, null) orelse return false;
+    return platform.win32_titlebar.backdropOffered(hwnd);
+}
+
 /// What this platform can draw this frame: the OS's Liquid Glass, the compositor's blur.
 fn materialPlatform(self: *SDLBackend) materials.Platform {
     if (self.material_platform) |p| return p;
@@ -1470,6 +1476,7 @@ fn materialPlatform(self: *SDLBackend) materials.Platform {
         .os = builtin.target.os.tag,
         .liquid_glass = liquidGlassAvailable(),
         .compositor_blur = platform.linux_titlebar.blurOffered(self.window),
+        .dwm_backdrop = dwmBackdropOffered(self.window),
     };
     self.material_platform = p;
     return p;
