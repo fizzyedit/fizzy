@@ -35,6 +35,9 @@ const Touch = struct {
     x: Fling = .{},
     y: Fling = .{},
     dragging: bool = false,
+    coast_start_ns: i128 = 0,
+    coast_origin: dvui.Point = .{},
+    coast_velocity: dvui.Point = .{},
     /// The finger that owns the drag; another finger's release or motion is not this area's.
     finger: dvui.enums.Button = .none,
 };
@@ -133,6 +136,9 @@ pub fn deinit(self: *ScrollArea) void {
         t.dragging = false;
         _ = t.x.releaseWindowed(tuning, window_s);
         _ = t.y.releaseWindowed(tuning, window_s);
+        t.coast_start_ns = dvui.frameTimeNS();
+        t.coast_origin = self.si.viewport.topLeft();
+        t.coast_velocity = .{ .x = t.x.vel, .y = t.y.vel };
     }
 
     // A nested child's propagated motion sets this (parent) area's velocity through dvui's
@@ -193,14 +199,26 @@ fn coast(self: *ScrollArea) void {
     const t = self.touch;
     const si = self.si;
     var moved: dvui.Point = .{};
-    if (t.x.step(tuning)) |d| moved.x = d;
-    if (t.y.step(tuning)) |d| moved.y = d;
-    if (!moved.nonZero()) return;
+    const elapsed = @as(f64, @floatFromInt(dvui.frameTimeNS() - t.coast_start_ns)) / std.time.ns_per_s;
+    if (t.x.coasting) moved.x = coastPosition(&t.x, t.coast_origin.x, t.coast_velocity.x, elapsed) - si.viewport.x;
+    if (t.y.coasting) moved.y = coastPosition(&t.y, t.coast_origin.y, t.coast_velocity.y, elapsed) - si.viewport.y;
 
     self.scrollBy(moved);
     if (si.viewport.x < 0 or si.viewport.x > si.scrollMax(.horizontal)) t.x.cancel();
     if (si.viewport.y < 0 or si.viewport.y > si.scrollMax(.vertical)) t.y.cancel();
     if (t.x.coasting or t.y.coasting) dvui.refresh(null, @src(), self.data().id);
+}
+
+// Evaluate from the release, rounding the position once rather than accumulating f32 deltas.
+// Clamp time at the stop speed so the final position also agrees across frame schedules.
+fn coastPosition(fling: *Fling, origin: f32, velocity: f32, elapsed: f64) f32 {
+    const decay: f64 = tuning.decay;
+    const duration = @log(@as(f64, @abs(velocity)) / tuning.stop) / decay;
+    const time = std.math.clamp(elapsed, 0, duration);
+    const keep = @exp(-decay * time);
+    fling.vel = @floatCast(velocity * keep);
+    fling.coasting = elapsed < duration;
+    return @floatCast(origin + velocity / decay * (1 - keep));
 }
 
 fn scrollBy(self: *ScrollArea, by: dvui.Point) void {
@@ -281,9 +299,9 @@ fn flick() !f32 {
     return t_viewport_y - at_release;
 }
 
-/// How far the content has been drawn to move from the release at each of 15 steps of 33 ms, the clock
+/// How far the content has been drawn to move from the release at each of 150 steps of 33 ms, the clock
 /// cut into frames by `gaps_ms` (summing to 33), so different cuts meet at equal timestamps.
-fn coastTrace(gaps_ms: []const u64, out: *[15]f32) !void {
+fn coastTrace(gaps_ms: []const u64, out: *[150]f32) !void {
     var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
     defer t.deinit();
     t_use_dvui = false;
@@ -299,11 +317,14 @@ fn coastTrace(gaps_ms: []const u64, out: *[15]f32) !void {
 }
 
 test "the coast is a function of time, not of how the frames cut it" {
-    var steady: [15]f32 = undefined;
-    try coastTrace(&.{33}, &steady);
-    var jittery: [15]f32 = undefined;
+    var steady: [150]f32 = undefined;
+    try coastTrace(&.{ 16, 17 }, &steady);
+    var jittery: [150]f32 = undefined;
     try coastTrace(&.{ 25, 8 }, &jittery);
-    for (steady, jittery) |a, b| try std.testing.expectApproxEqAbs(a, b, 0.01);
+    var max_error: f32 = 0;
+    for (steady, jittery) |a, b| max_error = @max(max_error, @abs(a - b));
+    std.debug.print("coast: steady final={d:.6}, jittery final={d:.6}, max difference={d:.6} points\n", .{ steady[149], jittery[149], max_error });
+    try std.testing.expectApproxEqAbs(@as(f32, 0), max_error, 0.0001);
 }
 
 test "coast displacement follows each frame gap" {
@@ -324,6 +345,7 @@ test "coast displacement follows each frame gap" {
         try frameAfter(next_gap);
         const displacement = previous_y - t_raw_y;
         const speed = displacement / gap_ms;
+        std.debug.print("coast: gap={d:.0} ms, displacement={d:.6} points\n", .{ gap_ms, displacement });
         follows_gaps = follows_gaps and displacement > 0 and speed < previous_speed;
         previous_time = time;
         previous_y = t_raw_y;
