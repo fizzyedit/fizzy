@@ -1098,6 +1098,9 @@ fn addTests(
         // Fade / blur-fade timeline. std-only (see crossfade.zig) — pictures and the clock
         // live in core/anim.zig.
         .{ "fizzy-crossfade-tests", "core/crossfade.zig" },
+        // Hold / slop / tap rules of touch selection. std-only (see TouchHold.zig) — the dvui
+        // half is widgets/SelectableText.zig.
+        .{ "fizzy-touch-hold-tests", "core/TouchHold.zig" },
         // A motion's clock stepped by its frames, a long one held to a step. std-only (see
         // FrameClock.zig); the floats' landing and ghost run on it.
         .{ "fizzy-frame-clock-tests", "core/FrameClock.zig" },
