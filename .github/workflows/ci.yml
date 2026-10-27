@@ -24,8 +24,8 @@ name: CI
 # `main`'s ruleset still requires it. Pushes to main and the merge queue are unchanged.
 #
 # A skipped `ci-ok` is safe only on a draft: a draft cannot be merged, and the merge queue
-# reruns the whole matrix on the `merge_group` ref. Turning a ready PR back into a draft is not a trigger, so its last full result stays on it; push or
-# mark it ready again for a fresh one.
+# reruns the whole matrix on the `merge_group` ref. Turning a ready PR back into a draft is
+# not a trigger, so its last full result stays on it; push or mark it ready again for a fresh one.
 #
 # The Zig compiler is restored from the Actions cache by every job: setup-zig keeps the verified
 # tarball under the key `setup-zig-tarball-<tarball name>` (the version is pinned by ZIG_VERSION;
@@ -714,7 +714,8 @@ jobs:
           exit "$status"
 
   # The required check. Drafts run only changes. Otherwise, every selected job must succeed;
-  # only jobs deliberately excluded by the code/SDL filters may be skipped.
+  # only jobs deliberately excluded by the code/SDL filters may be skipped. Add each new job
+  # to needs and to CODE_RESULTS or SDL_RESULT so the required check includes its result.
   ci-ok:
     name: ci-ok
     if: always() && !(github.event_name == 'pull_request' && github.event.pull_request.draft)
