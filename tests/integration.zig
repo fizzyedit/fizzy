@@ -7750,6 +7750,38 @@ test "float: a float in an OS window with its own buttons still has a close a ta
     try std.testing.expectEqual(@as(usize, 0), editor.app.layout.floats.items.items.len);
 }
 
+test "float: a press on the header of a float in an OS window, off its buttons, does not close it" {
+    var case = try ManyPanelCase.init();
+    defer case.deinit();
+    const editor = case.ctx.editor;
+    try case.place("Panel", "Panel", .swap);
+    const floats = editor.app.layout.floats.items.items;
+    try std.testing.expectEqual(@as(usize, 1), floats.len);
+    floats[0].viewport = .{ .rect = floats[0].rect, .os_buttons = true, .buttons_w = 60 };
+
+    const WantFrame = struct {
+        fn frame() !dvui.App.Result {
+            fizzy.core.anchor.want();
+            return ManyPanelFrame.frame();
+        }
+    };
+    try dvui.testing.settle(WantFrame.frame);
+    try dvui.testing.settle(WantFrame.frame);
+
+    const close = dvui.tagGet("float-close:Float 1") orelse return error.TestUnexpectedResult;
+    const header = dvui.tagGet("float-header:Float 1") orelse return error.TestUnexpectedResult;
+    // The header's far end, well clear of the leading traffic light.
+    const pt: dvui.Point.Physical = .{ .x = header.rect.x + header.rect.w - 8, .y = close.rect.y + close.rect.h / 2 };
+    try std.testing.expect(pt.x > close.rect.x + close.rect.w);
+    const cw = dvui.currentWindow();
+    _ = try cw.addEventMouseMotion(.{ .pt = pt });
+    _ = try cw.addEventMouseButton(.left, .press);
+    _ = try cw.addEventMouseButton(.left, .release);
+    try dvui.testing.settle(WantFrame.frame);
+    try dvui.testing.settle(WantFrame.frame);
+    try std.testing.expectEqual(@as(usize, 1), editor.app.layout.floats.items.items.len);
+}
+
 test "float: closing it loses no view its keywords would show nowhere" {
     var case = try ManyPanelCase.init();
     defer case.deinit();

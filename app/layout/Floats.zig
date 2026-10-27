@@ -209,6 +209,11 @@ const ghost_blur: f32 = 0.55;
 /// Where `Float.aside` goes for a ghost closing — its last view landed elsewhere: past the ghost,
 /// to nothing.
 const gone: f32 = 2;
+/// The leading traffic light of a titled macOS window, points: its diameter, and how far its left
+/// edge sits in from the window's. A tape presses the same spot in the frame, since the OS draws
+/// the button outside it.
+const traffic_light_diameter: f32 = 12;
+const traffic_light_inset: f32 = 7;
 
 /// How a float looks `v` of the way aside (`Float.aside`): itself at 0, its ghost at 1, nothing
 /// at `gone` — how much of it shows, and how far out of focus.
@@ -679,8 +684,8 @@ fn drawOne(l: *Layout, i: usize) bool {
     // click there never reaches it. A tape aims at the same spot in the frame (the leading
     // traffic light), and a press there closes the float as the OS button does.
     if (header_close == null and osButtons(first) and core.anchor.wanted()) {
-        const side = 12 * scale;
-        const spot: dvui.Rect.Physical = .{ .x = header.x + 7 * scale, .y = header.y + (header.h - side) / 2, .w = side, .h = side };
+        const side = traffic_light_diameter * scale;
+        const spot: dvui.Rect.Physical = .{ .x = header.x + traffic_light_inset * scale, .y = header.y + (header.h - side) / 2, .w = side, .h = side };
         core.anchor.markRect(win_id, spot, true, "float-close:{s}", .{first.name});
         for (dvui.events()) |*e| {
             if (e.evt != .mouse or e.handled) continue;
