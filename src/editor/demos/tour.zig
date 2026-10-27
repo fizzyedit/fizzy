@@ -7,7 +7,6 @@
 //! fresh one. The explorer is pressed open only if it is not showing already. A snapshot holds the window's
 //! arrangement too (`Demo.Snapshot`), so a seek back across a split or a float puts the window
 //! back as it was then, rather than replaying from the keyframe.
-const std = @import("std");
 const Tape = @import("tape").Tape;
 const Script = @import("tape").Script;
 const catalog = @import("catalog.zig");
@@ -150,7 +149,7 @@ pub fn build(s: *Script) !void {
         if (first == null) {
             first = m.kind;
             try s.commandWith("fizzy.windowMaterial", .{ .kind = m.kind });
-            const text = try std.fmt.allocPrint(s.arena.allocator(), "Over the code you can see what it is made of. The window, its floats, menus and dialogs are one material, {s} here…", .{m.name});
+            const text = try s.print("Over the code you can see what it is made of. The window, its floats, menus and dialogs are one material, {s} here…", .{m.name});
             try s.caption(text, .{ .near = floatNear(s, "float-header:Float 1") });
         } else {
             if (m.caption) |text| try s.caption(text, .{ .near = floatNear(s, "float-header:Float 1") });
