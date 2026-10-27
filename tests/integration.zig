@@ -8675,6 +8675,48 @@ const CarriedTree = struct {
     }
 };
 
+test "tree: an external reopen during closing owns the branch state" {
+    const Scene = struct {
+        // Written by this test and its frame callback on the test thread.
+        var open = true;
+        var expanded = false;
+        var children = false;
+        var requested: ?bool = null;
+        var progress: f32 = 0;
+
+        fn frame() !dvui.App.Result {
+            const tree = fizzy.core.widgets.TreeWidget.tree(@src(), .{}, .{ .expand = .both });
+            defer tree.deinit();
+            const branch = tree.branch(@src(), .{ .expanded = open }, .{ .expand = .horizontal });
+            defer branch.deinit();
+            expanded = branch.expanded;
+            dvui.labelNoFmt(@src(), "folder", .{}, .{});
+            children = branch.expander(@src(), .{}, .{ .expand = .horizontal });
+            requested = branch.requested;
+            progress = branch.anim.?.val.?;
+            if (children) dvui.labelNoFmt(@src(), "child", .{}, .{});
+            return .ok;
+        }
+    };
+    var t = try dvui.testing.init(.{ .allocator = std.testing.allocator });
+    defer t.deinit();
+    Scene.open = true;
+    _ = try dvui.testing.step(Scene.frame);
+    try std.testing.expectEqual(@as(f32, 1), Scene.progress);
+    try dvui.testing.settle(Scene.frame);
+    Scene.open = false;
+    _ = try dvui.testing.step(Scene.frame);
+    try std.testing.expect(!Scene.expanded);
+    try std.testing.expect(Scene.children);
+    try std.testing.expectEqual(@as(?bool, null), Scene.requested);
+    Scene.open = true;
+    _ = try dvui.testing.step(Scene.frame);
+    try std.testing.expect(Scene.expanded);
+    try dvui.testing.settle(Scene.frame);
+    try std.testing.expect(Scene.expanded and Scene.children);
+    try std.testing.expectEqual(@as(?bool, null), Scene.requested);
+}
+
 test "tree: a row carried back over it goes into the folder under the pointer when let go" {
     var t = try dvui.testing.init(.{ .allocator = std.testing.allocator });
     defer t.deinit();
@@ -8784,7 +8826,7 @@ test "tree: a drag put down is not dropped where the pointer last was" {
 }
 
 // A key fold sticks. The caller below keeps its own open state and passes it back each frame, as
-// the settings, file and guides trees do, reading `branch.expanded` after `expander()`: Left must
+// the settings, file and guides trees do, applying `branch.requested` after `expander()`: Left must
 // fold the branch (animated, as a click does) and leave it folded, and Right open it again.
 const KeyFoldTree = struct {
     const TW = fizzy.core.widgets.TreeWidget;
