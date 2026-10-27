@@ -15,7 +15,8 @@ scroll_info: dvui.ScrollInfo = .{
 rect: dvui.Rect = .{},
 rect_screen: dvui.Rect.Physical = .{},
 collapse_btn_anim_started: bool = false,
-/// Cleared at the start of `draw` and set on the frame the collapse button is pressed; the caller reads it after `draw`.
+/// Cleared at the start of `draw` and set on the frame the collapse button is pressed; the
+/// caller reads it after `draw`.
 collapse_requested: bool = false,
 
 /// Draws the pane *chrome* — header, scroll policy, collapse button — around whichever
