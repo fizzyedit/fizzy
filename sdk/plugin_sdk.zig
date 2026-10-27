@@ -3,7 +3,8 @@
 //! Required in your project (see `docs/PLUGINS.md` §2):
 //! - `plugin.zig` — `register(host)` + `Plugin` vtable; read `sdk.allocator()` / `sdk.host()`.
 //!   This is the module root: everything under `src/` imports it via relative paths, and the
-//!   shared deps (`fizzy_sdk`/`core`/`dvui`/`proxy_bridge`) are named imports (`@import("fizzy_sdk")`, …).
+//!   shared deps (`fizzy_sdk`/`core`/`dvui`/`proxy_bridge`) are named imports
+//!   (`@import("fizzy_sdk")`, …).
 //! - `plugin.zig.zon` — identity only (`id`/`name`/`version`/`min_sdk_version`). Read
 //!   at configure time by `create` below; also embedded verbatim into the dylib (`fizzy_plugin_
 //!   manifest_zon`) so a disabled/unloaded plugin's identity can still be probed. There is no
@@ -86,9 +87,16 @@ pub fn readManifest(b: *std.Build) IdentityManifest {
 
 fn readManifestAt(b: *std.Build, rel_path: []const u8) IdentityManifest {
     b.dependOnFileContents(b.path(rel_path));
-    const raw = std.Io.Dir.cwd().readFileAlloc(b.graph.io, b.root.joinString(b.allocator, rel_path) catch @panic("OOM"), b.allocator, std.Io.Limit.limited(256 * 1024)) catch |e|
+    const raw = std.Io.Dir.cwd().readFileAlloc(
+        b.graph.io,
+        b.root.joinString(b.allocator, rel_path) catch @panic("OOM"),
+        b.allocator,
+        std.Io.Limit.limited(256 * 1024),
+    ) catch |e|
         std.debug.panic(
-            "fizzy: could not read {s}: {}\nEvery plugin needs a `plugin.zig.zon` manifest at its root (id/name/version) — see docs/PLUGINS.md.",
+            "fizzy: could not read {s}: {}\n" ++
+                "Every plugin needs a `plugin.zig.zon` manifest at its root (id/name/version) — " ++
+                "see docs/PLUGINS.md.",
             .{ rel_path, e },
         );
     const src = b.allocator.dupeSentinel(u8, raw, 0) catch @panic("OOM");
@@ -100,13 +108,25 @@ fn readManifestAt(b: *std.Build, rel_path: []const u8) IdentityManifest {
     };
     // The build's allocator is freed only when the build ends: the manifest is read into it.
     var diag: std.zon.parse.Diagnostics = undefined;
-    const parsed = std.zon.parse.fromSlice(Target, .{ .gpa = b.allocator, .arena = b.allocator, .source = src, .diagnostics = &diag, .ignore_unknown_fields = true }) catch |e|
+    const parsed = std.zon.parse.fromSlice(Target, .{
+        .gpa = b.allocator,
+        .arena = b.allocator,
+        .source = src,
+        .diagnostics = &diag,
+        .ignore_unknown_fields = true,
+    }) catch |e|
         std.debug.panic("fizzy: failed to parse {s}: {}", .{ rel_path, e });
     _ = std.SemanticVersion.parse(parsed.version) catch
-        std.debug.panic("fizzy: {s} .version \"{s}\" is not valid semver (expected e.g. 1.2.3)", .{ rel_path, parsed.version });
+        std.debug.panic(
+            "fizzy: {s} .version \"{s}\" is not valid semver (expected e.g. 1.2.3)",
+            .{ rel_path, parsed.version },
+        );
     if (parsed.min_sdk_version.len > 0) {
         _ = std.SemanticVersion.parse(parsed.min_sdk_version) catch
-            std.debug.panic("fizzy: {s} .min_sdk_version \"{s}\" is not valid semver", .{ rel_path, parsed.min_sdk_version });
+            std.debug.panic(
+                "fizzy: {s} .min_sdk_version \"{s}\" is not valid semver",
+                .{ rel_path, parsed.min_sdk_version },
+            );
     }
     return .{
         .id = parsed.id,
@@ -257,7 +277,13 @@ pub const InstallBesideOptions = struct {
 ///     fizzy.plugin.installBeside(b, helper_exe, .{ .plugin = "agent" });
 pub fn installBeside(b: *std.Build, artifact: *std.Build.Step.Compile, opts: InstallBesideOptions) void {
     if (artifact.rootModuleTarget().cpu.arch == .wasm32) return;
-    addDevInstall(b, artifact, opts.plugin, artifact.out_filename, b.fmt("install '{s}' beside plugin '{s}'", .{ artifact.out_filename, opts.plugin }));
+    addDevInstall(
+        b,
+        artifact,
+        opts.plugin,
+        artifact.out_filename,
+        b.fmt("install '{s}' beside plugin '{s}'", .{ artifact.out_filename, opts.plugin }),
+    );
 }
 
 /// The helper `addDevInstall` runs, one per builder however many artifacts it installs. Debug:
@@ -281,7 +307,13 @@ var dev_install_exes: std.AutoHashMapUnmanaged(*std.Build, *std.Build.Step.Compi
 
 /// Copy `artifact` to `{plugins}/{dir_name}/{file_name}` on every `zig build install`, through
 /// `plugin_sdk_install.zig`: Zig 0.17's build has no custom steps.
-fn addDevInstall(b: *std.Build, artifact: *std.Build.Step.Compile, dir_name: []const u8, file_name: []const u8, step_name: []const u8) void {
+fn addDevInstall(
+    b: *std.Build,
+    artifact: *std.Build.Step.Compile,
+    dir_name: []const u8,
+    file_name: []const u8,
+    step_name: []const u8,
+) void {
     const dev = b.addRunArtifact(devInstallExe(b));
     dev.setName(step_name);
     dev.addArtifactArg(artifact);
@@ -338,7 +370,10 @@ fn addSdkMeta(b: *std.Build, lib: *std.Build.Step.Compile) *std.Build.Step {
 fn addSdkCheck(b: *std.Build) *std.Build.Step {
     if (b.top_level_steps.get("check")) |existing| return &existing.step;
 
-    const step = b.step("check", "Print pinned fizzy SDK version + abi fingerprint (and catch legacy release.yml drift)");
+    const step = b.step(
+        "check",
+        "Print pinned fizzy SDK version + abi fingerprint (and catch legacy release.yml drift)",
+    );
 
     const release_yml = ".github/workflows/release.yml";
     dependOnPathExistence(b, release_yml);
@@ -364,7 +399,11 @@ fn addSdkCheck(b: *std.Build) *std.Build.Step {
 /// without regard to the environment, so a variable read here would be seen once and then ignored.
 fn pluginUseLlvm(b: *std.Build) ?bool {
     const gop = plugin_use_llvm.getOrPut(b.allocator, b) catch @panic("OOM");
-    if (!gop.found_existing) gop.value_ptr.* = b.option(bool, "plugin-use-llvm", "Force (true) or forbid (false) LLVM for plugin builds; unset, Zig chooses");
+    if (!gop.found_existing) gop.value_ptr.* = b.option(
+        bool,
+        "plugin-use-llvm",
+        "Force (true) or forbid (false) LLVM for plugin builds; unset, Zig chooses",
+    );
     return gop.value_ptr.*;
 }
 var plugin_use_llvm: std.AutoHashMapUnmanaged(*std.Build, ?bool) = .empty;
@@ -554,7 +593,10 @@ pub fn create(b: *std.Build, opts: CreateOptions) PluginArtifact {
         .link_libc = opts.link_libc and opts.target.result.cpu.arch != .wasm32,
     });
     static_module.addAnonymousImport("plugin_zon", .{ .root_source_file = b.path("plugin.zig.zon") });
-    static_module.addOptions(plugin_options_import, pluginOptions(b, m.id, m.name, m.version, m.min_sdk_version, m.raw));
+    static_module.addOptions(
+        plugin_options_import,
+        pluginOptions(b, m.id, m.name, m.version, m.min_sdk_version, m.raw),
+    );
 
     return .{ .lib = lib, .module = plugin_module, .static = static_module };
 }
