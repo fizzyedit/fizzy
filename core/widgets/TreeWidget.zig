@@ -780,7 +780,7 @@ pub const Branch = struct {
 
         const anim = self.anim.?;
         const target: f32 = if (want) 1 else 0;
-        const progress = dvui.dataGet(null, self.data().id, "branch_progress", f32) orelse 0;
+        const progress = dvui.dataGet(null, self.data().id, "branch_progress", f32) orelse target;
         const active = dvui.animationGet(anim.data().id, "_end");
         if ((active != null and active.?.end_val != target) or
             (active == null and progress != target))
@@ -792,7 +792,9 @@ pub const Branch = struct {
                 .easing = if (want) self.init_options.animation_easing else motion.settle,
             });
         }
-        const value = if (anim.init_opts.kind == .none or anim.init_opts.duration == 0) target else if (dvui.animationGet(anim.data().id, "_end")) |a| a.value() else target;
+        const animate_progress = anim.init_opts.kind != .none and anim.init_opts.duration != 0;
+        const current = dvui.animationGet(anim.data().id, "_end");
+        const value = if (animate_progress and current != null) current.?.value() else target;
         anim.val = value;
         dvui.dataSet(null, self.data().id, "branch_progress", value);
         self.draw_children = want or value > 0;
