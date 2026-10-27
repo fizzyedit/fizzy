@@ -647,8 +647,12 @@ pub fn probeVersionInfo(gpa: std.mem.Allocator, path: []const u8) ?PluginVersion
 }
 
 test "builtin plugin path joins exe_dir/plugins/<name>/<name>.<ext>" {
-    const path = try builtinPluginPath(std.testing.allocator, "/app", "pixi");
+    const joined = try builtinPluginPath(std.testing.allocator, "/app", "pixi");
+    defer std.testing.allocator.free(joined);
+    // `join` keeps `exe_dir` as given and separates the rest with the native separator.
+    const path = try std.testing.allocator.dupe(u8, joined);
     defer std.testing.allocator.free(path);
+    std.mem.replaceScalar(u8, path, std.fs.path.sep, '/');
     switch (builtin.target.os.tag) {
         .windows => try std.testing.expectEqualStrings("/app/plugins/pixi/pixi.dll", path),
         .macos => try std.testing.expectEqualStrings("/app/plugins/pixi/pixi.dylib", path),

@@ -8550,11 +8550,15 @@ test "workbench: the Files explorer frame does not grow with a 300k-note folder"
     defer gpa.free(editor.app.folder.?);
     explorer_scroll = .{ .horizontal = .none };
 
-    const last = try std.fmt.allocPrint(gpa, "{s}/note-{d:0>6}.md", .{ root, n - 1 });
+    const last_name = try std.fmt.allocPrint(gpa, "note-{d:0>6}.md", .{n - 1});
+    defer gpa.free(last_name);
+    const last = try std.fs.path.join(gpa, &.{ root, last_name });
     defer gpa.free(last);
     const last_tag = try std.fmt.allocPrint(gpa, "workbench.file:{s}", .{last});
     defer gpa.free(last_tag);
-    const hit_tag = try std.fmt.allocPrint(gpa, "workbench.file:{s}/note-123456.md", .{root});
+    const hit = try std.fs.path.join(gpa, &.{ root, "note-123456.md" });
+    defer gpa.free(hit);
+    const hit_tag = try std.fmt.allocPrint(gpa, "workbench.file:{s}", .{hit});
     defer gpa.free(hit_tag);
 
     // Loading the folder: no frame waits for the disk, and the row says so meanwhile.
@@ -9850,6 +9854,15 @@ test "live: a wait that never holds stops the tape and says where" {
 // Taking `--profile` out of argv is `app/profile.zig`'s own unit tests; these are the single-instance
 // layer's half: the profile made absolute like any other path, and never forwarded as one.
 
+/// `expected` written with `/`, against a path the OS spelled with its own separator.
+fn expectPosixPath(expected: []const u8, actual: []const u8) !void {
+    const gpa = std.testing.allocator;
+    const posix = try gpa.dupe(u8, actual);
+    defer gpa.free(posix);
+    std.mem.replaceScalar(u8, posix, std.fs.path.sep, '/');
+    try std.testing.expectEqualStrings(expected, posix);
+}
+
 test "profile: argv names one, made absolute and taken out of what is opened" {
     const si = @import("app").single_instance;
     const gpa = std.testing.allocator;
@@ -9857,16 +9870,16 @@ test "profile: argv names one, made absolute and taken out of what is opened" {
     const named = try si.resolveArgs(gpa, "/work", &.{ "fizzy", "--profile", "sandbox/./one", "notes.md", "-v" }, "/from/env");
     defer si.freeResolvedArgv(gpa, named.argv);
     defer gpa.free(named.profile.?);
-    try std.testing.expectEqualStrings("/work/sandbox/one", named.profile.?);
+    try expectPosixPath("/work/sandbox/one", named.profile.?);
     try std.testing.expectEqual(@as(usize, 3), named.argv.len);
-    try std.testing.expectEqualStrings("/work/notes.md", named.argv[1]);
+    try expectPosixPath("/work/notes.md", named.argv[1]);
     try std.testing.expectEqualStrings("-v", named.argv[2]);
 
     // The flag absent, the environment names it; neither, there is none.
     const from_env = try si.resolveArgs(gpa, "/work", &.{"fizzy"}, "/from/env");
     defer si.freeResolvedArgv(gpa, from_env.argv);
     defer gpa.free(from_env.profile.?);
-    try std.testing.expectEqualStrings("/from/env", from_env.profile.?);
+    try expectPosixPath("/from/env", from_env.profile.?);
 
     const none = try si.resolveArgs(gpa, "/work", &.{ "fizzy", "a.md" }, null);
     defer si.freeResolvedArgv(gpa, none.argv);
@@ -9879,7 +9892,7 @@ test "profile: argv names one, made absolute and taken out of what is opened" {
     defer gpa.free(quiet.profile.?);
     try std.testing.expect(quiet.quiet);
     try std.testing.expectEqual(@as(usize, 2), quiet.argv.len);
-    try std.testing.expectEqualStrings("/work/a.md", quiet.argv[1]);
+    try expectPosixPath("/work/a.md", quiet.argv[1]);
 
     // Taking the lock with a profile is native startup, not something a test process can do
     // twice; it is compiled here, so a mistake in it fails this build rather than only the app's.
