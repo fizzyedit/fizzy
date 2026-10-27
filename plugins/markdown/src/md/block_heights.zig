@@ -4,12 +4,14 @@
 //! Deliberately std-only, exactly like `textcore` and `wikilink_scan`: every rule that decides
 //! *where a block sits* and *whether its height can be trusted* lives here, so it can be unit
 //! tested headlessly instead of only being observable as the preview misbehaving. `render_ast.zig`
-//! keeps the half that needs dvui — laying blocks out and measuring them — and hands the numbers
+//! keeps the half that needs dvui — laying blocks out and measuring them — and hands the
+//! numbers
 //! back through `record`.
 //!
 //! The one invariant everything else serves: **a block's cached height is either a measurement or
 //! an admission that it isn't one.** The renderer used to blur the two — an estimate could
-//! overwrite a measurement on resize, and a knowingly-collapsed height could claim to be settled —
+//! overwrite a measurement on resize, and a knowingly-collapsed height could claim to be settled
+//! —
 //! and every scroll instability downstream traced back to a number that was trusted more than it
 //! deserved.
 
@@ -172,7 +174,8 @@ pub const width_epsilon: f32 = 0.5;
 /// A scroll position expressed as *content identity* rather than as a pixel offset.
 ///
 /// This is the whole point of the anchor. An absolute `viewport.y` only means something relative
-/// to a total height, and this renderer's total changes constantly — blocks get measured, the pane
+/// to a total height, and this renderer's total changes constantly — blocks get measured, the
+/// pane
 /// resizes, the document is re-parsed under an edit. Every one of those silently redefined what
 /// the reader's scroll offset pointed at, which is what made the preview jump. A line number does
 /// not move when the block above it turns out to be 40px taller than guessed.
@@ -182,7 +185,8 @@ pub const Anchor = struct {
     /// Preferred over `line` when resolving, because it is the only identity an *edit* preserves:
     /// inserting a line above the reader shifts every line number below it, so a line-based anchor
     /// silently starts naming different content. The block itself is unchanged and hashes the
-    /// same. `line` remains as the fallback — a `revealLine` request has a line and no hash, and a
+    /// same. `line` remains as the fallback — a `revealLine` request has a line and no hash, and
+    /// a
     /// block whose text the edit did change has to land somewhere sensible.
     hash: u64 = 0,
     /// 0-based source line of the anchored block.
@@ -260,7 +264,8 @@ pub const Table = struct {
         // Flattening everything to `.stale` looked harmless and was not: `record` reads it as "a
         // height from before a width change", and discards it in favour of even a contaminated
         // measurement. A re-parse hands every table exactly one contaminated
-        // measurement — the cell sizes the renderer keys by AST node pointer die with the old tree
+        // measurement — the cell sizes the renderer keys by AST node pointer die with the old
+        // tree
         // — so on every keystroke a settled 900pt table was replaced by whatever that frame's
         // half-culled layout reported. Measured at 42pt in the test below: an 858pt lurch under the
         // reader, once per character typed.
@@ -315,7 +320,8 @@ pub const Table = struct {
             .quote => @max(src_lines, wrapped) * m.line_h + 8,
             // Headings are one line in a much bigger font.
             .heading => src_lines * m.line_h * 1.8,
-            // Code never wraps — one source line is one laid-out line — plus the panel's padding.
+            // Code never wraps — one source line is one laid-out line — plus the panel's
+            // padding.
             .code => src_lines * m.line_h + 12,
             // A table's height is driven by how much its cells *wrap*, not by how many rows it
             // has: the 45KB table in plans/PLUGIN_MANIFEST_PLAN.md is 25 source lines and 13,310pt
@@ -386,7 +392,8 @@ pub const Table = struct {
         return false;
     }
 
-    /// Whether this block can be positioned at all — it has been laid out, or it has enough source
+    /// Whether this block can be positioned at all — it has been laid out, or it has enough
+    /// source
     /// to guess from. A block that is neither (cmark reported no span for it) has no height and no
     /// way to get one except being drawn, so the renderer must draw it unconditionally. That is
     /// what keeps the table filling in without ever leaving a gap.
@@ -427,7 +434,14 @@ pub const Table = struct {
     /// A `partial` measurement never overwrites a height we already have: an off-screen table
     /// reporting its header height is strictly less informative than whatever the block last
     /// measured on screen.
-    pub fn record(self: *Table, gpa: std.mem.Allocator, index: usize, mm: Measurement, m: Metrics, column_width: f32) void {
+    pub fn record(
+        self: *Table,
+        gpa: std.mem.Allocator,
+        index: usize,
+        mm: Measurement,
+        m: Metrics,
+        column_width: f32,
+    ) void {
         self.ensureSlot(gpa, index, m, column_width);
         if (index >= self.heights.items.len) return; // allocation failed; nothing to update
         // Resolved through `heightAt`, not read raw: an `.estimated` slot carries no stored height
@@ -484,7 +498,8 @@ pub const Table = struct {
 
     /// React to the text column changing width.
     ///
-    /// Every wrapped block reflows, so no height is *current* any more — but a stale measurement is
+    /// Every wrapped block reflows, so no height is *current* any more — but a stale measurement
+    /// is
     /// still far closer to the truth than an estimate, so heights are kept and merely demoted to
     /// `.stale`. They must not be clamped toward the estimate: an image or a table occupies
     /// one line of source, so its estimate is a dozen pixels against a real several hundred, and
@@ -953,7 +968,8 @@ test "width change keeps measurements instead of clamping them to estimates" {
 // is a real answer; the frame after it draws a few rows for the first time, and dvui lays a new
 // text layout out at an assumed width, so those rows come out short and the block's measurement is
 // contaminated. That number must not replace the clean one. It did while "clean, at this width"
-// and "laid out at a width that is gone" were both `.measured`, because the second must be replaced.
+// and "laid out at a width that is gone" were both `.measured`, because the second must be
+// replaced.
 test "a contaminated measurement does not replace a clean one at the same width" {
     const gpa = testing.allocator;
     var t = testTable(gpa, 1, 1);
@@ -968,7 +984,8 @@ test "a contaminated measurement does not replace a clean one at the same width"
 }
 
 // The first width a pane learns is a width change too, and it used to turn every never-measured
-// block into a "measurement" of its placeholder height — zero — so the document's first real frame
+// block into a "measurement" of its placeholder height — zero — so the document's first real
+// frame
 // placed every block it had not yet drawn at y=0 instead of by its estimate.
 test "a width change leaves a never-measured block on its estimate" {
     const gpa = testing.allocator;

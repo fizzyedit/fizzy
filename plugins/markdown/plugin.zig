@@ -113,7 +113,14 @@ fn previewFollow(state: *anyopaque, ext: []const u8, path: []const u8, line: u32
     st.previewFor(sdk.allocator(), id_extra).followLine(line, at);
 }
 
-fn previewPane(state: *anyopaque, ext: []const u8, path: []const u8, bytes: []const u8, id_extra: u64, gpa: std.mem.Allocator) !void {
+fn previewPane(
+    state: *anyopaque,
+    ext: []const u8,
+    path: []const u8,
+    bytes: []const u8,
+    id_extra: u64,
+    gpa: std.mem.Allocator,
+) !void {
     const st: *State = @ptrCast(@alignCast(state));
     // A Zine site's SuperMD previews as the markdown it reads as; see `src/md/supermd.zig`.
     const source = if (std.ascii.eqlIgnoreCase(ext, ".smd")) st.superMdAsMarkdown(gpa, id_extra, bytes) else bytes;
@@ -135,7 +142,12 @@ fn previewPane(state: *anyopaque, ext: []const u8, path: []const u8, bytes: []co
     // `[[wikilinks]]` here but not in the store's README pane, which has no local file.
 }
 
-fn svcRender(ctx: *anyopaque, bytes: []const u8, gpa: std.mem.Allocator, opts: sdk.services.markdown.Api.RenderOptions) !void {
+fn svcRender(
+    ctx: *anyopaque,
+    bytes: []const u8,
+    gpa: std.mem.Allocator,
+    opts: sdk.services.markdown.Api.RenderOptions,
+) !void {
     const st: *State = @ptrCast(@alignCast(ctx));
     const preview = st.previewFor(gpa, opts.id_extra);
     md.drawPreview(preview, bytes, gpa, .{
@@ -145,7 +157,12 @@ fn svcRender(ctx: *anyopaque, bytes: []const u8, gpa: std.mem.Allocator, opts: s
     });
 }
 
-fn svcRenderInline(ctx: *anyopaque, bytes: []const u8, gpa: std.mem.Allocator, opts: sdk.services.markdown.Api.InlineOptions) !void {
+fn svcRenderInline(
+    ctx: *anyopaque,
+    bytes: []const u8,
+    gpa: std.mem.Allocator,
+    opts: sdk.services.markdown.Api.InlineOptions,
+) !void {
     const st: *State = @ptrCast(@alignCast(ctx));
     md.drawInline(st.previewFor(gpa, opts.id_extra), bytes, gpa, .{
         .io = dvui.io,

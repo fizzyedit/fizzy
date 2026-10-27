@@ -208,7 +208,8 @@ const resettle_above_budget: usize = 4;
 /// table is seen. Same idea as `resettle_budget`, one level down: a 45KB table
 /// (plans/PLUGIN_MANIFEST_PLAN.md has one) costs several milliseconds to lay out in full, and
 /// doing that on the frame the document opens is the hitch this whole file is about. Spread over
-/// frames instead, the table's height is briefly short — by however many rows are still unmeasured
+/// frames instead, the table's height is briefly short — by however many rows are still
+/// unmeasured
 /// — and settles within half a second.
 ///
 /// Counted in bytes rather than rows because rows differ wildly: this document's big table runs
@@ -232,7 +233,11 @@ inline fn statBlock() void {
 }
 
 /// `dvui.textLayout` + the counters, so no call site can add one without the others.
-inline fn textLayout(src: std.lang.SourceLocation, init_opts: dvui.TextLayoutWidget.InitOptions, opts: dvui.Options) *dvui.TextLayoutWidget {
+inline fn textLayout(
+    src: std.lang.SourceLocation,
+    init_opts: dvui.TextLayoutWidget.InitOptions,
+    opts: dvui.Options,
+) *dvui.TextLayoutWidget {
     stats.text_layouts += 1;
     const tl = dvui.textLayout(src, init_opts, opts);
     if (init_opts.break_lines and dvui.firstFrame(tl.data().id)) stats.fresh_text_layouts += 1;
@@ -827,9 +832,13 @@ fn addMarkdownLink(
     opts: dvui.Options,
     ctx: RenderContext,
 ) void {
-    const defs: dvui.Options = .{ .color_text = .{ .color = dvui.themeGet().focus }, .font = dvui.Font.theme(.body).withUnderline(.{}) };
+    const defs: dvui.Options = .{
+        .color_text = .{ .color = dvui.themeGet().focus },
+        .font = dvui.Font.theme(.body).withUnderline(.{}),
+    };
     if (tl.addTextClick(text orelse url, defs.override(opts))) |click_event| {
-        const open_side = (click_event == .mouse and (click_event.mouse.button == .middle or click_event.mouse.mod.matchBind("ctrl/cmd")));
+        const open_side = (click_event == .mouse and
+            (click_event.mouse.button == .middle or click_event.mouse.mod.matchBind("ctrl/cmd")));
         openMarkdownUrl(url, open_side, ctx);
     }
 }
@@ -978,7 +987,8 @@ fn tryRevealFileUri(url: []const u8, open_side: bool) bool {
 /// Opens `path` (native, absolute) in the editor at a 0-based `line`/`character`, splitting to
 /// the side when `open_side`. Returns false when workbench isn't available or refused.
 ///
-/// Split out of `tryRevealFileUri` so a caller that already *has* a path — a resolved wikilink —
+/// Split out of `tryRevealFileUri` so a caller that already *has* a path — a resolved wikilink
+/// —
 /// doesn't have to encode it into a `file://` URI just to have it decoded straight back. That
 /// round trip isn't merely wasteful: it has to percent-encode, and a path containing a space or
 /// a `#` is exactly where a hand-rolled encoder goes wrong.
@@ -1053,7 +1063,9 @@ fn decodeFileUriPath(arena: std.mem.Allocator, encoded: []const u8) ![]u8 {
     if (comptime is_windows) {
         // `file:///C:/Users/...` decodes to `/C:/Users/...`; strip the leading slash and
         // swap separators so this is a usable native Windows path.
-        if (out.items.len >= 3 and out.items[0] == '/' and std.ascii.isAlphabetic(out.items[1]) and out.items[2] == ':') {
+        if (out.items.len >= 3 and out.items[0] == '/' and
+            std.ascii.isAlphabetic(out.items[1]) and out.items[2] == ':')
+        {
             _ = out.orderedRemove(0);
         }
         for (out.items) |*c| {
@@ -1472,13 +1484,23 @@ fn renderInlineFlowContainer(container: ast.Node, span: dvui.Options, ctx: Rende
                 .link => {
                     const link_font = span.fontGet().withUnderline(.{});
                     const link_color = dvui.themeGet().focus;
-                    renderInlineFlowContainer(node, span.override(.{ .font = link_font, .color_text = .{ .color = link_color } }), ctx, ids);
+                    renderInlineFlowContainer(
+                        node,
+                        span.override(.{ .font = link_font, .color_text = .{ .color = link_color } }),
+                        ctx,
+                        ids,
+                    );
                 },
                 else => {
                     if (node.nodeType() == .strikethrough) {
                         const strike_font = span.fontGet().withStrike(.{});
                         const strike_color = dvui.themeGet().color(.control, .text).opacity(0.5);
-                        renderInlineFlowContainer(node, span.override(.{ .font = strike_font, .color_text = .{ .color = strike_color } }), ctx, ids);
+                        renderInlineFlowContainer(
+                            node,
+                            span.override(.{ .font = strike_font, .color_text = .{ .color = strike_color } }),
+                            ctx,
+                            ids,
+                        );
                     } else if (node.firstChild()) |_| {
                         renderInlineFlowContainer(node, span, ctx, ids);
                     } else if (node.literal()) |t| {
@@ -1598,12 +1620,19 @@ fn renderWikilink(
         // available to say "provisional" with.) Inert until there's a create-note flow.
         .unresolved => addText(tl, label, .{
             .font = span.fontGet().withUnderline(.{ .thick = 0.04 }),
-            .color_text = (span.color_text orelse dvui.ColorOrGradient.fromColor(theme.color(.content, .text))).opacity(0.6),
+            .color_text = (span.color_text orelse
+                dvui.ColorOrGradient.fromColor(theme.color(.content, .text))).opacity(0.6),
         }),
     }
 }
 
-fn renderInlineNodeToTl(tl: *dvui.TextLayoutWidget, x: ast.Node, span: dvui.Options, ctx: RenderContext, ids: *IdGen) void {
+fn renderInlineNodeToTl(
+    tl: *dvui.TextLayoutWidget,
+    x: ast.Node,
+    span: dvui.Options,
+    ctx: RenderContext,
+    ids: *IdGen,
+) void {
     switch (x.nodeType()) {
         .text => {
             if (x.literal()) |t| renderTextWithWikilinks(tl, x, t, span, ctx);
@@ -1671,7 +1700,13 @@ fn renderInlineNodeToTl(tl: *dvui.TextLayoutWidget, x: ast.Node, span: dvui.Opti
             if (x.nodeType() == .strikethrough) {
                 const strike_font = span.fontGet().withStrike(.{});
                 const strike_color = dvui.themeGet().color(.control, .text).opacity(0.5);
-                renderInlines(tl, x, span.override(.{ .font = strike_font, .color_text = .{ .color = strike_color } }), ctx, ids);
+                renderInlines(
+                    tl,
+                    x,
+                    span.override(.{ .font = strike_font, .color_text = .{ .color = strike_color } }),
+                    ctx,
+                    ids,
+                );
             } else if (x.firstChild()) |_| {
                 renderInlines(tl, x, span, ctx, ids);
             } else if (x.literal()) |t| {
@@ -1717,7 +1752,10 @@ fn renderTopLevel(doc_node: ast.Node, ids: *IdGen, ctx: RenderContext) void {
     const width_in_flux = rs.blocks.invalidateForWidth(ctx.column_width);
     rs.width_in_flux = width_in_flux;
     if (diag and width_in_flux) {
-        dvui.log.warn("md-diag: column width now {d:.2} — every cached height distrusted, tables unpinned", .{ctx.column_width});
+        dvui.log.warn(
+            "md-diag: column width now {d:.2} — every cached height distrusted, tables unpinned",
+            .{ctx.column_width},
+        );
     }
     if (width_in_flux) {
         // Come back next frame — if the width has stopped moving, resettle can start.
@@ -1991,8 +2029,20 @@ fn renderTopLevel(doc_node: ast.Node, ids: *IdGen, ctx: RenderContext) void {
             const prev = rs.place_err;
             if (diag and !std.math.isNan(prev) and @abs(err - prev) > 8) {
                 dvui.log.warn(
-                    "md-diag: PLACEMENT drift {d:.1} -> {d:.1} ({d:.1}pt) at block {d} ({s}) cursor_y={d:.1} laid_at={d:.1} spacer={d:.1} skipped_from={d} at viewport y={d:.0}",
-                    .{ prev, err, err - prev, index, @tagName(rs.blocks.extents.items[index].kind), y, wrapper.data().rect.y, rs.diag_last_spacer, rs.diag_last_skip_from, ctx.viewport.y },
+                    "md-diag: PLACEMENT drift {d:.1} -> {d:.1} ({d:.1}pt) at block {d} " ++
+                        "({s}) cursor_y={d:.1} laid_at={d:.1} spacer={d:.1} skipped_from={d} at viewport y={d:.0}",
+                    .{
+                        prev,
+                        err,
+                        err - prev,
+                        index,
+                        @tagName(rs.blocks.extents.items[index].kind),
+                        y,
+                        wrapper.data().rect.y,
+                        rs.diag_last_spacer,
+                        rs.diag_last_skip_from,
+                        ctx.viewport.y,
+                    },
                 );
             }
             rs.place_err = err;
@@ -2027,7 +2077,8 @@ fn renderTopLevel(doc_node: ast.Node, ids: *IdGen, ctx: RenderContext) void {
         //
         // *Any* pinned block, not only one pinned above the fold. A pinned wrapper emits exactly
         // its pin, so measuring the wrapper files the pin back as a measurement. That is how a
-        // `.deferred` table — pinned at a height nobody believes — came out of the deferral with
+        // `.deferred` table — pinned at a height nobody believes — came out of the deferral
+        // with
         // that same height recorded as a clean measurement, as soon as its rows were all measured:
         // the guess, laundered into an answer. The synthetic sample's last table had a 46pt
         // header-only measurement filed that way on its first frames.
@@ -2062,7 +2113,15 @@ fn renderTopLevel(doc_node: ast.Node, ids: *IdGen, ctx: RenderContext) void {
         if (diag and known_h > 0 and @abs(after_h - known_h) > diag_height_jump) {
             dvui.log.warn(
                 "md-diag: block {d} ({s}) height {d:.0} -> {d:.0} ({s}, rows_pending={d}) at viewport y={d:.0}",
-                .{ index, @tagName(rs.blocks.extents.items[index].kind), known_h, after_h, @tagName(rs.blocks.stateAt(index)), rs.block_rows_pending, ctx.viewport.y },
+                .{
+                    index,
+                    @tagName(rs.blocks.extents.items[index].kind),
+                    known_h,
+                    after_h,
+                    @tagName(rs.blocks.stateAt(index)),
+                    rs.block_rows_pending,
+                    ctx.viewport.y,
+                },
             );
         }
         // What the widget actually EMITTED, against what the height table believes.
@@ -2076,7 +2135,8 @@ fn renderTopLevel(doc_node: ast.Node, ids: *IdGen, ctx: RenderContext) void {
         // scrollbar is fine".
         if (diag and known_h > 0 and @abs(emitted - known_h) > diag_height_jump) {
             dvui.log.warn(
-                "md-diag: block {d} ({s}) EMITTED {d:.0} but table says {d:.0} (recorded {d:.0}, {s}, partial={any}, pinned={any}) at viewport y={d:.0}",
+                "md-diag: block {d} ({s}) EMITTED {d:.0} but table says {d:.0} (recorded " ++
+                    "{d:.0}, {s}, partial={any}, pinned={any}) at viewport y={d:.0}",
                 .{
                     index,          @tagName(rs.blocks.extents.items[index].kind),
                     emitted,        known_h,
@@ -2233,7 +2293,13 @@ pub fn anchorForLineAt(rs: *const RenderState, line: u32, at_px: f32, column_wid
 }
 
 /// Turn the settled scroll offset back into an anchor, after the scroll area has committed.
-pub fn anchorCapture(rs: *const RenderState, viewport_y: f32, column_width: f32, origin_y: f32, max_scroll: f32) ?Anchor {
+pub fn anchorCapture(
+    rs: *const RenderState,
+    viewport_y: f32,
+    column_width: f32,
+    origin_y: f32,
+    max_scroll: f32,
+) ?Anchor {
     return rs.blocks.captureAnchor(viewport_y, currentMetrics(), column_width, origin_y, max_scroll);
 }
 
@@ -2263,7 +2329,13 @@ fn rowNeedsMeasure(ctx: RenderContext, g: *dvui.GridWidget, row: ast.Node) bool 
 /// inside re-wraps narrower, the next frame's measurement is narrower still, and a short cell
 /// ends up one character wide. Natural widths are measured from the text instead, so they are the
 /// same every frame no matter what the table currently looks like.
-fn tableColumnWidths(n: ast.Node, num_cols: usize, avail: f32, cell_padding: dvui.Rect, ctx: RenderContext) []const f32 {
+fn tableColumnWidths(
+    n: ast.Node,
+    num_cols: usize,
+    avail: f32,
+    cell_padding: dvui.Rect,
+    ctx: RenderContext,
+) []const f32 {
     const font = dvui.Font.theme(.body);
     const body_m = font.sizeM(1, 1).w;
     const mono_m = dvui.Font.theme(.mono).sizeM(1, 1).w;
@@ -2271,7 +2343,8 @@ fn tableColumnWidths(n: ast.Node, num_cols: usize, avail: f32, cell_padding: dvu
     if (ctx.rs.table_layouts.getPtr(key)) |cached| {
         if (cached.body_m == body_m and cached.mono_m == mono_m and cached.natural.len == num_cols) {
             if (cached.avail == avail) return cached.widths;
-            // Only the space available changed — which is every frame of a split drag. The natural
+            // Only the space available changed — which is every frame of a split drag. The
+            // natural
             // widths are still valid, so re-fit them instead of re-measuring the whole table.
             @memcpy(cached.widths, cached.natural);
             fitColumns(cached.widths, avail, ctx.gpa);
@@ -2544,7 +2617,11 @@ fn renderBlock(n: ast.Node, ids: *IdGen, ctx: RenderContext) void {
                     .id_extra = ids.next(),
                 });
                 defer hdr.deinit();
-                var tl_i = textLayout(@src(), .{}, .{ .expand = .horizontal, .background = false, .id_extra = ids.next() });
+                var tl_i = textLayout(
+                    @src(),
+                    .{},
+                    .{ .expand = .horizontal, .background = false, .id_extra = ids.next() },
+                );
                 addText(tl_i, info, .{
                     .font = dvui.Font.theme(.mono).withWeight(.bold),
                     .color_text = .{ .color = dvui.themeGet().color(.control, .text).opacity(0.55) },
@@ -2703,7 +2780,8 @@ fn renderBlock(n: ast.Node, ids: *IdGen, ctx: RenderContext) void {
                 //
                 // The width the table has to work with. Taken from the wrap rather than from
                 // `ctx.column_width` so a table nested in a quote or list gets its container's
-                // width, and — because the wrap expands — it is a *fixed* number rather than one
+                // width, and — because the wrap expands — it is a *fixed* number rather than
+                // one
                 // derived from how wide the table currently is. That distinction is the whole
                 // trick: column widths computed against a number the columns themselves feed into
                 // ratchet down a little every frame.
@@ -2852,7 +2930,8 @@ fn renderBlock(n: ast.Node, ids: *IdGen, ctx: RenderContext) void {
                         // `renderDocument` asks for another frame while any remains. It stays
                         // owed on the frame it *is* measured on, because a measurement only
                         // counts once a second pass agrees with it.
-                        if (!measured_before and !row_visible and !ctx.rs.block_measure_exhausted) stats.pending_measure += 1;
+                        if (!measured_before and !row_visible and !ctx.rs.block_measure_exhausted)
+                            stats.pending_measure += 1;
                         // Any row that has not been measured for real leaves this table's height
                         // a guess, however it is drawn — see `RenderState.block_rows_pending`.
                         if (!measured_before) ctx.rs.block_rows_pending += 1;
@@ -2879,7 +2958,8 @@ fn renderBlock(n: ast.Node, ids: *IdGen, ctx: RenderContext) void {
                             // it compounds: on a 45KB table most rows are unmeasured on first
                             // sight, so the block came out a fraction of its real height and then
                             // inflated by hundreds of points per frame as the budget caught up.
-                            // One line is the honest floor — most table cells are exactly that —
+                            // One line is the honest floor — most table cells are exactly that
+                            // —
                             // and the block's height is roughly right immediately instead.
                             const cell_placeholder: dvui.Size = if (cached) |cs|
                                 cs.size
@@ -2998,7 +3078,8 @@ pub fn renderDocument(root: ast.Node, ctx: RenderContext) void {
     var ids: IdGen = .{ .n = ctx.id_base };
     renderBlock(root, &ids, resolved_ctx);
 
-    // Keep frames coming until the measuring budgets have caught up — see `Stats.pending_measure`.
+    // Keep frames coming until the measuring budgets have caught up — see
+    // `Stats.pending_measure`.
     if (stats.pending_measure > 0) dvui.refresh(null, @src(), null);
 
     if (comptime builtin.target.cpu.arch != .wasm32) {

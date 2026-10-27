@@ -1,6 +1,7 @@
 //! `<img>` extraction from the raw-HTML nodes md4c hands back untouched.
 //!
-//! GitHub-flavoured READMEs routinely wrap their hero image in HTML (`<p align="center"><img …>`),
+//! GitHub-flavoured READMEs routinely wrap their hero image in HTML (`<p align="center"><img
+//! …>`),
 //! which CommonMark preserves verbatim as an HTML block rather than as an `IMAGE` node — so a
 //! preview that only walks `![alt](url)` shows the markup and none of the pictures.
 //!
@@ -275,9 +276,15 @@ test "an image inherits alignment from the block wrapping it" {
         \\  <img src="a.png">
         \\</p>
     )).alignment.?);
-    try testing.expectEqual(Align.right, (try firstImage("<div align=\"right\"><img src=\"a.png\"></div>")).alignment.?);
+    try testing.expectEqual(
+        Align.right,
+        (try firstImage("<div align=\"right\"><img src=\"a.png\"></div>")).alignment.?,
+    );
     try testing.expectEqual(Align.center, (try firstImage("<center><img src=\"a.png\"></center>")).alignment.?);
-    try testing.expectEqual(Align.left, (try firstImage("<p align=\"center\"><img align=\"left\" src=\"a.png\"></p>")).alignment.?);
+    try testing.expectEqual(
+        Align.left,
+        (try firstImage("<p align=\"center\"><img align=\"left\" src=\"a.png\"></p>")).alignment.?,
+    );
 }
 
 test "alignment does not leak past the block that set it" {
