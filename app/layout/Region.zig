@@ -1438,7 +1438,8 @@ fn initTree(
 /// target of zero), then easing open along the new one. Its share of the box is kept through the
 /// turn (`_share`, taken from the extent when that was last chosen, not from a box that has since
 /// changed shape), and follows a drag while turned. That drag is shown and nothing more: turning
-/// back takes the share from the saved extent again.
+/// back takes the share from the saved extent again (`_seen` is unread while turned, so dvui drops
+/// it and the first frame back sees the extent anew).
 fn orientBranch(self: *Layout, saved: SplitTree.Branch, id: dvui.Id) SplitTree.Branch {
     if (!saved.adaptive) return saved;
     const dims = dvui.dataGet(null, id, "_dims", dvui.Size) orelse return saved;
@@ -1490,8 +1491,6 @@ fn orientBranch(self: *Layout, saved: SplitTree.Branch, id: dvui.Id) SplitTree.B
     turned = !turned;
     setFold(id, leaf, false);
     dvui.dataSet(null, id, "_turned", turned);
-    // Back to the saved side, the share is the saved extent's again, not a drag's while turned.
-    if (!turned) dvui.dataRemove(null, id, "_seen");
     drawn = saved;
     if (turned) SplitTree.turn(&drawn);
     const room = alongSize(drawn.dir, dims);
