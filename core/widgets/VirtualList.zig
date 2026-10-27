@@ -71,6 +71,10 @@ pub const InitOptions = struct {
     /// A guess at a row's height at `width`, used until the row is drawn. An exact estimate is
     /// never replaced.
     estimate: *const fn (ctx: *anyopaque, index: usize, width: f32) f32,
+    /// A number that changes whenever the rows do (a version counter, say). While it holds, the
+    /// list trusts that the rows are as they were and does not ask for every key each frame. Null
+    /// asks for every key each frame: right for a short list, costly for 20,000 rows.
+    revision: ?u64 = null,
     /// Keep the view on the last row while the reader is at the bottom.
     follow_end: bool = false,
     /// Pixels drawn beyond each edge of the view. dvui forgets a widget's size when it goes
@@ -101,13 +105,11 @@ pub fn init(src: std.builtin.SourceLocation, opts: InitOptions, widget_opts: dvu
     const width = if (st.si.viewport.w > 0) st.si.viewport.w else first_frame_width;
     const view_h = if (st.si.viewport.h > 0) st.si.viewport.h else first_frame_height;
     var count = opts.count;
-    st.index.reconcile(st.gpa, source, count) catch |err| {
+    st.index.reconcile(st.gpa, source, count, width, opts.revision) catch |err| {
         // The rows are the caller's, and the index no longer matches them: draw none.
         dvui.log.err("VirtualList: {t} while reconciling {d} rows", .{ err, count });
         count = 0;
     };
-    // After reconciling, so `estimate` is only asked about rows the caller still has.
-    _ = st.index.invalidateForWidth(source, width);
 
     const total = @min(st.index.total(), dvui.max_float_safe);
     st.si.virtual_size.h = total;
@@ -169,6 +171,8 @@ pub fn row(self: *VirtualList, index: usize) Row {
         .index = index,
         .box = dvui.box(@src(), .{}, .{
             .expand = .horizontal,
+            // Folded to 32 bits; two drawn rows with colliding folds would share a dvui id, and
+            // only rows in view are drawn, so a collision needs two on screen at once.
             .id_extra = @truncate(key ^ (key >> 32)),
         }),
     };
@@ -311,6 +315,22 @@ test "500 rows prepended above the reader leave the row they read where it was" 
     try settleOn(&m);
     try testing.expectEqual(key_before, m.top_key);
     try testing.expectApproxEqAbs(y_before, m.top_y, 0.5);
+}
+
+test "State.scrollTo puts a row at the top, and an unknown key does nothing" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    var m: Messages = .{ .count = 500 };
+    defer m.state.deinit();
+    try settleOn(&m);
+    m.state.scrollTo(300);
+    try testing.expect(!m.state.pinned);
+    try settleOn(&m);
+    try testing.expectEqual(@as(u64, 300), m.top_key);
+
+    m.state.scrollTo(99_999);
+    try settleOn(&m);
+    try testing.expectEqual(@as(u64, 300), m.top_key);
 }
 
 test "follow_end holds the last row at the bottom as rows are appended" {

@@ -10,7 +10,7 @@
 //!
 //! Cumulative heights live in a Fenwick tree, so `record` is O(log n) and `yAt`, `rowAt` and
 //! `visibleRange` are O(log n) however many rows there are. `reconcile` is a key comparison per row
-//! while the rows are unchanged and O(n) with allocation when they are not (a prepend, an append,
+//! while the rows are unchanged (none, given a `revision`) and O(n) with allocation when they are not (a prepend, an append,
 //! a deletion, a replaced row).
 //!
 //! Position is an `Anchor` (a row's key and an offset into it), never a pixel `y`: rows prepended
@@ -52,6 +52,9 @@ pub const Source = struct {
 /// Heights closer than this are the same height.
 pub const epsilon: f32 = 0.5;
 
+/// A measurement this close to the height held is not worth moving the tree for.
+const unchanged: f32 = 0.001;
+
 keys: std.ArrayList(u64) = .empty,
 heights: std.ArrayList(f32) = .empty,
 states: std.ArrayList(State) = .empty,
@@ -60,6 +63,8 @@ states: std.ArrayList(State) = .empty,
 tree: std.ArrayList(f64) = .empty,
 by_key: std.AutoHashMapUnmanaged(u64, u32) = .empty,
 width: f32 = 0,
+/// The caller's `revision` the rows were last reconciled at.
+revision: ?u64 = null,
 
 pub fn deinit(self: *HeightIndex, gpa: std.mem.Allocator) void {
     self.keys.deinit(gpa);
@@ -156,36 +161,31 @@ pub fn wantsMeasure(self: *const HeightIndex, index: usize) bool {
 pub fn record(self: *HeightIndex, index: usize, h: f32) bool {
     const was = self.heights.items[index];
     self.states.items[index] = .measured;
-    if (@abs(was - h) < 0.001) return false;
+    if (@abs(was - h) < unchanged) return false;
     self.heights.items[index] = h;
     self.add(index, @as(f64, h) - was);
     return @abs(was - h) >= epsilon;
 }
 
-/// Sets the width rows are laid out at. A change keeps the heights of measured rows as guesses
-/// that want measuring again, and re-estimates the rest. Returns whether the width changed.
-pub fn invalidateForWidth(self: *HeightIndex, source: Source, width: f32) bool {
-    if (@abs(self.width - width) < epsilon) return false;
-    self.width = width;
-    if (self.len() == 0) return true;
-    for (self.states.items, 0..) |*state, i| {
-        switch (state.*) {
-            .measured => state.* = .stale,
-            .stale => {},
-            .estimated => self.heights.items[i] = source.estimate(source.ctx, i, width),
-        }
-    }
-    self.rebuild();
-    return true;
-}
-
-/// Brings the rows in line with the caller's `count` rows. A row whose key is still present keeps
-/// its height and state wherever it moved to; a new row starts at its estimate.
-pub fn reconcile(self: *HeightIndex, gpa: std.mem.Allocator, source: Source, count: usize) std.mem.Allocator.Error!void {
-    if (count == self.len()) {
+/// Brings the rows in line with the caller's `count` rows laid out `width` wide. A row whose key
+/// is still present keeps its height and state wherever it moved to; a new row starts at its
+/// estimate. A change of `width` keeps the heights of measured rows as guesses that want measuring
+/// again, and re-estimates the rows never measured. Estimates are only asked of rows in `count`.
+///
+/// Without a `revision` every row's key is compared on each call. A caller that can say when its
+/// rows changed passes a number that changes with them, and an unchanged number skips the scan, so
+/// a steady frame costs nothing in the number of rows.
+pub fn reconcile(self: *HeightIndex, gpa: std.mem.Allocator, source: Source, count: usize, width: f32, revision: ?u64) std.mem.Allocator.Error!void {
+    const width_changed = @abs(self.width - width) >= epsilon;
+    if (!width_changed and count == self.len()) {
+        if (count == 0) return;
+        if (revision != null and revision == self.revision) return;
         for (self.keys.items, 0..) |key, i| {
             if (key != source.key(source.ctx, i)) break;
-        } else return;
+        } else {
+            self.revision = revision;
+            return;
+        }
     }
 
     const old_heights = self.heights.items;
@@ -205,10 +205,12 @@ pub fn reconcile(self: *HeightIndex, gpa: std.mem.Allocator, source: Source, cou
         keys.appendAssumeCapacity(key);
         by_key.putAssumeCapacity(key, @intCast(i));
         if (self.by_key.get(key)) |was| {
-            heights.appendAssumeCapacity(old_heights[was]);
-            states.appendAssumeCapacity(old_states[was]);
+            const state = old_states[was];
+            const refresh = width_changed and state == .estimated;
+            heights.appendAssumeCapacity(if (refresh) source.estimate(source.ctx, i, width) else old_heights[was]);
+            states.appendAssumeCapacity(if (width_changed and state == .measured) .stale else state);
         } else {
-            heights.appendAssumeCapacity(source.estimate(source.ctx, i, self.width));
+            heights.appendAssumeCapacity(source.estimate(source.ctx, i, width));
             states.appendAssumeCapacity(.estimated);
         }
     }
@@ -222,6 +224,8 @@ pub fn reconcile(self: *HeightIndex, gpa: std.mem.Allocator, source: Source, cou
     self.heights = heights;
     self.states = states;
     self.by_key = by_key;
+    self.width = width;
+    self.revision = revision;
     self.rebuild();
 }
 
@@ -270,8 +274,7 @@ const Rows = struct {
 fn fresh(rows: *Rows) !HeightIndex {
     var index: HeightIndex = .{};
     errdefer index.deinit(testing.allocator);
-    _ = index.invalidateForWidth(rows.source(), 100);
-    try index.reconcile(testing.allocator, rows.source(), rows.count);
+    try index.reconcile(testing.allocator, rows.source(), rows.count, 100, null);
     return index;
 }
 
@@ -302,7 +305,7 @@ test "a measurement is never overwritten by an estimate" {
     _ = index.record(3, 123);
     // The rows are rebuilt (one appended) and the width is unchanged: row 3 keeps its measurement.
     rows.count = 11;
-    try index.reconcile(testing.allocator, rows.source(), rows.count);
+    try index.reconcile(testing.allocator, rows.source(), rows.count, 100, null);
     try testing.expectEqual(@as(f32, 123), index.heightAt(3));
     try testing.expectEqual(State.measured, index.stateAt(3));
     try testing.expectEqual(State.estimated, index.stateAt(10));
@@ -319,7 +322,7 @@ test "500 rows prepended above the anchor leave what the reader sees unchanged" 
 
     rows.first_id = 500;
     rows.count = 2500;
-    try index.reconcile(testing.allocator, rows.source(), rows.count);
+    try index.reconcile(testing.allocator, rows.source(), rows.count, 100, null);
     const new_y = index.resolve(anchor).?;
     const after = index.yAt(index.indexOf(anchor.key).?) - new_y;
     try testing.expectEqual(row_on_screen, after);
@@ -350,7 +353,7 @@ test "follow_end holds the last row at the bottom as rows are appended" {
     try testing.expect(index.atEnd(y, view_h));
     for (0..20) |_| {
         rows.count += 1;
-        try index.reconcile(testing.allocator, rows.source(), rows.count);
+        try index.reconcile(testing.allocator, rows.source(), rows.count, 100, null);
         y = index.endY(view_h);
         const last = index.len() - 1;
         try testing.expectApproxEqAbs(y + view_h, index.yAt(last) + index.heightAt(last), 0.01);
@@ -367,7 +370,7 @@ test "a width change re-estimates without moving the anchor" {
     const anchor = index.anchorAt(index.yAt(250) + 5).?;
     const before = index.yAt(index.indexOf(anchor.key).?) - index.resolve(anchor).?;
 
-    try testing.expect(index.invalidateForWidth(rows.source(), 50));
+    try index.reconcile(testing.allocator, rows.source(), rows.count, 50, null);
     // Never-measured rows follow the estimate at the new width; measured ones keep their height
     // as a guess and ask to be measured again.
     try testing.expectEqual(@as(f32, 80), index.heightAt(250));
@@ -376,8 +379,10 @@ test "a width change re-estimates without moving the anchor" {
     try testing.expectEqual(before, index.yAt(index.indexOf(anchor.key).?) - index.resolve(anchor).?);
     try testing.expectApproxEqAbs(naiveY(&index, 400), index.total(), 0.01);
 
-    // The same width again is not a change.
-    try testing.expect(!index.invalidateForWidth(rows.source(), 50.2));
+    // The same width again is not a change: the estimates stay put.
+    rows.count = 400;
+    try index.reconcile(testing.allocator, rows.source(), rows.count, 50.2, null);
+    try testing.expectEqual(@as(f32, 80), index.heightAt(250));
 }
 
 test "an anchor whose row is gone resolves to null" {
@@ -386,7 +391,7 @@ test "an anchor whose row is gone resolves to null" {
     defer index.deinit(testing.allocator);
     const anchor = index.anchorAt(index.yAt(2)).?;
     rows.first_id = 5;
-    try index.reconcile(testing.allocator, rows.source(), rows.count);
+    try index.reconcile(testing.allocator, rows.source(), rows.count, 100, null);
     try testing.expectEqual(@as(?f32, null), index.resolve(anchor));
 }
 
@@ -404,7 +409,7 @@ test "visibleRange covers the view plus overscan and is null only without rows" 
     try testing.expectEqual(@as(usize, 99), past.first);
 
     rows.count = 0;
-    try index.reconcile(testing.allocator, rows.source(), 0);
+    try index.reconcile(testing.allocator, rows.source(), 0, 100, null);
     try testing.expectEqual(@as(?Range, null), index.visibleRange(0, 100, 0));
 }
 
@@ -424,7 +429,7 @@ test "a replaced or reordered interior row is noticed even when count and endpoi
     _ = index.record(4, 123);
 
     rows.replaced = 4;
-    try index.reconcile(testing.allocator, rows.source(), rows.count);
+    try index.reconcile(testing.allocator, rows.source(), rows.count, 100, null);
     try testing.expectEqual(@as(?usize, null), index.indexOf(4));
     try testing.expectEqual(@as(?usize, 4), index.indexOf(std.math.maxInt(u64)));
     try testing.expectEqual(State.estimated, index.stateAt(4));
@@ -437,9 +442,9 @@ test "a second width change keeps the first one's measurements as guesses" {
     defer index.deinit(testing.allocator);
     _ = index.record(2, 77);
 
-    try testing.expect(index.invalidateForWidth(rows.source(), 50));
+    try index.reconcile(testing.allocator, rows.source(), rows.count, 50, null);
     try testing.expectEqual(State.stale, index.stateAt(2));
-    try testing.expect(index.invalidateForWidth(rows.source(), 25));
+    try index.reconcile(testing.allocator, rows.source(), rows.count, 25, null);
     try testing.expectEqual(@as(f32, 77), index.heightAt(2));
     try testing.expect(index.wantsMeasure(2));
     try testing.expectEqual(@as(f32, 160), index.heightAt(3));
@@ -451,5 +456,59 @@ test "an empty list reconciles without allocating" {
     var index = try fresh(&rows);
     defer index.deinit(testing.allocator);
     var failing = testing.FailingAllocator.init(testing.allocator, .{ .fail_index = 0 });
-    try index.reconcile(failing.allocator(), rows.source(), 0);
+    try index.reconcile(failing.allocator(), rows.source(), 0, 100, null);
+}
+
+test "a width change estimates only the rows the caller still has" {
+    var rows: Rows = .{ .first_id = 0, .count = 20 };
+    var index = try fresh(&rows);
+    defer index.deinit(testing.allocator);
+    rows.count = 5;
+    // `Rows.key` and `estimate` do not bound-check, so count the asks instead.
+    var asked = Asked{ .limit = rows.count };
+    try index.reconcile(testing.allocator, asked.source(), rows.count, 50, null);
+    try testing.expectEqual(@as(usize, 0), asked.beyond);
+    try testing.expectEqual(@as(usize, 5), index.len());
+}
+
+const Asked = struct {
+    limit: usize,
+    beyond: usize = 0,
+
+    fn key(ctx: *anyopaque, i: usize) u64 {
+        const self: *Asked = @ptrCast(@alignCast(ctx));
+        if (i >= self.limit) self.beyond += 1;
+        return i;
+    }
+
+    fn estimate(ctx: *anyopaque, i: usize, _: f32) f32 {
+        const self: *Asked = @ptrCast(@alignCast(ctx));
+        if (i >= self.limit) self.beyond += 1;
+        return 40;
+    }
+
+    fn source(self: *Asked) Source {
+        return .{ .ctx = self, .key = key, .estimate = estimate };
+    }
+};
+
+test "a new list is estimated at the width it is laid out at" {
+    var index: HeightIndex = .{};
+    defer index.deinit(testing.allocator);
+    var rows: Rows = .{ .first_id = 0, .count = 3 };
+    try index.reconcile(testing.allocator, rows.source(), rows.count, 200, null);
+    try testing.expectEqual(@as(f32, 20), index.heightAt(0));
+}
+
+test "an unchanged revision skips the key scan, a new one does not" {
+    var rows: Rows = .{ .first_id = 0, .count = 10 };
+    var index: HeightIndex = .{};
+    defer index.deinit(testing.allocator);
+    try index.reconcile(testing.allocator, rows.source(), rows.count, 100, 1);
+    // The interior row changes with no new revision: trusted, so not noticed.
+    rows.replaced = 4;
+    try index.reconcile(testing.allocator, rows.source(), rows.count, 100, 1);
+    try testing.expectEqual(@as(?usize, 4), index.indexOf(4));
+    try index.reconcile(testing.allocator, rows.source(), rows.count, 100, 2);
+    try testing.expectEqual(@as(?usize, null), index.indexOf(4));
 }
