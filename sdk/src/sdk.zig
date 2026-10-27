@@ -122,7 +122,6 @@ pub const services = struct {
     pub const automation = @import("services/automation.zig");
     pub const demos = @import("services/demos.zig");
     pub const dashboard_cards = @import("services/dashboard_cards.zig");
-    pub const chat = @import("services/chat.zig");
     pub const plugins = @import("services/plugins.zig");
 };
 

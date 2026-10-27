@@ -1079,9 +1079,6 @@ fn addTests(
         // never-blank visible-range guarantee. std-only by design (see block_heights.zig) so
         // the rules the preview's scroll stability rests on are testable without a Window.
         .{ "fizzy-md-block-heights-tests", "plugins/markdown/src/md/block_heights.zig" },
-        // What the chat composer decides (Enter, its height cap, fences). std-only, so it tests
-        // without a Window.
-        .{ "fizzy-chat-composer-tests", "plugins/chat/src/composer.zig" },
         // Fence language tag → file extension, which is the whole of what the markdown plugin
         // knows about languages: the grammar itself comes from whichever plugin claims that
         // extension. std-only, so the table is testable without a Window.
@@ -1603,11 +1600,6 @@ fn addTests(
         .core = core_module_test,
         .sdk = sdk_module_test,
     }, fizzy_test_module);
-    const chat_module_test = plugins.chat.addStaticModule(b, target, optimize, .{
-        .dvui = dvui_testing_dep.module("dvui_testing"),
-        .core = core_module_test,
-        .sdk = sdk_module_test,
-    }, fizzy_test_module);
     // A `.zip` opened as a mounted folder, as the web opens the site (`tests/demos.zig`).
     const archive_module_test = plugins.archive.addStaticModule(b, target, optimize, .{
         .dvui = dvui_testing_dep.module("dvui_testing"),
@@ -1669,8 +1661,6 @@ fn addTests(
     // built above rather than rooting a second one at the widget — a file may belong to only
     // one module per compilation, and the plugin's own module already owns it.
     integration_module.addImport("text", text_module_test);
-    // The chat composer's growth and Enter are drawn behaviour, so a headless frame checks them.
-    integration_module.addImport("chat", chat_module_test);
     // Same reasoning for the markdown preview: its block virtualization is a claim about what
     // gets *drawn*, which only a real headless frame can check.
     integration_module.addImport("markdown", markdown_module_test);
@@ -2155,15 +2145,6 @@ fn addTests(
         check_integration_step.dependOn(&dashboard_plugin_tests.step);
     }
 
-    {
-        const chat_plugin_tests = b.addTest(.{
-            .name = "fizzy-chat-plugin-tests",
-            .root_module = chat_module_test,
-            .filters = test_filters,
-        });
-        test_integration_step.dependOn(&b.addRunArtifact(chat_plugin_tests).step);
-        check_integration_step.dependOn(&chat_plugin_tests.step);
-    }
 
     // Give the file extension tests a root; the plugin's lazy exports do not collect them.
     {

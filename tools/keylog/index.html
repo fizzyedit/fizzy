@@ -1,0 +1,130 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>fizzy keylog probe</title>
+<style>
+  body { font: 16px system-ui, sans-serif; margin: 12px; }
+  textarea, input[type=text] { width: 100%; box-sizing: border-box; font-size: 18px; margin-bottom: 8px; }
+  button { font-size: 16px; padding: 8px 12px; margin-right: 6px; }
+  pre { white-space: pre-wrap; word-break: break-all; font-size: 11px; max-height: 40vh; overflow: auto; background: #eee; padding: 6px; }
+  #env { font-size: 13px; }
+</style>
+<h3>fizzy keylog probe</h3>
+<p id="env"></p>
+<label>textarea (type here; use autocorrect, suggestions, swipe, replace a word)</label>
+<textarea id="field" rows="4" autocapitalize="sentences" autocomplete="on" spellcheck="true"></textarea>
+<label>single-line input</label>
+<input id="line" type="text" spellcheck="true">
+<p>
+  <button id="copy">Copy log</button>
+  <button id="post">POST log</button>
+  <button id="clear">Clear</button>
+  <span id="status"></span>
+</p>
+<pre id="out"></pre>
+<script>
+"use strict";
+// One JSON object per line. `t` is ms since page load (performance.now()).
+const params = new URLSearchParams(location.search);
+const postUrl = params.get("post");
+const lines = [];
+const out = document.getElementById("out");
+const status = document.getElementById("status");
+
+function record(obj) {
+  const line = JSON.stringify({ t: Math.round(performance.now() * 10) / 10, ...obj });
+  lines.push(line);
+  out.textContent = lines.slice(-200).join("\n");
+  out.scrollTop = out.scrollHeight;
+}
+
+function describe(node) {
+  if (!node) return null;
+  return node.nodeType === 3 ? "#text" : node.nodeName.toLowerCase() + (node.id ? "#" + node.id : "");
+}
+
+function fieldState(el) {
+  return { field: el.id, value: el.value, selStart: el.selectionStart, selEnd: el.selectionEnd, selDir: el.selectionDirection };
+}
+
+function ranges(e) {
+  if (typeof e.getTargetRanges !== "function") return null;
+  return e.getTargetRanges().map((r) => ({
+    sc: describe(r.startContainer), so: r.startOffset, ec: describe(r.endContainer), eo: r.endOffset,
+  }));
+}
+
+function attach(el) {
+  const log = (e, extra) => record({ type: e.type, ...extra, ...fieldState(el) });
+  el.addEventListener("keydown", (e) => log(e, {
+    key: e.key, code: e.code, keyCode: e.keyCode, isComposing: e.isComposing, repeat: e.repeat,
+  }));
+  el.addEventListener("keyup", (e) => log(e, { key: e.key, code: e.code, keyCode: e.keyCode, isComposing: e.isComposing }));
+  el.addEventListener("beforeinput", (e) => log(e, {
+    inputType: e.inputType, data: e.data, isComposing: e.isComposing, cancelable: e.cancelable,
+    dataTransfer: e.dataTransfer ? e.dataTransfer.getData("text/plain") : null,
+    targetRanges: ranges(e),
+  }));
+  el.addEventListener("input", (e) => log(e, { inputType: e.inputType, data: e.data, isComposing: e.isComposing }));
+  for (const type of ["compositionstart", "compositionupdate", "compositionend"]) {
+    el.addEventListener(type, (e) => log(e, { data: e.data }));
+  }
+}
+
+const field = document.getElementById("field");
+const line = document.getElementById("line");
+attach(field);
+attach(line);
+
+// Chrome fires selectionchange on the document for text controls.
+document.addEventListener("selectionchange", () => {
+  const el = document.activeElement;
+  if (el === field || el === line) record({ type: "selectionchange", ...fieldState(el) });
+});
+
+const env = {
+  type: "env",
+  userAgent: navigator.userAgent,
+  brands: navigator.userAgentData ? navigator.userAgentData.brands : null,
+  platform: navigator.userAgentData ? navigator.userAgentData.platform : navigator.platform,
+  editContext: typeof window.EditContext !== "undefined",
+  virtualKeyboard: "virtualKeyboard" in navigator,
+  touch: navigator.maxTouchPoints,
+  lang: navigator.language,
+};
+record(env);
+document.getElementById("env").textContent =
+  "EditContext: " + (env.editContext ? "available" : "NOT available") + " | " + navigator.userAgent;
+
+function say(msg) { status.textContent = msg; }
+
+document.getElementById("clear").onclick = () => { lines.length = 0; out.textContent = ""; record(env); };
+
+document.getElementById("copy").onclick = async () => {
+  const text = lines.join("\n") + "\n";
+  try {
+    await navigator.clipboard.writeText(text);
+    say("copied " + lines.length + " lines");
+  } catch (_) {
+    // Clipboard API needs a secure context; copy the full text through a temporary control,
+    // since `out` shows only the last 200 records.
+    const tmp = document.createElement("textarea");
+    tmp.value = text;
+    document.body.appendChild(tmp);
+    tmp.select();
+    const ok = document.execCommand("copy");
+    tmp.remove();
+    say(ok ? "copied " + lines.length + " lines" : "copy failed; use POST or select the log by hand");
+  }
+};
+
+document.getElementById("post").onclick = async () => {
+  if (!postUrl) { say("no ?post=URL in the page address"); return; }
+  try {
+    const res = await fetch(postUrl, { method: "POST", headers: { "content-type": "application/x-ndjson" }, body: lines.join("\n") + "\n" });
+    say("POST " + res.status);
+  } catch (err) {
+    say("POST failed: " + err.message);
+  }
+};
+</script>
