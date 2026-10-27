@@ -4026,11 +4026,67 @@ test "an adaptive split saved beside comes back as the same share stacked" {
     try std.testing.expect(state.splits.setShare("Main/r1", 0.5));
     _ = state.setExtent(editor.app.gpa, "Main/r1", 590);
 
+    // Exercise the same collection, ZON format and reconstruction as a saved layout.
+    const gpa = std.testing.allocator;
+    const regions = editor.collectSavedRegions(gpa);
+    defer gpa.free(regions);
+    var out: std.Io.Writer.Allocating = .init(gpa);
+    defer out.deinit();
+    try std.zon.stringify.serializeMaxDepth(regions, .{}, &out.writer, 64);
+    const text = try gpa.dupeSentinel(u8, out.written(), 0);
+    defer gpa.free(text);
+    var saved_arena: std.heap.ArenaAllocator = .init(gpa);
+    defer saved_arena.deinit();
+    var saved_diag: std.zon.parse.Diagnostics = undefined;
+    const saved = try std.zon.parse.fromSlice([]fizzy.backend.SavedRegion, .{
+        .gpa = gpa,
+        .arena = saved_arena.allocator(),
+        .source = text,
+        .diagnostics = &saved_diag,
+        .ignore_unknown_fields = true,
+    });
+    state.resetLayout(gpa);
+    editor.applySavedRegions(saved);
+    const links = state.splits.collectLinks(gpa);
+    defer gpa.free(links);
+    try std.testing.expectEqual(@as(usize, 1), links.len);
+    try std.testing.expectEqual(@as(?f32, 0.5), links[0].share);
+    try std.testing.expect(links[0].adaptive);
+
     for (0..60) |_| _ = try dvui.testing.step(ColumnCardFrame.frame);
     const top = try ColumnCardFrame.sizeOf(editor, "Main");
     const bottom = try ColumnCardFrame.sizeOf(editor, "Main/r1");
     // Not 590 over the 820 width, which is the share the pixels alone would say.
     try std.testing.expectApproxEqAbs(0.5, bottom.h / (top.h + bottom.h), 0.03);
+}
+
+test "an adaptive split saved without a share loads with the ratio absent" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+    const gpa = std.testing.allocator;
+    const editor = ctx.editor;
+    editor.app.gpa = gpa;
+    defer editor.app.layout.deinitExtents(gpa);
+    defer editor.app.layout.deinitQualified(gpa);
+
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    var diagnostics: std.zon.parse.Diagnostics = undefined;
+    const saved = try std.zon.parse.fromSlice([]fizzy.backend.SavedRegion, .{
+        .gpa = gpa,
+        .arena = arena.allocator(),
+        .source = ".{.{ .name = \"Main/r1\", .parent = \"Main\", .from = \"right\", .extent = 590, .adaptive = true }}",
+        .diagnostics = &diagnostics,
+        .ignore_unknown_fields = true,
+    });
+    try std.testing.expectEqual(@as(?f32, null), saved[0].share);
+    editor.applySavedRegions(saved);
+    const links = editor.app.layout.splits.collectLinks(gpa);
+    defer gpa.free(links);
+    try std.testing.expectEqual(@as(usize, 1), links.len);
+    try std.testing.expect(links[0].adaptive);
+    try std.testing.expectEqual(@as(?f32, null), links[0].share);
+    try std.testing.expectEqual(@as(f32, 590), editor.app.layout.extent("Main/r1", 0));
 }
 
 /// Main | (Main/r1 over Main/r1/b1) in fizzy's split forest, each holding one view. Main/r1 is two
