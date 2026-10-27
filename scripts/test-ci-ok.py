@@ -12,14 +12,33 @@ import tempfile
 import unittest
 
 
+def run_block(workflow, job, after):
+    """The `run: |` script of the first step of `job` that follows the line `after`.
+
+    The block ends at the first non-blank line indented less than its body, so blank lines,
+    comments and a changed indent in the workflow do not move the extraction.
+    """
+    lines = workflow.split(f'\n  {job}:\n', 1)[1].splitlines()
+    start = next(i for i, line in enumerate(lines) if after in line)
+    run = next(i for i in range(start, len(lines)) if lines[i].strip() == 'run: |')
+    body = []
+    indent = None
+    for line in lines[run + 1:]:
+        if line.strip():
+            width = len(line) - len(line.lstrip())
+            indent = width if indent is None else indent
+            if width < indent:
+                break
+        body.append(line[indent:] if indent is not None else line)
+    return '\n'.join(body)
+
+
 class CiOkTests(unittest.TestCase):
     def test_changes_selects_work_only_when_ready(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/ci.yml').read_text()
         self.assertIn('types: [opened, synchronize, reopened, ready_for_review]', workflow)
         self.assertIn("if: always() && !(github.event_name == 'pull_request' && github.event.pull_request.draft)", workflow)
-        changes = workflow.split('\n  changes:\n', 1)[1].split('\n  format:\n', 1)[0]
-        shell = changes.split('        run: |\n', 1)[1].split('\n\n', 1)[0]
-        shell = '\n'.join(line[10:] for line in shell.splitlines())
+        shell = run_block(workflow, 'changes', 'steps:')
         cases = [
             ('draft', 'pull_request', 'true', '', 'false', 'false'),
             ('ready code', 'pull_request', 'false', 'src/Entry.zig', 'true', 'false'),
@@ -45,9 +64,7 @@ class CiOkTests(unittest.TestCase):
 
     def test_selected_jobs_must_succeed(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/ci.yml').read_text()
-        gate = workflow.split('\n  ci-ok:\n', 1)[1]
-        shell = gate.split('        run: |\n', 1)[1]
-        shell = '\n'.join(line[10:] for line in shell.splitlines())
+        shell = run_block(workflow, 'ci-ok', 'steps:')
         cases = [
             ('selected success', 'success', 'true', 'false', 'success ' * 6, 'skipped', True),
             ('docs only', 'success', 'false', 'false', 'skipped ' * 6, 'skipped', True),
@@ -61,8 +78,7 @@ class CiOkTests(unittest.TestCase):
         for name, changes, code, sdl, results, sdl_result, passed in cases:
             with self.subTest(name=name):
                 env = dict(os.environ, CHANGES=changes, CODE=code, SDL=sdl,
-                           CODE_RESULTS=results, SDL_RESULT=sdl_result,
-                           RESULTS=f"{changes} {results} {sdl_result}")
+                           CODE_RESULTS=results, SDL_RESULT=sdl_result)
                 result = subprocess.run(['bash', '-c', shell], env=env, capture_output=True)
                 self.assertEqual(result.returncode == 0, passed, result.stdout.decode())
 

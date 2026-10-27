@@ -161,7 +161,7 @@ pub fn draw(self: *Workspace) !dvui.App.Result {
     // The person's pane, when it has the room for an open beside to split it: a tape that drops a
     // tab on the edge asks for this first, or skips the drop (`core.placement`).
     if (core.anchor.wanted() and runtime.workbench().open_workspace_grouping == self.grouping and
-        runtime.workbench().besideEdge() != null) core.anchor.mark(pane_box, "workbench.beside-room", .{});
+        runtime.workbench().besideEdge(self.grouping) != null) core.anchor.mark(pane_box, "workbench.beside-room", .{});
 
     if (tabs.len > 0) {
         self.dropSnapshot();

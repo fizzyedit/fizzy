@@ -30,6 +30,9 @@ pub const WebPluginDir = struct {
     };
 };
 
+/// The type of `Chrome.sidebar_edge`, for the build option.
+const ChromeEdge = enum { left, right };
+
 pub const Options = struct {
     /// Every plugin the application links, fizzy's own among them, each in the executables its
     /// `targets` names — see `build.zig`'s `buildApp`.
@@ -98,6 +101,10 @@ pub const Config = struct {
     static_text: bool,
     static_image: bool,
     dynamic_plugins: bool,
+    chrome_sidebar_edge: ChromeEdge,
+    chrome_panel: bool,
+    chrome_menu_bar: bool,
+    chrome_infobar: bool,
     workbench_opts: *std.Build.Step.Options,
     /// Null on the configure pass that fetches Velopack (see `readConfig`).
     msvcup_before_compile: ?*std.Build.Step.Run,
@@ -503,6 +510,20 @@ pub fn readConfig(b: *std.Build, target: std.Build.ResolvedTarget, opts: Options
         "App-owned layout file (pub fn layout(?*anyopaque, *Layout))",
     );
     build_opts.addOption(bool, "has_app_layout", app_layout_path != null);
+    // The frame of fizzy's own shape an app keeps (`src/editor/Chrome.zig`); the defaults are
+    // fizzy's own.
+    const chrome_sidebar_edge = b.option(
+        ChromeEdge,
+        "chrome-sidebar-edge",
+        "Which end of the window the icon rail and Sidebar sit at: left (default) or right",
+    ) orelse .left;
+    const chrome_panel = b.option(bool, "chrome-panel", "Draw the bottom Panel and its Output view (default: true)") orelse true;
+    const chrome_menu_bar = b.option(bool, "chrome-menu-bar", "Draw the in-window menu bar (default: true)") orelse true;
+    const chrome_infobar = b.option(bool, "chrome-infobar", "Draw the infobar (default: true)") orelse true;
+    build_opts.addOption(ChromeEdge, "chrome_sidebar_edge", chrome_sidebar_edge);
+    build_opts.addOption(bool, "chrome_panel", chrome_panel);
+    build_opts.addOption(bool, "chrome_menu_bar", chrome_menu_bar);
+    build_opts.addOption(bool, "chrome_infobar", chrome_infobar);
     const static_workbench = b.option(
         bool,
         "static-workbench",
@@ -597,6 +618,10 @@ pub fn readConfig(b: *std.Build, target: std.Build.ResolvedTarget, opts: Options
         .static_text = static_text,
         .static_image = static_image,
         .dynamic_plugins = dynamic_plugins,
+        .chrome_sidebar_edge = chrome_sidebar_edge,
+        .chrome_panel = chrome_panel,
+        .chrome_menu_bar = chrome_menu_bar,
+        .chrome_infobar = chrome_infobar,
         .workbench_opts = workbench_opts,
         .msvcup_before_compile = msvcup_before_compile,
         .accesskit = accesskit,
@@ -787,6 +812,10 @@ fn native(
         pack_opts.addOption(bool, "static_image", static_image);
         pack_opts.addOption(bool, "dynamic_plugins", dynamic_plugins);
         pack_opts.addOption(bool, "has_app_layout", app_layout_path != null);
+        pack_opts.addOption(ChromeEdge, "chrome_sidebar_edge", cfg.chrome_sidebar_edge);
+        pack_opts.addOption(bool, "chrome_panel", cfg.chrome_panel);
+        pack_opts.addOption(bool, "chrome_menu_bar", cfg.chrome_menu_bar);
+        pack_opts.addOption(bool, "chrome_infobar", cfg.chrome_infobar);
         break :package_blk try fizzy_exe.addFizzyExecutableForTarget(
             b,
             vz,
@@ -1050,6 +1079,9 @@ fn addTests(
         // never-blank visible-range guarantee. std-only by design (see block_heights.zig) so
         // the rules the preview's scroll stability rests on are testable without a Window.
         .{ "fizzy-md-block-heights-tests", "plugins/markdown/src/md/block_heights.zig" },
+        // What the chat composer decides (Enter, its height cap, fences). std-only, so it tests
+        // without a Window.
+        .{ "fizzy-chat-composer-tests", "plugins/chat/src/composer.zig" },
         // Fence language tag → file extension, which is the whole of what the markdown plugin
         // knows about languages: the grammar itself comes from whichever plugin claims that
         // extension. std-only, so the table is testable without a Window.
@@ -1532,6 +1564,11 @@ fn addTests(
         .core = core_module_test,
         .sdk = sdk_module_test,
     }, fizzy_test_module);
+    const chat_module_test = plugins.chat.addStaticModule(b, target, optimize, .{
+        .dvui = dvui_testing_dep.module("dvui_testing"),
+        .core = core_module_test,
+        .sdk = sdk_module_test,
+    }, fizzy_test_module);
     // A `.zip` opened as a mounted folder, as the web opens the site (`tests/demos.zig`).
     const archive_module_test = plugins.archive.addStaticModule(b, target, optimize, .{
         .dvui = dvui_testing_dep.module("dvui_testing"),
@@ -1592,6 +1629,8 @@ fn addTests(
     // built above rather than rooting a second one at the widget — a file may belong to only
     // one module per compilation, and the plugin's own module already owns it.
     integration_module.addImport("text", text_module_test);
+    // The chat composer's growth and Enter are drawn behaviour, so a headless frame checks them.
+    integration_module.addImport("chat", chat_module_test);
     // Same reasoning for the markdown preview: its block virtualization is a claim about what
     // gets *drawn*, which only a real headless frame can check.
     integration_module.addImport("markdown", markdown_module_test);
@@ -2062,6 +2101,16 @@ fn addTests(
         text_plugin_tests.root_module.link_libcpp = !target_is_windows_msvc;
         test_integration_step.dependOn(&b.addRunArtifact(text_plugin_tests).step);
         check_integration_step.dependOn(&text_plugin_tests.step);
+    }
+
+    {
+        const chat_plugin_tests = b.addTest(.{
+            .name = "fizzy-chat-plugin-tests",
+            .root_module = chat_module_test,
+            .filters = test_filters,
+        });
+        test_integration_step.dependOn(&b.addRunArtifact(chat_plugin_tests).step);
+        check_integration_step.dependOn(&chat_plugin_tests.step);
     }
 
     // Give the file extension tests a root; the plugin's lazy exports do not collect them.

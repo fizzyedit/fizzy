@@ -15,6 +15,9 @@ import { Dvui, TextInput } from "./web.js?cache-buster=TEMPLATE_HASH_WITH_PADDIN
 // /app/) is built with a name of its own (`zig build web -Dweb-storage=...`) and never reads or
 // overwrites the real one's settings, layout or plugins. Stamped by the build.
 const buildStorageName = "__FIZZY_WEB_STORAGE__";
+// iPhone Safari has no Fullscreen API for pages (iPad does); there, "Add to Home Screen"
+// is the way to lose the address bar (manifest.webmanifest).
+const fullscreenSupported = !!(document.fullscreenEnabled && document.documentElement.requestFullscreen);
 
 /**
  * @typedef {object} FizzyOptions
@@ -273,6 +276,10 @@ export class Fizzy {
           } else if (document.documentElement.requestFullscreen) {
             document.documentElement.requestFullscreen().catch((err) => console.warn("fizzy: full screen refused:", err));
           }
+        },
+        // False where a page cannot go full screen (Safari on iPhone), so the command hides.
+        fizzy_web_fullscreen_supported() {
+          return fullscreenSupported ? 1 : 0;
         },
         // `Clock.real` for the app's `Io` (src/backend/web_io.zig).
         fizzy_web_now_real_ms() {
@@ -939,6 +946,7 @@ export class Fizzy {
         storage,
         storageName,
         buildStorageName,
+        fullscreenSupported,
         startup,
         baseURI: document.baseURI,
       }, [offscreen]));
@@ -1117,7 +1125,7 @@ export class Fizzy {
         axis(1, ev.deltaY, []);
       }, { passive: false });
 
-      // What the keyboard does to the word before the caret reaches the worker as typing.
+      // What the keyboard does to the fragment before the caret reaches the worker as typing.
       const textInput = new TextInput(hidden, {
         text: (text) => post({ type: "text", text }),
         backspace: () => {
