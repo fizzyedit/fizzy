@@ -177,13 +177,6 @@ pub const BundledPlugin = struct {
         module: ?*std.Build.Module = null,
     };
 
-    /// One of fizzy's own: no module for any executable.
-    pub fn isFizzys(self: BundledPlugin) bool {
-        if (self.module != null) return false;
-        for (self.targets orelse &.{}) |t| if (t.module != null) return false;
-        return true;
-    }
-
     /// The entry as `platform`'s executables link it, or null if they do not.
     pub fn forPlatform(self: BundledPlugin, platform: Platform) ?BundledPlugin {
         const targets = self.targets orelse return self;

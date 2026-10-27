@@ -494,8 +494,6 @@ pub fn init(
         }
     }
 
-    // Save-queue worker is owned by the pixel-art plugin (`initPlugin` in `postInit`).
-
     { // Setup themes
         var fizzy_dark = dvui.themeGet();
         fizzy_dark.embedded_fonts = embedded_fonts;
@@ -937,8 +935,8 @@ fn unloadPluginLibs(editor: *Editor) void {
 
 // ---- runtime plugin lifecycle (store: install / enable / disable / update) ---------
 //
-// Only dylib-loaded *user* plugins are managed here. Bundled built-ins (pixi/workbench/
-// code) ship in the app and are never unloaded, even though they also appear in
+// Only dylib-loaded *user* plugins are managed here. Bundled built-ins (workbench,
+// text, …) ship in the app and are never unloaded, even though they also appear in
 // `loaded_plugin_libs` when loaded from their bundled dylibs.
 
 /// True when `id` names one of the bundled built-ins (ships in the app, must never be

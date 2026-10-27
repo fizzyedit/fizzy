@@ -9,6 +9,7 @@ const core = @import("core");
 const auto_update = @import("auto_update.zig");
 const update_install = @import("update_install.zig");
 const move_offer = @import("move_offer.zig");
+const bounded_join = @import("bounded_join.zig");
 const restart = @import("../restart.zig");
 
 const Phase = enum(u8) {
@@ -94,12 +95,8 @@ fn startCheck() void {
         return;
     }
 
-    // `setAllocator` runs before the launch check; without it there is nothing to run on.
-    const gpa = install_gpa orelse {
-        phase.store(@backingInt(Phase.done_no), .release);
-        return;
-    };
-    check_thread = std.Thread.spawn(.{}, worker, .{ io, gpa }) catch {
+    // The worker may outlive `deinit` (see there), so it cannot borrow the app's allocator.
+    check_thread = std.Thread.spawn(.{}, worker, .{}) catch {
         phase.store(@backingInt(Phase.done_no), .release);
         return;
     };
@@ -109,15 +106,28 @@ fn startCheck() void {
 /// an updater (the web has no threads) never name `std.Thread`.
 var check_thread: if (auto_update.impl) ?std.Thread else void = if (auto_update.impl) null else {};
 
-/// Waits for the launch check to finish. Call at shutdown, before the allocator given to
-/// `setAllocator` is torn down: the worker allocates from it until it returns.
-pub fn deinit() void {
+/// Set by the check's thread as its last act.
+var check_done: std.atomic.Value(bool) = .init(false);
+
+/// How long quit waits on a check still in flight: Velopack's request blocks in C and cannot be
+/// cancelled, so past this the thread is detached and the process exit ends it.
+const quit_wait_ms = 250;
+
+/// Waits for the launch check, up to `quit_wait_ms`. The check's thread runs on its own allocator,
+/// so the one given to `setAllocator` may be torn down after this returns.
+pub fn deinit(io: std.Io) void {
     if (comptime !auto_update.impl) return;
-    if (check_thread) |thread| thread.join();
+    if (check_thread) |thread| _ = bounded_join.joinWithin(io, thread, &check_done, quit_wait_ms);
     check_thread = null;
 }
 
-fn worker(io: std.Io, gpa: std.mem.Allocator) void {
+fn worker() void {
+    defer check_done.store(true, .release);
+    // A detached check must also outlive teardown of the application's Io.
+    const gpa = std.heap.page_allocator;
+    var threaded: std.Io.Threaded = .init(gpa, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
     var ver_buf: [128]u8 = undefined;
     const summary = auto_update.checkRemoteVersionSummary(io, gpa, &ver_buf) catch {
         phase.store(@backingInt(Phase.done_no), .release);

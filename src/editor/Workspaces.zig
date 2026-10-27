@@ -289,6 +289,22 @@ fn layoutOf(editor: *Editor) Layout {
     return Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, editor.app.host.arena());
 }
 
+/// The pane shown in place `name`: the person's own when it is there, else the first held.
+/// Null where the place holds no pane (a pane the keywords show is in no list: the caller's).
+pub fn groupingIn(self: *Workspaces, name: []const u8) ?u64 {
+    const editor = self.editorOf();
+    var l = layoutOf(editor);
+    var buf: [64]u8 = undefined;
+    var first: ?u64 = null;
+    for (self.views.keys()) |g| {
+        const holder = Layout.ViewDrag.holderOf(&l, viewId(&buf, g)) orelse continue;
+        if (!std.mem.eql(u8, holder, name)) continue;
+        if (g == editor.workbench.open_workspace_grouping) return g;
+        first = first orelse g;
+    }
+    return first;
+}
+
 fn beside(ctx: *anyopaque, grouping: u64, anchor: u64, side: Workbench.Panes.Side, adaptive: bool) bool {
     const self: *Workspaces = @ptrCast(@alignCast(ctx));
     var l = layoutOf(self.editorOf());
@@ -298,12 +314,7 @@ fn beside(ctx: *anyopaque, grouping: u64, anchor: u64, side: Workbench.Panes.Sid
 fn besideIn(l: *Layout, grouping: u64, anchor: u64, side: Workbench.Panes.Side, adaptive: bool) bool {
     var abuf: [64]u8 = undefined;
     const place = Layout.ViewDrag.holderOf(l, viewId(&abuf, anchor)) orelse return false;
-    const new = Layout.splitOn(l, place, switch (side) {
-        .left => .left,
-        .right => .right,
-        .top => .top,
-        .bottom => .bottom,
-    }) orelse return false;
+    const new = Layout.splitOn(l, place, side) orelse return false;
     var buf: [64]u8 = undefined;
     const id = l.arena.dupe(u8, viewId(&buf, grouping)) catch return false;
     l.state.assign(l.gpa, new, &.{id}) catch return false;
@@ -357,12 +368,7 @@ fn open(ctx: *anyopaque, grouping: u64, side: Workbench.Panes.Side) bool {
     var l = layoutOf(self.editorOf());
     var buf: [64]u8 = undefined;
     const place = Layout.ViewDrag.holderOf(&l, viewId(&buf, grouping)) orelse return false;
-    return Layout.splitOn(&l, place, switch (side) {
-        .left => .left,
-        .right => .right,
-        .top => .top,
-        .bottom => .bottom,
-    }) != null;
+    return Layout.splitOn(&l, place, side) != null;
 }
 
 /// The view of the workspace whose only tab is document `id`, if one is.
