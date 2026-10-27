@@ -3,17 +3,22 @@ From: Fizzy macos worker <fizzy-macos@users.noreply.github.com>
 Date: Mon, 26 Oct 2026 12:00:00 -0400
 Subject: [PATCH] web: a keyboard's correction replaces the typed word
 
-Keep up to 60 code points of sentence context in the hidden input, including spaces and
-punctuation. Reconcile native input and composition updates against that fragment, and route
-cancelable replacements and soft deletions to the same editor sink. Invalidate context when
-the editor caret moves or the field changes.
+A phone keyboard corrects the word before the caret, but the hidden input stayed empty and
+every beforeinput/compositionend was sent as new text, so "im" became "imI'm". TextInput keeps
+the word typed since the last space in the hidden input, caret at its end, and turns an
+insertReplacementText (its target range, or the selection the keyboard made, when a range is
+empty as it is for an input) or a composition that rewrote the word into backspaces and the
+new text. A pointer, a navigation key, a delete it cannot follow, a blur or another field
+clears the word.
 ---
+ src/backends/web.js | 159 ++++++++++++++++
+ 1 file changed, 128 insertions(+), 31 deletions(-)
 
 diff --git a/src/backends/web.js b/src/backends/web.js
 index cecf29a..cc084e5 100644
 --- a/src/backends/web.js
 +++ b/src/backends/web.js
-@@ -162,16 +162,153 @@ const StylusAction = Object.freeze({
+@@ -162,16 +162,138 @@ const StylusAction = Object.freeze({
      /** motion only */
      move: 1,
      /** motion, then the left button pressed */
@@ -23,12 +28,18 @@ index cecf29a..cc084e5 100644
  });
  
 +/**
-+ * Mirrors a bounded sentence fragment before the editor caret. Keyboard replacements and
-+ * native composition edits become backspaces and text for dvui's own text widgets.
-+ * Pointer and navigation events invalidate the fragment because its document position is unknown.
++ * Keeps the hidden input showing the word before the caret, and turns what a phone keyboard
++ * does to that word into the edits dvui's text widgets understand.
++ *
++ * The widgets draw their own text, so the input is empty and a keyboard has nothing to
++ * correct: autocorrect or a suggestion then arrives as plain new text ("im" becomes "imI'm").
++ * The input holds the word typed since the last space instead, the caret at its end, so a
++ * keyboard replaces it, and a replacement is sent as that many backspaces and then the new
++ * text. The word is only what this class has seen typed; a caret moved by a pointer or a key,
++ * or a delete it cannot follow, clears it.
 + */
 +export class TextInput {
-+    /** The fragment before the caret, as the hidden input shows it. */
++    /** The word before the caret, as the hidden input shows it. */
 +    word = "";
 +    /** @type {boolean} */
 +    composing = false;
@@ -44,8 +55,6 @@ index cecf29a..cc084e5 100644
 +        this.sink = sink;
 +        hidden.addEventListener("beforeinput", (ev) => this.beforeInput(ev));
 +        hidden.addEventListener("compositionstart", () => { this.composing = true; });
-+        hidden.addEventListener("compositionupdate", () => this.sync());
-+        hidden.addEventListener("input", () => this.sync());
 +        hidden.addEventListener("compositionend", (ev) => this.compositionEnd(ev));
 +        hidden.addEventListener("blur", () => this.clear());
 +    }
@@ -53,7 +62,6 @@ index cecf29a..cc084e5 100644
 +    /** Forget the word: the caret moved, or the field changed. */
 +    clear() {
 +        this.word = "";
-+        this.backspaceKey = false;
 +        if (!this.composing && this.hidden.value !== "") this.hidden.value = "";
 +    }
 +
@@ -71,13 +79,11 @@ index cecf29a..cc084e5 100644
 +    set(word) {
 +        this.word = word;
 +        if (!this.composing && this.hidden.value !== word) this.hidden.value = word;
-+        if (!this.composing) this.hidden.selectionStart = this.hidden.selectionEnd = word.length;
 +    }
 +
 +    /** The word after `text` is typed at the caret. */
 +    typed(text) {
-+        // Keep spaces and punctuation: suggestions can replace several words.
-+        this.set(Array.from((this.word + text).split(/[\r\n]/).pop()).slice(-60).join(""));
++        this.set((this.word + text).split(/\s/).pop());
 +    }
 +
 +    /** Replace [start, end) of the word with `text`: the deleted tail, then the text. */
@@ -96,17 +102,13 @@ index cecf29a..cc084e5 100644
 +    }
 +
 +    beforeInput(ev) {
-+        if (ev.isComposing || ev.cancelable === false) return;
 +        ev.preventDefault();
++        if (ev.isComposing) return;
 +        const type = ev.inputType;
-+        if (type !== "deleteContentBackward") this.backspaceKey = false;
 +        if (type === "deleteContentBackward") {
 +            // Soft keyboards usually send the Backspace key as well, which has popped the word.
 +            if (this.backspaceKey) this.backspaceKey = false;
-+            else {
-+                this.sink.backspace();
-+                this.set(Array.from(this.word).slice(0, -1).join(""));
-+            }
++            else this.set(Array.from(this.word).slice(0, -1).join(""));
 +            return;
 +        }
 +        if (type && type.startsWith("delete")) {
@@ -116,7 +118,7 @@ index cecf29a..cc084e5 100644
 +        let text = ev.data;
 +        if (text == null && type === "insertReplacementText" && ev.dataTransfer) text = ev.dataTransfer.getData("text/plain");
 +        if (!text) return;
-+        if (type === "insertReplacementText" || type === "insertText") {
++        if (type === "insertReplacementText") {
 +            // For an input the target ranges are empty; the keyboard selects what it replaces.
 +            const ranges = ev.getTargetRanges ? ev.getTargetRanges() : [];
 +            const start = ranges.length > 0 ? ranges[0].startOffset : this.hidden.selectionStart;
@@ -125,40 +127,28 @@ index cecf29a..cc084e5 100644
 +                this.replace(start, end, text);
 +                return;
 +            }
-+            if (type === "insertReplacementText") {
-+                // No range and a collapsed caret: the keyboard means the word before it.
-+                const word = this.word.match(/\S*$/)[0];
-+                this.replace(this.word.length - word.length, this.word.length, text);
-+                return;
-+            }
 +        }
 +        this.sink.text(text);
 +        this.typed(text);
 +    }
 +
-+    /** Reconcile native edits, including non-cancelable keyboard and composition events. */
-+    sync() {
++    compositionEnd(ev) {
++        this.composing = false;
++        // The input now holds the word as the keyboard composed it. Whatever it shares with the
++        // word the widgets have is untouched; the rest of ours is deleted and theirs typed.
 +        const had = Array.from(this.word);
-+        const now = Array.from(this.hidden.value);
++        let now = Array.from(this.hidden.value);
++        if (now.length === 0 && had.length === 0 && ev.data) now = Array.from(ev.data);
 +        let same = 0;
 +        while (same < had.length && same < now.length && had[same] === now[same]) same++;
 +        for (let i = same; i < had.length; i++) this.sink.backspace();
 +        const text = now.slice(same).join("");
 +        if (text) this.sink.text(text);
-+        this.word = now.join("");
-+        // Do not truncate or reset the DOM during an active composition.
-+        if (!this.composing) {
-+            this.word = "";
-+            this.typed(now.join(""));
-+        }
-+    }
-+
-+    compositionEnd(ev) {
-+        if (!this.hidden.value && !this.word && ev.data) this.hidden.value = ev.data;
-+        this.composing = false;
-+        this.sync();
++        this.word = "";
++        this.typed(now.join(""));
 +    }
 +}
++
  export class Dvui {
      /** @type {WebGL2RenderingContext | WebGLRenderingContext} */
      gl;
@@ -167,7 +157,7 @@ index cecf29a..cc084e5 100644
      /** @type {WebGLBuffer} */
      vertexBuffer;
      /** @type {WebGLProgram} */
-@@ -1164,21 +1292,24 @@ export class Dvui {
+@@ -1164,21 +1286,24 @@ export class Dvui {
                  }
                  if (this.cur !== this.stock) this.useProgram(0, null, 0, 0);
              },
@@ -192,7 +182,7 @@ index cecf29a..cc084e5 100644
                      window.open(url);
                  } else {
                      window.location.href = url;
-@@ -1725,16 +1856,17 @@ export class Dvui {
+@@ -1725,16 +1850,17 @@ export class Dvui {
                      0,
                  );
              }
@@ -210,7 +200,7 @@ index cecf29a..cc084e5 100644
                  // switches tabs and we don't do anything.
                  if (ev.ctrlKey) return;
  
-@@ -1771,49 +1903,32 @@ export class Dvui {
+@@ -1771,49 +1897,32 @@ export class Dvui {
                  (ev.metaKey << 3) + (ev.altKey << 2) + (ev.ctrlKey << 1) +
                  (ev.shiftKey << 0),
              );

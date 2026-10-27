@@ -1177,7 +1177,7 @@ pub fn exportTape(self: *Tracks, host: *sdk.Host, doc: sdk.DocHandle, gpa: std.m
     const files = try arena.alloc(tape.Tape.File, 1);
     files[0] = .{ .path = name, .text = bytes, .owner = doc.owner.id, .format = t.format };
     const keyframes = try arena.alloc(tape.Tape.Keyframe, 1);
-    keyframes[0] = .{ .root = "demo://share", .files = files, .open = try arena.dupe([]const u8, &.{name}) };
+    keyframes[0] = .{ .root = "demo://share", .files = files, .open = try arena.dupe([]const u8, &.{name}), .layout = .focused };
     const ops = try arena.alloc(tape.Tape.Op, to - first + 2);
     ops[0] = .{ .at = 0, .do = .{ .keyframe = 0 } };
     ops[1] = .{ .at = 0, .do = .{ .wait = .{ .until = .idle } } };
@@ -1288,7 +1288,7 @@ pub fn exportLine(self: *Tracks, host: *sdk.Host, doc: sdk.DocHandle, gpa: std.m
     const files = try arena.alloc(tape.Tape.File, 1);
     files[0] = .{ .path = name, .text = bytes, .owner = doc.owner.id, .format = t.format };
     const keyframes = try arena.alloc(tape.Tape.Keyframe, 1);
-    keyframes[0] = .{ .root = "demo://share", .files = files, .open = try arena.dupe([]const u8, &.{name}) };
+    keyframes[0] = .{ .root = "demo://share", .files = files, .open = try arena.dupe([]const u8, &.{name}), .layout = .focused };
     const ops = try arena.alloc(tape.Tape.Op, recs.len + 2);
     ops[0] = .{ .at = 0, .do = .{ .keyframe = 0 } };
     ops[1] = .{ .at = 0, .do = .{ .wait = .{ .until = .idle } } };

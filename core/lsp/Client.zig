@@ -595,11 +595,7 @@ fn setHoverReturnScratch(self: *Client, gpa: std.mem.Allocator, text: []const u8
 /// slot for it and no caller needs it (only `resolveCompletionDocumentation`, which reads the
 /// cache directly instead). Items that fail to dupe are skipped, matching `runCompletionJob`'s
 /// existing "partial list beats none" stance.
-fn setCompletionReturnScratch(
-    self: *Client,
-    gpa: std.mem.Allocator,
-    cached: []const CachedCompletionItem,
-) []const CompletionItem {
+fn setCompletionReturnScratch(self: *Client, gpa: std.mem.Allocator, cached: []const CachedCompletionItem) []const CompletionItem {
     for (self.completion_return_scratch.items) |it| {
         gpa.free(it.label);
         gpa.free(it.insert_text);
@@ -666,11 +662,7 @@ pub fn hover(self: *Client, path: []const u8, bytes: []const u8, byte_offset: us
     if (path.len == 0) return null;
 
     const gpa = self.config.allocator;
-    const key: CacheKey = .{
-        .path_hash = std.hash.Wyhash.hash(0, path),
-        .byte_offset = byte_offset,
-        .content_hash = std.hash.Wyhash.hash(0, bytes),
-    };
+    const key: CacheKey = .{ .path_hash = std.hash.Wyhash.hash(0, path), .byte_offset = byte_offset, .content_hash = std.hash.Wyhash.hash(0, bytes) };
 
     // Serve a still-valid cache hit even when the server has crashed — better than blanking
     // every tooltip the moment the pipe closes. Only after a miss do we check liveness.
@@ -750,10 +742,7 @@ pub fn hover(self: *Client, path: []const u8, bytes: []const u8, byte_offset: us
     // is actually waiting on. The job currently in `runHoverJob` (already dequeued) still
     // finishes and caches; only not-yet-started work is dropped.
     self.dropQueuedHoverJobsLocked();
-    self.queue.append(
-        gpa,
-        .{ .path = owned_path, .bytes = owned_bytes, .byte_offset = byte_offset, .key = key },
-    ) catch {
+    self.queue.append(gpa, .{ .path = owned_path, .bytes = owned_bytes, .byte_offset = byte_offset, .key = key }) catch {
         self.queue_lock.unlock();
         gpa.free(owned_path);
         gpa.free(owned_bytes);
@@ -905,11 +894,7 @@ pub fn completion(self: *Client, path: []const u8, bytes: []const u8, byte_offse
     if (!(std.ascii.isAlphanumeric(prev) or prev == '_' or prev == '.' or prev == '@')) return null;
 
     const gpa = self.config.allocator;
-    const key: CacheKey = .{
-        .path_hash = std.hash.Wyhash.hash(0, path),
-        .byte_offset = byte_offset,
-        .content_hash = std.hash.Wyhash.hash(0, bytes),
-    };
+    const key: CacheKey = .{ .path_hash = std.hash.Wyhash.hash(0, path), .byte_offset = byte_offset, .content_hash = std.hash.Wyhash.hash(0, bytes) };
 
     self.completion_cache_lock.lock();
     if (self.completion_cache.get(key)) |entry| {
@@ -964,13 +949,7 @@ pub fn completion(self: *Client, path: []const u8, bytes: []const u8, byte_offse
 /// (same `CacheKey` derivation) so the raw item JSON needed to actually resolve can be found;
 /// `index` out of range, or no completion cache entry for that key at all (evicted, or the
 /// original request never completed), is a clean "nothing to resolve" rather than an error.
-pub fn resolveCompletionDocumentation(
-    self: *Client,
-    path: []const u8,
-    bytes: []const u8,
-    byte_offset: usize,
-    index: usize,
-) ?[]const u8 {
+pub fn resolveCompletionDocumentation(self: *Client, path: []const u8, bytes: []const u8, byte_offset: usize, index: usize) ?[]const u8 {
     if (path.len == 0) return null;
     if (!self.ensureStarted(path)) return null;
     // zls declares `resolveProvider: false` and always answers `completionItem/resolve` with
@@ -979,11 +958,7 @@ pub fn resolveCompletionDocumentation(
     if (!self.completion_resolve_supported) return null;
 
     const gpa = self.config.allocator;
-    const completion_key: CacheKey = .{
-        .path_hash = std.hash.Wyhash.hash(0, path),
-        .byte_offset = byte_offset,
-        .content_hash = std.hash.Wyhash.hash(0, bytes),
-    };
+    const completion_key: CacheKey = .{ .path_hash = std.hash.Wyhash.hash(0, path), .byte_offset = byte_offset, .content_hash = std.hash.Wyhash.hash(0, bytes) };
     const key: ResolveKey = .{ .completion_key = completion_key, .index = index };
 
     self.resolve_cache_lock.lock();
@@ -1070,22 +1045,14 @@ pub fn signatureHelp(self: *Client, path: []const u8, bytes: []const u8, byte_of
     if (!insideOpenCall(bytes, byte_offset)) return null;
 
     const gpa = self.config.allocator;
-    const key: CacheKey = .{
-        .path_hash = std.hash.Wyhash.hash(0, path),
-        .byte_offset = byte_offset,
-        .content_hash = std.hash.Wyhash.hash(0, bytes),
-    };
+    const key: CacheKey = .{ .path_hash = std.hash.Wyhash.hash(0, path), .byte_offset = byte_offset, .content_hash = std.hash.Wyhash.hash(0, bytes) };
 
     self.signature_help_cache_lock.lock();
     if (self.signature_help_cache.get(key)) |entry| {
         // Copy out *while still holding the lock* — see `hover_return_scratch`'s doc comment.
         const result: ?SignatureHelpResult = if (entry.result) |r| blk: {
             const label_copy = self.setSignatureHelpReturnScratch(gpa, r.label) orelse break :blk null;
-            break :blk .{
-                .label = label_copy,
-                .active_param_start = r.active_param_start,
-                .active_param_end = r.active_param_end,
-            };
+            break :blk .{ .label = label_copy, .active_param_start = r.active_param_start, .active_param_end = r.active_param_end };
         } else null;
         self.signature_help_cache_lock.unlock();
         return result;
@@ -1164,10 +1131,7 @@ fn ensureStarted(self: *Client, doc_path: []const u8) bool {
                 // `ConcurrencyUnavailable` is a documented transient condition (pool
                 // exhaustion) — leave state as `not_started` so the next hover retries,
                 // rather than permanently disabling the client the way `.unavailable` would.
-                dvui.log.warn(
-                    "{s}: Io.Group.concurrent(startupThreadMain) failed: {any}",
-                    .{ self.config.language_id, err },
-                );
+                dvui.log.warn("{s}: Io.Group.concurrent(startupThreadMain) failed: {any}", .{ self.config.language_id, err });
                 return false;
             };
             self.state.store(.starting, .release);
@@ -1205,11 +1169,7 @@ fn startupThreadMain(self: *Client, io: std.Io) void {
         if (err == error.ShuttingDown) return;
         dvui.log.warn("{s}: language server unavailable ({any})", .{ self.config.language_id, err });
         var msg_buf: [256]u8 = undefined;
-        const msg = std.mem.print(
-            &msg_buf,
-            "language server unavailable ({any})",
-            .{err},
-        ) catch "language server unavailable";
+        const msg = std.mem.print(&msg_buf, "language server unavailable ({any})", .{err}) catch "language server unavailable";
         self.config.log(self.config.language_id, .warn, msg);
         self.state.store(.unavailable, .release);
         self.config.refresh();
@@ -1262,16 +1222,9 @@ fn spawnProcess(self: *Client, io: std.Io) !void {
     if (self.shutdown.load(.acquire)) return error.ShuttingDown;
 
     const spawned = spawnChild(gpa, io, argv, root) catch |err| {
-        dvui.log.warn(
-            "{s}: could not spawn \"{s}\" ({any}) — hover/goto-definition disabled for this session",
-            .{ self.config.language_id, argv[0], err },
-        );
+        dvui.log.warn("{s}: could not spawn \"{s}\" ({any}) — hover/goto-definition disabled for this session", .{ self.config.language_id, argv[0], err });
         var msg_buf: [256]u8 = undefined;
-        const msg = std.mem.print(
-            &msg_buf,
-            "could not spawn \"{s}\" ({any}) — hover/goto-definition disabled for this session",
-            .{ argv[0], err },
-        ) catch "could not spawn language server";
+        const msg = std.mem.print(&msg_buf, "could not spawn \"{s}\" ({any}) — hover/goto-definition disabled for this session", .{ argv[0], err }) catch "could not spawn language server";
         self.config.log(self.config.language_id, .warn, msg);
         return err;
     };
@@ -1955,16 +1908,7 @@ fn cacheHoverResult(self: *Client, io: std.Io, gpa: std.mem.Allocator, key: Cach
         // for a key whose next answer turned out positive, and linger there unused forever.
         _ = self.unconfirmed_negative_keys.remove(key);
     }
-    self.hover_cache.put(
-        gpa,
-        key,
-        .{
-            .text = owned_text,
-            .seq = self.cache_seq,
-            .cached_at = cached_at,
-            .confirmed_negative = confirmed_negative,
-        },
-    ) catch {
+    self.hover_cache.put(gpa, key, .{ .text = owned_text, .seq = self.cache_seq, .cached_at = cached_at, .confirmed_negative = confirmed_negative }) catch {
         if (owned_text) |t| gpa.free(t);
         return;
     };
@@ -2144,12 +2088,7 @@ fn runCompletionJob(self: *Client, io: std.Io, pc: PendingCompletion) !void {
 /// in the cache and evicts the oldest entry if it's now over `completion_cache_limit`.
 /// `owned_items`, if non-null, must already be owned by `gpa` (the slice and every owned field
 /// inside each entry, `raw_json` included) — this function takes ownership.
-fn cacheCompletionResult(
-    self: *Client,
-    gpa: std.mem.Allocator,
-    key: CacheKey,
-    owned_items: ?[]CachedCompletionItem,
-) void {
+fn cacheCompletionResult(self: *Client, gpa: std.mem.Allocator, key: CacheKey, owned_items: ?[]CachedCompletionItem) void {
     self.completion_cache_lock.lock();
     defer self.completion_cache_lock.unlock();
     self.completion_cache_seq += 1;
@@ -2258,12 +2197,7 @@ fn runSignatureHelpJob(self: *Client, io: std.Io, ps: PendingSignatureHelp) !voi
 /// `SignatureHelpCacheEntry.result`) in the cache and evicts the oldest entry if it's now over
 /// `signature_help_cache_limit`. `owned_result`, if non-null, must already have a gpa-owned
 /// `label` — this function takes ownership.
-fn cacheSignatureHelpResult(
-    self: *Client,
-    gpa: std.mem.Allocator,
-    key: CacheKey,
-    owned_result: ?SignatureHelpResult,
-) void {
+fn cacheSignatureHelpResult(self: *Client, gpa: std.mem.Allocator, key: CacheKey, owned_result: ?SignatureHelpResult) void {
     self.signature_help_cache_lock.lock();
     defer self.signature_help_cache_lock.unlock();
     self.signature_help_cache_seq += 1;
@@ -2619,11 +2553,7 @@ fn resolveSignatureHelp(result: std.json.Value) ?ResolvedSignatureHelp {
     return switch (param_label) {
         .string => |s| blk: {
             const idx = std.mem.find(u8, label, s) orelse break :blk no_emphasis;
-            break :blk ResolvedSignatureHelp{
-                .label = label,
-                .active_param_start = idx,
-                .active_param_end = idx + s.len,
-            };
+            break :blk ResolvedSignatureHelp{ .label = label, .active_param_start = idx, .active_param_end = idx + s.len };
         },
         .array => |arr| blk: {
             if (arr.items.len != 2) break :blk no_emphasis;
@@ -2652,12 +2582,7 @@ const TextEditSpan = struct { start: usize, end: usize, new_text: []const u8 };
 /// correctly: edits are sorted by descending start offset and applied back-to-front, so each
 /// edit's byte range (computed against the *original* `bytes`/positions) stays valid — an
 /// earlier edit's insert/delete would otherwise shift every later offset.
-fn applyTextEdits(
-    gpa: std.mem.Allocator,
-    bytes: []const u8,
-    edits: []const std.json.Value,
-    encoding: Protocol.PositionEncoding,
-) ?[]u8 {
+fn applyTextEdits(gpa: std.mem.Allocator, bytes: []const u8, edits: []const std.json.Value, encoding: Protocol.PositionEncoding) ?[]u8 {
     var spans: std.ArrayList(TextEditSpan) = .empty;
     defer spans.deinit(gpa);
 
@@ -2672,16 +2597,8 @@ fn applyTextEdits(
         const end_char = jsonInt(end_pos, "character") orelse continue;
         if (start_line < 0 or start_char < 0 or end_line < 0 or end_char < 0) continue;
 
-        const start = Protocol.positionToByteOffset(
-            bytes,
-            .{ .line = @intCast(start_line), .character = @intCast(start_char) },
-            encoding,
-        );
-        const end = Protocol.positionToByteOffset(
-            bytes,
-            .{ .line = @intCast(end_line), .character = @intCast(end_char) },
-            encoding,
-        );
+        const start = Protocol.positionToByteOffset(bytes, .{ .line = @intCast(start_line), .character = @intCast(start_char) }, encoding);
+        const end = Protocol.positionToByteOffset(bytes, .{ .line = @intCast(end_line), .character = @intCast(end_char) }, encoding);
         if (end < start) continue;
         spans.append(gpa, .{ .start = start, .end = end, .new_text = new_text }) catch continue;
     }
@@ -2800,12 +2717,7 @@ fn syncDocument(self: *Client, io: std.Io, path: []const u8, bytes: []const u8) 
 
     if (send_open) {
         try self.sendNotification(io, "textDocument/didOpen", .{
-            .textDocument = .{
-                .uri = uri,
-                .languageId = self.config.language_id,
-                .version = @as(i32, 1),
-                .text = bytes,
-            },
+            .textDocument = .{ .uri = uri, .languageId = self.config.language_id, .version = @as(i32, 1), .text = bytes },
         });
     } else {
         try self.sendNotification(io, "textDocument/didChange", .{
@@ -2839,10 +2751,7 @@ fn send(self: *Client, io: std.Io, value: anytype) !void {
     Protocol.writeMessage(gpa, &w.interface, value) catch |err| {
         // `WriteFailed` is std.Io.Writer's generic wrapper error; the real underlying OS
         // error (if any) is stashed on the concrete File.Writer for exactly this reason.
-        dvui.log.warn(
-            "{s}: send failed: {any} (underlying file-writer error: {any})",
-            .{ self.config.language_id, err, w.err },
-        );
+        dvui.log.warn("{s}: send failed: {any} (underlying file-writer error: {any})", .{ self.config.language_id, err, w.err });
         return err;
     };
 }

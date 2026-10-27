@@ -390,8 +390,8 @@ pub fn branch(self: *TreeWidget, src: std.lang.SourceLocation, init_opts: Branch
 pub const Branch = struct {
     pub const InitOptions = struct {
         /// Whether the caller wants the branch open, passed every frame. The caller owns this
-        /// state; the branch animates toward it and reports a click or key press in
-        /// `Branch.requested`.
+        /// state; the branch only eases toward it (`Branch.expanded` is what is drawn) and reports
+        /// a click or key press in `Branch.requested`.
         expanded: bool = false,
 
         // if null, uses widget id
@@ -427,7 +427,8 @@ pub const Branch = struct {
     /// One of the rows carried back over the tree (`TreeWidget.carriedOver`): the rows drawn
     /// inside it are carried with it.
     carried_source: bool = false,
-    /// The caller's open state for this frame.
+    /// What is drawn: open while opening and while closing, until the close animation ends.
+    /// Follows `init_options.expanded` and is never to be copied back into the caller's state.
     expanded: bool = false,
     /// The open state the user asked for this frame (a click, Left/Right, hover-to-open), null
     /// when they asked for nothing. Valid after `expander()`; the caller applies it to its own state.
@@ -435,7 +436,6 @@ pub const Branch = struct {
     /// Left/Right pressed on this row this frame; `expander()` turns it into `requested`.
     key_toggle: bool = false,
     can_expand: bool = false,
-    draw_children: bool = false,
     anim: ?*dvui.AnimateWidget = null,
     /// Populated while `expander_vbox` is active: clip children to `anim`'s content (animated height).
     expander_clip_prev: ?dvui.Rect.Physical = null,
@@ -474,7 +474,7 @@ pub const Branch = struct {
         self.init_options = init_opts;
         self.options = defaults.override(opts);
         self.wd = WidgetData.init(src, .{}, wrapOuter(self.options).override(.{ .rect = .{} }));
-        self.expanded = init_opts.expanded;
+        self.expanded = if (dvui.dataGet(null, self.wd.id, "_expanded", bool)) |e| e else init_opts.expanded;
     }
 
     // can call this after init before install
@@ -567,7 +567,11 @@ pub const Branch = struct {
                 if (rs.r.contains(dp)) {
                     if (!self.expanded) {
                         // Auto-expand after timer so hover over closed folder opens it.
+                        // Set only `init_options.expanded` so `self.expanded` stays false until
+                        // `expander()` runs: that keeps `init_options.expanded != self.expanded` and
+                        // replays the same open animation as a click.
                         if (dvui.timerDone(self.data().id)) {
+                            self.init_options.expanded = true;
                             self.requested = true;
                         } else {
                             _ = dvui.timer(self.data().id, 500_000);
@@ -774,32 +778,38 @@ pub const Branch = struct {
         );
 
         const toggled = clicked or self.key_toggle;
-        const want = self.init_options.expanded;
-        if (toggled) self.requested = !want;
-        if (self.requested != null) dvui.refresh(null, @src(), self.data().id);
+        const want = self.init_options.expanded != toggled;
+        if (toggled) self.requested = want;
 
         const anim = self.anim.?;
-        const target: f32 = if (want) 1 else 0;
-        const progress = dvui.dataGet(null, self.data().id, "branch_progress", f32) orelse target;
-        const active = dvui.animationGet(anim.data().id, "_end");
-        if ((active != null and active.?.end_val != target) or
-            (active == null and progress != target))
-        {
-            dvui.animation(anim.data().id, "_end", .{
-                .start_val = if (active) |a| a.value() else progress,
-                .end_val = target,
-                .end_time = motion.duration(if (want) self.init_options.animation_duration else @divTrunc(self.init_options.animation_duration, 2)),
-                .easing = if (want) self.init_options.animation_easing else motion.settle,
-            });
+        // A close in flight, through the frame it ends on (when `end()` reports it).
+        const closing_anim = if (dvui.animationGet(anim.data().id, "_end")) |a| (if (a.end_val == 0) a else null) else null;
+        if (want and (!self.expanded or closing_anim != null)) {
+            if (closing_anim) |a| {
+                // Reopen from where the close had got to.
+                dvui.animation(anim.data().id, "_end", .{
+                    .start_val = a.value(),
+                    .end_val = 1.0,
+                    .end_time = anim.init_opts.duration,
+                    .easing = anim.init_opts.easing orelse dvui.easing.linear,
+                });
+                anim.val = a.value();
+            } else {
+                anim.val = 0.0;
+                anim.start();
+            }
+            self.expanded = true;
+        } else if (!want and self.expanded and closing_anim == null) {
+            anim.init_opts.easing = motion.settle;
+            anim.init_opts.duration = motion.duration(@divTrunc(self.init_options.animation_duration, 2));
+            anim.startEnd();
         }
-        const animate_progress = anim.init_opts.kind != .none and anim.init_opts.duration != 0;
-        const current = dvui.animationGet(anim.data().id, "_end");
-        const value = if (animate_progress and current != null) current.?.value() else target;
-        anim.val = value;
-        dvui.dataSet(null, self.data().id, "branch_progress", value);
-        self.draw_children = want or value > 0;
 
-        if (self.draw_children) {
+        if (!want and anim.end()) {
+            self.expanded = false;
+        }
+
+        if (self.expanded) {
             // Always expand the inner box to fill the animation
             const expander_opts = dvui.Options{ .expand = .both };
 
@@ -813,7 +823,7 @@ pub const Branch = struct {
 
         self.can_expand = true;
 
-        return self.draw_children;
+        return self.expanded;
     }
 
     pub fn targetRectScale(self: *Branch) ?dvui.RectScale {
@@ -900,7 +910,7 @@ pub const Branch = struct {
         if (self.carried_source) self.tree.carried_depth -= 1;
 
         if (self.can_expand) {
-            if (self.draw_children) {
+            if (self.expanded) {
                 if (self.expander_clip_prev) |p| {
                     dvui.clipSet(p);
                     self.expander_clip_prev = null;
@@ -910,6 +920,8 @@ pub const Branch = struct {
             if (self.anim) |a| {
                 a.deinit();
             }
+
+            dvui.dataSet(null, self.data().id, "_expanded", self.expanded);
         } else {
             self.hbox.deinit();
             self.button.deinit();

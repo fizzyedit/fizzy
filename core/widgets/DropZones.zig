@@ -48,7 +48,7 @@ const motion = @import("glass").motion;
 const liquid_glass = @import("glass").liquid_glass;
 const LiquidField = @import("glass").LiquidField;
 
-pub const Side = @import("DockingWidget/Layout.zig").Side;
+pub const Side = enum { left, right, top, bottom };
 
 pub const Zone = union(enum) {
     /// Into the place itself: a trade for a place that shows one view, a new tab for one that

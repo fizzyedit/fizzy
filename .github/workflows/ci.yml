@@ -114,8 +114,8 @@ jobs:
           echo "code=$code" >> "$GITHUB_OUTPUT"
           echo "sdl=$sdl" >> "$GITHUB_OUTPUT"
 
-  # Every tracked .zig and .zon file as `zig fmt` writes it. Needs Zig and nothing else: no
-  # dependencies, no cache, a few seconds.
+  # Formatting, lint and script regression checks. Needs Zig, Python and shell tools,
+  # but no app dependencies or build cache.
   format:
     name: Format
     needs: changes

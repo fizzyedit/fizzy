@@ -47,5 +47,5 @@ each directory is.
   ReleaseFast). Check against `control.Server.max_path`, the real size, before `init`.
 - **On Windows, a socket test must not read to EOF when it need not.** Its AF_UNIX sometimes never
   tells a reader that the other side closed, so a test client reading "until the end" hangs about
-  one run in twenty. Read `Content-Length` bytes, as HTTP clients do, or stop after the expected
-  complete SSE message for an event stream (`control/Server.zig`'s `TestClient`).
+  one run in twenty. Read `Content-Length` bytes, as HTTP clients do (`control/Server.zig`'s
+  `TestClient`). It sent a day after server bugs that were not there.

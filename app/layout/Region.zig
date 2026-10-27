@@ -1437,9 +1437,7 @@ fn initTree(
 /// A turn is the new half sliding shut along the old axis (`_fold`, which its place reads as a
 /// target of zero), then easing open along the new one. Its share of the box is kept through the
 /// turn (`_share`, taken from the extent when that was last chosen, not from a box that has since
-/// changed shape), and follows a drag while turned. That drag is shown and nothing more: turning
-/// back takes the share from the saved one again (`_seen` is unread while turned, so dvui drops it
-/// and the first frame back reads the saved share anew).
+/// changed shape), and follows a drag while turned.
 fn orientBranch(self: *Layout, saved: SplitTree.Branch, id: dvui.Id) SplitTree.Branch {
     if (!saved.adaptive) return saved;
     const dims = dvui.dataGet(null, id, "_dims", dvui.Size) orelse return saved;
@@ -1464,10 +1462,10 @@ fn orientBranch(self: *Layout, saved: SplitTree.Branch, id: dvui.Id) SplitTree.B
             }
         }
     } else if (chosen) |extent| {
-        // Dragged since the branch set it: the drag is the share drawn, and is not saved.
+        // Dragged since the branch set it: the drag is the new share.
         const set = dvui.dataGet(null, id, "_set", f32) orelse extent;
         const room = alongSize(drawn.dir, dims);
-        if (set != extent and room > 0) dvui.dataSet(null, id, "_share", std.math.clamp(extent / room, 0, 1));
+        if (set != extent and room > 0) setShare(self, saved.created, id, std.math.clamp(extent / room, 0, 1));
     }
     const share = dvui.dataGet(null, id, "_share", f32) orelse return drawn;
 

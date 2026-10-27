@@ -18,8 +18,8 @@
 //!
 //! **Sheets follow the window's shape.** In portrait a sheet rises from the foot, `sheet_share` of
 //! the height tall and at most `sheet_max_w` wide, centred. In landscape (wider than tall) the
-//! explorer follows `Chrome.sidebar_edge` and the panel takes the opposite side, each at most
-//! `sheet_max_w` wide and `side_share` of the width, with the scrim between them: a tablet or phone
+//! explorer is a side sheet on the left and the panel one on the right, each at most `sheet_max_w`
+//! wide and `side_share` of the width, with the scrim between them: a 1024x768 tablet or a phone
 //! on its side keeps Main's height instead of losing most of it to a slab.
 //!
 //! **A sheet is a resizable region at the foot of a transparent column laid over Main.** Opening
@@ -155,15 +155,9 @@ fn sheets(editor: *fizzy.Editor, f: *Layout) !bool {
 
     const showing = sheetOpen(f, sidebar) or sheetOpen(f, bottom);
     var tapped = false;
-    const explorer_left = editor.chrome.sidebar_edge == .left;
     if (side) {
-        if (explorer_left) {
-            var explorer = try explorerSheet(editor, f, true);
-            defer explorer.deinit();
-        } else if (editor.chrome.panel) {
-            var panel = try panelSheet(f, true);
-            defer panel.deinit();
-        }
+        var explorer = try explorerSheet(editor, f, true);
+        defer explorer.deinit();
     }
 
     {
@@ -178,13 +172,8 @@ fn sheets(editor: *fizzy.Editor, f: *Layout) !bool {
     }
 
     if (side) {
-        if (!explorer_left) {
-            var explorer = try explorerSheet(editor, f, true);
-            defer explorer.deinit();
-        } else if (editor.chrome.panel) {
-            var panel = try panelSheet(f, true);
-            defer panel.deinit();
-        }
+        var panel = try panelSheet(f, true);
+        defer panel.deinit();
     } else {
         // Capped and centred: the regions fill this box, not the window.
         var foot = dvui.box(@src(), .{ .dir = .vertical }, .{
@@ -194,7 +183,7 @@ fn sheets(editor: *fizzy.Editor, f: *Layout) !bool {
             .max_size_content = .width(sheet_max_w),
         });
         defer foot.deinit();
-        if (editor.chrome.panel) {
+        {
             var panel = try panelSheet(f, false);
             defer panel.deinit();
         }
@@ -309,7 +298,7 @@ fn bottomBar(editor: *fizzy.Editor, f: *Layout) !void {
     }
 
     // Only where something draws in the panel.
-    if (editor.chrome.panel and f.matching(bottom).len > 0) {
+    if (f.matching(bottom).len > 0) {
         if (iconButton(@src(), icons.tvg.lucide.terminal, "fizzy.mobile.panel")) {
             const open = sheetOpen(f, bottom);
             if (editor.regionFor(bottom)) |panel| {

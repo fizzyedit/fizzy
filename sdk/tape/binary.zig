@@ -33,9 +33,7 @@
 //! reader refuses a version it does not know (`error.UnsupportedVersion`) rather than guess, and
 //! reads every older one it does. 2 gave a `command` op its arguments, in the record's second
 //! string; a version-1 command has none. 3 added steps, files' owner and format, the blob table
-//! and the deflated form. 4 added the `skip` op. A keyframe once had a layout byte (ahead of three of
-//! padding), which nothing read and is now four bytes of padding: older tapes read the same, and
-//! an older reader reads a newer tape's zero as `keep`, the only layout that ever did anything.
+//! and the deflated form. 4 added the `skip` op.
 const std = @import("std");
 const flate = std.compress.flate;
 const Tape = @import("Tape.zig");
@@ -314,8 +312,8 @@ fn writeBody(gpa: std.mem.Allocator, tape: Tape, w: *std.Io.Writer) !void {
     var settings_at: u32 = 0;
     for (tape.keyframes) |kf| {
         try w.writeInt(u32, table.index(kf.root), .little);
-        // Reserved: versions up to 4 kept a layout byte here that nothing read, then padding.
-        try w.splatByteAll(0, 4);
+        try w.writeByte(@backingInt(kf.layout));
+        try w.splatByteAll(0, 3);
         for ([_]u32{
             files_at,
             count(kf.files.len),
@@ -550,9 +548,11 @@ pub fn read(gpa: std.mem.Allocator, bytes: []const u8, check: Tape.Check) ReadEr
     for (keyframes, 0..) |*kf, i| {
         var f: Reader = .{ .bytes = kf_bytes[i * keyframe_size ..][0..keyframe_size] };
         const root = try strings.get(try f.int(u32));
-        _ = try f.take(4);
+        const layout = std.enums.fromInt(Tape.Keyframe.Layout, try f.int(u8)) orelse return error.Corrupt;
+        _ = try f.take(3);
         kf.* = .{
             .root = root,
+            .layout = layout,
             .files = try slice(Tape.File, files, try f.int(u32), try f.int(u32)),
             .open = try slice([]const u8, open, try f.int(u32), try f.int(u32)),
             .settings = try slice(Tape.Setting, settings, try f.int(u32), try f.int(u32)),
@@ -698,6 +698,7 @@ const Everything = struct {
         .files = &files,
         .open = &.{ "a.md", "b.md" },
         .settings = &settings,
+        .layout = .reset,
     };
     /// A binary document, by its owner, and its steps.
     const sprite = [_]Tape.File{.{
@@ -772,7 +773,7 @@ fn everything() Tape {
 /// `everything` as version 2 could hold it, before steps: what `testdata/everything-v2.tape` is,
 /// written by the version-2 codec.
 fn everythingV2() Tape {
-    const keyframes = [_]Tape.Keyframe{ Everything.keyframe, .{ .root = "demo://t" } };
+    const keyframes = [_]Tape.Keyframe{ Everything.keyframe, .{ .root = "demo://t", .layout = .focused } };
     return Everything.tape(&Everything.ops_v2, &keyframes);
 }
 

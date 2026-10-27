@@ -96,7 +96,7 @@ fn startCheck() void {
     }
 
     // The worker may outlive `deinit` (see there), so it cannot borrow the app's allocator.
-    check_thread = std.Thread.spawn(.{}, worker, .{}) catch {
+    check_thread = std.Thread.spawn(.{}, worker, .{ io, std.heap.page_allocator }) catch {
         phase.store(@backingInt(Phase.done_no), .release);
         return;
     };
@@ -121,13 +121,8 @@ pub fn deinit(io: std.Io) void {
     check_thread = null;
 }
 
-fn worker() void {
+fn worker(io: std.Io, gpa: std.mem.Allocator) void {
     defer check_done.store(true, .release);
-    // A detached check must also outlive teardown of the application's Io.
-    const gpa = std.heap.page_allocator;
-    var threaded: std.Io.Threaded = .init(gpa, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
     var ver_buf: [128]u8 = undefined;
     const summary = auto_update.checkRemoteVersionSummary(io, gpa, &ver_buf) catch {
         phase.store(@backingInt(Phase.done_no), .release);
