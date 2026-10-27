@@ -15,7 +15,9 @@ const darwin_spawn = @import("darwin_spawn.zig");
 /// allocator a caller passed: callers come and go (a build's arena, a request's scratch) while
 /// the cached slice is handed to every later caller for the life of the process. Core is
 /// compiled into each plugin dylib, so each of those has a cache of its own, owned the same way.
-var cache: Cache = .{};
+/// Applications needing allocator tracking can own a `Cache` instead. Written by the first
+/// calling thread under the cache mutex; later callers only read it.
+var cache: Cache = .init(std.heap.page_allocator);
 
 /// Timeout for the shell spawn — a pathological `.zshrc` (network calls, slow prompt themes,
 /// …) shouldn't be able to hang this indefinitely.
@@ -36,20 +38,37 @@ const timeout_ms = 3000;
 /// `.zshrc` might do real work) — call this lazily, only once nothing faster has already found
 /// what you're looking for, same as `Client.zig`'s `resolveExecutable`.
 pub fn path(gpa: std.mem.Allocator, io: std.Io) ?[]const u8 {
-    return cache.get(std.heap.page_allocator, gpa, io, resolve);
+    return cache.path(gpa, io);
 }
 
-/// A value resolved once per process, on whichever thread asks first, and kept in `owner`.
-const Cache = struct {
+/// A login-shell PATH resolved once, on whichever thread asks first.
+/// The owner allocator must remain valid until `deinit`; returned slices live until then.
+pub const Cache = struct {
+    owner: std.mem.Allocator,
     mutex: std.Io.Mutex = .init,
     resolved: std.atomic.Value(bool) = .init(false),
     value: ?[]const u8 = null,
+
+    /// The allocator owns the cached string; each lookup supplies its own scratch allocator.
+    pub fn init(owner: std.mem.Allocator) Cache {
+        return .{ .owner = owner };
+    }
+
+    /// Resolves once, returning a borrowed slice. Concurrent lookups wait for the first result.
+    pub fn path(self: *Cache, gpa: std.mem.Allocator, io: std.Io) ?[]const u8 {
+        return self.get(gpa, io, resolve);
+    }
+
+    /// Frees the cached string. All lookups and users of returned slices must have finished.
+    pub fn deinit(self: *Cache) void {
+        if (self.value) |value| self.owner.free(value);
+        self.* = .init(self.owner);
+    }
 
     const ResolveFn = fn (gpa: std.mem.Allocator, io: std.Io) anyerror!?[]u8;
 
     fn get(
         self: *Cache,
-        owner: std.mem.Allocator,
         gpa: std.mem.Allocator,
         io: std.Io,
         comptime resolveFn: ResolveFn,
@@ -58,7 +77,7 @@ const Cache = struct {
         self.mutex.lockUncancelable(io);
         defer self.mutex.unlock(io);
         if (!self.resolved.load(.monotonic)) {
-            self.value = own(owner, gpa, io, resolveFn);
+            self.value = own(self.owner, gpa, io, resolveFn);
             self.resolved.store(true, .release);
         }
         return self.value;
@@ -130,20 +149,20 @@ fn testResolve(gpa: std.mem.Allocator, io: std.Io) !?[]u8 {
 fn testGet(c: *Cache, io: std.Io) void {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
-    _ = c.get(std.testing.allocator, arena.allocator(), io, testResolve);
+    _ = c.get(arena.allocator(), io, testResolve);
 }
 
 test "the cached value outlives the allocator its first caller passed" {
     const io = std.testing.io;
     test_resolutions.store(0, .monotonic);
-    var c: Cache = .{};
-    defer if (c.value) |v| std.testing.allocator.free(v);
+    var c: Cache = .init(std.testing.allocator);
+    defer c.deinit();
 
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
-    const first = c.get(std.testing.allocator, arena.allocator(), io, testResolve);
+    const first = c.get(arena.allocator(), io, testResolve);
     arena.deinit();
 
-    const second = c.get(std.testing.allocator, std.testing.allocator, io, testResolve);
+    const second = c.get(std.testing.allocator, io, testResolve);
     try std.testing.expectEqualStrings("/opt/homebrew/bin:/usr/bin", second.?);
     try std.testing.expectEqual(first.?.ptr, second.?.ptr);
     try std.testing.expectEqual(1, test_resolutions.load(.monotonic));
@@ -152,8 +171,8 @@ test "the cached value outlives the allocator its first caller passed" {
 test "threads asking at once resolve once" {
     const io = std.testing.io;
     test_resolutions.store(0, .monotonic);
-    var c: Cache = .{};
-    defer if (c.value) |v| std.testing.allocator.free(v);
+    var c: Cache = .init(std.testing.allocator);
+    defer c.deinit();
 
     var threads: [8]std.Thread = undefined;
     for (&threads) |*t| t.* = try std.Thread.spawn(.{}, testGet, .{ &c, io });
@@ -173,8 +192,22 @@ test "a failed resolution is cached as null" {
         }
     }.resolve;
     test_resolutions.store(0, .monotonic);
-    var c: Cache = .{};
-    try std.testing.expectEqual(null, c.get(std.testing.allocator, std.testing.allocator, io, fail));
-    try std.testing.expectEqual(null, c.get(std.testing.allocator, std.testing.allocator, io, fail));
+    var c: Cache = .init(std.testing.allocator);
+    try std.testing.expectEqual(null, c.get(std.testing.allocator, io, fail));
+    try std.testing.expectEqual(null, c.get(std.testing.allocator, io, fail));
     try std.testing.expectEqual(1, test_resolutions.load(.monotonic));
+}
+
+test "cache deinit releases its owner allocation and permits another resolution" {
+    test_resolutions.store(0, .monotonic);
+    var c: Cache = .init(std.testing.allocator);
+    defer c.deinit();
+
+    _ = c.get(std.testing.allocator, std.testing.io, testResolve);
+    c.deinit();
+    try std.testing.expectEqual(null, c.value);
+    try std.testing.expect(!c.resolved.load(.monotonic));
+    const value = c.get(std.testing.allocator, std.testing.io, testResolve);
+    try std.testing.expectEqualStrings("/opt/homebrew/bin:/usr/bin", value.?);
+    try std.testing.expectEqual(2, test_resolutions.load(.monotonic));
 }
