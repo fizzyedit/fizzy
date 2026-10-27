@@ -1385,9 +1385,8 @@ test "a thousand listeners stop without a client waking accept" {
     if (!Io.net.has_unix_sockets) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const io = std.testing.io;
-    var dog: Watchdog = .{ .io = io, .name = @src().fn_name };
-    try dog.arm();
-    defer dog.disarm();
+    const dog = try Watchdog.start(gpa, io, @src().fn_name);
+    defer dog.stop();
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const path = try testSocket(gpa, &tmp);
