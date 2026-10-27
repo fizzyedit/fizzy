@@ -29,6 +29,7 @@ const BundledApp = struct {
     const gpa = std.heap.smp_allocator;
 
     fn up(self: *BundledApp) !void {
+        Watchdog.enter("editor up");
         self.t = try dvui.testing.init(.{ .allocator = gpa, .window_size = .{ .w = 1280, .h = 800 } });
         self.tmp = std.testing.tmpDir(.{});
         const len = try self.tmp.dir.realPath(dvui.io, self.root_buf[0 .. self.root_buf.len - 1]);
@@ -49,6 +50,7 @@ const BundledApp = struct {
 
     /// Quits the way `appQuit` does: after the last frame, with no window current.
     fn down(self: *BundledApp) void {
+        Watchdog.enter("editor down");
         const harness_window = dvui.current_window;
         dvui.current_window = null;
         self.editor.deinit() catch {};
@@ -58,6 +60,59 @@ const BundledApp = struct {
         @import("app").profile.root = null;
         self.tmp.cleanup();
         self.t.deinit();
+    }
+};
+
+/// Ends the test binary, naming the phase, when the test stays in one phase for `limit_ms`: every
+/// frame loop here is bounded, so what stalls is a block outside them (a join, an await, a futex)
+/// that `zig build test-integration` would otherwise wait on until its runner is killed.
+const Watchdog = struct {
+    const limit_ms = 180_000;
+
+    var lock: std.Io.Mutex = .init;
+    var phase_name: []const u8 = "setup";
+    var phase_count: usize = 0;
+    var done: std.Io.Event = .unset;
+    var thread: ?std.Thread = null;
+
+    fn start() !void {
+        thread = try std.Thread.spawn(.{}, watch, .{});
+    }
+
+    fn stop() void {
+        done.set(std.testing.io);
+        if (thread) |t| t.join();
+        thread = null;
+        done.reset();
+    }
+
+    /// What the test is doing now; `name` outlives the call.
+    fn enter(name: []const u8) void {
+        lock.lockUncancelable(std.testing.io);
+        defer lock.unlock(std.testing.io);
+        phase_name = name;
+        phase_count += 1;
+    }
+
+    fn watch() void {
+        var seen: ?usize = null;
+        while (true) {
+            done.waitTimeout(std.testing.io, .{ .duration = .{ .raw = .fromMilliseconds(limit_ms), .clock = .awake } }) catch |err| switch (err) {
+                error.Timeout => {
+                    lock.lockUncancelable(std.testing.io);
+                    defer lock.unlock(std.testing.io);
+                    if (seen == phase_count) {
+                        std.debug.print("\nfizzy-demo-tests: phase '{s}' has not ended in {d} s: something outside the bounded frame loops is blocked; aborting\n", .{ phase_name, limit_ms / 1000 });
+                        std.process.abort();
+                    }
+                    seen = phase_count;
+                    continue;
+                },
+                // Nothing cancels this thread; a cancellation would mean the test is already ending.
+                error.Canceled => {},
+            };
+            return;
+        }
     }
 };
 
@@ -75,6 +130,8 @@ test "demo: the rail's Files anchor the scripts spell out is the one fizzy publi
 }
 
 test "demo: every bundled demo plays to the end through fizzy's stage, a seek lands on what playing reached, and the person's own folder is theirs again after" {
+    try Watchdog.start();
+    defer Watchdog.stop();
     var app: BundledApp = undefined;
     try app.up();
     defer app.down();
@@ -95,6 +152,7 @@ test "demo: every bundled demo plays to the end through fizzy's stage, a seek la
     const random = prng.random();
 
     for (fizzy.Editor.Demo.catalog.entries) |e| {
+        Watchdog.enter(e.name);
         try app.editor.demo.play(e.name);
 
         // A role in an anchor's name is the place of that kind in the layout as it is.
@@ -178,6 +236,7 @@ test "demo: every bundled demo plays to the end through fizzy's stage, a seek la
         try std.testing.expectEqual(@as(u32, 0), p.timeouts);
     }
 
+    Watchdog.enter("demos service");
     // The `demos` service lists them, fizzy's own in its order, with each one's length and chapters.
     const api = app.editor.demos.api;
     const catalog = fizzy.Editor.Demo.catalog;
@@ -223,6 +282,7 @@ test "demo: every bundled demo plays to the end through fizzy's stage, a seek la
     while (p.state == .seeking and frames < 400) : (frames += 1) _ = try dvui.testing.step(headlessFrame);
     try std.testing.expect(p.seq.now >= @as(f64, @floatFromInt(second)));
 
+    Watchdog.enter("window material");
     // The window's material a tape sets is the demo's: a cut and the end give the person theirs.
     const settings = &app.editor.app.settings;
     p.unload();
@@ -256,6 +316,7 @@ test "demo: every bundled demo plays to the end through fizzy's stage, a seek la
     try std.testing.expectEqual(fizzy.core.material.Kind.blur, settings.window_material);
     settings.window_material = .liquid;
 
+    Watchdog.enter("person's panes");
     // A demo plays among the person's panes: their split and their documents stay where they are
     // through a play, a seek and the end, and the demo's tabs open beside them.
     {
@@ -304,6 +365,7 @@ test "demo: every bundled demo plays to the end through fizzy's stage, a seek la
         try dvui.testing.settle(headlessFrame);
     }
 
+    Watchdog.enter("unsaved work");
     // A demo plays on a stage of its own: unsaved work of the person's never stops one, and is
     // there after it exactly as it was — still open, still unsaved, its history and its pane
     // theirs — through a play, a seek back and an end, with settings.zon never written.
@@ -376,6 +438,7 @@ test "demo: every bundled demo plays to the end through fizzy's stage, a seek la
         try dvui.testing.settle(headlessFrame);
     }
 
+    Watchdog.enter("tour on the person's window");
     // The tour on the person's window: a file they open while it plays is theirs, and the panes
     // the tour splits off are not written to `panes.zon` as theirs and are back as they were when
     // it ends.
@@ -532,6 +595,7 @@ test "demo: every bundled demo plays to the end through fizzy's stage, a seek la
 /// A tour played to its end and reverted closes what it opened, and the window is the person's
 /// again: here with the explorer shut, a window the recording was not made on.
 fn revertClosesWhatTheTourOpened(app: *BundledApp) !void {
+    Watchdog.enter("revertClosesWhatTheTourOpened");
     const editor = app.editor;
     const p = &editor.demo.player;
 
@@ -560,6 +624,7 @@ fn revertClosesWhatTheTourOpened(app: *BundledApp) !void {
 /// A float the person had, then moved while the tour played, is back where it was after the
 /// revert, not flying shut: only what the snapshot lacks glides away.
 fn revertKeepsAMovedFloat(app: *BundledApp) !void {
+    Watchdog.enter("revertKeepsAMovedFloat");
     const editor = app.editor;
     const p = &editor.demo.player;
     const gpa = editor.app.gpa;
@@ -597,6 +662,7 @@ fn revertKeepsAMovedFloat(app: *BundledApp) !void {
 /// arrangement and the documents as they were, reverted too, and a tour stopped or closed from its
 /// bar midway leaves it exactly as it stood at that moment.
 fn tourOnARearrangedLayout(app: *BundledApp) !void {
+    Watchdog.enter("tourOnARearrangedLayout");
     const editor = app.editor;
     const p = &editor.demo.player;
     const name = fizzy.Editor.Demo.catalog.entries[0].name;
@@ -853,6 +919,7 @@ fn encodedDemo(name: []const u8, demo: bool) ![]u8 {
 /// The tour on a phone: the files view is the explorer sheet over the documents, which the role
 /// `explorer` names, and the tour opens it. (Run from the test above: the editor comes up once.)
 fn tourOnAPhone(app: *BundledApp) !void {
+    Watchdog.enter("tourOnAPhone");
     const p = &app.editor.demo.player;
     fizzy.core.platform.cached_form_factor = .mobile;
     defer fizzy.core.platform.cached_form_factor = .desktop;
