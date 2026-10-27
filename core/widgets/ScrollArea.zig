@@ -324,7 +324,6 @@ test "coast displacement follows each frame gap" {
         try frameAfter(next_gap);
         const displacement = previous_y - t_raw_y;
         const speed = displacement / gap_ms;
-        std.debug.print("coast gap_ms={d:.0} displacement_px={d:.4} px_per_ms={d:.4}\n", .{ gap_ms, displacement, speed });
         follows_gaps = follows_gaps and displacement > 0 and speed < previous_speed;
         previous_time = time;
         previous_y = t_raw_y;
