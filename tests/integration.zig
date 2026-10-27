@@ -8687,7 +8687,7 @@ test "tree: an external reopen during closing owns the branch state" {
         fn frame() !dvui.App.Result {
             const tree = fizzy.core.widgets.TreeWidget.tree(@src(), .{}, .{ .expand = .both });
             defer tree.deinit();
-            const branch = tree.branch(@src(), .{ .expanded = open }, .{ .expand = .horizontal });
+            const branch = tree.branch(@src(), .{ .expanded = open, .animation_duration = 1_000_000 }, .{ .expand = .horizontal });
             defer branch.deinit();
             expanded = branch.expanded;
             dvui.labelNoFmt(@src(), "folder", .{}, .{});
@@ -8709,11 +8709,15 @@ test "tree: an external reopen during closing owns the branch state" {
     try std.testing.expect(!Scene.expanded);
     try std.testing.expect(Scene.children);
     try std.testing.expectEqual(@as(?bool, null), Scene.requested);
+    // A second frame advances the close animation before the caller restores its state.
+    _ = try dvui.testing.step(Scene.frame);
+    try std.testing.expect(Scene.progress > 0 and Scene.progress < 1);
     Scene.open = true;
     _ = try dvui.testing.step(Scene.frame);
     try std.testing.expect(Scene.expanded);
     try dvui.testing.settle(Scene.frame);
     try std.testing.expect(Scene.expanded and Scene.children);
+    try std.testing.expectEqual(@as(f32, 1), Scene.progress);
     try std.testing.expectEqual(@as(?bool, null), Scene.requested);
 }
 
