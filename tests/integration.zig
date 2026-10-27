@@ -5475,6 +5475,71 @@ test "dragging a view over its own place shows that place's drop zones" {
     try std.testing.expect(fizzy.core.widgets.DropZones.showing(center.id));
 }
 
+test "drop: beside marks the tall target's bottom rather than the wide source's right" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+    const editor = ctx.editor;
+    const gpa = std.testing.allocator;
+    editor.app.gpa = gpa;
+    const state = &editor.app.layout;
+    defer state.regions.deinit(gpa);
+    defer state.regions_building.deinit(gpa);
+    defer state.deinitExtents(gpa);
+    defer state.deinitAssignments(gpa);
+    defer state.deinitQualified(gpa);
+    defer state.view_drag.discard();
+    const source: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 1200, .h = 800 };
+    const target: dvui.Rect.Physical = .{ .x = 1200, .y = 0, .w = 820, .h = 1180 };
+    state.registerRegion(gpa, .{ .name = "Source", .keywords = fizzy.sdk.keywords.ide.main, .bounds = source, .size = .{ .w = source.w, .h = source.h } });
+    state.registerRegion(gpa, .{ .name = "Target", .keywords = &.{"slot"}, .bounds = target, .size = .{ .w = target.w, .h = target.h } });
+    state.publishRegions();
+    const Probe = struct {
+        calls: usize = 0,
+        fn edge(raw: *anyopaque, name: []const u8) ?fizzy.Editor.Layout.State.SplitTree.Side {
+            const self: *@This() = @ptrCast(@alignCast(raw));
+            self.calls += 1;
+            const room = if (std.mem.eql(u8, name, "Target")) target else source;
+            return workbench.Workbench.sideFor(room.w, room.h);
+        }
+    };
+    var probe: Probe = .{};
+    state.beside = .{ .ctx = &probe, .edge = Probe.edge };
+    defer state.beside = null;
+    try editor.app.host.registerSurface(.{ .id = "test.view", .title = "View", .keywords = &.{"slot"}, .draw = ManyPanelFrame.draw });
+    try state.assign(gpa, "Source", &.{"test.view"});
+    var layout = fizzy.Editor.Layout.init(&editor.app.host, state, gpa, dvui.currentWindow().arena());
+    const VD = fizzy.Editor.Layout.ViewDrag;
+    const cw = dvui.currentWindow();
+    const mouse = cw.mouse_pt;
+    defer cw.mouse_pt = mouse;
+    cw.mouse_pt = source.center();
+    VD.begin(&layout, "Source", source, source);
+    cw.mouse_pt = target.center();
+    fizzy.core.anchor.want();
+    VD.drawZones(&layout, "Target", dvui.parentGet().extendId(@src(), 0));
+    const beside = dvui.tagGet("drop:beside") orelse return error.TestUnexpectedResult;
+    const bottom = dvui.tagGet("drop:bottom") orelse return error.TestUnexpectedResult;
+    const right = dvui.tagGet("drop:right") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(bottom.rect, beside.rect);
+    try std.testing.expect(!std.meta.eql(right.rect, beside.rect));
+    try std.testing.expectEqual(@as(usize, 1), probe.calls);
+
+    // Main's implicit pane must not borrow the shape of a workspace held elsewhere.
+    const wb = &editor.workbench;
+    const grouping = wb.open_workspace_grouping;
+    var workspace = workbench.Workspace.init(grouping);
+    workspace.pane_rect_physical = source;
+    try wb.workspaces.put(gpa, grouping, workspace);
+    defer wb.workspaces.deinit(gpa);
+    var id_buf: [64]u8 = undefined;
+    const id = try std.mem.print(&id_buf, fizzy.Editor.Workspaces.id_prefix ++ "{d}", .{grouping});
+    try editor.app.host.registerSurface(.{ .id = id, .title = "Workspace", .keywords = &.{"slot"}, .draw = ManyPanelFrame.draw });
+    try state.assign(gpa, "Target", &.{id});
+    editor.demo.editor = editor;
+    editor.app.host.installFizzyApi(.{ .ctx = editor, .vtable = &fizzy.Editor.fizzy_api_vtable });
+    try std.testing.expectEqual(@as(?fizzy.Editor.Layout.State.SplitTree.Side, null), fizzy.Editor.Demo.besideEdge(&editor.demo, "Source"));
+}
+
 // `core` is not a test root, so its widgets' pure rules are tested here.
 const DZ = fizzy.core.widgets.DropZones;
 

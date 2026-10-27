@@ -877,7 +877,14 @@ pub fn besideEdge(ctx: *anyopaque, name: []const u8) ?SplitTree.Side {
     const wb = &editor.workbench;
     const grouping = Editor.Workspace.groupingOfName(name) orelse editor.workspaces.groupingIn(name) orelse blk: {
         const main = editor.regionFor(sdk.keywords.ide.main) orelse return null;
-        break :blk if (std.mem.eql(u8, main.name, name)) wb.open_workspace_grouping else return null;
+        if (!std.mem.eql(u8, main.name, name)) return null;
+        var layout = Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, editor.app.host.arena());
+        var buf: [64]u8 = undefined;
+        const id = std.mem.print(&buf, Editor.Workspaces.id_prefix ++ "{d}", .{wb.open_workspace_grouping}) catch return null;
+        if (Editor.Layout.ViewDrag.holderOf(&layout, id)) |holder| {
+            if (!std.mem.eql(u8, holder, name)) return null;
+        }
+        break :blk wb.open_workspace_grouping;
     };
     return wb.besideEdge(grouping);
 }
