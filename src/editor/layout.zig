@@ -31,7 +31,7 @@ pub fn layout(ctx: ?*anyopaque, f: *Layout) !dvui.App.Result {
     defer body.deinit();
 
     var rail_action: Rail.Action = .none;
-    if (rail_left) rail_action = try Rail.draw(railHost(editor), f, sidebar);
+    if (rail_left) rail_action = Rail.draw(railHost(editor), f, sidebar);
 
     {
         var stack = dvui.box(@src(), .{ .dir = .vertical }, .{
@@ -71,7 +71,7 @@ pub fn layout(ctx: ?*anyopaque, f: *Layout) !dvui.App.Result {
     }
 
     if (!rail_left) {
-        rail_action = try Rail.draw(railHost(editor), f, sidebar);
+        rail_action = Rail.draw(railHost(editor), f, sidebar);
         applyRailAction(editor, f, rail_action);
     }
 

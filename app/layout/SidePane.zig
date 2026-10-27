@@ -15,7 +15,7 @@ scroll_info: dvui.ScrollInfo = .{
 rect: dvui.Rect = .{},
 rect_screen: dvui.Rect.Physical = .{},
 collapse_btn_anim_started: bool = false,
-/// Set by `draw` on the frame the collapse button is pressed; the caller reads and clears it.
+/// Cleared at the start of `draw` and set on the frame the collapse button is pressed; the caller reads it after `draw`.
 collapse_requested: bool = false,
 
 /// Draws the pane *chrome* — header, scroll policy, collapse button — around whichever
@@ -26,21 +26,23 @@ collapse_requested: bool = false,
 ///
 /// `region` is the pane's own region, if the layout has one; the collapse button shows while it peeks.
 pub fn draw(
-    explorer: *SidePane,
+    self: *SidePane,
     f: *Layout,
     keywords: []const []const u8,
     region: ?Layout.Region,
 ) Layout.Region.Error!dvui.App.Result {
+    self.collapse_requested = false;
+
     const vbox = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .both,
         .background = false,
     });
     defer vbox.deinit();
 
-    explorer.rect = vbox.data().rect;
-    explorer.rect_screen = vbox.data().rectScale().r;
+    self.rect = vbox.data().rect;
+    self.rect_screen = vbox.data().rectScale().r;
 
-    try drawHeader(explorer, f, keywords);
+    drawHeader(f, keywords);
 
     _ = dvui.spacer(@src(), .{});
 
@@ -56,15 +58,15 @@ pub fn draw(
     // could then never be narrower than it had just been told to be.
     const self_scrolling = if (f.selected(keywords)) |view| view.scrolls_itself else false;
     if (self_scrolling) {
-        explorer.scroll_info.vertical = .given;
-        explorer.scroll_info.horizontal = .none;
+        self.scroll_info.vertical = .given;
+        self.scroll_info.horizontal = .none;
         // Left over from a surface that did scroll sideways; a pane that cannot scroll has
         // nowhere to be scrolled to.
-        explorer.scroll_info.viewport.x = 0;
-        explorer.scroll_info.viewport.y = 0;
+        self.scroll_info.viewport.x = 0;
+        self.scroll_info.viewport.y = 0;
     } else {
-        explorer.scroll_info.vertical = .auto;
-        explorer.scroll_info.horizontal = .auto;
+        self.scroll_info.vertical = .auto;
+        self.scroll_info.horizontal = .auto;
     }
 
     // No bars at all around a surface that scrolls itself, rather than bars decided against a size
@@ -72,14 +74,14 @@ pub fn draw(
     // it was last given, a frame old — while the window shrank, every frame of it, last frame's
     // height overflowed this frame's, and a bar showed beside the pane's own until it stopped.
     const bar: dvui.ScrollInfo.ScrollBarMode = if (self_scrolling) .hide else .auto_overlay;
-    var scroll = core.widgets.ScrollArea.init(@src(), .{ .scroll_info = &explorer.scroll_info, .horizontal_bar = bar, .vertical_bar = bar }, .{
+    var scroll = core.widgets.ScrollArea.init(@src(), .{ .scroll_info = &self.scroll_info, .horizontal_bar = bar, .vertical_bar = bar }, .{
         .expand = .both,
         .background = false,
     });
     // This frame's viewport, measured just now, before the surface lays out in it: given last
     // frame's, it was a frame too tall as the window shrank (its foot clipped) and a frame too short
     // as it grew.
-    if (self_scrolling) explorer.scroll_info.virtual_size = .{ .w = explorer.scroll_info.viewport.w, .h = explorer.scroll_info.viewport.h };
+    if (self_scrolling) self.scroll_info.virtual_size = .{ .w = self.scroll_info.viewport.w, .h = self.scroll_info.viewport.h };
 
     // Through the layout, not `Host.selectedSurface`: the host remembers which
     // view was chosen here and hands it back whether or not this place still
@@ -96,7 +98,7 @@ pub fn draw(
         // view can be unpacked before the incoming one draws. The blur bleeds past the pane's
         // edge and feathers out over the rail beside it: the pane has no card, and a blur that
         // stopped dead at an edge nothing on screen draws read as clipped. Not upward: the title
-        // above is the explorer's own, already names the new view, and stays sharp.
+        // above is the pane's own, already names the new view, and stays sharp.
         var body = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .background = false });
         defer body.deinit();
         _ = try f.drawSwappedIn(sdk.keywords.groupKey(keywords), body, surface, .{ .left = true, .right = true, .bottom = true });
@@ -106,31 +108,31 @@ pub fn draw(
 
     // Two calls rather than one: `pane_vbox` has to deinit between the vertical and horizontal
     // hints, since the horizontal ones are drawn over the outer `vbox` instead.
-    core.draw.drawScrollEdgeShadows(pane_vbox.data().contentRectScale(), null, &explorer.scroll_info, .{});
+    core.draw.drawScrollEdgeShadows(pane_vbox.data().contentRectScale(), null, &self.scroll_info, .{});
 
     pane_vbox.deinit();
 
-    core.draw.drawScrollEdgeShadows(null, vbox.data().contentRectScale(), &explorer.scroll_info, .{});
+    core.draw.drawScrollEdgeShadows(null, vbox.data().contentRectScale(), &self.scroll_info, .{});
 
     // Peek-only floating collapse button. Drawn last so it overlays everything else in the
-    // explorer pane. Only while the region is *peeking*: open on a window too narrow to hold it
+    // side pane. Only while the region is *peeking*: open on a window too narrow to hold it
     // beside the center, which is the one state where there is no split to drag it shut by.
     if (region) |r| {
-        if (r.isPeeking()) drawCollapseButton(explorer, r) else explorer.collapse_btn_anim_started = false;
+        if (r.isPeeking()) drawCollapseButton(self, r) else self.collapse_btn_anim_started = false;
     }
 
     return .ok;
 }
 
-fn drawCollapseButton(explorer: *SidePane, r: Layout.Region) void {
+fn drawCollapseButton(self: *SidePane, r: Layout.Region) void {
     // A glass bubble, as the controls over a document are (`core.widgets.glass_button`).
     const button_size = core.widgets.glass_button.size;
     const margin: f32 = 12;
     const wr = dvui.windowRect();
 
     const anim_id = dvui.Id.update(r.id, "collapse_btn");
-    if (!explorer.collapse_btn_anim_started) {
-        explorer.collapse_btn_anim_started = true;
+    if (!self.collapse_btn_anim_started) {
+        self.collapse_btn_anim_started = true;
         dvui.animation(anim_id, "_appear", .{
             .start_val = 0.0,
             .end_val = 1.0,
@@ -150,11 +152,11 @@ fn drawCollapseButton(explorer: *SidePane, r: Layout.Region) void {
     const centre: dvui.Point = .{ .x = wr.w - margin - button_size / 2, .y = wr.h - margin - button_size / 2 };
     const rect: dvui.Rect = .{ .x = centre.x - sized / 2, .y = centre.y - sized / 2, .w = sized, .h = sized };
     if (core.widgets.glass_button.bubble(@src(), rect, icons.tvg.lucide.@"panel-left-close", .{ .label = "Collapse Side Pane" })) {
-        explorer.collapse_requested = true;
+        self.collapse_requested = true;
     }
 }
 
-pub fn drawHeader(_: *SidePane, f: *Layout, keywords: []const []const u8) !void {
+fn drawHeader(f: *Layout, keywords: []const []const u8) void {
     const view = f.selected(keywords) orelse return;
     const header_title = std.ascii.allocUpperString(dvui.currentWindow().arena(), view.title) catch view.title;
 

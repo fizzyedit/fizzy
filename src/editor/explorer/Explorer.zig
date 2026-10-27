@@ -47,7 +47,6 @@ pub fn draw(
 ) Layout.Region.Error!dvui.App.Result {
     const result = try explorer.pane.draw(f, keywords, editor.regionFor(fizzy.sdk.keywords.ide.sidebar));
     if (explorer.pane.collapse_requested) {
-        explorer.pane.collapse_requested = false;
         explorer.peekClose(editor);
     }
     return result;

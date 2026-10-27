@@ -54,7 +54,7 @@ pub const Action = enum { none, open, close };
 /// What is the rail's own
 /// is only how an icon looks and what picking the showing one means: it opens or closes the
 /// sidebar.
-pub fn draw(host: Host, f: *Layout, keywords: []const []const u8) !Action {
+pub fn draw(host: Host, f: *Layout, keywords: []const []const u8) Action {
     const vbox = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .vertical,
         .background = false,
