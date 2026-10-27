@@ -10,7 +10,7 @@
         "src",
         "static",
     },
-    .fingerprint = 0x0,
+    .fingerprint = 0x659df2aa507f8c19,
     .dependencies = .{
         .fizzy = .{
             .path = "../../sdk",

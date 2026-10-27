@@ -2,7 +2,7 @@
 //! Enter does, how many lines the composer shows, and where a message's ``` fences begin and end.
 const std = @import("std");
 
-/// Lines the composer grows to; past this it scrolls.
+/// Lines the composer grows to; past this it scrolls (View caps the entry at this many lines).
 pub const max_lines: usize = 8;
 
 pub const Enter = enum { send, newline };
@@ -11,12 +11,6 @@ pub const Enter = enum { send, newline };
 /// is a new line anywhere.
 pub fn enter(shift: bool, mobile: bool) Enter {
     return if (shift or mobile) .newline else .send;
-}
-
-/// The lines the composer shows for `wrapped` lines of text: one while empty, growing with the
-/// text up to `max_lines`.
-pub fn visibleLines(wrapped: usize) usize {
-    return std.math.clamp(wrapped, 1, max_lines);
 }
 
 /// `text` with the whitespace around it removed, or null when nothing is left to send.
@@ -89,12 +83,6 @@ test "Enter sends on a desktop and breaks the line on a phone or with Shift" {
     try std.testing.expectEqual(Enter.newline, enter(true, false));
     try std.testing.expectEqual(Enter.newline, enter(false, true));
     try std.testing.expectEqual(Enter.newline, enter(true, true));
-}
-
-test "the composer grows with its lines up to the cap" {
-    try std.testing.expectEqual(@as(usize, 1), visibleLines(0));
-    try std.testing.expectEqual(@as(usize, 3), visibleLines(3));
-    try std.testing.expectEqual(max_lines, visibleLines(max_lines + 4));
 }
 
 test "only text with something in it can be sent" {
