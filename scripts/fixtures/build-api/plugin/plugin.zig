@@ -4,6 +4,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const sdk = @import("fizzy_sdk");
 const dvui = @import("dvui");
+const fixture_lib = @import("fixture_lib");
 
 pub const plugin_options = @import("fizzy_plugin_options");
 pub const plugin_id = plugin_options.id;
@@ -28,6 +29,8 @@ var plugin: sdk.Plugin = .{
 const vtable: sdk.Plugin.VTable = .{};
 
 pub fn register(host: *sdk.Host) !void {
+    // Calls into the C source of the package's own dependency: it must have reached the link.
+    if (fixture_lib.fixture_answer() != 42) return error.FixtureDependency;
     try host.registerPlugin(&plugin);
     try host.registerSurface(.{
         .id = plugin_id ++ ".surface",

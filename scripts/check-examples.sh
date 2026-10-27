@@ -130,7 +130,7 @@ fi
 fixtures="scripts/fixtures/build-api"
 for id in fixture_both fixture_native; do
   mkdir -p "$work/$id"
-  cp "$fixtures"/plugin/{build.zig,build.zig.zon,plugin.zig,lib.zig} "$work/$id/"
+  cp "$fixtures"/plugin/{build.zig,build.zig.zon,plugin.zig,lib.zig,lib.c} "$work/$id/"
   sed "s/@ID@/$id/g" "$fixtures/plugin/plugin.zig.zon.tmpl" > "$work/$id/plugin.zig.zon"
   (cd "$work/$id" && zig fetch --save=fizzy "$sdk_tarball" >/dev/null)
 done
@@ -165,11 +165,19 @@ step "web build leaves the native-only plugin out" ok "" web --prefix "$work/out
 [[ -f "$work/out/fixture-web/web/index.html" ]] \
   || { echo "FAIL  addWebSteps installed no web/index.html"; fixture_fail=1; }
 # `package` runs vpk, which needs dotnet; `--verbose` prints its command line, `vpk-args` on it.
-# Whether vpk then packs the fixture is not the question, so the status is not read.
+# Whether vpk then packs the fixture is not the question, so the status is not read; the files of
+# `package-dirs` are staged into the pack input before vpk runs, and that is read from disk.
 if command -v dotnet > /dev/null; then
   step "vpk-args reach vpk pack" any "--fixture-vpk-arg" package --verbose --prefix "$work/out/fixture-pkg"
+  staged=$(ls "$work"/out/fixture-pkg/*/.pack-input/fixture-helper.txt 2>/dev/null || true)
+  if [[ -n $staged && $(cat "$staged") == "beside the executable" ]]; then
+    echo "ok    package-dirs staged into the pack input"
+  else
+    echo "FAIL  package-dirs file missing from the pack input"
+    fixture_fail=1
+  fi
 else
-  echo "skip  vpk-args reach vpk pack (no dotnet)"
+  echo "skip  vpk-args reach vpk pack, package-dirs staged (no dotnet)"
 fi
 step "a plugin listed twice is an error" fail "listed twice" -Dfixture-fail=twice
 step "an app's own web step is an error" fail "already has a \`web\` step" -Dfixture-fail=web-taken
