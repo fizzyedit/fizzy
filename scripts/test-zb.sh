@@ -4,10 +4,12 @@
 # its arguments in $T/ran and sleeps until $T/go exists, then exits with $T/status (default 0).
 cd "$(dirname "$0")" || exit 1
 T=$(mktemp -d)
-trap 'touch "$T/go"; kill $(cat "$T"/pids 2>/dev/null) 2>/dev/null; rm -rf "$T"' EXIT
+trap 'touch "$T/go"; kill $(cat "$T"/pids "$T"/zigpids 2>/dev/null) 2>/dev/null; rm -rf "$T"' EXIT
+trap 'exit 1' INT TERM HUP
 cat >"$T/zig" <<FAKE
 #!/bin/sh
 echo "\$*" >>"$T/ran"
+echo \$\$ >>"$T/zigpids"
 while [ ! -e "$T/go" ]; do sleep 0.1; done
 exit \$(cat "$T/status" 2>/dev/null || echo 0)
 FAKE
@@ -70,6 +72,15 @@ grep -q "zb: no build slot after 1s" "$T/o7" || fail "young pid-less slot not he
 touch -t 200001010000 "$T/slots/slot.0" "$T/slots/slot.1"
 ./zb build i >"$T/o8" 2>&1 || fail "old pid-less slot not reclaimed: $(cat "$T/o8")"
 grep -q '^build i' "$T/ran" || fail "build i did not run"
+
+# A reclaimer paused between moving a pid away and putting it back holds the lock, so a waiter
+# cannot claim the pid-less slot meanwhile, even once the slot is a minute old.
+rm -rf "$T/slots"; mkdir -p "$T/slots/slot.0" "$T/slots/slot.1" "$T/slots/lock"
+touch -t 200101010000 "$T/slots/slot.0" "$T/slots/slot.1"
+FIZZY_BUILD_WAIT=1 ./zb build j >"$T/o9" 2>&1 && fail "build took a slot while the lock was held"
+grep -q '^build j' "$T/ran" && fail "build j ran while the lock was held"
+touch -t 200001010000 "$T/slots/lock"
+./zb build k >"$T/o10" 2>&1 || fail "stale lock not broken: $(cat "$T/o10")"
 
 # Over the load ceiling, a build waits (and says so) until it is lifted.
 FIZZY_BUILD_MAX_LOAD=-1 ./zb build e >"$T/o5" 2>&1 & p5=$!; echo $p5 >>"$T/pids"

@@ -30,7 +30,7 @@ const no_disk = builtin.target.cpu.arch == .wasm32;
 gpa: std.mem.Allocator,
 io: std.Io,
 ready: vfs.http.Completions(Completion),
-/// Reads in flight on `io.async`, by job id. Guarded by `lock`; the futures themselves are
+/// Reads in flight on `io.concurrent`, by job id. Guarded by `lock`; the futures themselves are
 /// awaited from `pump` only once their task has set `done`.
 reads: std.AutoArrayHashMapUnmanaged(u64, *ReadJob) = .empty,
 /// Listings in flight on `io.concurrent`, by job id; guarded by `lock` like `reads`.

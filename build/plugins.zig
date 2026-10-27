@@ -16,6 +16,7 @@ pub const archive = @import("../plugins/archive/static/integration.zig");
 pub const devtools = @import("../plugins/devtools/static/integration.zig");
 pub const guides = @import("../plugins/guides/static/integration.zig");
 pub const dashboard = @import("../plugins/dashboard/static/integration.zig");
+pub const chat = @import("../plugins/chat/static/integration.zig");
 
 /// Fizzy's own plugins, as entries in the list an application links (`fizzy.plugins`). An entry
 /// with no module is built by fizzy for each executable, wired to that executable's framework.
@@ -28,6 +29,7 @@ pub const entries = struct {
     pub const devtools: BundledPlugin = .{ .name = "devtools" };
     pub const guides: BundledPlugin = .{ .name = "guides" };
     pub const dashboard: BundledPlugin = .{ .name = "dashboard" };
+    pub const chat: BundledPlugin = .{ .name = "chat" };
 
     /// What fizzy itself links, in its sidebar order.
     pub const all = [_]BundledPlugin{
@@ -78,11 +80,11 @@ pub const Linked = struct {
 
 /// Make the modules for `plugins`: fizzy's own built for this executable, an application's
 /// re-homed onto it. workbench must be listed, because the editor still holds its state
-/// (fizzyedit/plans#13).
+/// (fizzyedit/plans#16).
 pub fn link(b: *std.Build, w: Wiring, plugins: []const BundledPlugin) Linked {
     if (!linksFizzys(plugins, "workbench")) std.debug.panic(
         "fizzy: the plugin list must include `fizzy.plugins.workbench`; the editor " ++
-            "still holds its state (fizzyedit/plans#13)",
+            "still holds its state (fizzyedit/plans#16)",
         .{},
     );
 
@@ -153,6 +155,14 @@ pub fn link(b: *std.Build, w: Wiring, plugins: []const BundledPlugin) Linked {
             )
         else if (std.mem.eql(u8, p.name, "dashboard"))
             dashboard.addStaticModule(
+                b,
+                w.target,
+                w.optimize,
+                .{ .dvui = w.dvui, .core = w.core, .sdk = w.sdk },
+                w.consumer,
+            )
+        else if (std.mem.eql(u8, p.name, "chat"))
+            chat.addStaticModule(
                 b,
                 w.target,
                 w.optimize,

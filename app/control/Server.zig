@@ -684,18 +684,25 @@ fn noWake() void {}
 const Watchdog = struct {
     const limit_ms = 60_000;
 
+    gpa: std.mem.Allocator,
     io: Io,
     name: []const u8,
     done: Io.Event = .unset,
-    thread: ?std.Thread = null,
+    thread: std.Thread = undefined,
 
-    fn arm(self: *Watchdog) !void {
+    /// Starts a watch on the test `name` (`@src().fn_name`); the test ends it with `stop`.
+    fn start(gpa: std.mem.Allocator, io: Io, name: []const u8) !*Watchdog {
+        const self = try gpa.create(Watchdog);
+        errdefer gpa.destroy(self);
+        self.* = .{ .io = io, .name = name, .gpa = gpa };
         self.thread = try std.Thread.spawn(.{}, watch, .{self});
+        return self;
     }
 
-    fn disarm(self: *Watchdog) void {
+    fn stop(self: *Watchdog) void {
         self.done.set(self.io);
-        if (self.thread) |t| t.join();
+        self.thread.join();
+        self.gpa.destroy(self);
     }
 
     fn watch(self: *Watchdog) void {
@@ -704,7 +711,8 @@ const Watchdog = struct {
                 std.debug.print("\nfizzy-control-server-tests: {s} still running after {d} s: a client or the server is blocked; aborting\n", .{ self.name, limit_ms / 1000 });
                 std.process.abort();
             },
-            else => {},
+            // Nothing cancels this thread; a cancellation would mean the test is already ending.
+            error.Canceled => {},
         };
     }
 };
@@ -713,6 +721,8 @@ const TestClient = struct {
     io: Io,
     path: []const u8,
     request: []const u8,
+    /// A complete final SSE message: streams have no Content-Length or reliable EOF.
+    event_end: ?[]const u8 = null,
     reply: [8192]u8 = undefined,
     reply_len: usize = 0,
 
@@ -727,11 +737,13 @@ const TestClient = struct {
         w.interface.flush() catch return;
         var rbuf: [1024]u8 = undefined;
         var r = stream.reader(self.io, &rbuf);
-        // As an HTTP client does: the head, then `Content-Length` bytes when it says, else to the
-        // end (a stream). Never to the end when it need not: whether Windows' AF_UNIX tells a
-        // reader the other side closed is not something to test here.
+        self.readReply(&r.interface);
+    }
+
+    fn readReply(self: *TestClient, reader: *Io.Reader) void {
+        // Read only a framed response: EOF is not reliable on Windows AF_UNIX.
         while (self.reply_len < self.reply.len) {
-            const n = r.interface.readSliceShort(self.reply[self.reply_len..][0..1]) catch return;
+            const n = reader.readSliceShort(self.reply[self.reply_len..][0..1]) catch return;
             if (n == 0) return;
             self.reply_len += 1;
             if (std.mem.endsWith(u8, self.reply[0..self.reply_len], "\r\n\r\n")) break;
@@ -742,21 +754,43 @@ const TestClient = struct {
             const end = std.mem.findPos(u8, head, i, "\r\n") orelse return;
             const len = std.fmt.parseInt(usize, head[i + key.len .. end], 10) catch return;
             const want = @min(len, self.reply.len - self.reply_len);
-            r.interface.readSliceAll(self.reply[self.reply_len..][0..want]) catch return;
+            reader.readSliceAll(self.reply[self.reply_len..][0..want]) catch return;
             self.reply_len += want;
-        } else {
-            self.reply_len += r.interface.readSliceShort(self.reply[self.reply_len..]) catch 0;
+        } else if (self.event_end) |end| {
+            while (self.reply_len < self.reply.len) {
+                const n = reader.readSliceShort(self.reply[self.reply_len..][0..1]) catch return;
+                if (n == 0) return;
+                self.reply_len += 1;
+                if (std.mem.endsWith(u8, self.reply[0..self.reply_len], end)) return;
+            }
         }
     }
 };
+
+test "the HTTP test client stops at the response boundary without waiting for EOF" {
+    const cases = [_]struct { response: []const u8, event_end: ?[]const u8 = null }{
+        .{ .response = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi" },
+        .{ .response = "HTTP/1.1 204 No Content\r\n\r\n" },
+        .{ .response = "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\r\nevent: end\ndata: {}\n\n", .event_end = "event: end\ndata: {}\n\n" },
+    };
+    for (cases) |case| {
+        // Bytes after the response stand in for an open connection: none may be consumed.
+        const bytes = try std.mem.concat(std.testing.allocator, u8, &.{ case.response, "still open" });
+        defer std.testing.allocator.free(bytes);
+        var reader: Io.Reader = .fixed(bytes);
+        var client: TestClient = .{ .io = std.testing.io, .path = "", .request = "", .event_end = case.event_end };
+        client.readReply(&reader);
+        try std.testing.expectEqualStrings(case.response, client.reply[0..client.reply_len]);
+        try std.testing.expectEqualStrings("still open", reader.buffered());
+    }
+}
 
 test "a request reaches the UI thread and its answer goes back" {
     if (!Io.net.has_unix_sockets) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const io = std.testing.io;
-    var dog: Watchdog = .{ .io = io, .name = @src().fn_name };
-    try dog.arm();
-    defer dog.disarm();
+    const dog = try Watchdog.start(gpa, io, @src().fn_name);
+    defer dog.stop();
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     // In a folder of its own that `start` makes, as the app's is (`control/control.sock`).
@@ -831,9 +865,8 @@ test "a request still queued at quit is answered: the server is stopping" {
     if (!Io.net.has_unix_sockets) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const io = std.testing.io;
-    var dog: Watchdog = .{ .io = io, .name = @src().fn_name };
-    try dog.arm();
-    defer dog.disarm();
+    const dog = try Watchdog.start(gpa, io, @src().fn_name);
+    defer dog.stop();
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const path = try testSocket(gpa, &tmp);
@@ -864,9 +897,8 @@ test "what cannot be served is refused before its body, and never reaches the ap
     if (!Io.net.has_unix_sockets) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const io = std.testing.io;
-    var dog: Watchdog = .{ .io = io, .name = @src().fn_name };
-    try dog.arm();
-    defer dog.disarm();
+    const dog = try Watchdog.start(gpa, io, @src().fn_name);
+    defer dog.stop();
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const path = try testSocket(gpa, &tmp);
@@ -930,9 +962,8 @@ test "a server that took over the path keeps it when the old one stops" {
     if (!Io.net.has_unix_sockets) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const io = std.testing.io;
-    var dog: Watchdog = .{ .io = io, .name = @src().fn_name };
-    try dog.arm();
-    defer dog.disarm();
+    const dog = try Watchdog.start(gpa, io, @src().fn_name);
+    defer dog.stop();
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const path = try testSocket(gpa, &tmp);
@@ -963,13 +994,12 @@ test "a server that took over the path keeps it when the old one stops" {
     try std.testing.expect(std.mem.endsWith(u8, client.reply[0..client.reply_len], "\r\n\r\nnew"));
 }
 
-test "a stream gets the events it asked for, once each, until the server stops" {
+test "a stream gets only the events it asked for, once each" {
     if (!Io.net.has_unix_sockets) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const io = std.testing.io;
-    var dog: Watchdog = .{ .io = io, .name = @src().fn_name };
-    try dog.arm();
-    defer dog.disarm();
+    const dog = try Watchdog.start(gpa, io, @src().fn_name);
+    defer dog.stop();
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const path = try testSocket(gpa, &tmp);
@@ -979,7 +1009,12 @@ test "a stream gets the events it asked for, once each, until the server stops" 
     var server: Server = .{ .gpa = gpa, .io = io, .socket_path = path, .wake = noWake };
     try server.start();
     errdefer server.stop();
-    var client: TestClient = .{ .io = io, .path = path, .request = "GET /events?topics=fizzy.document.*,chat.turn_ended HTTP/1.1\r\nHost: x\r\n\r\n" };
+    var client: TestClient = .{
+        .io = io,
+        .path = path,
+        .request = "GET /events?topics=fizzy.document.*,chat.turn_ended HTTP/1.1\r\nHost: x\r\n\r\n",
+        .event_end = "event: chat.turn_ended\ndata: {}\n\n",
+    };
     const thread = try std.Thread.spawn(.{}, TestClient.run, .{&client});
 
     var taken: std.ArrayList(*Request) = .empty;
@@ -996,10 +1031,9 @@ test "a stream gets the events it asked for, once each, until the server stops" 
     server.publish("fizzy.document.saved", "{\"path\":\"/a\"}");
     server.publish("fizzy.folder.opened", "{\"path\":\"/p\"}");
     server.publish("chat.turn_ended", "{}");
-    // Let the stream write before the stop ends it.
-    io.sleep(.fromMilliseconds(50), .awake) catch {};
-    server.stop();
+    // Wait for the final expected message before stopping can cancel the writer.
     thread.join();
+    server.stop();
 
     const reply = client.reply[0..client.reply_len];
     try std.testing.expect(std.mem.startsWith(u8, reply, "HTTP/1.1 200 OK\r\n"));
@@ -1069,9 +1103,8 @@ test "a client that stops reading neither holds up the quit nor buffers without 
     if (!Io.net.has_unix_sockets) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const io = std.testing.io;
-    var dog: Watchdog = .{ .io = io, .name = @src().fn_name };
-    try dog.arm();
-    defer dog.disarm();
+    const dog = try Watchdog.start(gpa, io, @src().fn_name);
+    defer dog.stop();
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const path = try testSocket(gpa, &tmp);
@@ -1114,9 +1147,8 @@ test "a stopped server ends a stream whose client stopped reading" {
     if (!Io.net.has_unix_sockets) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const io = std.testing.io;
-    var dog: Watchdog = .{ .io = io, .name = @src().fn_name };
-    try dog.arm();
-    defer dog.disarm();
+    const dog = try Watchdog.start(gpa, io, @src().fn_name);
+    defer dog.stop();
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const path = try testSocket(gpa, &tmp);
@@ -1142,13 +1174,12 @@ test "a stopped server ends a stream whose client stopped reading" {
     server.stop();
 }
 
-test "an event published as the stream is answered is not lost" {
+test "an event published as the stream is answered arrives while the stream stays open" {
     if (!Io.net.has_unix_sockets) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const io = std.testing.io;
-    var dog: Watchdog = .{ .io = io, .name = @src().fn_name };
-    try dog.arm();
-    defer dog.disarm();
+    const dog = try Watchdog.start(gpa, io, @src().fn_name);
+    defer dog.stop();
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const path = try testSocket(gpa, &tmp);
@@ -1157,7 +1188,12 @@ test "an event published as the stream is answered is not lost" {
 
     var server: Server = .{ .gpa = gpa, .io = io, .socket_path = path, .wake = noWake };
     try server.start();
-    var client: TestClient = .{ .io = io, .path = path, .request = "GET /events HTTP/1.1\r\nHost: x\r\n\r\n" };
+    var client: TestClient = .{
+        .io = io,
+        .path = path,
+        .request = "GET /events HTTP/1.1\r\nHost: x\r\n\r\n",
+        .event_end = "event: first\ndata: 1\n\n",
+    };
     const thread = try std.Thread.spawn(.{}, TestClient.run, .{&client});
     var taken: std.ArrayList(*Request) = .empty;
     defer taken.deinit(gpa);
@@ -1170,9 +1206,9 @@ test "an event published as the stream is answered is not lost" {
     // though its connection has not written the headers yet.
     taken.items[0].answerStream(&server);
     server.publish("first", "1");
-    io.sleep(.fromMilliseconds(50), .awake) catch {};
-    server.stop();
+    // The client must finish on the message, while the server still holds the stream open.
     thread.join();
+    server.stop();
     try std.testing.expect(std.mem.endsWith(u8, client.reply[0..client.reply_len], "\r\n\r\nevent: first\ndata: 1\n\n"));
 }
 
@@ -1180,9 +1216,8 @@ test "a stopped server ends a keep-alive connection waiting for its next request
     if (!Io.net.has_unix_sockets) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const io = std.testing.io;
-    var dog: Watchdog = .{ .io = io, .name = @src().fn_name };
-    try dog.arm();
-    defer dog.disarm();
+    const dog = try Watchdog.start(gpa, io, @src().fn_name);
+    defer dog.stop();
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const path = try testSocket(gpa, &tmp);
@@ -1289,9 +1324,8 @@ test "an upgraded connection carries bytes both ways until the app closes it" {
     if (!Io.net.has_unix_sockets) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const io = std.testing.io;
-    var dog: Watchdog = .{ .io = io, .name = @src().fn_name };
-    try dog.arm();
-    defer dog.disarm();
+    const dog = try Watchdog.start(gpa, io, @src().fn_name);
+    defer dog.stop();
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const path = try testSocket(gpa, &tmp);
@@ -1337,9 +1371,8 @@ test "a client that leaves an upgraded connection finishes its link" {
     if (!Io.net.has_unix_sockets) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const io = std.testing.io;
-    var dog: Watchdog = .{ .io = io, .name = @src().fn_name };
-    try dog.arm();
-    defer dog.disarm();
+    const dog = try Watchdog.start(gpa, io, @src().fn_name);
+    defer dog.stop();
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const path = try testSocket(gpa, &tmp);
@@ -1365,4 +1398,24 @@ test "a client that leaves an upgraded connection finishes its link" {
 
 test {
     _ = Link;
+}
+
+test "a thousand listeners stop without a client waking accept" {
+    if (!Io.net.has_unix_sockets) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    const dog = try Watchdog.start(gpa, io, @src().fn_name);
+    defer dog.stop();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try testSocket(gpa, &tmp);
+    defer gpa.free(path);
+    defer removeTestSocket(path);
+
+    // Reuse the path, as repeated launches in one profile do.
+    for (0..1000) |_| {
+        var server: Server = .{ .gpa = gpa, .io = io, .socket_path = path, .wake = noWake };
+        try server.start();
+        server.stop();
+    }
 }

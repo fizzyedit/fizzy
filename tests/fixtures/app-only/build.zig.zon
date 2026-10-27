@@ -1,0 +1,14 @@
+.{
+    .name = .app_only,
+    .version = "0.0.0",
+    .fingerprint = 0xe5f716f041fcf114,
+    .minimum_zig_version = "0.17.0",
+    .dependencies = .{
+        // A placeholder: `scripts/check-examples.sh` swaps in the packed tree.
+        .fizzy = .{
+            .url = "https://github.com/fizzyedit/fizzy/archive/refs/heads/main.tar.gz",
+            .hash = "N-V-__8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        },
+    },
+    .paths = .{ "build.zig", "build.zig.zon", "plugin.zig" },
+}
