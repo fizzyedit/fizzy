@@ -181,28 +181,11 @@ test "demo: every bundled demo plays to the end through fizzy's stage, a seek la
     // The `demos` service lists them, fizzy's own in its order, with each one's length and chapters.
     const api = app.editor.demos.api;
     const catalog = fizzy.Editor.Demo.catalog;
-    // The bundled plugins' own demos follow: the dashboard's, one.
-    try std.testing.expectEqual(catalog.entries.len + 1, api.list().len);
-    for (catalog.entries, api.list()[0..catalog.entries.len]) |e, info| {
+    try std.testing.expectEqual(catalog.entries.len, api.list().len);
+    for (catalog.entries, api.list()) |e, info| {
         try std.testing.expectEqualStrings(e.name, info.name);
         try std.testing.expectEqual(sdk.services.demos.Api.Origin.bundled, info.origin);
         try std.testing.expect(info.ms > 0);
-    }
-
-    // The dashboard's demo clicks the carousel's buttons through their anchors and plays to its
-    // end, with no wait timing out and no press off an anchor.
-    {
-        const info = api.list()[catalog.entries.len];
-        try std.testing.expectEqualStrings("dashboard", info.name);
-        try std.testing.expectEqual(sdk.services.demos.Api.Origin.plugin, info.origin);
-        try std.testing.expectEqual(sdk.services.demos.Api.Play.started, api.play("dashboard", 0));
-        var played: usize = 0;
-        while (p.state != .ended and played < 4_000) : (played += 1) _ = try dvui.testing.step(headlessFrame);
-        try std.testing.expectEqual(automation.Player.State.ended, p.state);
-        try std.testing.expectEqual(@as(u32, 0), p.timeouts);
-        try std.testing.expectEqual(@as(u32, 0), p.mismatches);
-        p.unload();
-        try dvui.testing.settle(headlessFrame);
     }
 
     // A plugin's demo is listed beside them; one reusing a name fizzy has, and a live tape, are not.
@@ -217,7 +200,7 @@ test "demo: every bundled demo plays to the end through fizzy's stage, a seek la
     try host.registerDemo(.{ .name = "a-live-tape", .title = "Live", .tape = live });
     try std.testing.expect(api.generation() != generation);
     const listed = api.list();
-    try std.testing.expectEqual(catalog.entries.len + 2, listed.len);
+    try std.testing.expectEqual(catalog.entries.len + 1, listed.len);
     const added = listed[listed.len - 1];
     try std.testing.expectEqualStrings("a-guide", added.name);
     try std.testing.expectEqualStrings("A guide", added.title);

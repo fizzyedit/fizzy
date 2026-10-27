@@ -14,7 +14,6 @@ const sdk = @import("fizzy_sdk");
 const dvui = @import("dvui");
 const View = @import("src/View.zig");
 const demo_cards = @import("src/demo_cards.zig");
-const demo_tape = @import("src/demo_tape.zig");
 
 /// Injected at build time from `plugin.zig.zon`.
 pub const plugin_options = @import("fizzy_plugin_options");
@@ -43,7 +42,6 @@ pub fn register(host: *sdk.Host) !void {
         demo_cards.reset();
         try host.registerService(Api, &demo_cards.api, &plugin);
     }
-    try host.registerDemo(.{ .name = demo_tape.name, .title = demo_tape.title, .tape = demo_tape.tape, .owner = &plugin });
     try host.registerSurface(.{
         .id = view_id,
         .owner = &plugin,
