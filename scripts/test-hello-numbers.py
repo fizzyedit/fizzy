@@ -39,7 +39,9 @@ class HelloNumbersTests(unittest.TestCase):
             command = [sys.executable, '-u', '-c',
                        'import time; print("info: startup: first frame 12.375 ms after main"); time.sleep(10)']
             record = hello.measure(command, Path(temporary) / 'log', os.environ, idle_seconds=2)
-            self.assertEqual(record['first_frame_ms'], 12.375)
+            self.assertEqual(record['first_frame_after_main_ms'], 12.375)
+            # Spawn to observation, the clock the peers use, so it is never below the app's own.
+            self.assertGreater(record['first_frame_ms'], 0)
             self.assertGreater(record['idle_rss_bytes'], 0)
             self.assertGreaterEqual(record['rss_sample_after_s'], 2)
             output = Path(temporary) / 'numbers.jsonl'

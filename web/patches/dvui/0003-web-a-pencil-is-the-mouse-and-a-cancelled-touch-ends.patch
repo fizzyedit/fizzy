@@ -1,0 +1,185 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Michael Belousov <michael.belousov98@gmail.com>
+Date: Sat, 24 Oct 2026 16:10:31 -0400
+Subject: [PATCH] web: a pencil is the mouse, and a cancelled touch ends
+
+An Apple Pencil on iPad Safari arrives as a touch whose touchType is "stylus". As a
+finger it panned and left nothing hovered; it now goes in as the mouse (motion, then
+the left button), so dvui counts it as .mouse, as native does with SDL's pen touches.
+
+A touch the system took (a gesture, an alert) fires touchcancel and no touchend, so
+its touch, or the pencil's button, stayed held. touchcancel now ends it the same way.
+---
+ src/backends/web.js | 61 +++++++++++++++++++++++++++++++++++++++------
+ 1 file changed, 54 insertions(+), 7 deletions(-)
+
+diff --git a/src/backends/web.js b/src/backends/web.js
+index 3285a64..368fbfb 100644
+--- a/src/backends/web.js
++++ b/src/backends/web.js
+@@ -149,16 +149,29 @@ export function dvui(canvas, wasmRef) {
+         dvui.run();
+         return dvui;
+     });
+ }
+ 
+ const utf8decoder = new TextDecoder();
+ const utf8encoder = new TextEncoder();
+ 
++/**
++ * What a pencil's touch does to the mouse; the values are `add_event`'s mouse codes.
++ * @enum {number}
++ */
++const StylusAction = Object.freeze({
++    /** motion only */
++    move: 1,
++    /** motion, then the left button pressed */
++    press: 2,
++    /** motion, then the left button released */
++    release: 3,
++});
++
+ export class Dvui {
+     /** @type {WebGL2RenderingContext | WebGLRenderingContext} */
+     gl;
+     /** @type {WebGLBuffer} */
+     indexBuffer;
+     /** @type {WebGLBuffer} */
+     vertexBuffer;
+     /** @type {WebGLProgram} */
+@@ -271,16 +284,39 @@ export class Dvui {
+             this.hidden_input.style.top = top + "px";
+             this.hidden_input.style.width = width + "px";
+             this.hidden_input.style.height = height + "px";
+             this.hidden_input.focus();
+             //par.textContent = hidden_input.style.left + " " + hidden_input.style.top + " " + hidden_input.style.width + " " + hidden_input.style.height;
+         }
+     }
+ 
++    /**
++     * An Apple Pencil on iPad Safari arrives as a TouchEvent whose touch has `touchType`
++     * "stylus" (a finger's is "direct"). It is a pen, not a finger, so it goes in as the mouse:
++     * motion to where it is, then the left button pressed or released. dvui then counts it as
++     * `.mouse` (`dvui.pointerKind()`), so what it last touched stays hovered after a lift and a
++     * canvas treats it as a pointer, not a pan; native excludes SDL's pen touches the same way.
++     * The touch handlers' `preventDefault` stops the browser's own mouse events following it.
++     *
++     * @param {TouchEvent} ev
++     * @param {Touch} touch
++     * @param {StylusAction} action
++     */
++    stylusEvent(ev, touch, action) {
++        const rect = this.gl.canvas.getBoundingClientRect();
++        const x = (touch.clientX - rect.left) / (rect.right - rect.left) *
++            this.gl.drawingBufferWidth;
++        const y = (touch.clientY - rect.top) / (rect.bottom - rect.top) *
++            this.gl.drawingBufferHeight;
++        const mods = this.modCode(ev);
++        this.instance.exports.add_event(1, mods, 0, x, y);
++        if (action !== StylusAction.move) this.instance.exports.add_event(action, 0, mods, 0, 0);
++    }
++
+     touchIndex(pointerId) {
+         let idx = this.touches.findIndex((e) => e[0] === pointerId);
+         if (idx < 0) {
+             idx = this.touches.length;
+             this.touches.push([pointerId, idx]);
+         }
+ 
+         return idx;
+@@ -1578,37 +1614,45 @@ export class Dvui {
+             ev.target.value = "";
+         });
+         this.gl.canvas.addEventListener("touchstart", (ev) => {
+             if (this.stopped) return;
+             ev.preventDefault();
+             let rect = this.gl.canvas.getBoundingClientRect();
+             for (let i = 0; i < ev.changedTouches.length; i++) {
+                 let touch = ev.changedTouches[i];
++                if (touch.touchType === "stylus") {
++                    this.stylusEvent(ev, touch, StylusAction.press);
++                    continue;
++                }
+                 let x = (touch.clientX - rect.left) /
+                     (rect.right - rect.left);
+                 let y = (touch.clientY - rect.top) /
+                     (rect.bottom - rect.top);
+                 let tidx = this.touchIndex(touch.identifier);
+                 this.instance.exports.add_event(
+                     8,
+                     this.touches[tidx][1],
+                     0,
+                     x,
+                     y,
+                 );
+             }
+             this.requestRender();
+         });
+-        this.gl.canvas.addEventListener("touchend", (ev) => {
++        const touchEnd = (ev) => {
+             if (this.stopped) return;
+             ev.preventDefault();
+             let rect = this.gl.canvas.getBoundingClientRect();
+             for (let i = 0; i < ev.changedTouches.length; i++) {
+                 let touch = ev.changedTouches[i];
++                if (touch.touchType === "stylus") {
++                    this.stylusEvent(ev, touch, StylusAction.release);
++                    continue;
++                }
+                 let x = (touch.clientX - rect.left) /
+                     (rect.right - rect.left);
+                 let y = (touch.clientY - rect.top) /
+                     (rect.bottom - rect.top);
+                 let tidx = this.touchIndex(touch.identifier);
+                 this.instance.exports.add_event(
+                     9,
+                     this.touches[tidx][1],
+@@ -1618,39 +1662,42 @@ export class Dvui {
+                 );
+                 this.touches.splice(tidx, 1);
+             }
+             // This oskCheck is for some platforms (iphone) where showing
+             // the keyboard has to be done inside an event handler.
+             // https://stackoverflow.com/a/6837575
+             this.oskCheck();
+             this.requestRender();
+-        });
++        };
++        this.gl.canvas.addEventListener("touchend", touchEnd);
++        // A cancelled touch (the system took it: a gesture, an alert) ends like a lifted one,
++        // or its button, or the pencil's mouse button, would stay held.
++        this.gl.canvas.addEventListener("touchcancel", touchEnd);
+         this.gl.canvas.addEventListener("touchmove", (ev) => {
+             if (this.stopped) return;
+             ev.preventDefault();
+             let rect = this.gl.canvas.getBoundingClientRect();
+             for (let i = 0; i < ev.changedTouches.length; i++) {
+                 let touch = ev.changedTouches[i];
++                if (touch.touchType === "stylus") {
++                    this.stylusEvent(ev, touch, StylusAction.move);
++                    continue;
++                }
+                 let x = (touch.clientX - rect.left) /
+                     (rect.right - rect.left);
+                 let y = (touch.clientY - rect.top) /
+                     (rect.bottom - rect.top);
+                 let tidx = this.touchIndex(touch.identifier);
+                 this.instance.exports.add_event(
+                     10,
+                     this.touches[tidx][1],
+                     0,
+                     x,
+                     y,
+                 );
+             }
+             this.requestRender();
+         });
+-        //canvas.addEventListener("touchcancel", (ev) => {
+-        //    console.log(ev);
+-        //    this.requestRender();
+-        //});
+-
+         // start the first update
+         this.requestRender();
+     }
+ }

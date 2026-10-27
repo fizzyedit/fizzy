@@ -1,11 +1,11 @@
-// The editor in a worker: dvui's `web.js`, unchanged, driving WebGL on the page's canvas through
-// an `OffscreenCanvas`, with the page (`index.html`, worker mode) forwarding input and doing what
-// only a page can.
+// The editor in a worker: dvui's `web.js` (`patches/dvui`) driving WebGL on the page's canvas
+// through an `OffscreenCanvas`, with the page (`index.html`, worker mode) forwarding input and
+// doing what only a page can.
 //
 // Why: Chrome on Android throttles main-thread frames (`requestAnimationFrame` on the page) to
 // 60 Hz on a 120 Hz screen unless input is driving them, so every animation — a sidebar
 // sliding, a dialog forming — ran at half the display's rate. A worker's own frame loop is not
-// throttled. Everything here is the page's `index.html` bootstrap, moved: the fizzy imports, the
+// throttled. Everything here is the page's bootstrap (`fizzy.js`), moved: the fizzy imports, the
 // plugin loader. What needs the page is a message to it and back.
 
 const utf8 = new TextDecoder();
@@ -23,11 +23,12 @@ const env = {
     prefs: { dark: false, light: false, reduce: false },
     storage: {},
     // The page's `storageName`: what this copy of the app files its storage under — the build's
-    // name, or that and an embed's own (`?storage=`).
+    // name, or that and an embed's own (`storage`).
     storageName: "fizzy",
     // The build's own name, which plugin bytes are kept under whatever the embed's is.
     buildStorageName: "fizzy",
-    search: "",
+    // The page's `startup`: what to load, open and play once the editor is up.
+    startup: { plugins: [], open: [], show: "", demos: [], tape: "" },
     baseURI: "",
 };
 const inputStub = { style: {}, value: "", setAttribute() {}, addEventListener() {}, focus() {}, select() {} };
@@ -89,7 +90,7 @@ function ask(msg, transfer) {
     });
 }
 
-// ---- the fizzy imports (was `index.html`'s `fizzyImports`) ------------------------------------
+// ---- the fizzy imports (as `fizzy.js`'s `fizzyImports`) -----------------------------------------
 function mem() {
     return wasmInstance.exports.memory.buffer;
 }
@@ -274,7 +275,7 @@ const fizzyImports = (target) => ({
     },
 });
 
-// ---- plugins at runtime (was `index.html`'s loader; see there for the why) --------------------
+// ---- plugins at runtime (as `fizzy.js`'s loader; see there for the why) -------------------------
 const rememberedKey = () => env.storageName + ".web_plugins";
 function rememberedPlugins() {
     try { return JSON.parse(storageGet(rememberedKey()) || "{}"); } catch (_) { return {}; }
@@ -348,14 +349,13 @@ function requestPlugin(id, url) {
 function requestUrlPlugins() {
     const inst = wasmInstance;
     if (!inst || !inst.exports.FizzyWebPluginRequest) return;
-    const params = new URLSearchParams(env.search);
-    // A `?plugin=` build stands in for a remembered one of the same id.
-    const devPlugins = params.getAll("plugin");
+    // A dev build stands in for a remembered one of the same id.
+    const devPlugins = env.startup.plugins;
     for (const [id, url] of Object.entries(rememberedPlugins())) if (!devPlugins.includes(id)) requestPlugin(id, url);
     for (const id of devPlugins) requestPlugin(id, "");
     if (inst.exports.FizzyWebStartupPluginsRequested) inst.exports.FizzyWebStartupPluginsRequested();
     render();
-    for (const url of params.getAll("open")) {
+    for (const url of env.startup.open) {
         fetch(new URL(url, env.baseURI), { cache: "no-store" }).then((r) => r.arrayBuffer()).then((buf) => {
             const name = utf8encode(url.split("/").pop().split("?")[0]);
             const namePtr = wasmInstance.exports.FizzyWebPluginAlloc(name.length, 1);
@@ -365,8 +365,7 @@ function requestUrlPlugins() {
             new Uint8Array(mem(), namePtr, name.length).set(name);
             new Uint8Array(mem(), bytesPtr, bytes.length).set(bytes);
             wasmInstance.exports.FizzyWebOpenBytes(namePtr, name.length, bytesPtr, bytes.length);
-            // `&show=<path>`: then open that file from inside the folder just opened.
-            const show = params.get("show");
+            const show = env.startup.show;
             if (show && wasmInstance.exports.FizzyWebShowInRoot) {
                 const showBytes = utf8encode(show);
                 const showPtr = wasmInstance.exports.FizzyWebPluginAlloc(showBytes.length, 1);
@@ -378,13 +377,8 @@ function requestUrlPlugins() {
             render();
         }).catch((err) => console.error("fizzy: could not open", url, err));
     }
-    // `?demo=tour` plays a bundled demo; `?demo=<url>.zon` (or `.tape`, the binary form) fetches a
-    // tape and plays that.
-    for (const demo of params.getAll("demo")) playDemo(demo, env.baseURI);
-    // `?tape=<url>` plays a shared tape: the plugins it needs come from the store, and the page
-    // shows only the tape.
-    const tape = params.get("tape");
-    if (tape) playTape(tape, env.baseURI);
+    for (const demo of env.startup.demos) playDemo(demo, env.baseURI);
+    if (env.startup.tape) playTape(env.startup.tape, env.baseURI);
 }
 
 function playTape(url, base) {
@@ -459,7 +453,7 @@ function readDylinkNeeds(module) {
     return needs;
 }
 
-// fetchPluginBytes and reportPluginFailed have a matching copy in web/index.html; change both.
+// fetchPluginBytes and reportPluginFailed have a matching copy in web/fizzy.js; change both.
 async function fetchPluginBytes(url) {
   // Each fetch (the body included) gets a deadline: a request the network swallows would
   // otherwise leave the store's row on "Updating..." for good, with nothing to say why.
@@ -616,7 +610,7 @@ function postBoundKeys() {
 
 // ---- start -------------------------------------------------------------------------------
 async function start(init) {
-    Object.assign(env, { size: init.size, prefs: init.prefs, storage: init.storage, storageName: init.storageName, buildStorageName: init.buildStorageName || init.storageName, search: init.search, baseURI: init.baseURI });
+    Object.assign(env, { size: init.size, prefs: init.prefs, storage: init.storage, storageName: init.storageName, buildStorageName: init.buildStorageName || init.storageName, startup: init.startup, baseURI: init.baseURI });
     adoptCanvas(init.canvas);
     warmRememberedPlugins();
 

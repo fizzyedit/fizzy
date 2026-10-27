@@ -42,10 +42,10 @@ The open PR list is the board of who is working on what.
    touches the same files or the same plan step, coordinate on it (comment, or stack on top of
    it) instead of starting a parallel version.
 2. **Open a draft PR on your first push** (`gh pr create --draft --body-file <file>`), with the
-   template filled in as far as you know it. A draft runs CI, so claim early.
+   template filled in as far as you know it. A draft runs only the light `changes` job (the full matrix starts at `gh pr ready`), so claim early.
 3. **Take it to ready yourself; don't hand back a draft.** When the change is done and the gates
    pass, review your own diff (in Claude Code, the `code-review` skill at `high` on the PR), fix
-   what holds up, push, and wait for CI to go green. Then `gh pr ready`, and end the session
+   what holds up, push, then `gh pr ready`, which starts the full CI, and wait for it to go green. End the session
    with one question: merge it? Say what was reviewed and what was left, so the answer can be
    yes without opening the PR.
 4. **Merging is the maintainer's.** On a yes, merge with `gh pr merge --squash`. Never push to

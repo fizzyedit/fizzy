@@ -192,7 +192,14 @@ fn pressChord(c: chord.Chord) void {
     // dvui keeps the last key event's modifiers as the window's, and every pointer event after
     // carries them: let go of the modifier, as a hand does, or the next click is a Ctrl-click.
     if (mod != .none) {
-        const modifier: dvui.enums.Key = if (c.mods.command) .left_command else if (c.mods.ctrl) .left_control else if (c.mods.alt) .left_alt else .left_shift;
+        const modifier: dvui.enums.Key = if (c.mods.command)
+            .left_command
+        else if (c.mods.ctrl)
+            .left_control
+        else if (c.mods.alt)
+            .left_alt
+        else
+            .left_shift;
         addKey(cw, .{ .code = modifier, .mod = .none, .action = .up });
     }
 }

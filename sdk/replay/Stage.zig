@@ -49,9 +49,9 @@ pub const VTable = struct {
     chordFor: ?*const fn (ctx: *anyopaque, id: []const u8) ?chord.Stroke = null,
     /// What a person would call a command ("Format Document"), for the keystroke display.
     commandTitle: ?*const fn (ctx: *anyopaque, id: []const u8) ?[]const u8 = null,
-    /// The live name of the place `role` stands for (`documents`, `explorer`, `panel`), written into
-    /// `buf`, for a tag like `region:role:documents`: a demo aims at what a place is, not at the
-    /// name the person's layout gave it. Null when the app has no such place now. Null hook: no
+    /// The live name of the place `role` stands for (`documents`, `explorer`, `panel`), written
+    /// into `buf`, for a tag like `region:role:documents`: a demo aims at what a place is, not at
+    /// the name the person's layout gave it. Null when the app has no such place now. Null hook: no
     /// roles.
     resolveRole: ?*const fn (ctx: *anyopaque, role: []const u8, buf: []u8) ?[]const u8 = null,
     /// Replaying fast (a seek): turn animation off so every replayed frame lands where it is

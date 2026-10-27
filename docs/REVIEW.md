@@ -38,13 +38,28 @@ PR uses the same shape, with `VERDICT` replaced by what they changed after answe
 
 ## Severity
 
+A finding is **blocker** or **major** only when it breaks the issue's `Done` criteria, a test,
+correctness, or a principle of the vision, and it says which. Everything else is minor or nit.
+
 - **blocker**: wrong behaviour, a crash, a leak, build or tests fail, the goal is not met.
-- **major**: duplicates existing code; a Zig-standard break with real cost; new logic without a
-  test; a test that passes without the change; drift from the plan step.
+- **major**: breaks a named `Done` criterion, a test or a vision principle, for example
+  duplicated code (Lean), a `docs/ZIG.md` break with real cost (code quality), new logic without
+  a test, a test that passes without the change, or drift from the plan step. Name the principle.
 - **minor**: readability, naming, small lean gains.
 - **nit**: taste.
 
 Only blocker and major hold a PR. Minor and nit are the writer's to take or leave.
+
+## Rounds
+
+- **Evidence first.** A PR whose `Done` needs evidence (numbers, screenshots, a tape) is not
+  reviewed until the evidence is in its body.
+- **Verify checks the must-fix list.** `VERIFY` checks only the items the `RULING` (or rework
+  issue) lists. A new finding at verify is a follow-up, unless it is a blocker the fix itself
+  caused.
+- **Two fix rounds at most.** After the second the PM decides once: merge with follow-ups,
+  split, or close and restart. The stage labels and markers are in
+  [`AGENT_WORK.md`](AGENT_WORK.md).
 
 ## Lean
 

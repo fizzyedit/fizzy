@@ -1,0 +1,98 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Michael Belousov <michael.belousov98@gmail.com>
+Date: Sat, 24 Oct 2026 16:14:48 -0400
+Subject: [PATCH] web: wasm_renderStream, a flush's draws in one call
+
+wasm_renderGeometry uploads the geometry and sets the state of one draw per call. A
+backend that batches its draws can instead hand web.js the whole flush: the geometry,
+uploaded once, and a list of steps, each a draw (texture, clip, blend and its range of
+the indices), a switch of render target or a clear of one. A blur pass's dozens of
+small draws then cost one call from wasm and one upload.
+
+wasm_renderGeometry stays, and web.zig still draws through it.
+---
+ src/backends/web.js | 61 +++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 61 insertions(+)
+
+diff --git a/src/backends/web.js b/src/backends/web.js
+index 7cd1983..afc813b 100644
+--- a/src/backends/web.js
++++ b/src/backends/web.js
+@@ -933,16 +933,77 @@ export class Dvui {
+                     // feedback loop to some drivers, sampled or not.
+                     this.bindTex(null);
+                     this.setUseTex(0);
+                     this.setBlend(0);
+                 }
+ 
+                 this.gl.drawElements(this.gl.TRIANGLES, indices.length, this.gl.UNSIGNED_SHORT, 0);
+             },
++            // A flush's worth of draws, for a backend that batches them: the stream's geometry,
++            // uploaded once, and its steps in order — each `cmd_count` entry eight i32s: texture,
++            // kind, x, y, w, h, and the range of the stream's indices it draws. Kind's bit 0 says
++            // the draw is clipped to x, y, w, h and the bits above it are the draw's blend (0
++            // source-over, 1 add, 2 copy); -1 is a switch of render target to `texture`, -2 a
++            // clear of it.
++            wasm_renderStream: (
++                index_ptr,
++                index_len,
++                vertex_ptr,
++                vertex_len,
++                sizeof_vertex,
++                offset_pos,
++                offset_col,
++                offset_uv,
++                cmd_ptr,
++                cmd_count,
++            ) => {
++                // A stream of only switches and clears has no geometry (and an empty slice's
++                // pointer is not one to make a view at).
++                if (index_len > 0) {
++                    const indices = new Uint16Array(this.instance.exports.memory.buffer, index_ptr, index_len / 2);
++                    this.gl.bufferData(this.gl.ELEMENT_ARRAY_BUFFER, indices, this.gl.DYNAMIC_DRAW);
++                    this.gl.bufferData(this.gl.ARRAY_BUFFER, this.bytesFromPointer(vertex_ptr, vertex_len), this.gl.DYNAMIC_DRAW);
++                    this.setLayout(sizeof_vertex, offset_pos, offset_col, offset_uv);
++                }
++
++                const cmds = new Int32Array(this.instance.exports.memory.buffer, cmd_ptr, cmd_count * 8);
++                for (let i = 0; i < cmd_count; i += 1) {
++                    const c = i * 8;
++                    const textureId = cmds[c];
++                    const kind = cmds[c + 1];
++                    if (kind === -1) {
++                        // A switch of render target (0 the screen).
++                        this.imports.wasm_renderTarget(textureId);
++                        continue;
++                    }
++                    if (kind === -2) {
++                        // A clear of a target, wherever drawing is going.
++                        this.imports.wasm_textureClearTarget(textureId);
++                        continue;
++                    }
++                    this.setMatrix();
++                    if ((kind & 1) === 1) {
++                        this.setScissor(cmds[c + 2], cmds[c + 3], cmds[c + 4], cmds[c + 5]);
++                    } else {
++                        this.setScissor(0, 0, this.renderTargetSize[0], this.renderTargetSize[1]);
++                    }
++                    const tex = textureId != 0 ? this.textureEntry(textureId) : null;
++                    if (textureId != 0 && tex === null) console.warn(`wasm_renderStream: missing texture id ${textureId}`);
++                    if (tex !== null) {
++                        this.bindTex(tex[0]);
++                        this.setUseTex(1);
++                    } else {
++                        this.setUseTex(0);
++                    }
++                    // The draw's blend as it was when drawn (bits above the clip's).
++                    this.setBlend(kind >> 1);
++                    this.gl.drawElements(this.gl.TRIANGLES, cmds[c + 7], this.gl.UNSIGNED_SHORT, cmds[c + 6] * 2);
++                }
++            },
+             wasm_cursor: (name_ptr, name_len) => {
+                 const cursor_name = this.stringFromPointer(name_ptr, name_len);
+                 this.gl.canvas.style.cursor = cursor_name;
+             },
+             wasm_text_input: (x, y, w, h) => {
+                 if (w > 0 && h > 0) {
+                     this.textInputRect = [x, y, w, h];
+                 } else {

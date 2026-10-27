@@ -869,7 +869,7 @@ pub fn clearArrangement(self: *State, gpa: std.mem.Allocator) void {
     self.splits.deinit(gpa);
     self.splits = .{};
     self.slide_open = "";
-    self.view_drag.discard();
+    self.view_drag.discard(gpa);
     self.discardSwaps();
     self.center_transition.discard();
     self.center_prev_id = null;
