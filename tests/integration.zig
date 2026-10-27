@@ -10019,6 +10019,11 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
     defer gpa.destroy(editor);
     fizzy.setInstances(entry, editor);
     editor.* = try fizzy.Editor.init(entry);
+    // A failing expect below returns early, and the watcher threads read the editor until
+    // `deinit` joins them: without this they outlive the `destroy` above and crash the run
+    // while it prints the failure.
+    var quit = false;
+    errdefer if (!quit) editor.deinit() catch {};
     workbench.runtime.setWorkbench(&editor.workbench);
     try editor.postInit();
     try dvui.testing.settle(headlessFrame);
@@ -12548,6 +12553,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
     const harness_window = dvui.current_window;
     dvui.current_window = null;
     defer dvui.current_window = harness_window;
+    quit = true;
     try editor.deinit();
 }
 
