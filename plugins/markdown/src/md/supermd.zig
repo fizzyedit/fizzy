@@ -121,8 +121,7 @@ fn rewriteLine(gpa: std.mem.Allocator, out: *std.ArrayList(u8), line: []const u8
     }
 }
 
-/// If a `[text]($…)` or `[text](<$…>)` directive starts at `open`, writes what it stands for
-/// and
+/// If a `[text]($…)` or `[text](<$…>)` directive starts at `open`, writes what it stands for and
 /// returns the index just past it.
 fn directiveAt(gpa: std.mem.Allocator, out: *std.ArrayList(u8), line: []const u8, open: usize) !?usize {
     // The link text: brackets nest, backslashes escape.

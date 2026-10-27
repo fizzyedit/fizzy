@@ -39,10 +39,9 @@ pub const Preview = struct {
     follow: ?struct { line: u32, at: f32 } = null,
     /// The last viewport height the scroll area actually had. dvui sizes a widget from what its
     /// children reported the frame before, so a window *height* change (a vertical resize drag)
-    /// can hand the scroll area a zero-height rect for a frame while the layout re-settles — and
-    /// a
-    /// zero viewport reads as "no scroll area, draw the whole document", which for a long README
-    /// is every block laid out and shaped for a frame nobody sees (800 blocks: ~250ms in Debug,
+    /// can hand the scroll area a zero-height rect for a frame while the layout re-settles — and a
+    /// zero viewport reads as "no scroll area, draw the whole document", which for a long README is
+    /// every block laid out and shaped for a frame nobody sees (800 blocks: ~250ms in Debug,
     /// repeated on every height step of the drag). Standing in with the height we last had keeps
     /// that frame to the blocks that were on screen; nothing is lost, since the real height comes
     /// back with the next layout.
@@ -461,8 +460,7 @@ pub const PreviewOptions = struct {
     /// This has to reach the individual text widgets, not just the scroll area:
     /// `dvui.TextLayoutWidget.defaults.background` is true, so every paragraph/heading/caption
     /// paints its own fill unless told otherwise (see `render_ast.RenderContext.background`).
-    /// Deliberate decoration — code-block panels, HTML-block tint, table banding — ignores
-    /// this.
+    /// Deliberate decoration — code-block panels, HTML-block tint, table banding — ignores this.
     background: bool = true,
     /// Overrides the default `.content`-styled fill when `background` is true. Null keeps the
     /// existing look (a real `.md` file's own preview tab).
@@ -592,12 +590,11 @@ pub fn drawPreview(
             // block sits at its top padding.
             //
             // On a document's very first frame the `ScrollInfo` has not been laid out yet and its
-            // viewport is all zeros, which would read as "no viewport, draw everything" — and
-            // that
+            // viewport is all zeros, which would read as "no viewport, draw everything" — and that
             // frame is exactly the one that must not lay out a whole 60KB document, because it is
             // the frame the preview pane opens on. The scroll area's own rect is already known by
-            // then, so it stands in — and when even that is zero (a frame mid vertical resize,
-            // see `last_viewport_h`), the height the area had last frame does.
+            // then, so it stands in — and when even that is zero (a frame mid vertical resize, see
+            // `last_viewport_h`), the height the area had last frame does.
             .viewport = viewport: {
                 if (state.scroll.viewport.h > 0) {
                     state.last_viewport_h = state.scroll.viewport.h;

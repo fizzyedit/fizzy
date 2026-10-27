@@ -4,22 +4,19 @@
 //! **Why this file exists.** md4c reports a backslash escape as its own text run holding just the
 //! escaped character, and `ast.zig` merges adjacent runs into one `.text` node so the renderer
 //! sees a paragraph of prose as one node. After that merge `\[\[A]]` and `[[A]]` have **the same
-//! literal** — `[[A]]` — so tokenizing the literal turns a deliberately escaped link into a
-//! real
+//! literal** — `[[A]]` — so tokenizing the literal turns a deliberately escaped link into a real
 //! one, and the AST alone cannot tell them apart.
 //!
 //! What survives is position: `ast.zig` records the source byte span every node was built from,
-//! so the original bytes — backslashes included — can be read straight back out of the
-//! document.
+//! so the original bytes — backslashes included — can be read straight back out of the document.
 //!
 //! **The rule.** Re-apply markdown's escape handling to that source span, producing the bytes it
 //! would have yielded plus a flag per byte for "this came from an escape". When those bytes match
 //! the node's literal exactly, the flags line up with it positionally and a link whose opening
-//! brackets are flagged is dropped. When they *don't* match — an HTML entity expanded, say —
-//! the
+//! brackets are flagged is dropped. When they *don't* match — an HTML entity expanded, say — the
 //! mapping is untrustworthy and we **fail open**: the link renders. A link that renders when the
-//! author wanted literal text is a visible, correctable annoyance; a link that silently vanishes
-//! is a bug someone spends an afternoon on.
+//! author wanted literal text is a visible, correctable annoyance; a link that silently vanishes is
+//! a bug someone spends an afternoon on.
 const std = @import("std");
 const ast = @import("ast.zig");
 const wikilink = @import("fizzy_sdk").services.wikilink;

@@ -208,8 +208,7 @@ const resettle_above_budget: usize = 4;
 /// table is seen. Same idea as `resettle_budget`, one level down: a 45KB table
 /// (plans/PLUGIN_MANIFEST_PLAN.md has one) costs several milliseconds to lay out in full, and
 /// doing that on the frame the document opens is the hitch this whole file is about. Spread over
-/// frames instead, the table's height is briefly short — by however many rows are still
-/// unmeasured
+/// frames instead, the table's height is briefly short — by however many rows are still unmeasured
 /// — and settles within half a second.
 ///
 /// Counted in bytes rather than rows because rows differ wildly: this document's big table runs
@@ -987,11 +986,10 @@ fn tryRevealFileUri(url: []const u8, open_side: bool) bool {
 /// Opens `path` (native, absolute) in the editor at a 0-based `line`/`character`, splitting to
 /// the side when `open_side`. Returns false when workbench isn't available or refused.
 ///
-/// Split out of `tryRevealFileUri` so a caller that already *has* a path — a resolved wikilink
-/// —
-/// doesn't have to encode it into a `file://` URI just to have it decoded straight back. That
-/// round trip isn't merely wasteful: it has to percent-encode, and a path containing a space or
-/// a `#` is exactly where a hand-rolled encoder goes wrong.
+/// Split out of `tryRevealFileUri` so a caller that already *has* a path — a resolved wikilink —
+/// doesn't have to encode it into a `file://` URI just to have it decoded straight back. That round
+/// trip isn't merely wasteful: it has to percent-encode, and a path containing a space or a `#` is
+/// exactly where a hand-rolled encoder goes wrong.
 fn revealPath(path: []const u8, line: u32, character: u32, open_side: bool) bool {
     return sdk.host().revealPosition(path, line, character, open_side) catch |err| {
         dvui.log.err("markdown: revealPosition failed for {s}: {any}", .{ path, err });
@@ -1730,8 +1728,7 @@ fn renderInlineNodeToTl(
 /// is emitted with that height and its contents are skipped entirely; the scroll container still
 /// sees the document's true total height, so the scrollbar and every scroll position stay exactly
 /// as they were. A block whose height isn't known at all is always drawn, so the cache fills in
-/// without ever showing a gap — which makes a document's first frame one full layout, and only
-/// one.
+/// without ever showing a gap — which makes a document's first frame one full layout, and only one.
 ///
 /// Widths change every frame while a panel animates open or a window is dragged, which is
 /// handled by `resettle_budget` rather than by throwing the cache away — see below.
@@ -1802,8 +1799,8 @@ fn renderTopLevel(doc_node: ast.Node, ids: *IdGen, ctx: RenderContext) void {
     // starving distant blocks outright (164 of 185 unmeasured after 600 frames on
     // plans/PLUGIN_MANIFEST_PLAN.md). Both budgets being non-zero is what makes the sweep
     // terminate: once every block has been measured twice, nothing wants a re-measure,
-    // `pending_measure` hits zero, and the refresh loop stops. A bounded warm-up, not a
-    // permanent wake.
+    // `pending_measure` hits zero, and the refresh loop stops. A bounded warm-up, not a permanent
+    // wake.
     var resettle_below_left: usize = if (width_in_flux) 0 else resettle_below_budget;
     var resettle_above_left: usize = if (width_in_flux) 0 else resettle_above_budget;
 
@@ -1860,8 +1857,7 @@ fn renderTopLevel(doc_node: ast.Node, ids: *IdGen, ctx: RenderContext) void {
                 .expand = .horizontal,
                 // Stable across frames for a given skip-run start so scroll anchoring stays
                 // coherent when a neighbouring run's height changes.
-                // The id varies with how many blocks the run stands for, not just where it
-                // starts.
+                // The id varies with how many blocks the run stands for, not just where it starts.
                 //
                 // dvui sizes a widget to `max(min_size_content, what it measured last frame)`,
                 // so a widget that keeps its id also keeps its height — and pinning
@@ -2077,8 +2073,7 @@ fn renderTopLevel(doc_node: ast.Node, ids: *IdGen, ctx: RenderContext) void {
         //
         // *Any* pinned block, not only one pinned above the fold. A pinned wrapper emits exactly
         // its pin, so measuring the wrapper files the pin back as a measurement. That is how a
-        // `.deferred` table — pinned at a height nobody believes — came out of the deferral
-        // with
+        // `.deferred` table — pinned at a height nobody believes — came out of the deferral with
         // that same height recorded as a clean measurement, as soon as its rows were all measured:
         // the guess, laundered into an answer. The synthetic sample's last table had a 46pt
         // header-only measurement filed that way on its first frames.
@@ -2343,8 +2338,7 @@ fn tableColumnWidths(
     if (ctx.rs.table_layouts.getPtr(key)) |cached| {
         if (cached.body_m == body_m and cached.mono_m == mono_m and cached.natural.len == num_cols) {
             if (cached.avail == avail) return cached.widths;
-            // Only the space available changed — which is every frame of a split drag. The
-            // natural
+            // Only the space available changed — which is every frame of a split drag. The natural
             // widths are still valid, so re-fit them instead of re-measuring the whole table.
             @memcpy(cached.widths, cached.natural);
             fitColumns(cached.widths, avail, ctx.gpa);
@@ -2780,8 +2774,7 @@ fn renderBlock(n: ast.Node, ids: *IdGen, ctx: RenderContext) void {
                 //
                 // The width the table has to work with. Taken from the wrap rather than from
                 // `ctx.column_width` so a table nested in a quote or list gets its container's
-                // width, and — because the wrap expands — it is a *fixed* number rather than
-                // one
+                // width, and — because the wrap expands — it is a *fixed* number rather than one
                 // derived from how wide the table currently is. That distinction is the whole
                 // trick: column widths computed against a number the columns themselves feed into
                 // ratchet down a little every frame.
@@ -2958,8 +2951,7 @@ fn renderBlock(n: ast.Node, ids: *IdGen, ctx: RenderContext) void {
                             // it compounds: on a 45KB table most rows are unmeasured on first
                             // sight, so the block came out a fraction of its real height and then
                             // inflated by hundreds of points per frame as the budget caught up.
-                            // One line is the honest floor — most table cells are exactly that
-                            // —
+                            // One line is the honest floor — most table cells are exactly that —
                             // and the block's height is roughly right immediately instead.
                             const cell_placeholder: dvui.Size = if (cached) |cs|
                                 cs.size
