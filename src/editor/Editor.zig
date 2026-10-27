@@ -67,6 +67,7 @@ const PluginManager = @import("app").store.Manager;
 pub const FilesService = @import("FilesService.zig");
 const SettingsTree = @import("SettingsTree.zig");
 const OutputPanel = @import("OutputPanel.zig");
+pub const Chrome = @import("Chrome.zig");
 const SettingsPluginsZon = @import("app").settings.PluginsZon;
 const file_glyphs = @import("file_glyphs.zig");
 const SettingsWatcher = @import("app").watch.SettingsWatcher;
@@ -199,6 +200,10 @@ last_titlebar_color: dvui.Color,
 sidebar: Sidebar,
 
 infobar: Infobar,
+
+/// The frame of fizzy's shape this build keeps. A field and not a `comptime` read so a test can
+/// draw the shape either way.
+chrome: Chrome = .configured,
 
 /// Whether a text-input widget held keyboard focus at the end of the last frame.
 ///
@@ -493,8 +498,6 @@ pub fn init(
             KeptDocuments.noteRecoveredFromCheckpoint();
         }
     }
-
-    // Save-queue worker is owned by the pixel-art plugin (`initPlugin` in `postInit`).
 
     { // Setup themes
         var fizzy_dark = dvui.themeGet();
@@ -937,8 +940,8 @@ fn unloadPluginLibs(editor: *Editor) void {
 
 // ---- runtime plugin lifecycle (store: install / enable / disable / update) ---------
 //
-// Only dylib-loaded *user* plugins are managed here. Bundled built-ins (pixi/workbench/
-// code) ship in the app and are never unloaded, even though they also appear in
+// Only dylib-loaded *user* plugins are managed here. Bundled built-ins (workbench,
+// text, …) ship in the app and are never unloaded, even though they also appear in
 // `loaded_plugin_libs` when loaded from their bundled dylibs.
 
 /// True when `id` names one of the bundled built-ins (ships in the app, must never be
@@ -2316,13 +2319,15 @@ pub fn postInit(editor: *Editor) !void {
     // even with no document open, since it's a diagnostic view, not a per-file one. Before the
     // plugins, so it is the bottom panel's first view and a plugin's (the dashboard, a terminal)
     // comes after it: a region shows its first view until someone picks another.
-    try editor.app.host.registerSurface(.{
-        .id = "fizzy.output",
-        .title = "Output",
-        .keywords = sdk.keywords.ide.panel,
-        .persistent = true,
-        .draw = OutputPanel.draw,
-    });
+    if (editor.chrome.panel) {
+        try editor.app.host.registerSurface(.{
+            .id = "fizzy.output",
+            .title = "Output",
+            .keywords = sdk.keywords.ide.panel,
+            .persistent = true,
+            .draw = OutputPanel.draw,
+        });
+    }
 
     inline for (bundled_plugins) |m| {
         const extra: ?*anyopaque = if (comptime std.mem.eql(u8, m.plugin_id, "workbench")) @ptrCast(&editor.workbench) else null;

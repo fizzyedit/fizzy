@@ -38,6 +38,14 @@ pub const StoreOffer = struct {
     title: []const u8,
 };
 
+/// An app's answer to where an open beside splits a place (`beside`).
+pub const Beside = struct {
+    ctx: *anyopaque,
+    /// The edge of place `name` an open beside splits, or null where it joins a place, becomes a
+    /// card, or `name` holds no documents.
+    edge: *const fn (ctx: *anyopaque, name: []const u8) ?SplitTree.Side,
+};
+
 /// How an application gives a document a home outside the slots its plugins made: a view of its
 /// own that holds documents (fizzy's workspaces). With one, a document carried in the view drag
 /// lands in any place as a view would, inside a new such view (`ViewDrag.place`).
@@ -169,10 +177,11 @@ tree_cleared: bool = false,
 slide_open: []const u8 = "",
 /// A place's view being dragged to another place. Empty `name` when idle.
 view_drag: ViewDrag = .{},
-/// The edge an open beside splits the documents' place on right now, set each frame by the app
-/// while a demo plays: that edge's drop zone is also published as the anchor `drop:beside`, so a
-/// tape aims at the place's answer, not at an edge it chose when it was written.
-beside: ?SplitTree.Side = null,
+/// Set each frame by the app while a demo plays: asked for each place a drag may land in, it
+/// names the edge an open beside splits that place on. That edge's drop zone is also published as
+/// the anchor `drop:beside`, so a tape aims at the target place's own answer, not at an edge it
+/// chose when it was written.
+beside: ?Beside = null,
 /// Floats are OS windows of their own (the application says so each frame, where it has them): a
 /// view let go over no window of the app's opens one there (`ViewDrag.apply`).
 floats_windowed: bool = false,

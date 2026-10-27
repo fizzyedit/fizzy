@@ -150,7 +150,7 @@ pub fn keyframe(self: *Script, kf: Tape.Keyframe) !void {
     const root = try self.dupe(kf.root);
     try self.keyframes.append(
         a,
-        .{ .root = root, .files = files, .open = open, .layout = kf.layout, .settings = settings },
+        .{ .root = root, .files = files, .open = open, .settings = settings },
     );
     try self.push(.{ .at = self.t, .do = .{ .keyframe = @intCast(self.keyframes.items.len - 1) } });
     try self.push(.{ .at = self.t, .do = .{ .wait = .{ .until = .idle } } });
@@ -250,16 +250,21 @@ pub fn waitIdle(self: *Script, opts: WaitOptions) !void {
 pub const Skip = usize;
 
 /// Leave out everything up to `endSkip` when `tag` is drawn already. The gesture to bring it up
-/// goes between, so a person's layout that has it open is left as it is.
+/// goes between, so a person's layout that has it open is left as it is. Waits for the stage to
+/// be idle first: the skip reads the tags of the last frame drawn, which a gesture just before it
+/// has not yet changed.
 pub fn skipIfShown(self: *Script, tag: []const u8) !Skip {
+    try self.waitIdle(.{});
     try self.push(.{ .at = self.t, .do = .{ .skip = .{ .when = .{ .shown = try self.dupe(tag) }, .count = 0 } } });
     return self.ops.items.len - 1;
 }
 
 /// `skipIfShown`'s other half: leave out everything up to `endSkip` when `tag` is not drawn. The
 /// steps for a layout that has `tag` open go between, after those of a `skipIfShown` for one that
-/// has not, so exactly one of the two plays.
+/// has not, so exactly one of the two plays. Waits for the stage to be idle first, as
+/// `skipIfShown` does.
 pub fn skipIfGone(self: *Script, tag: []const u8) !Skip {
+    try self.waitIdle(.{});
     try self.push(.{ .at = self.t, .do = .{ .skip = .{ .when = .{ .gone = try self.dupe(tag) }, .count = 0 } } });
     return self.ops.items.len - 1;
 }
@@ -416,6 +421,7 @@ const testing = std.testing;
 test "a skip counts the ops pushed between it and its end" {
     var s: Script = .init(testing.allocator, "t", "T");
     try s.keyframe(.{ .root = "demo://t" });
+    try s.click(.{ .tag = "first" }, .{});
     const mark = try s.skipIfShown("rail");
     try s.click(.{ .tag = "button" }, .{});
     s.endSkip(mark);
@@ -424,6 +430,7 @@ test "a skip counts the ops pushed between it and its end" {
     defer owned.deinit();
     const ops = owned.tape.ops;
     const skip = ops[mark].do.skip;
+    try testing.expectEqual(Tape.Until.idle, ops[mark - 1].do.wait.until);
     try testing.expectEqualStrings("rail", skip.when.shown);
     // The wait for the button, the aim, the press and the release; the key after is not left out.
     try testing.expectEqual(@as(u32, 4), skip.count);
@@ -433,12 +440,14 @@ test "a skip counts the ops pushed between it and its end" {
 test "skipIfGone leaves its ops out when the tag is not drawn" {
     var s: Script = .init(testing.allocator, "t", "T");
     try s.keyframe(.{ .root = "demo://t" });
+    try s.key("tab");
     const mark = try s.skipIfGone("sheet");
     try s.key("enter");
     s.endSkip(mark);
     var owned = try s.finish();
     defer owned.deinit();
     const skip = owned.tape.ops[mark].do.skip;
+    try testing.expectEqual(Tape.Until.idle, owned.tape.ops[mark - 1].do.wait.until);
     try testing.expectEqualStrings("sheet", skip.when.gone);
     try testing.expectEqual(@as(u32, 1), skip.count);
 }

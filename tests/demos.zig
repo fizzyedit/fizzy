@@ -147,6 +147,13 @@ test "demo: every bundled demo plays to the end through fizzy's stage, a seek la
                 break;
             };
         }
+        if (std.mem.eql(u8, e.name, "tour")) {
+            var explorer_prng: std.Random.DefaultPrng = .init(0x6);
+            const explorer_random = explorer_prng.random();
+            var explorer_picks: [bundled_random_seeks]usize = undefined;
+            for (&explorer_picks) |*pick| pick.* = explorer_random.uintLessThan(usize, moments.items.len);
+            try picks.insertSlice(gpa, 0, &explorer_picks);
+        }
         var wrong: usize = 0;
         for (picks.items) |i| {
             const want = moments.items[i];

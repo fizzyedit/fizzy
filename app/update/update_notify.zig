@@ -95,7 +95,7 @@ fn startCheck() void {
     }
 
     // The worker may outlive `deinit` (see there), so it cannot borrow the app's allocator.
-    check_thread = std.Thread.spawn(.{}, worker, .{ io, std.heap.page_allocator, auto_update.checkRemoteVersionSummary }) catch {
+    check_thread = std.Thread.spawn(.{}, worker, .{ std.heap.page_allocator, auto_update.checkRemoteVersionSummary }) catch {
         phase.store(@backingInt(Phase.done_no), .release);
         return;
     };
@@ -128,10 +128,13 @@ pub fn deinit(io: std.Io) void {
 }
 
 fn worker(
-    io: std.Io,
     gpa: std.mem.Allocator,
     check: *const fn (std.Io, std.mem.Allocator, []u8) error{OutOfMemory}!auto_update.CheckSummary,
 ) void {
+    // A detached check must also outlive teardown of the application's Io.
+    var threaded: std.Io.Threaded = .init(gpa, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
     defer check_done.set(io);
     var ver_buf: [128]u8 = undefined;
     const summary = check(io, gpa, &ver_buf) catch {
@@ -443,7 +446,7 @@ test "launch worker signals completion on success and error" {
     defer phase.store(@backingInt(Phase.pending), .release);
     for ([_]@TypeOf(&Check.success){ &Check.success, &Check.failure }) |check| {
         check_done = .unset;
-        worker(std.testing.io, std.testing.allocator, check);
+        worker(std.testing.allocator, check);
         try std.testing.expect(check_done.isSet());
         try std.testing.expectEqual(AppUpdateState.none, appUpdateState());
     }
