@@ -3080,6 +3080,22 @@ test "chrome: panel false leaves no Panel place" {
     try withChrome(.{ .panel = false }, expectNoPanel);
 }
 
+fn expectCornerButtons(editor: *fizzy.Editor) !void {
+    _ = editor;
+    try std.testing.expect(dvui.tagGet("region.arrange:Main") != null);
+}
+
+fn expectNoCornerButtons(editor: *fizzy.Editor) !void {
+    _ = editor;
+    try std.testing.expect(dvui.tagGet("region.arrange:Main") == null);
+    try std.testing.expect(dvui.tagGet("region.arrange:Sidebar") == null);
+}
+
+test "chrome: corner_buttons false draws no corner button on any place" {
+    try withChrome(.{}, expectCornerButtons);
+    try withChrome(.{ .corner_buttons = false }, expectNoCornerButtons);
+}
+
 fn expectBarsVisible(editor: *fizzy.Editor) !void {
     const side = chromeBounds(editor, "Sidebar") orelse return error.TestUnexpectedResult;
     try std.testing.expect(side.h < dvui.windowRectPixels().h - 1);

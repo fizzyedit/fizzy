@@ -1,0 +1,10 @@
+app: chrome corner_buttons option
+
+Chrome gains corner_buttons (default true; -Dchrome-corner-buttons=false). It sets
+Layout.corner_buttons, and Region.cornerButton draws no orb, glyph, ring or handle when
+it is false. A drag begun elsewhere still ticks and shows its drop zones.
+
+Agent-Team: linux
+Worker: claude
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>

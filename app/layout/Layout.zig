@@ -155,6 +155,10 @@ form_factor: core.platform.FormFactor = .desktop,
 /// which are drawn after the shape — so a view, and the places a split makes, look the same in a
 /// float as in the window. Null, no card.
 card: ?dvui.Options = null,
+/// Whether a place draws its corner button (`Region.cornerButton`), the handle that lifts a view.
+/// False for an app whose places hold nothing worth moving; a drag begun elsewhere
+/// (`beginViewDrag`) still shows its drop zones and lands.
+corner_buttons: bool = true,
 /// Set when a region's remembered extent changed this frame. The application decides what that
 /// means — fizzy debounces a write to `layout.zon`.
 extents_changed: bool = false,

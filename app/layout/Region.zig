@@ -713,6 +713,16 @@ const corner_touch_ms: i32 = 3000;
 /// Drag the button to lift the view: a card of it follows the pointer (grab offset preserved)
 /// and every place it could land, this one included, shows its drop zones.
 fn cornerButton(self: *Layout, opts: InitOptions, keywords: []const []const u8, box: *dvui.BoxWidget) void {
+    if (!self.corner_buttons) {
+        // No button to lift a view by, but a drag begun elsewhere still needs somewhere to land.
+        if (!self.state.view_drag.active()) return;
+        ViewDrag.tick(self);
+        var ftb: dvui.RenderFrontToBack = undefined;
+        ftb.init();
+        defer ftb.deinit();
+        ViewDrag.drawZones(self, opts.name, box.data().id);
+        return;
+    }
     const rs = box.data().borderRectScale();
     const mouse = dvui.currentWindow().mouse_pt;
     const picker_here = self.state.picker.is_open and std.mem.eql(u8, self.state.picker.region, opts.name);

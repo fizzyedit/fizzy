@@ -70,6 +70,7 @@ const place_padding: f32 = 8;
 pub fn layout(ctx: ?*anyopaque, f: *Layout) !dvui.App.Result {
     const editor: *fizzy.Editor = @ptrCast(@alignCast(ctx.?));
     f.card = placeCard();
+    f.corner_buttons = editor.chrome.corner_buttons;
 
     var body = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
     defer body.deinit();

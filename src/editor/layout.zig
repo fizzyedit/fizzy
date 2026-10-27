@@ -24,6 +24,7 @@ pub fn layout(ctx: ?*anyopaque, f: *Layout) !dvui.App.Result {
     const rail_left = chrome.sidebar_edge == .left;
     // The card Main and Panel wear, and every float's places with them (`Layout.card`).
     f.card = placeCard(editor);
+    f.corner_buttons = chrome.corner_buttons;
     // The blur harness: a frosted card above the shape, declared last so it floats over it.
     defer blurDemo(editor);
     var body = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .both });

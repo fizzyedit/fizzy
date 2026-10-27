@@ -105,6 +105,7 @@ pub const Config = struct {
     chrome_panel: bool,
     chrome_menu_bar: bool,
     chrome_infobar: bool,
+    chrome_corner_buttons: bool,
     workbench_opts: *std.Build.Step.Options,
     /// Null on the configure pass that fetches Velopack (see `readConfig`).
     msvcup_before_compile: ?*std.Build.Step.Run,
@@ -520,10 +521,12 @@ pub fn readConfig(b: *std.Build, target: std.Build.ResolvedTarget, opts: Options
     const chrome_panel = b.option(bool, "chrome-panel", "Draw the bottom Panel and its Output view (default: true)") orelse true;
     const chrome_menu_bar = b.option(bool, "chrome-menu-bar", "Draw the in-window menu bar (default: true)") orelse true;
     const chrome_infobar = b.option(bool, "chrome-infobar", "Draw the infobar (default: true)") orelse true;
+    const chrome_corner_buttons = b.option(bool, "chrome-corner-buttons", "Draw the corner button on every place (default: true)") orelse true;
     build_opts.addOption(ChromeEdge, "chrome_sidebar_edge", chrome_sidebar_edge);
     build_opts.addOption(bool, "chrome_panel", chrome_panel);
     build_opts.addOption(bool, "chrome_menu_bar", chrome_menu_bar);
     build_opts.addOption(bool, "chrome_infobar", chrome_infobar);
+    build_opts.addOption(bool, "chrome_corner_buttons", chrome_corner_buttons);
     const static_workbench = b.option(
         bool,
         "static-workbench",
@@ -622,6 +625,7 @@ pub fn readConfig(b: *std.Build, target: std.Build.ResolvedTarget, opts: Options
         .chrome_panel = chrome_panel,
         .chrome_menu_bar = chrome_menu_bar,
         .chrome_infobar = chrome_infobar,
+        .chrome_corner_buttons = chrome_corner_buttons,
         .workbench_opts = workbench_opts,
         .msvcup_before_compile = msvcup_before_compile,
         .accesskit = accesskit,
@@ -816,6 +820,7 @@ fn native(
         pack_opts.addOption(bool, "chrome_panel", cfg.chrome_panel);
         pack_opts.addOption(bool, "chrome_menu_bar", cfg.chrome_menu_bar);
         pack_opts.addOption(bool, "chrome_infobar", cfg.chrome_infobar);
+        pack_opts.addOption(bool, "chrome_corner_buttons", cfg.chrome_corner_buttons);
         break :package_blk try fizzy_exe.addFizzyExecutableForTarget(
             b,
             vz,
