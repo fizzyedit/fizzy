@@ -11,7 +11,8 @@ const app = @import("app");
 
 const Layout = app.layout.Layout;
 const Menu = @import("Menu.zig");
-const Sidebar = @import("Sidebar.zig");
+const Rail = app.layout.Rail;
+const Accounts = @import("Accounts.zig");
 const Chrome = @import("Chrome.zig");
 
 pub const sidebar = sdk.keywords.ide.sidebar;
@@ -29,8 +30,8 @@ pub fn layout(ctx: ?*anyopaque, f: *Layout) !dvui.App.Result {
     var body = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .both });
     defer body.deinit();
 
-    var rail_action: Sidebar.Action = .none;
-    if (rail_left) rail_action = try editor.sidebar.draw(editor, f, sidebar);
+    var rail_action: Rail.Action = .none;
+    if (rail_left) rail_action = try Rail.draw(railHost(editor), f, sidebar);
 
     {
         var stack = dvui.box(@src(), .{ .dir = .vertical }, .{
@@ -70,7 +71,7 @@ pub fn layout(ctx: ?*anyopaque, f: *Layout) !dvui.App.Result {
     }
 
     if (!rail_left) {
-        rail_action = try editor.sidebar.draw(editor, f, sidebar);
+        rail_action = try Rail.draw(railHost(editor), f, sidebar);
         applyRailAction(editor, f, rail_action);
     }
 
@@ -93,7 +94,7 @@ fn sidebarRegion(editor: *fizzy.Editor, f: *Layout) !void {
 }
 
 /// What the Sidebar and the rail ask of the frame once the Sidebar is drawn.
-fn applyRailAction(editor: *fizzy.Editor, f: *Layout, action: Sidebar.Action) void {
+fn applyRailAction(editor: *fizzy.Editor, f: *Layout, action: Rail.Action) void {
     // `?show=` asked for one file and the room for it (`Editor.show_only_document`).
     if (editor.show_only_document) {
         editor.show_only_document = false;
@@ -187,6 +188,42 @@ fn placeCard(editor: *fizzy.Editor) dvui.Options {
 fn explorerPane(ctx: ?*anyopaque, f: *Layout, keywords: []const []const u8) Layout.Region.Error!dvui.App.Result {
     const editor: *fizzy.Editor = @ptrCast(@alignCast(ctx.?));
     return editor.explorer.draw(editor, f, keywords);
+}
+
+fn railHost(editor: *fizzy.Editor) Rail.Host {
+    return .{ .ctx = editor, .vtable = &.{
+        .drawFooterItems = railFooterItems,
+        .sidePaneShown = railSidePaneShown,
+        .undecidedPluginCount = railUndecidedCount,
+        .iconRect = railIconRect,
+    } };
+}
+
+/// The account disc, when anything can be signed in to; then plugin-drawn items (a badge, a
+/// status light); the rail then adds fizzy's own views.
+fn railFooterItems(ctx: ?*anyopaque, size: f32) void {
+    const editor: *fizzy.Editor = @ptrCast(@alignCast(ctx.?));
+    if (editor.app.host.account_providers.items.len != 0) Accounts.drawRailDisc(editor, size) catch |err| dvui.log.err("account disc failed to draw: {s}", .{@errorName(err)});
+    for (editor.app.host.rail_items.items, 0..) |item, i| {
+        if (item.hidden) continue;
+        var slot = dvui.box(@src(), .{ .dir = .vertical }, .{ .id_extra = i, .background = false, .min_size_content = .{ .h = size } });
+        defer slot.deinit();
+        item.draw(item.ctx, size) catch |err| dvui.log.err("rail item '{s}' failed to draw: {s}", .{ item.id, sdk.Plugin.errorNameOf(item.owner, err) });
+    }
+}
+
+fn railSidePaneShown(ctx: ?*anyopaque) bool {
+    const editor: *fizzy.Editor = @ptrCast(@alignCast(ctx.?));
+    return if (editor.regionFor(sidebar)) |r| !r.isClosed() and !r.isFolded() else !editor.explorer.closed;
+}
+
+fn railUndecidedCount(ctx: ?*anyopaque) usize {
+    const editor: *fizzy.Editor = @ptrCast(@alignCast(ctx.?));
+    return editor.app.undecidedPluginCount();
+}
+
+fn railIconRect(_: ?*anyopaque, r: dvui.Rect.Physical) void {
+    if (fizzy.backend.custom_titlebar) fizzy.Editor.pushTitleStripRect(r);
 }
 
 // ── Blur harness ───────────────────────────────────────────────────────────────────────────────
