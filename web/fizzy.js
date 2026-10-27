@@ -1117,7 +1117,7 @@ export class Fizzy {
         axis(1, ev.deltaY, []);
       }, { passive: false });
 
-      // What the keyboard does to the word before the caret reaches the worker as typing.
+      // What the keyboard does to the fragment before the caret reaches the worker as typing.
       const textInput = new TextInput(hidden, {
         text: (text) => post({ type: "text", text }),
         backspace: () => {
