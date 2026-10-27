@@ -231,7 +231,7 @@ fn testFrame() !dvui.App.Result {
         t_viewport_y = scroll.si.viewport.y;
     } else {
         var scroll = ScrollArea.init(@src(), .{ .horizontal = .none, .vertical_bar = .hide }, .{ .expand = .both });
-        // After the area's `deinit`, which is where the coast moves it: the frame's final place.
+        // Read the final viewport after the area's event handling and edge correction.
         const si = scroll.si;
         defer t_viewport_y = si.viewport.y;
         defer scroll.deinit();
@@ -304,6 +304,33 @@ test "the coast is a function of time, not of how the frames cut it" {
     var jittery: [15]f32 = undefined;
     try coastTrace(&.{ 25, 8 }, &jittery);
     for (steady, jittery) |a, b| try std.testing.expectApproxEqAbs(a, b, 0.01);
+}
+
+test "coast displacement follows each frame gap" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    t_use_dvui = false;
+    _ = try swipe();
+    var previous_time = dvui.currentWindow().frame_time_ns;
+    try frameAfter(25);
+    var previous_y = t_raw_y;
+    var previous_speed: f32 = std.math.inf(f32);
+    var follows_gaps = true;
+    // frameAfter draws at the current timestamp, then begins the next frame with this gap.
+    // Alternating long and short gaps exposes a displacement applied one frame late.
+    for ([_]u64{ 8, 25, 8, 25, 8, 25, 8, 25 }) |next_gap| {
+        const time = dvui.currentWindow().frame_time_ns;
+        const gap_ms: f32 = @as(f32, @floatFromInt(time - previous_time)) / std.time.ns_per_ms;
+        try frameAfter(next_gap);
+        const displacement = previous_y - t_raw_y;
+        const speed = displacement / gap_ms;
+        std.debug.print("coast gap_ms={d:.0} displacement_px={d:.4} px_per_ms={d:.4}\n", .{ gap_ms, displacement, speed });
+        follows_gaps = follows_gaps and displacement > 0 and speed < previous_speed;
+        previous_time = time;
+        previous_y = t_raw_y;
+        previous_speed = speed;
+    }
+    try std.testing.expect(follows_gaps);
 }
 
 test "a slow coast draws at a new place every frame, then snaps at rest" {
