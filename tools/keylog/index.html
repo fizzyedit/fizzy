@@ -106,12 +106,15 @@ document.getElementById("copy").onclick = async () => {
     await navigator.clipboard.writeText(text);
     say("copied " + lines.length + " lines");
   } catch (_) {
-    // Clipboard API needs a secure context; fall back to selecting the log.
-    const range = document.createRange();
-    range.selectNodeContents(out);
-    getSelection().removeAllRanges();
-    getSelection().addRange(range);
-    say(document.execCommand("copy") ? "copied " + lines.length + " lines" : "select the log and copy by hand");
+    // Clipboard API needs a secure context; copy the full text through a temporary control,
+    // since `out` shows only the last 200 records.
+    const tmp = document.createElement("textarea");
+    tmp.value = text;
+    document.body.appendChild(tmp);
+    tmp.select();
+    const ok = document.execCommand("copy");
+    tmp.remove();
+    say(ok ? "copied " + lines.length + " lines" : "copy failed; use POST or select the log by hand");
   }
 };
 
