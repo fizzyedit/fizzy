@@ -111,6 +111,7 @@ test "demo: every bundled demo plays to the end through fizzy's stage, a seek la
         var steady: Steady = .{};
         defer steady.deinit(gpa);
         var frames: usize = 0;
+        var checked_snapshot_memory = false;
         while (p.state != .ended and frames < 20_000) : (frames += 1) {
             _ = try dvui.testing.step(headlessFrame);
             try steady.frame(gpa, app.editor, e.name);
@@ -120,11 +121,23 @@ test "demo: every bundled demo plays to the end through fizzy's stage, a seek la
             // first and replays from the keyframe (`Player.letGo`), which replays a drag cut short
             // no better than it did — a moment the player takes no snapshot at either.
             if (p.input.held.count() > 0) continue;
+            if (!checked_snapshot_memory) {
+                // The app uses smp_allocator for its lifetime; snapshots must also release every
+                // arrangement buffer when captured with an allocator that checks for leaks.
+                const app_gpa = app.editor.app.gpa;
+                app.editor.app.gpa = gpa;
+                defer app.editor.app.gpa = app_gpa;
+                if (stage.capture()) |snap| {
+                    stage.release(snap);
+                    checked_snapshot_memory = true;
+                }
+            }
             try moments.append(gpa, .{ .now = p.seq.now, .cursor = p.seq.cursor, .print = p.stage.fingerprint().? });
         }
         errdefer std.debug.print("demo '{s}': {t} after {d} frames at {d:.0} of {d} ms\n", .{ e.name, p.state, frames, p.seq.now, p.duration() });
         try std.testing.expectEqual(automation.Player.State.ended, p.state);
         try std.testing.expect(p.seq.done());
+        try std.testing.expect(checked_snapshot_memory);
         try std.testing.expectEqual(@as(u32, 0), p.timeouts);
         try std.testing.expectEqual(@as(u32, 0), p.mismatches);
         try std.testing.expect(moments.items.len > bundled_random_seeks);
