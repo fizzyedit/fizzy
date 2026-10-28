@@ -294,3 +294,26 @@ test "empty or unreadable window manager names refuse blur without writing" {
         try std.testing.expect(s.sent == null);
     }
 }
+
+test "behind refuses on its first call without a library or readable window manager name" {
+    if (builtin.target.os.tag != .linux) return error.SkipZigTest;
+    defer {
+        tried = false;
+        bound = false;
+        Probe.lib = null;
+        Probe.unreadable = false;
+    }
+    var display: u8 = 0;
+    for ([_]?Lib{ null, Probe.xlib, Probe.xlib }, [_]bool{ false, false, true }) |lib, unreadable| {
+        // Each case starts before the first capability probe.
+        for ([_]?Want{ .{ .frame = .{ .w = 100, .h = 80 }, .radius = 0 }, null }) |want| {
+            tried = false;
+            bound = false;
+            Probe.lib = lib;
+            Probe.unreadable = unreadable;
+            try std.testing.expect(!behind(&display, 3, want));
+            try std.testing.expect(tried);
+            try std.testing.expect(!offered(&display));
+        }
+    }
+}
