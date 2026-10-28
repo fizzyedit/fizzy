@@ -210,11 +210,18 @@ chrome: Chrome = .configured,
 /// answer. That is fine for deciding who owns a clipboard verb: focus doesn't change between
 /// the keystroke and the frame that handles it.
 text_input_focused: bool = false,
+/// Shared preferences last loaded from disk, with any pending local choice.
 person: core.person.Person = .{},
+/// Shared config directory, owned by `app.gpa` until deinit.
 person_dir: []const u8,
+/// Timestamp of the last loaded or saved shared file.
 person_mtime: ?i128 = null,
+/// Native focus state from the preceding frame.
 person_app_active: bool = false,
+/// Browser focus notification last handled by tick.
 person_focus_epoch: u32 = 0,
+/// Pending shared preference save deadline; null when clean.
+person_save_deadline_ns: ?i128 = null,
 
 /// Whether any plugin asked to keep painting this frame — one poll of every plugin's
 /// `needsContinuousRepaint`, sampled in `tick` and read by everything that needs the answer.
@@ -484,9 +491,7 @@ pub fn init(
     {
         const settings_path = try std.fs.path.join(app.allocator, &.{ editor.app.config_folder, "settings.zon" });
         defer app.allocator.free(settings_path);
-        try @import("app").settings.Migration.personMotion(app.allocator, dvui.io, settings_path, editor.person_dir);
-        editor.person = core.person.load(dvui.io, editor.person_dir);
-        editor.person_mtime = editor.personMtime();
+        editor.loadPerson(settings_path);
         editor.app.settings = try Settings.load(app.allocator, settings_path, plugins_dir);
     }
 
@@ -4383,6 +4388,15 @@ pub fn restartPending(_: *const Editor) bool {
     return Popout.restartPending();
 }
 
+/// Loads shared preferences after a best-effort migration; disk errors never prevent startup.
+pub fn loadPerson(editor: *Editor, settings_path: []const u8) void {
+    @import("app").settings.Migration.personMotion(editor.app.gpa, dvui.io, settings_path, editor.person_dir) catch |err| {
+        std.log.warn("Could not migrate person preferences: {s}", .{@errorName(err)});
+    };
+    editor.person = core.person.load(dvui.io, editor.person_dir);
+    editor.person_mtime = editor.personMtime();
+}
+
 fn personMtime(editor: *const Editor) ?i128 {
     if (comptime builtin.target.cpu.arch == .wasm32) return null;
     const path = std.fs.path.join(editor.app.gpa, &.{ editor.person_dir, "person.zon" }) catch return null;
@@ -4393,6 +4407,7 @@ fn personMtime(editor: *const Editor) ?i128 {
 
 /// Re-reads shared preferences on focus when another app has replaced the file.
 pub fn reloadPerson(editor: *Editor) void {
+    if (editor.person_save_deadline_ns != null) return;
     const mtime = editor.personMtime();
     if (comptime builtin.target.cpu.arch == .wasm32) {
         editor.person = core.person.load(dvui.io, editor.person_dir);
@@ -4402,12 +4417,21 @@ pub fn reloadPerson(editor: *Editor) void {
     editor.person_mtime = mtime;
 }
 
+/// Debounces shared preference writes while a slider is changing.
+pub fn markPersonDirty(editor: *Editor) void {
+    editor.person_save_deadline_ns = core.perf.nanoTimestamp() + Settings.autosave_timeout_ns;
+    dvui.refresh(null, @src(), null);
+}
+
+/// Flushes the local shared preference choice to disk.
 pub fn savePerson(editor: *Editor) void {
     core.person.save(dvui.io, editor.person_dir, editor.person) catch |err| {
         dvui.log.err("Could not save person preferences: {s}", .{@errorName(err)});
+        editor.person_save_deadline_ns = core.perf.nanoTimestamp() + Settings.autosave_timeout_ns;
         return;
     };
     editor.person_mtime = editor.personMtime();
+    editor.person_save_deadline_ns = null;
 }
 
 pub fn tick(editor: *Editor) !dvui.App.Result {
@@ -4415,7 +4439,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         extern "fizzy" fn fizzy_web_focus_epoch() u32;
     };
     const epoch = if (comptime builtin.target.cpu.arch == .wasm32) web_focus.fizzy_web_focus_epoch() else 0;
-    const active = if (comptime builtin.target.cpu.arch != .wasm32 and @hasDecl(@import("backend"), "appActive")) @import("backend").appActive() else true;
+    const active = fizzy.backend.viewports.appActive();
     if ((active and !editor.person_app_active) or epoch != editor.person_focus_epoch) {
         editor.reloadPerson();
     }
@@ -5038,6 +5062,10 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     editor.saveSettingsGuarded() catch |err| {
         dvui.log.err("Failed to autosave settings ({s})", .{@errorName(err)});
     };
+    if (editor.person_save_deadline_ns) |deadline| {
+        const remaining = deadline - core.perf.nanoTimestamp();
+        if (remaining > 0) App.scheduleSaveWakeup(remaining, 2) else editor.savePerson();
+    }
     editor.saveWindowRatiosGuarded();
 
     _ = editor.app.arena.reset(.retain_capacity);
@@ -7334,6 +7362,7 @@ pub fn rawCloseFileID(editor: *Editor, id: u64) !void {
 }
 
 pub fn deinit(editor: *Editor) !void {
+    if (editor.person_save_deadline_ns != null) editor.savePerson();
     defer editor.app.gpa.free(editor.person_dir);
     // Freed however this ends: the fallible steps below may return early.
     defer editor.app.deinit();

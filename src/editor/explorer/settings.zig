@@ -563,7 +563,7 @@ fn drawMotion() void {
     var level = fizzy.core.person.motionLevel(editor.person, build_opts.look_motion);
     if (editor.person.motion == null) dvui.label(@src(), "System default ({d:0.01})", .{level}, .{});
     dvui.labelNoFmt(@src(), "Applies to every fizzy app.", .{}, .{});
-    if (dvui.button(@src(), "Reset to system default", .{}, .{})) {
+    if (editor.person.motion != null and dvui.button(@src(), "Reset to system default", .{}, .{})) {
         editor.person.motion = null;
         level = fizzy.core.person.motionLevel(editor.person, build_opts.look_motion);
         editor.savePerson();
@@ -576,7 +576,7 @@ fn drawMotion() void {
         .min = 0.0,
     }, .{ .expand = .horizontal })) {
         editor.person.motion = level;
-        editor.savePerson();
+        editor.markPersonDirty();
         dvui.refresh(null, @src(), null);
     }
     // The three names along the slider's length, the one it is nearest lit.

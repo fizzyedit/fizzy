@@ -16,7 +16,7 @@ pub fn load(io: std.Io, dir: []const u8) Person {
     const path = if (builtin.target.cpu.arch == .wasm32) "fizzyedit.person" else std.fs.path.join(gpa, &.{ dir, "person.zon" }) catch return .{};
     const data = fs.readZ(gpa, io, path) catch return .{};
     var diag: std.zon.parse.Diagnostics = undefined;
-    const person = std.zon.parse.fromSlice(Person, .{ .gpa = gpa, .arena = gpa, .source = data, .diagnostics = &diag }) catch return .{};
+    const person = std.zon.parse.fromSlice(Person, .{ .gpa = gpa, .arena = gpa, .source = data, .diagnostics = &diag, .ignore_unknown_fields = true }) catch return .{};
     if (person.motion) |level| if (!std.math.isFinite(level) or level < 0 or level > 1) return .{};
     return person;
 }
@@ -53,6 +53,8 @@ test "preferences round trip, invalid files, and atomic replacement" {
     try std.testing.expectEqual(Person{}, load(io, dir));
     try tmp.dir.writeFile(io, .{ .sub_path = "person.zon", .data = "garbage" });
     try std.testing.expectEqual(Person{}, load(io, dir));
+    try tmp.dir.writeFile(io, .{ .sub_path = "person.zon", .data = ".{ .motion = 0.4, .future = true }" });
+    try std.testing.expectEqual(@as(?f32, 0.4), load(io, dir).motion);
     try save(io, dir, .{ .motion = 0.4 });
     try std.testing.expectEqual(@as(?f32, 0.4), load(io, dir).motion);
     try save(io, dir, .{ .motion = 0.8 });
