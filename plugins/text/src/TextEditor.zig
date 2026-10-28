@@ -1150,9 +1150,9 @@ fn drawHoverAndGotoDefinition(doc: *Document, ext: []const u8, te: *TextEntryWid
             const same = if (prev) |p| (p.start == span.start and p.end == span.end) else false;
             if (!same) {
                 dvui.dataSet(null, tt.data().id, "_loading_span", span);
-                dvui.dataSet(null, tt.data().id, "_loading_since_ns", dvui.frameTimeNS());
+                dvui.dataSet(null, tt.data().id, "_loading_since_ns", core.MotionClock.wallFrameNs());
             } else if (dvui.dataGet(null, tt.data().id, "_loading_since_ns", i128)) |since| {
-                const elapsed_ms = @divTrunc(dvui.frameTimeNS() - since, std.time.ns_per_ms);
+                const elapsed_ms = @divTrunc(core.MotionClock.wallFrameNs() - since, std.time.ns_per_ms);
                 if (elapsed_ms >= hover_loading_timeout_ms) hover_timed_out = true;
             }
             // Keep polling while pending so a late answer (or the timeout) is noticed even
