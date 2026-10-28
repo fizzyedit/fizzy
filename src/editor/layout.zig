@@ -190,7 +190,7 @@ fn explorerPane(ctx: ?*anyopaque, f: *Layout, keywords: []const []const u8) Layo
     return editor.explorer.draw(editor, f, keywords);
 }
 
-fn railHost(editor: *fizzy.Editor) Rail.Host {
+pub fn railHost(editor: *fizzy.Editor) Rail.Host {
     return .{ .ctx = editor, .vtable = &.{
         .drawFooterItems = railFooterItems,
         .sidePaneShown = railSidePaneShown,
@@ -217,7 +217,9 @@ fn railSidePaneShown(ctx: ?*anyopaque) bool {
     return if (editor.regionFor(sidebar)) |r| !r.isClosed() and !r.isFolded() else !editor.explorer.closed;
 }
 
-fn railUndecidedCount(ctx: ?*anyopaque) usize {
+fn railUndecidedCount(ctx: ?*anyopaque, view_id: []const u8) usize {
+    // The rail knows no view by name; only the store's view holds the card that offers a build.
+    if (!std.mem.eql(u8, view_id, app.store.Store.view_id)) return 0;
     const editor: *fizzy.Editor = @ptrCast(@alignCast(ctx.?));
     return editor.app.undecidedPluginCount();
 }

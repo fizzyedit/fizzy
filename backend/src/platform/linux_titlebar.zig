@@ -85,9 +85,8 @@ pub fn blurOffered(window: *c.SDL_Window) bool {
 pub fn blurBehind(window: *c.SDL_Window, radius: ?f32) bool {
     if (comptime builtin.target.os.tag != .linux) return false;
     const props = c.SDL_GetWindowProperties(window);
-    const x11_display = c.SDL_GetPointerProperty(props, c.SDL_PROP_WINDOW_X11_DISPLAY_POINTER, null);
     const display = c.SDL_GetPointerProperty(props, c.SDL_PROP_WINDOW_WAYLAND_DISPLAY_POINTER, null) orelse {
-        const xd = x11_display orelse return false;
+        const xd = c.SDL_GetPointerProperty(props, c.SDL_PROP_WINDOW_X11_DISPLAY_POINTER, null) orelse return false;
         // SDL keeps no frame margin on X11: the frame is the window, in pixels.
         const xwindow: c_ulong = @intCast(c.SDL_GetNumberProperty(props, c.SDL_PROP_WINDOW_X11_WINDOW_NUMBER, 0));
         if (xwindow == 0) return false;
