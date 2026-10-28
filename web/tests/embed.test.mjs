@@ -139,3 +139,33 @@ assert.equal(document.fullscreenElement, parentA, "leaving the second embed reve
 toggles[0]();
 assert.equal(document.fullscreenElement, null, "leaving the first embed exits full screen");
 console.log("embed.test: ok");
+
+// Deliver text input as soon as the handler is installed, before setup completes.
+let earlyTextInputs = 0;
+let filterClears = 0;
+const { TextInput } = await import(pathToFileURL(path.join(dir, "web.js")).href);
+TextInput.prototype.clear = () => { filterClears++; };
+Canvas.prototype.transferControlToOffscreen = function () { return {}; };
+globalThis.OffscreenCanvas = class {};
+globalThis.ResizeObserver = class { observe() {} };
+globalThis.Worker = class {
+  set onmessage(handler) {
+    this.handler = handler;
+    handler({ data: { type: "textInput", rect: [10, 20, 80, 30] } });
+    earlyTextInputs++;
+  }
+  postMessage(message) {
+    if (message.type === "init") this.handler({ data: { type: "ready" } });
+  }
+};
+const workerCanvas = document.createElement("canvas");
+workerCanvas.parentElement = new Element();
+await new Promise((resolve, reject) => {
+  new Fizzy({ canvas: workerCanvas, worker: true, persist: false, onReady: resolve, onError: reject }).run();
+});
+assert.equal(earlyTextInputs, 1, "worker text input is handled during setup");
+assert.equal(filterClears, 1, "entering text input clears the initialized filter");
+assert.equal(document.body.children[0].style.left, "10px", "early text input positions the hidden input");
+workerCanvas.dispatch("pointerdown", { pointerId: 1, pointerType: "mouse", buttons: 1, clientX: 0, clientY: 0, timeStamp: 0 });
+assert.equal(filterClears, 2, "pointer input still clears the filter");
+console.log("embed.test: worker startup and early text input ok");
