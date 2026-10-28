@@ -9,9 +9,16 @@
 
 // Pointer input is batched before crossing the worker boundary. Times are absolute
 // performance-clock milliseconds; subtracting the receiver's origin preserves latency.
-export function pointerInput(canvas, send, clockOrigin = performance.timeOrigin, done = () => {}) {
+//
+// `keyboard` is the on-screen keyboard's rule for a touch (`keyboardGate` is its other half):
+// `field()` is the focused text field's rect in canvas CSS pixels (empty when none), and a drag
+// that starts outside it and passes `dragSlop` calls `dismiss()` once. A press never touches the
+// keyboard, and a gesture that stays inside the slop is a tap and calls `resume()`.
+export function pointerInput(canvas, send, clockOrigin = performance.timeOrigin, done = () => {}, keyboard = null) {
+  const dragSlop = 10;
   canvas.style.touchAction = "none";
   const slots = new Map();
+  let gesture = null;
   let mouseButtons = 0;
   const mods = (e) => (e.metaKey << 3) | (e.altKey << 2) | (e.ctrlKey << 1) | (e.shiftKey << 0);
   const handle = (kind, ev) => {
@@ -24,6 +31,23 @@ export function pointerInput(canvas, send, clockOrigin = performance.timeOrigin,
     if (touch && !slots.has(ev.pointerId)) return;
     if (kind === 8) canvas.setPointerCapture(ev.pointerId);
     const rect = canvas.getBoundingClientRect();
+    if (touch && keyboard) {
+      const x = ev.clientX - rect.left;
+      const y = ev.clientY - rect.top;
+      if (kind === 8 && !gesture) {
+        const f = keyboard.field();
+        const onField = f.length > 0 && x >= f[0] && x <= f[0] + f[2] && y >= f[1] && y <= f[1] + f[3];
+        gesture = { id: ev.pointerId, x, y, onField, moved: false };
+      } else if (gesture?.id === ev.pointerId) {
+        if (kind === 10 && !gesture.moved && Math.hypot(x - gesture.x, y - gesture.y) > dragSlop) {
+          gesture.moved = true;
+          if (!gesture.onField) keyboard.dismiss();
+        } else if (kind === 9) {
+          if (!gesture.moved) keyboard.resume();
+          gesture = null;
+        }
+      }
+    }
     let samples = kind === 10 ? ev.getCoalescedEvents?.() : null;
     if (!samples?.length) samples = [ev];
     const events = [];
@@ -55,6 +79,18 @@ export function pointerInput(canvas, send, clockOrigin = performance.timeOrigin,
   for (const name of ["touchstart", "touchend"]) {
     canvas.addEventListener(name, (ev) => ev.preventDefault(), { capture: true, passive: false });
   }
+}
+
+// Whether the hidden input may take focus: a scroll drag outside the field closes the keyboard
+// (`blur`) and holds it closed until a tap or the field going away, so the refocus that follows
+// the gesture's release or the keyboard's inset change cannot bring it back.
+export function keyboardGate(blur) {
+  let closed = false;
+  return {
+    closed: () => closed,
+    dismiss() { closed = true; blur(); },
+    resume() { closed = false; },
+  };
 }
 
 // The on-screen keyboard's height over the page's bottom edge, posted as `{type: "inset", bottom}`
@@ -1077,7 +1113,9 @@ export class Fizzy {
       function focusQuietly(el) {
         if (engaged) el.focus({ preventScroll: true });
       }
+      const gate = keyboardGate(() => hidden.blur());
       function oskCheck() {
+        if (gate.closed()) return;
         if (textInputRect.length === 0) {
           focusQuietly(canvas);
           return;
@@ -1092,7 +1130,7 @@ export class Fizzy {
         hidden.style.top = top + "px";
         hidden.style.width = Math.max(0, Math.min(textInputRect[2], canvas.clientWidth - textInputRect[0])) + "px";
         hidden.style.height = Math.max(0, Math.min(textInputRect[3], canvas.clientHeight - Math.min(textInputRect[1], above))) + "px";
-        focusQuietly(hidden);
+        if (document.activeElement !== hidden) focusQuietly(hidden);
       }
 
       let boundKeys = new Set();
@@ -1166,7 +1204,7 @@ export class Fizzy {
             canvas.style.cursor = m.name;
             break;
           case "textInput":
-            if ((textInputRect.length === 0) !== (m.rect.length === 0)) inputFilter.clear();
+            if ((textInputRect.length === 0) !== (m.rect.length === 0)) { inputFilter.clear(); gate.resume(); }
             textInputRect = m.rect;
             oskCheck();
             break;
@@ -1271,7 +1309,7 @@ export class Fizzy {
       const mods = (ev) => (ev.metaKey << 3) | (ev.altKey << 2) | (ev.ctrlKey << 1) | (ev.shiftKey << 0);
       const event = (a0, a1, a2, a3, a4) => post({ type: "event", a: [a0, a1, a2, a3, a4] });
       canvas.addEventListener("contextmenu", (ev) => ev.preventDefault());
-      pointerInput(canvas, post, performance.timeOrigin, oskCheck);
+      pointerInput(canvas, post, performance.timeOrigin, oskCheck, { field: () => textInputRect, dismiss: gate.dismiss, resume: gate.resume });
 
       const scrollLowest = [99999, 99999];
       let scrollLowestBatch = [99999, 99999];
@@ -1381,8 +1419,12 @@ export class Fizzy {
             if (ownsKey({ target: document.activeElement })) app.oskCheck();
           }, dvuiCanvas, () => ownsKey({ target: document.activeElement }));
           const oskCheck = app.oskCheck.bind(app);
+          const gate = keyboardGate(() => app.hidden_input?.blur());
+          let fieldShown = false;
           app.oskCheck = () => {
             const r = app.textInputRect;
+            if (!!r?.length !== fieldShown) { fieldShown = !!r?.length; gate.resume(); }
+            if (gate.closed()) return;
             if (!r?.length) return oskCheck();
             const y = r[1];
             r[1] = Math.min(y, Math.max(0, dvuiCanvas.clientHeight - insetBottom() - r[3]));
@@ -1396,7 +1438,8 @@ export class Fizzy {
               app.instance.exports.add_event(...a, e.time - performance.timeOrigin);
             }
             app.requestRender();
-          }, performance.timeOrigin, () => app.oskCheck());
+          }, performance.timeOrigin, () => app.oskCheck(),
+          { field: () => app.textInputRect ?? [], dismiss: gate.dismiss, resume: gate.resume });
           for (const name of ["touchstart", "touchmove", "touchend", "touchcancel", "mousedown", "mousemove", "mouseup"]) {
             dvuiCanvas.addEventListener(name, (ev) => ev.stopImmediatePropagation(), { capture: true });
           }

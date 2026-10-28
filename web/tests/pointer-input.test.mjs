@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 // Exercise the page's actual input adapter without loading the wasm/browser runtime.
 const source = readFileSync(new URL('../fizzy.js', import.meta.url), 'utf8');
 const adapter = source.slice(source.indexOf('export function pointerInput'), source.indexOf('// The on-screen keyboard'));
-const { pointerInput } = runInNewContext(adapter.replace('export function', 'function') + '\n({ pointerInput })');
+const { pointerInput, keyboardGate } = runInNewContext(adapter.replaceAll('export function', 'function') + '\n({ pointerInput, keyboardGate })');
 const listeners = {};
 const sent = [];
 const canvas = {
@@ -94,4 +94,42 @@ console.log('pointer input: chord transitions and cancellation passed');
   const without = tap(false);
   assert.notEqual(without.page.activeElement, without.hidden, 'the model closes the keyboard without the listeners');
   console.log('pointer input: a tap leaves the hidden input focused');
+}
+
+// The keyboard's rule for a touch: a press never touches the keyboard, a scroll drag that starts
+// outside the focused field closes it once, a tap resumes it, and a drag that starts on the field
+// (moving the caret, selecting) leaves it open.
+{
+  const run = (start, moves, field = [10, 150, 80, 30]) => {
+    const handlers = {};
+    const fake = {
+      style: {},
+      addEventListener(name, fn) { handlers[name] = fn; },
+      setPointerCapture() {},
+      getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 200 }),
+    };
+    const log = [];
+    const gate = keyboardGate(() => log.push('blur'));
+    pointerInput(fake, () => {}, 0, () => log.push('done'), {
+      field: () => field,
+      dismiss: () => { log.push('dismiss'); gate.dismiss(); },
+      resume: () => { log.push('resume'); gate.resume(); },
+    });
+    const at = (id, y, time) => ({ pointerId: id, pointerType: 'touch', clientX: 20, clientY: y, timeStamp: time, stopImmediatePropagation() {} });
+    handlers.pointerdown(at(1, start, 1));
+    assert.deepEqual(log, [], 'a press never touches the keyboard');
+    moves.forEach((y, i) => handlers.pointermove(at(1, y, 2 + i)));
+    handlers.pointerup(at(1, moves.at(-1) ?? start, 9));
+    return { log, gate };
+  };
+  const scroll = run(50, [55, 70, 90, 110]);
+  assert.deepEqual(scroll.log, ['dismiss', 'blur', 'done'], 'a scroll drag outside the field blurs once and stays closed');
+  assert.equal(scroll.gate.closed(), true);
+  const tapOutside = run(50, [52]);
+  assert.deepEqual(tapOutside.log, ['resume', 'done'], 'a tap blurs nothing itself; the app answers it');
+  const onField = run(160, [190, 195]);
+  assert.deepEqual(onField.log, ['done'], 'a drag that starts on the field leaves the keyboard open');
+  const noField = run(50, [90], []);
+  assert.deepEqual(noField.log, ['dismiss', 'blur', 'done']);
+  console.log('pointer input: press, scroll drag, tap and drag on the field keep the keyboard rule');
 }
