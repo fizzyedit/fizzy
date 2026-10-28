@@ -143,18 +143,24 @@ console.log("embed.test: ok");
 // Deliver text input as soon as the handler is installed, before setup completes.
 let earlyTextInputs = 0;
 let filterClears = 0;
+const filteredKeys = [];
+const workerMessages = [];
+let workerInstance;
 const { TextInput } = await import(pathToFileURL(path.join(dir, "web.js")).href);
 TextInput.prototype.clear = () => { filterClears++; };
+TextInput.prototype.keydown = (ev) => { filteredKeys.push(ev.key); };
 Canvas.prototype.transferControlToOffscreen = function () { return {}; };
 globalThis.OffscreenCanvas = class {};
 globalThis.ResizeObserver = class { observe() {} };
 globalThis.Worker = class {
+  constructor() { workerInstance = this; }
   set onmessage(handler) {
     this.handler = handler;
     handler({ data: { type: "textInput", rect: [10, 20, 80, 30] } });
     earlyTextInputs++;
   }
   postMessage(message) {
+    workerMessages.push(message);
     if (message.type === "init") this.handler({ data: { type: "ready" } });
   }
 };
@@ -168,4 +174,18 @@ assert.equal(filterClears, 1, "entering text input clears the initialized filter
 assert.equal(document.body.children[0].style.left, "10px", "early text input positions the hidden input");
 workerCanvas.dispatch("pointerdown", { pointerId: 1, pointerType: "mouse", buttons: 1, clientX: 0, clientY: 0, timeStamp: 0 });
 assert.equal(filterClears, 2, "pointer input still clears the filter");
+const hidden = document.body.children[0];
+assert.equal(key(hidden).defaultPrevented, false, "the worker hidden input is recognized without asking main-thread wasm");
+for (const key of ["a", "Backspace"]) {
+  hidden.dispatch("keydown", { key, preventDefault() {} });
+  hidden.dispatch("keyup", { key });
+}
+assert.deepEqual(filteredKeys, ["a", "Backspace"], "typing and backspace reach the filter after early text input");
+assert.deepEqual(workerMessages.filter((m) => m.type === "key").map((m) => [m.kind, m.key]), [
+  [5, "a"], [6, "a"], [5, "Backspace"], [6, "Backspace"],
+], "typing and backspace still reach the worker");
+workerInstance.handler({ data: { type: "textInput", rect: [20, 30, 80, 30] } });
+assert.equal(filterClears, 2, "moving the text input preserves its fragment");
+workerInstance.handler({ data: { type: "textInput", rect: [] } });
+assert.equal(filterClears, 3, "leaving text input clears the filter");
 console.log("embed.test: worker startup and early text input ok");

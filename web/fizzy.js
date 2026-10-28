@@ -1037,6 +1037,15 @@ export class Fizzy {
         focusQuietly(hidden);
       }
 
+      // Initialize before worker setup can deliver text-input messages.
+      const inputFilter = new TextInput(hidden, {
+        text: (text) => post({ type: "text", text }),
+        backspace: () => {
+          post({ type: "key", kind: 5, key: "Backspace", repeat: 0, mods: 0 });
+          post({ type: "key", kind: 6, key: "Backspace", repeat: 0, mods: 0 });
+        },
+      });
+
       let boundKeys = new Set();
       const offscreen = canvas.transferControlToOffscreen();
       // The init waits for the early compile (`wasmModule`), which by now has usually finished.
@@ -1065,15 +1074,6 @@ export class Fizzy {
       for (const q of ["(prefers-color-scheme: dark)", "(prefers-reduced-motion: reduce)"]) {
         window.matchMedia(q).addEventListener("change", () => post({ type: "prefs", prefs: prefs() }));
       }
-
-      // What the keyboard does to the fragment before the caret reaches the worker as typing.
-      const inputFilter = new TextInput(hidden, {
-        text: (text) => post({ type: "text", text }),
-        backspace: () => {
-          post({ type: "key", kind: 5, key: "Backspace", repeat: 0, mods: 0 });
-          post({ type: "key", kind: 6, key: "Backspace", repeat: 0, mods: 0 });
-        },
-      });
 
       worker.onerror = (err) => {
         console.error(err);
