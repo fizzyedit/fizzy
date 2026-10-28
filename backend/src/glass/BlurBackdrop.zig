@@ -1551,6 +1551,7 @@ fn passStrength(a: u32, b: u32) f32 {
 test "a frost scrolled away for two frames keeps its birth, capture size and last queued rect" {
     const fns = struct {
         var away = false;
+        var use_field = false;
         var first = true;
         var birth: i128 = 0;
         const kept_cap: dvui.Size = .{ .w = 150, .h = 150 };
@@ -1564,7 +1565,14 @@ test "a frost scrolled away for two frames keeps its birth, capture size and las
                 first = false;
             }
             const rect: Rect.Physical = if (away) .{ .x = 500, .y = 500, .w = 40, .h = 40 } else home;
-            frostPane(id, rect, .all(2), 1, .{ .radius = 20 });
+            if (use_field) {
+                var field: LiquidField = .{};
+                // bounds() adds one physical pixel around a shape.
+                field.add(.{ .rect = rect.insetAll(1) });
+                fieldPane(id, field, 1, .{ .radius = 20 });
+            } else {
+                frostPane(id, rect, .all(2), 1, .{ .radius = 20 });
+            }
             if (!away) {
                 try std.testing.expectEqual(birth, dvui.dataGet(null, id, "_frost_born", i128).?);
                 try std.testing.expectEqual(kept_cap, dvui.dataGet(null, id, "_frost_cap", dvui.Size).?);
@@ -1573,16 +1581,19 @@ test "a frost scrolled away for two frames keeps its birth, capture size and las
             return .ok;
         }
     };
-    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 200 } });
-    defer t.deinit();
-    fns.away = false;
-    fns.first = true;
-    _ = try dvui.testing.step(fns.frame);
-    const birth = dvui.dataGet(null, fns.id, "_frost_born", i128).?;
-    fns.away = true;
-    _ = try dvui.testing.step(fns.frame);
-    _ = try dvui.testing.step(fns.frame);
-    fns.away = false;
-    _ = try dvui.testing.step(fns.frame);
-    try std.testing.expectEqual(birth, dvui.dataGet(null, fns.id, "_frost_born", i128).?);
+    for ([_]bool{ false, true }) |use_field| {
+        var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 200 } });
+        defer t.deinit();
+        fns.use_field = use_field;
+        fns.away = false;
+        fns.first = true;
+        _ = try dvui.testing.step(fns.frame);
+        const birth = dvui.dataGet(null, fns.id, "_frost_born", i128).?;
+        fns.away = true;
+        _ = try dvui.testing.step(fns.frame);
+        _ = try dvui.testing.step(fns.frame);
+        fns.away = false;
+        _ = try dvui.testing.step(fns.frame);
+        try std.testing.expectEqual(birth, dvui.dataGet(null, fns.id, "_frost_born", i128).?);
+    }
 }

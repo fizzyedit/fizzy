@@ -35,6 +35,14 @@ test "ink must reach both axes, with the same margins in core and the backend" {
                 try std.testing.expectEqual(within(ink, clip, margin), @import("glass").BlurBackdrop.inkWithin(ink, clip, margin));
             }
         }
-        try std.testing.expect(!within(.{ .x = 40, .y = 100, .w = 1, .h = 1 }, clip, margin));
+        for ([_]dvui.Rect.Physical{
+            .{ .x = 0, .y = 40, .w = 1, .h = 1 },
+            .{ .x = 80, .y = 40, .w = 1, .h = 1 },
+            .{ .x = 40, .y = 0, .w = 1, .h = 1 },
+            .{ .x = 40, .y = 100, .w = 1, .h = 1 },
+        }) |ink| {
+            try std.testing.expect(!within(ink, clip, margin));
+            try std.testing.expectEqual(within(ink, clip, margin), @import("glass").BlurBackdrop.inkWithin(ink, clip, margin));
+        }
     }
 }

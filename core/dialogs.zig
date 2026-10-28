@@ -1973,6 +1973,25 @@ test "glass shadows cull distant ink but preserve a fade reaching into the clip"
                 }, 1);
                 try std.testing.expectEqual(expected, dvui.currentWindow().render_stats.draw_calls - before);
             }
+            // Only the scaled vertical offset reaches in; the fade and bare rect do not.
+            const before = dvui.currentWindow().render_stats.draw_calls;
+            glassShadow(.{ .x = 20, .y = -30, .w = 10, .h = 10 }, .all(2), 2, .{
+                .fade = 1,
+                .shrink = 0,
+                .offset = .{ .x = 0, .y = 12 },
+                .color = .black,
+                .alpha = 1,
+            }, 1);
+            try std.testing.expectEqual(@as(u32, 1), dvui.currentWindow().render_stats.draw_calls - before);
+            // Shrinking the ring moves all of its ink out of reach.
+            glassShadow(.{ .x = 98, .y = 20, .w = 20, .h = 20 }, .all(2), 2, .{
+                .fade = 1,
+                .shrink = 4,
+                .offset = .{},
+                .color = .black,
+                .alpha = 1,
+            }, 1);
+            try std.testing.expectEqual(@as(u32, 1), dvui.currentWindow().render_stats.draw_calls - before);
             return .ok;
         }
     };
