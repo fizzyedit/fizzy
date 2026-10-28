@@ -1,6 +1,6 @@
 #!/bin/sh
 # The hidden input's tests (web/tests/text-input.test.js) against the web.js the web build
-# writes: `zig build web` first. Node also runs the two-copy embed check.
+# writes: `zig build web` first. Node also runs pointer-input and two-copy embed checks.
 # Use --embed-only for the build-independent Node check; hidden-input tests also support jsc.
 set -eu
 cd "$(dirname "$0")/.."
@@ -10,6 +10,7 @@ fi
 js=zig-out/web/web.js
 [ -f "$js" ] || { echo "test-web-text-input: no $js; run zig build web" >&2; exit 1; }
 if command -v node >/dev/null; then
+    node web/tests/pointer-input.test.mjs
     node web/tests/text-input.test.js "$PWD/$js"
     exec node web/tests/embed.test.mjs
 fi

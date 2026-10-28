@@ -4494,9 +4494,9 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             .chrome = .{ chrome.r, chrome.g, chrome.b, chrome.a },
             .has_chrome = true,
         });
-        // The lens's bend fades with its own frost (`InApp.bend`): the whole of it here.
+        // The lens's bend fades with its own frost (`Look.bend`): the whole of it here.
         fizzy.core.dialogs.publishRefraction(if (lens) 1 else if (liquid) pane.refraction else 0);
-        fizzy.core.LiquidField.publishLook(if (lens) glass_look.inApp(opacity) else null);
+        fizzy.core.material.publishLook(if (lens) glass_look.Looks.fromOpacity(opacity) else null);
         fizzy.core.corners.publish(editor.app.settings.corner_roundness);
     }
     // How things move this frame, for every animation here and in every plugin (`core.motion`).
@@ -5360,6 +5360,9 @@ fn loadRuntimeSplits(state: *Layout.State, gpa: std.mem.Allocator, saved: []cons
         const parent = r.parent orelse continue;
         const side = Layout.State.SplitTree.parseSide(r.from orelse continue) orelse continue;
         const made = state.splits.split(gpa, intern.go, parent, side, r.extent orelse 0, r.name);
+        // Rebuilt under the name of a split that may have been turning (a demo putting the
+        // person's arrangement back): that turn is not this one's (`Region.settleTurn`).
+        if (made != null) state.splits.halfOf(r.name).?.settle = true;
         if (made != null and (r.adaptive orelse false)) {
             _ = state.splits.markAdaptive(r.name);
             if (r.share) |share| _ = state.splits.setShare(r.name, share);

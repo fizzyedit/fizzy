@@ -1328,7 +1328,7 @@ fn initTree(
 
     if (init_opts.resize) self.drawPendingSplit(id) else self.drawPendingSplit(null);
 
-    const branch = orientBranch(self, node.kind.branch, id);
+    const branch = orientBranch(self, &node.kind.branch, id);
     var box_opts = opts;
     var default_extent: f32 = 0;
     // Forgotten this frame, the tree `branch` points into may be freed: its children wait for
@@ -1440,7 +1440,9 @@ fn initTree(
 /// changed shape), and follows a drag while turned. That drag is shown and nothing more: turning
 /// back takes the share from the saved one again (`_seen` is unread while turned, so dvui drops it
 /// and the first frame back reads the saved share anew).
-fn orientBranch(self: *Layout, saved: SplitTree.Branch, id: dvui.Id) SplitTree.Branch {
+fn orientBranch(self: *Layout, branch: *SplitTree.Branch, id: dvui.Id) SplitTree.Branch {
+    if (branch.settle) settleTurn(self, branch, id);
+    const saved = branch.*;
     if (!saved.adaptive) return saved;
     const dims = dvui.dataGet(null, id, "_dims", dvui.Size) orelse return saved;
     const leaf = idOf(self.state, saved.created);
@@ -1509,6 +1511,19 @@ fn orientBranch(self: *Layout, saved: SplitTree.Branch, id: dvui.Id) SplitTree.B
     }
     dvui.refresh(null, @src(), id);
     return drawn;
+}
+
+/// Drop what a turn left in the frame's data (`orientBranch`) for `branch`, whose box is `id`. Its
+/// places read `_fold` and `_turned` every frame, adaptive or not, so a split that stopped being
+/// adaptive mid-turn would stay shut, or never save a drag again. What the turn showed is already
+/// in the branch (`setAdaptive`), or is not wanted (a split rebuilt from a saved arrangement).
+fn settleTurn(self: *Layout, branch: *SplitTree.Branch, id: dvui.Id) void {
+    branch.settle = false;
+    for ([_][]const u8{ "_turned", "_fold", "_share", "_set", "_seen" }) |key| dvui.dataRemove(null, id, key);
+    if (idOf(self.state, branch.created)) |leaf| {
+        dvui.dataRemove(null, leaf, "_turned");
+        dvui.dataRemove(null, leaf, "_fold");
+    }
 }
 
 /// The share an adaptive split's new half has now: drawn through the turn (`_share`), and saved
@@ -1700,7 +1715,7 @@ fn drawTreeNode(
         },
         .branch => |*branch| {
             if (self.depth >= Layout.max_nesting) return;
-            const b = orientBranch(self, branch.*, dvui.parentGet().extendId(src, nameExtra(branch.origin)));
+            const b = orientBranch(self, branch, dvui.parentGet().extendId(src, nameExtra(branch.origin)));
             const parent_dir = if (self.depth > 0) self.containers[self.depth - 1].dir else .horizontal;
             // Same extra as the leaf this branch replaced, so the parent sash
             // keeps the widget it was already dragging.
@@ -1888,6 +1903,55 @@ pub fn markAdaptive(self: *Layout, new: []const u8) void {
         return;
     };
     if (self.state.splits.markAdaptive(new)) self.state.markDirty();
+}
+
+/// Divide `name` the way its space's shape asks (`core.placement.orient`), the new place on the
+/// trailing side, and the split adaptive from then on: the menu's Split (`layout.place.split`),
+/// two groups where the person asked for two and named no side. Returns the minted leaf, or null
+/// as `splitOn` does. No size floor past the layout's own: the person asked.
+pub fn splitAdaptive(self: *Layout, name: []const u8) ?[]const u8 {
+    const size = ViewDrag.placeSize(self.state, name) orelse return null;
+    const side: SplitTree.Side = switch (core.placement.orient(null, size.w, size.h)) {
+        .side_by_side => .right,
+        .stacked => .bottom,
+    };
+    const new = splitOn(self, name, side) orelse return null;
+    markAdaptive(self, new);
+    return new;
+}
+
+/// Make the split place `name` is one half of follow its room, or stop (`layout.place.adaptive`),
+/// where `State.adaptiveOf` allows it. Nothing moves under the person either way. On, the split
+/// keeps the size it is drawn at as its share (the seed tree's sizes by `ratio` already; the
+/// forest's takes the share from the extent, `orientBranch`). Off, it keeps the direction it is
+/// drawn in now, and a turn under way settles where it is (`settleTurn`).
+pub fn setAdaptive(self: *Layout, name: []const u8, on: bool) void {
+    if (self.state.adaptiveOf(name) == null) return;
+    if (self.state.floatRoot(name) == null) if (self.state.dock) |*dock| {
+        const parent = dock.findParent(dock.findPanel(name).?).?;
+        const split = &dock.nodes.items[parent.idx].split;
+        if (!on) split.dir = split.axis();
+        split.adaptive = on;
+        split.drawn = null;
+        self.state.markDirty();
+        dvui.refresh(null, @src(), null);
+        return;
+    };
+    const branch = self.state.splits.halfOf(name).?;
+    if (!on) if (idOf(self.state, branch.created)) |leaf| {
+        if (dvui.dataGet(null, leaf, "_turned", bool) orelse false) {
+            SplitTree.turn(branch);
+            if (dvui.dataGet(null, leaf, "_size", f32)) |extent| {
+                if (self.state.setExtent(self.gpa, branch.created, extent)) self.extents_changed = true;
+            }
+        }
+    };
+    branch.adaptive = on;
+    // Taken anew from the extent it has now: a share from when it was last adaptive would jump.
+    branch.share = null;
+    if (!on) branch.settle = true;
+    self.state.markDirty();
+    dvui.refresh(null, @src(), null);
 }
 
 fn splitDock(

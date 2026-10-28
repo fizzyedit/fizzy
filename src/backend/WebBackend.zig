@@ -499,15 +499,25 @@ export fn new_font(ptr: [*c]u8, len: usize) void {
     }
 }
 
-export fn add_event(which: u8, int1: u32, int2: u32, float1: f32, float2: f32) void {
+export fn add_event(which: u8, int1: u32, int2: u32, float1: f32, float2: f32, time_ms: f64) void {
     if (win_ok) {
-        add_event_raw(&win, which, int1, int2, float1, float2) catch |err| {
+        add_event_raw(&win, which, int1, int2, float1, float2, time_ms) catch |err| {
             log.err("add_event_raw returned {any}", .{err});
         };
     }
 }
 
-fn add_event_raw(w: *dvui.Window, which: u8, int1: u32, int2: u32, float1: f32, float2: f32) !void {
+fn add_event_raw(w: *dvui.Window, which: u8, int1: u32, int2: u32, float1: f32, float2: f32, time_ms: f64) !void {
+    const first = w.events.items.len;
+    const time_ns: i128 = @as(i128, @intFromFloat((if (std.math.isFinite(time_ms)) time_ms else wasm.wasm_now()) * 1_000_000.0)) + w.backend.impl.clock_ahead_ns;
+    defer for (w.events.items[first..]) |e| {
+        var buf: [32]u8 = undefined;
+        // The prefix and a u16 event number fit in 32 bytes.
+        // Backend packages cannot import core; match core/input_time.zig key().
+        const key = std.fmt.bufPrint(&buf, "_input_time_{d}", .{e.num}) catch unreachable;
+        dvui.dataSet(w, w.data().id, key, time_ns);
+    };
+
     have_event = true;
     //event_temps.append(.{
     //    .which = which,
