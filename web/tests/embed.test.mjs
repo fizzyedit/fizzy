@@ -22,7 +22,7 @@ export class TextInput {
 export class Dvui {
   constructor() { this.imports = {}; this.hidden_input = null; }
   setInstance(instance) { this.instance = instance; }
-  setCanvas(canvas) { this.canvas = canvas; }
+  setCanvas(canvas) { this.canvas = canvas; this.gl = { drawingBufferWidth: 100, drawingBufferHeight: 100 }; }
   run() { this.hidden_input = globalThis.document.createElement("input"); }
   requestRender() {}
 }
@@ -39,12 +39,13 @@ class Element extends Target {
   constructor() { super(); this.style = {}; this.fullscreen = 0; }
   setAttribute() {}
   focus() {}
-  getBoundingClientRect() { return { left: 0, top: 0, right: 100, bottom: 100 }; }
+  getBoundingClientRect() { return { left: 0, top: 0, right: 100, bottom: 100, width: 100, height: 100 }; }
   requestFullscreen() { document.fullscreenElement = this; this.fullscreen++; document.dispatch("fullscreenchange", {}); return Promise.resolve(); }
 }
 class Canvas extends Element {
   constructor() { super(); this.clientWidth = 100; this.clientHeight = 100; }
   getContext() { return {}; }
+  setPointerCapture() {}
 }
 const document = Object.assign(new Target(), {
   fullscreenElement: null,
@@ -80,6 +81,7 @@ WebAssembly.instantiate = async (module, imports) => {
   return {
     exports: {
       memory: { buffer: memory.buffer },
+      add_event() {},
       FizzyWebKeyBuffer: () => 0,
       FizzyWebKeyBound: (len, mods) => { bound[id].push([len, mods]); return 1; },
     },
@@ -119,7 +121,7 @@ assert.deepEqual(bound.map((asks) => asks.length), [1, 0], "only the copy it was
 assert.equal(key(b).defaultPrevented, true);
 assert.deepEqual(bound.map((asks) => asks.length), [1, 1]);
 
-b.dispatch("pointerdown", {});
+b.dispatch("pointerdown", { pointerId: 1, pointerType: "mouse", buttons: 1, clientX: 0, clientY: 0, timeStamp: 0 });
 assert.equal(key(document.body).defaultPrevented, true, "with nothing focused the last copy used has the key");
 assert.deepEqual(bound.map((asks) => asks.length), [1, 2]);
 
