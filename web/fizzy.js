@@ -348,10 +348,6 @@ export class Fizzy {
         fizzy_web_fullscreen_supported() {
           return fullscreenSupported ? 1 : 0;
         },
-        // The person's "reduce transparency": every glass solid (`WebBackend.materialOffer`).
-        fizzy_web_reduced_transparency() {
-          return window.matchMedia("(prefers-reduced-transparency: reduce)").matches ? 1 : 0;
-        },
         // `Clock.real` for the app's `Io` (src/backend/web_io.zig).
         fizzy_web_now_real_ms() {
           return Date.now();
@@ -993,7 +989,6 @@ export class Fizzy {
         dark: media("(prefers-color-scheme: dark)"),
         light: media("(prefers-color-scheme: light)"),
         reduce: media("(prefers-reduced-motion: reduce)"),
-        transparency: media("(prefers-reduced-transparency: reduce)"),
       });
       const storage = {};
       try {
@@ -1061,7 +1056,7 @@ export class Fizzy {
       for (const q of ["(pointer: coarse)", "(hover: none)"]) {
         window.matchMedia(q).addEventListener("change", () => post({ type: "size", size: size() }));
       }
-      for (const q of ["(prefers-color-scheme: dark)", "(prefers-reduced-motion: reduce)", "(prefers-reduced-transparency: reduce)"]) {
+      for (const q of ["(prefers-color-scheme: dark)", "(prefers-reduced-motion: reduce)"]) {
         window.matchMedia(q).addEventListener("change", () => post({ type: "prefs", prefs: prefs() }));
       }
 

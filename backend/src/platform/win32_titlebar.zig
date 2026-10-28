@@ -196,32 +196,6 @@ var win32_styled_zoomed: bool = false;
 /// The backdrop last applied to it (`backdrops.main`): a new one re-applies the chrome.
 var win32_styled_backdrop: u32 = no_backdrop;
 
-/// Whether the person turned Windows' Transparency effects off (Personalization, Colors), which
-/// makes every window and every glass solid (`SDLBackend.materialOffer`). Read from the registry
-/// once, and again after the system says a setting changed (`WM_SETTINGCHANGE`).
-pub fn transparencyOff() bool {
-    if (comptime builtin.target.os.tag != .windows) return false;
-    if (transparency_off) |off| return off;
-    const reg = win32.system.registry;
-    var enabled: u32 = 1;
-    var size: u32 = @sizeOf(u32);
-    const err = reg.RegGetValueW(
-        reg.HKEY_CURRENT_USER,
-        std.unicode.utf8ToUtf16LeStringLiteral("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"),
-        std.unicode.utf8ToUtf16LeStringLiteral("EnableTransparency"),
-        reg.RRF_RT_REG_DWORD,
-        null,
-        &enabled,
-        &size,
-    );
-    // No value is Windows' default: transparency on.
-    const off = err == .NO_ERROR and enabled == 0;
-    transparency_off = off;
-    return off;
-}
-/// `transparencyOff`'s last answer; null until read, and after a setting changed.
-var transparency_off: ?bool = null;
-
 /// One-shot WM_NCMOUSELEAVE tracking is armed (`armNcMouseLeaveTracking`).
 var hover_tracking: bool = false;
 
@@ -319,8 +293,6 @@ fn win32MicaSubclassProc(
 ) callconv(.winapi) win32.foundation.LRESULT {
     _ = uIdSubclass;
     _ = dwRefData;
-    // Transparency effects may have been turned on or off: read again (`transparencyOff`).
-    if (uMsg == win32.ui.windows_and_messaging.WM_SETTINGCHANGE) transparency_off = null;
     // DWM requires the frame extension to be applied in WM_ACTIVATE (and when composition changes)
     // for the backdrop to show correctly instead of staying opaque.
     // Re-apply backdrop type on activate/deactivate so the window keeps its backdrop when unfocused

@@ -787,21 +787,10 @@ pub fn materialKinds(_: *WebBackend) MaterialKinds {
     return .{};
 }
 
-/// What the web can show (`glass_look.Offer`): every kind, drawn in the canvas, and the person's
-/// `prefers-reduced-transparency`, which makes every glass solid.
+/// What the web can show (`glass_look.Offer`): every kind, drawn in the canvas.
 pub fn materialOffer(_: *WebBackend) glass_look.Offer {
-    return .init(.web, .empty, true, page.fizzy_web_reduced_transparency());
+    return .init(.web, .empty, true, false);
 }
-
-/// The page's own functions (`web/fizzy.js`). Only a wasm build has a page; the integration tests
-/// compile this backend natively.
-const page = if (builtin.target.cpu.arch == .wasm32) struct {
-    extern "fizzy" fn fizzy_web_reduced_transparency() bool;
-} else struct {
-    fn fizzy_web_reduced_transparency() bool {
-        return false;
-    }
-};
 
 pub fn begin(_: *WebBackend, arena_in: std.mem.Allocator) !void {
     arena = arena_in;
