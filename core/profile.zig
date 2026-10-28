@@ -310,8 +310,9 @@ pub const Profiler = struct {
     }
 
     fn frameEnd(self: *Profiler) void {
+        if (!self.active) return;
         defer self.frame_cause = .{};
-        if (!self.active or self.paused or self.frozen) {
+        if (self.paused or self.frozen) {
             // Still clear the frame's times, or a held frame's add to the next one recorded.
             for (self.slice()) |*e| {
                 e.frame_ns = 0;
@@ -1130,4 +1131,25 @@ test "paused and frozen frames discard pending causes before recording resumes" 
         p.frameEnd();
         try std.testing.expect(!p.historyFrame(0).?.cause.press);
     }
+}
+
+test "inactive frame end leaves pending cause and scope counters untouched" {
+    var p: Profiler = .{};
+    // Sentinels expose writes and scans even when they would only clear zeroes.
+    p.frame_cause = .{ .press = true };
+    p.count = 1;
+    p.entries[0] = .{
+        .owner = "test",
+        .name = "sentinel",
+        .parent = none,
+        .depth = 0,
+        .key = 0,
+        .frame_ns = 1,
+        .frame_calls = 1,
+    };
+    p.frameEnd();
+    try std.testing.expect(p.frame_cause.press);
+    try std.testing.expectEqual(@as(u64, 1), p.entries[0].frame_ns);
+    try std.testing.expectEqual(@as(u32, 1), p.entries[0].frame_calls);
+    try std.testing.expectEqual(@as(usize, 0), p.history_filled);
 }
