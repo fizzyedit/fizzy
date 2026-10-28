@@ -746,6 +746,17 @@ pub fn draw(self: *GpuRenderer, texture: ?dvui.Texture, vtx: []const dvui.Vertex
     var extra: [2]*Tex = .{ self.white, self.white };
     var uniforms_at: u32 = 0;
     if (self.active) |*a| {
+        health.counts.program_draws += 1;
+        var min = vtx[0].pos;
+        var max = min;
+        for (vtx[1..]) |v| {
+            min.x = @min(min.x, v.pos.x);
+            min.y = @min(min.y, v.pos.y);
+            max.x = @max(max.x, v.pos.x);
+            max.y = @max(max.y, v.pos.y);
+        }
+        const area = @as(f64, max.x - min.x) * @as(f64, max.y - min.y);
+        health.counts.program_px +|= @intFromFloat(@min(area, std.math.maxInt(u32)));
         program = a.id;
         extra = a.extra;
         const n = self.programs.items[a.id - 1].uniform_vec4s;

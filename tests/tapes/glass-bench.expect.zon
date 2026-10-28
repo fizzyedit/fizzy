@@ -1,0 +1,3 @@
+// Deterministic program-pixel ceiling needs calibration from the first CI Linux verdict.
+// Keep timing budgets unset: hosted runners are not a stable timing baseline.
+.{}

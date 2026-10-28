@@ -144,6 +144,12 @@ jobs:
         run: bash scripts/test-agent-work.sh
       - name: superfans (fan-dedupe, fan-route, fan-lint on seeded input)
         run: bash scripts/test-fan.sh
+      - name: scripts/glass-bench (fixture budget must fail)
+        run: |
+          status=0
+          scripts/glass-bench.sh --self-test > /tmp/glass-bench.jsonl || status=$?
+          test "$status" = 1
+          python3 -c 'import json; rows=[json.loads(line) for line in open("/tmp/glass-bench.jsonl")]; assert any(row["metric"] == "glass_pane_us" and row["value"] == 8.333 for row in rows)'
       - name: scripts/perf-compile (store)
         run: bash scripts/test-perf-compile.sh
       - name: scripts/runner-setup.sh (private-repo check)
@@ -557,6 +563,21 @@ jobs:
           echo "--- verdict.zon"
           cat verdict/verdict.zon || { echo "(no verdict written)"; status=1; }
           exit $status
+      - name: Play the glass benchmark to a verdict
+        shell: bash
+        env:
+          SDL_VIDEO_DRIVER: x11
+          FIZZY_VSYNC: "0"
+          FIZZY_GLASS: liquid
+          FIZZY_GLASS_BENCH: 12x350x200
+          FIZZY_GLASS_REPEAT: "1"
+          FIZZY_DEMO: tests/tapes/glass-bench.zon
+          FIZZY_VERDICT: verdict/glass-bench.zon
+          FIZZY_VERDICT_EXPECT: tests/tapes/glass-bench.expect.zon
+        run: |
+          bin=$(ls zig-out/*/fizzy | head -n 1)
+          timeout 120 xvfb-run -a -s "-screen 0 1280x1024x24" "$bin" --profile verdict/glass-profile > verdict/glass-bench.log 2>&1
+          cat verdict/glass-bench.zon
       - name: Keep the verdict and the counters
         if: always()
         uses: actions/upload-artifact@v4
@@ -565,6 +586,8 @@ jobs:
           path: |
             verdict/verdict.zon
             verdict/fizzy.log
+            verdict/glass-bench.zon
+            verdict/glass-bench.log
             verdict/hang.txt
           if-no-files-found: warn
 

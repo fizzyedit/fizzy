@@ -195,6 +195,12 @@ export fn FizzyWebSetFormFactor(coarse: bool, w_css: f32, h_css: f32, override: 
     return @backingInt(platform.formFactor());
 }
 
+/// Visit-local benchmark options, applied once after the editor starts on the UI thread.
+export fn FizzyWebGlassBench(ptr: [*]const u8, len: usize, factor: u32) void {
+    fizzy.editor().glass_bench = @import("../editor/GlassBench.zig").parse(ptr[0..len]);
+    core.widgets.BlurBackdrop.repeat = if (factor >= 1 and factor <= 32) @intCast(factor) else 1;
+}
+
 /// Symmetric with the native API: nothing to install on web because the JS bootstrap wires
 /// the wheel listener at page load.
 pub fn installTrackpadGestureMonitor() void {}

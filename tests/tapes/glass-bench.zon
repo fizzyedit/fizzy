@@ -1,0 +1,16 @@
+// A fixed scene held long enough to fill the frame and work histories.
+.{
+    .name = "glass-bench",
+    .title = "Glass benchmark",
+    .keyframes = .{.{
+        .root = "demo://glass-bench",
+        .files = .{.{ .path = "README.md", .text = "# Glass benchmark\n" }},
+        .open = .{"README.md"},
+    }},
+    .home = "region:Main",
+    .ops = .{
+        .{ .at = 0, .do = .{ .keyframe = 0 } },
+        .{ .at = 0, .do = .{ .wait = .{ .until = .idle, .timeout = 1000 } } },
+        .{ .at = 8000, .do = .{ .wait = .{ .until = .idle, .timeout = 1000 } } },
+    },
+}

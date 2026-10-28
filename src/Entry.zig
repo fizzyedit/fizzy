@@ -370,6 +370,16 @@ pub fn AppInit(win: *dvui.Window) !void {
     const editor_ptr = try allocator.create(Editor);
     fizzy.setInstances(app_ptr, editor_ptr);
     editor_ptr.* = Editor.init(app_ptr) catch unreachable;
+    if (comptime builtin.target.cpu.arch != .wasm32) {
+        if (std.c.getenv("FIZZY_VSYNC")) |v| {
+            if (std.mem.eql(u8, std.mem.span(v), "0")) win.backend.impl.setVSync(false);
+        }
+        if (std.c.getenv("FIZZY_GLASS_BENCH")) |v| editor_ptr.glass_bench = Editor.GlassBench.parse(std.mem.span(v));
+        if (std.c.getenv("FIZZY_GLASS_REPEAT")) |v| {
+            const n = std.fmt.parseInt(u8, std.mem.span(v), 10) catch 1;
+            fizzy.core.widgets.BlurBackdrop.repeat = if (n >= 1 and n <= 32) n else 1;
+        }
+    }
     fizzy.core.profile.phase(dvui.io, "editor");
 
     // Workbench fizzy-owned state: wire before plugin `register`.
