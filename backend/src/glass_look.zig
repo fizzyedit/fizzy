@@ -22,7 +22,7 @@
 //! small glass.
 //!
 //! std-only: the mapping is pure, and tested here. The app publishes the in-app look each frame
-//! (`LiquidField.publishLook`, macOS); fizzy's pop-out overlay reads the native one.
+//! (`core.material.publishLook`, macOS); fizzy's pop-out overlay reads the native one.
 const std = @import("std");
 
 /// The one frost every glass has above 0, as a share of the way from a clear lens (0) to wholly
@@ -112,7 +112,7 @@ pub const frost_material: Material = .{ .variant = 2, .style = 1 };
 /// it frost at `over_share` and the window's colour `fill` opaque over that — both fading out
 /// across each piece's clearing bevel (`band`), so the rim stays the lens; the glass `glass` there,
 /// and the colour flat over everything `top_fill` opaque at the top. A drop takes the window's
-/// colour only at the top, as the app's glass does (`InApp.mix`): coming in sooner it was a disc of
+/// colour only at the top, as the app's glass does (`Look.mix`): coming in sooner it was a disc of
 /// colour over the surface being dragged across, not rougher glass (the user).
 pub const Native = struct {
     under: Material,
@@ -221,7 +221,7 @@ pub fn window(opacity: f32) Window {
 /// near the rim — `bevel` of the shape's shorter half, at most `bevel_cap` points — by up to `bend`
 /// times that band, which magnifies it and, past 1, folds it into a mirrored, darker band just
 /// inside the edge; the middle sharp and unblurred; a thin bright rim with a little colour fringe.
-pub const InApp = struct {
+pub const Look = struct {
     /// Frost over the sharp picture, 0…1: each shape's own blur is multiplied by it.
     frost: f32,
     /// The window's colour over it, 0…1 (the program's tint mix, whatever the blur): only at the
@@ -230,8 +230,17 @@ pub const InApp = struct {
     mix: f32,
     /// The colour a surface carrying text takes — a dialog, a menu: the window's opacity as it is.
     text_mix: f32,
-    /// White over it, 0…1.
-    lift: f32,
+    /// White added over the face, 0…1, a vertical ramp: `wash_top` at the shape's top edge, falling
+    /// to `wash_bottom` at its bottom (light falls from above). Equal, a flat lift.
+    wash_top: f32,
+    wash_bottom: f32,
+    /// A specular band over the top ~38% of the shape, strongest at its top edge: white added, 0…1.
+    sweep: f32 = 0,
+    /// A luminance cap, 0…1, on what the glass shows before the wash: brighter than this is soft-clipped
+    /// so text over a bright backdrop stays readable. 1 is off.
+    ceiling: f32 = 1,
+    /// How dark the window's hairline edge is, 0…1 (`diagonal` 0).
+    edge_dark: f32 = 0.85,
     /// The bending band's width: a share of the shape's shorter half…
     bevel: f32,
     /// …and at most this many points.
@@ -253,13 +262,19 @@ pub const InApp = struct {
     dispersion: f32,
 };
 
-pub fn inApp(opacity: f32) InApp {
+pub fn inApp(opacity: f32) Look {
     const w = way(opacity);
     return .{
         .frost = w.frost,
         .mix = w.top,
         .text_mix = w.tint,
-        .lift = 0.03 * w.shine,
+        .wash_top = 0.03 * w.shine,
+        .wash_bottom = 0.03 * w.shine,
+        // The identity of every curve fizzy does not use: no sweep, no cap, and the window's hairline
+        // as dark as it always was; the lit edge off.
+        .sweep = 0,
+        .ceiling = 1,
+        .edge_dark = 0.85,
         .bevel = bevel,
         .bevel_cap = bevel_cap,
         // The lens whole at its edge whatever the frost, as Liquid Glass's is (and the OS's drops,
@@ -282,7 +297,7 @@ pub fn inApp(opacity: f32) InApp {
 
 /// `look` for a drop — a drop zone's bubble, the carried view: frosted at least as much as the OS's
 /// glass keeps with no frost of the window's (`native`, `drop_frost_min`), on the same way up.
-pub fn forDrops(look: InApp) InApp {
+pub fn forDrops(look: Look) Look {
     var l = look;
     l.frost = std.math.lerp(drop_frost_min / drop_frost, 1, l.frost);
     return l;
@@ -292,7 +307,7 @@ pub fn forDrops(look: InApp) InApp {
 /// (`text_mix`), over the whole frost, as a window of the OS's glass has (`window`: its glass frost
 /// whole, its blur nearly so). At the frost level the sharp picture kept a tenth of the body, and
 /// the code behind a dialog read through it, where the OS's window beside it showed none.
-pub fn forText(look: InApp) InApp {
+pub fn forText(look: Look) Look {
     var l = look;
     l.mix = l.text_mix;
     if (l.frost > 0) l.frost = 1;
@@ -320,14 +335,49 @@ pub const text_blur: f32 = 24;
 /// — a colour picked through it is the colour under it. Only the band along its edge is glass,
 /// bending the picture toward its rim and lit there, and that follows the opacity as every glass
 /// does, its shine going at the top.
-pub fn forLens(look: InApp) InApp {
+pub fn forLens(look: Look) Look {
     var l = look;
     l.frost = 0;
     l.mix = 0;
     l.text_mix = 0;
-    l.lift = 0;
+    l.wash_top = 0;
+    l.wash_bottom = 0;
     return l;
 }
+
+/// What a glass is for, which picks its look (`Looks`): a drop's bubble or the carried view, a
+/// surface carrying text, a card, a bar, a lens over a picture of the caller's own.
+pub const Role = enum { drop, text, card, bar, lens };
+
+/// One `Look` per role, published once a frame before anything draws (`core.material.publishLook`)
+/// and read by every glass program (`LiquidField`). An app sets its own numbers per role; fizzy's
+/// are today's (`fromOpacity`).
+pub const Looks = struct {
+    drop: Look,
+    text: Look,
+    card: Look,
+    bar: Look,
+    lens: Look,
+
+    /// fizzy's: `forDrops`, `forText` and `forLens` of the app's glass at the window's opacity;
+    /// cards and bars are a drop's until an app says otherwise.
+    pub fn fromOpacity(opacity: f32) Looks {
+        const base_look = inApp(opacity);
+        const drop = forDrops(base_look);
+        return .{ .drop = drop, .text = forText(base_look), .card = drop, .bar = drop, .lens = forLens(base_look) };
+    }
+
+    pub fn get(self: *const Looks, role: Role) Look {
+        return switch (role) {
+            inline else => |r| @field(self, @tagName(r)),
+        };
+    }
+};
+
+/// Shared dvui data id for glass looks, renderer enablement and window opacity.
+/// The keys distinguish these values within each window.
+pub const data_id_backing: u64 = 0x6c69_7166;
+pub const data_key = "_liquid_look";
 
 // ── The app's frosted pane ──────────────────────────────────────────────────────────────────────
 
@@ -472,7 +522,7 @@ test "a lens over a picture leaves its middle as it is, at every opacity" {
         const l = forLens(inApp(t));
         try std.testing.expectEqual(@as(f32, 0), l.frost);
         try std.testing.expectEqual(@as(f32, 0), l.mix);
-        try std.testing.expectEqual(@as(f32, 0), l.lift);
+        try std.testing.expectEqual(@as(f32, 0), l.wash_top);
         // Its edge is the glass all the same.
         try std.testing.expectEqual(inApp(t).bend, l.bend);
         try std.testing.expectEqual(inApp(t).rim, l.rim);
@@ -520,5 +570,22 @@ test "both forms share the way" {
         const o = at(i, 20);
         try std.testing.expectApproxEqAbs(native(o).over_share, forDrops(inApp(o)).frost * drop_frost, 1e-6);
         try std.testing.expectEqual(native(o).fill, inApp(o).mix);
+    }
+}
+
+test "fizzy's looks keep every new curve at its identity" {
+    var i: usize = 0;
+    while (i <= 20) : (i += 1) {
+        const looks = Looks.fromOpacity(at(i, 20));
+        inline for (comptime std.enums.values(Role)) |r| {
+            const l = looks.get(r);
+            try std.testing.expectEqual(@as(f32, 0), l.sweep);
+            try std.testing.expectEqual(@as(f32, 1), l.ceiling);
+            try std.testing.expectEqual(@as(f32, 0.85), l.edge_dark);
+            try std.testing.expectEqual(l.wash_top, l.wash_bottom);
+        }
+        // Cards and bars are a drop's until an app says otherwise.
+        try std.testing.expectEqual(looks.drop, looks.card);
+        try std.testing.expectEqual(looks.drop, looks.bar);
     }
 }

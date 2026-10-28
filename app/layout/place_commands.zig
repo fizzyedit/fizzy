@@ -32,6 +32,8 @@ pub const Command = struct {
 pub const all = [_]Command{
     .{ .id = "layout.place.splitRight", .title = "Place: Split Right", .action = .split_right, .icon = icons.tvg.lucide.@"columns-2" },
     .{ .id = "layout.place.splitDown", .title = "Place: Split Down", .action = .split_down, .icon = icons.tvg.lucide.@"rows-2" },
+    .{ .id = "layout.place.split", .title = "Place: Split", .action = .split, .icon = icons.tvg.lucide.@"square-split-horizontal" },
+    .{ .id = "layout.place.adaptive", .title = "Place: Split Follows the Room", .action = .adaptive, .icon = icons.tvg.lucide.@"rotate-cw-square" },
     .{ .id = "layout.place.clear", .title = "Place: Clear", .action = .clear, .icon = icons.tvg.lucide.eraser },
     .{ .id = "layout.place.reset", .title = "Place: Reset to the Layout's Default", .action = .reset, .icon = icons.tvg.lucide.@"rotate-ccw" },
     .{ .id = "layout.place.delete", .title = "Place: Delete", .action = .delete, .icon = icons.tvg.lucide.@"trash-2" },

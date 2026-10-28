@@ -37,7 +37,7 @@ const LiquidField = @This();
 pub const max_shapes = 16;
 
 /// Uniform vec4s before the shapes (`Uniforms`), and per shape.
-const header_vec4s = 7;
+const header_vec4s = 9;
 const shape_vec4s = 3;
 
 /// A piece of glass. Physical pixels, window coordinates.
@@ -93,7 +93,7 @@ window: bool = false,
 /// even where the window is see-through behind it, as a place's corner button over the explorer,
 /// which is the window's own material. Off, it is as see-through there as the window is.
 solid: bool = false,
-/// Its tint and mix are its own, kept over the look the app publishes (`publishLook`): glass that
+/// Its tint and mix are its own, kept over the look the app publishes (`core.material.publishLook`): glass that
 /// must read as part of a surface, as a place's corner at rest does its card's fill.
 surface: bool = false,
 /// It is a lens over a picture of the caller's own (`drawPicture`): its middle the picture as it
@@ -105,6 +105,8 @@ lens: bool = false,
 /// that show face that way, as a piece in a place's top-right corner does — its arc down and to
 /// the left, its cut up and to the right — where the usual light would leave both in shade.
 light_across: bool = false,
+/// The look it is drawn with (`glass_look.Looks`), where it is not what its `lens` and `text` say.
+role: ?glass_look.Role = null,
 
 /// A place's outline (`edge`), physical: its rect and its corner radii, top-left, top-right,
 /// bottom-right, bottom-left.
@@ -218,6 +220,11 @@ pub const Uniforms = extern struct {
     /// `draw` sets it, in the frame; `pack` leaves it 0. Then Apple's lens: its colour fringe,
     /// a drop's diagonal light (0: a window's hairline), the band's widest (physical pixels).
     backdrop: [4]f32 = @splat(0),
+    /// The look's brightness curves (`applyLook`): the wash at the shape's top and at its bottom,
+    /// the sweep, the luminance ceiling. Identity: no wash, no sweep, a ceiling of 1.
+    curves: [4]f32 = .{ 0, 0, 0, 1 },
+    /// How dark the window's hairline edge is; remaining lanes reserved.
+    widths: [4]f32 = .{ 0.85, 0, 0, 0 },
     shapes: [max_shapes][shape_vec4s][4]f32,
 
     pub fn vec4s(self: *const Uniforms) [*]const [4]f32 {
@@ -318,7 +325,7 @@ fn enabled() bool {
     return dvui.dataGet(null, enabled_id, "_liquid_field", bool) orelse true;
 }
 
-const enabled_id: dvui.Id = @fromBackingInt(@intCast(0x6c69_7166));
+const enabled_id: dvui.Id = @fromBackingInt(@intCast(glass_look.data_id_backing));
 
 /// Whether the window is opaque behind its content — no desktop material shows through it (Linux,
 /// the web) — published each frame by the app. The glass is as see-through as what it covers
@@ -335,26 +342,31 @@ fn opaqueWindow() bool {
     return dvui.dataGet(null, enabled_id, "_liquid_opaque_window", bool) orelse false;
 }
 
-/// The app's glass at the window's opacity this frame (`glass_look.inApp`), published
-/// by the app before anything draws where there is OS glass beside it to match (macOS): every
-/// field — dialogs, menus, drops — is drawn as it says, Apple's lens at that opacity. Null
-/// (nothing published: the web, a plugin's own window): the earlier glass, as each field's own
-/// tint, lift and blur say. Every form of the program draws the lens — the GLSL, the Metal, and the
-/// SPIR-V and DXIL compiled from the HLSL — as long as the last two are compiled again whenever the
-/// HLSL changes (the commands are at its top).
-pub fn publishLook(slider_look: ?glass_look.InApp) void {
+/// The app's looks this frame (`glass_look.Looks`: one per role, fizzy's from the window's opacity
+/// where there is OS glass beside it to match, macOS), published once a frame before anything
+/// draws: every field — dialogs, menus, drops — is drawn as its role's look says. Null (nothing
+/// published: the web, a plugin's own window): the earlier glass, as each field's own tint, lift
+/// and blur say. Every form of the program draws the lens — the GLSL, the Metal, and the SPIR-V and
+/// DXIL compiled from the HLSL — as long as the last two are compiled again whenever the HLSL
+/// changes (the commands are at its top). Apps call it as `core.material.publishLook`.
+pub fn publishLook(looks: ?glass_look.Looks) void {
     if (dvui.current_window == null) return;
-    if (slider_look) |l| dvui.dataSet(null, enabled_id, "_liquid_look", l) else dvui.dataRemove(null, enabled_id, "_liquid_look");
+    if (looks) |l| dvui.dataSet(null, enabled_id, glass_look.data_key, l) else dvui.dataRemove(null, enabled_id, glass_look.data_key);
 }
 
-fn publishedLook() ?glass_look.InApp {
-    return dvui.dataGet(null, enabled_id, "_liquid_look", glass_look.InApp);
+fn publishedLooks() ?glass_look.Looks {
+    return dvui.dataGet(null, enabled_id, glass_look.data_key, glass_look.Looks);
 }
 
-/// `look` into what the program reads: the lens's own uniforms, and the tint, lift, clarity, rim
-/// light and frost the sliders set in place of the field's own. The bend follows the field's
-/// `refraction` (2, the whole of it, where the look is published).
-fn applyLook(self: *const LiquidField, u: *Uniforms, l: glass_look.InApp) void {
+/// The role a field is drawn as: its own (`role`), else what its `lens` and `text` flags say.
+fn roleOf(self: *const LiquidField) glass_look.Role {
+    return self.role orelse if (self.lens) .lens else if (self.text) .text else .drop;
+}
+
+/// `l` into what the program reads: the lens's own uniforms, and the tint, wash, clarity, rim
+/// light and frost the look sets in place of the field's own. The bend follows the field's
+/// `refraction` (2, the whole of it, where the look is published). Pure on the uniforms.
+pub fn applyLook(self: *const LiquidField, u: *Uniforms, l: glass_look.Look) void {
     const bend_scale = std.math.clamp(self.refraction / 2, 0, 1);
     u.dither[1] = @max(l.bevel, 0.0001);
     u.dither[2] = l.bend * bend_scale;
@@ -364,10 +376,16 @@ fn applyLook(self: *const LiquidField, u: *Uniforms, l: glass_look.InApp) void {
     u.backdrop[3] = l.bevel_cap * self.scale;
     u.rim[1] = l.clarity * bend_scale;
     u.rim[3] = l.rim;
+    // A surface's or a window's colour is its own: it keeps its mix and lift, and no wash.
     if (!self.surface and !self.window) {
         u.face[0] = std.math.clamp(l.mix, 0, 1);
-        u.face[1] = std.math.clamp(l.lift, 0, 1);
+        u.face[1] = 0;
+        u.curves[0] = std.math.clamp(l.wash_top, 0, 1);
+        u.curves[1] = std.math.clamp(l.wash_bottom, 0, 1);
+        u.curves[2] = std.math.clamp(l.sweep, 0, 1);
     }
+    u.curves[3] = std.math.clamp(l.ceiling, 0, 1);
+    u.widths = .{ l.edge_dark, 0, 0, 0 };
     for (u.shapes[0..self.len]) |*sh| sh[2][0] *= l.frost;
     if (self.edge != null) u.shapes[max_shapes - 1][2][0] *= l.frost;
 }
@@ -407,8 +425,8 @@ pub fn draw(self: *const LiquidField, frost: dvui.Texture, covered: dvui.Rect.Ph
     // And the light turned (`light_across`): +2 on the same lane, so it holds on every look,
     // published or not.
     u.backdrop[0] = (if (opaqueWindow() or self.solid) @as(f32, 1) else 0) + (if (self.light_across) @as(f32, 2) else 0);
-    // And the glass the sliders make of it this frame (`publishLook`).
-    if (publishedLook()) |l| self.applyLook(&u, if (self.lens) glass_look.forLens(l) else if (self.text) glass_look.forText(l) else glass_look.forDrops(l));
+    // And the glass the app's look makes of it this frame (`core.material.publishLook`).
+    if (publishedLooks()) |looks| self.applyLook(&u, looks.get(self.roleOf()));
     const textures = [_]?*anyopaque{programs.handle(sharp)};
     if (!h.begin(id, &textures, textures.len, u.vec4s(), uniform_vec4s)) return false;
     defer h.end();

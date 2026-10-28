@@ -15,7 +15,7 @@
 // sharp picture at 1, the uniforms as one array. On the web the same, by the names
 // `core.gfx.programs` gives them (the generator renames them).
 
-#define G 7
+#define G 9
 #define MAX_SHAPES 16
 // How far past its place's outline the outside of the place begins, in pixels: far enough that no
 // sliver of it shows inside, near enough that a shape at the outline still runs into it.
@@ -95,6 +95,8 @@ float4 main(PSInput input) : SV_Target0
     float4 g3 = uData[3];
     float4 g4 = uData[4];
     float4 g5 = uData[5]; // dither; the lens: its band's share of the shape, its bend, its shade
+    float4 g7 = uData[7]; // the look's curves (`glass_look.Look`): the wash at the shape's top and at its bottom, the sweep, the luminance ceiling (1: off)
+    float4 g8 = uData[8]; // how dark the window's hairline edge is
     float4 g6 = uData[6]; // opaque window (+1) and the light turned to the top right (+2); the lens: dispersion, a drop's diagonal light (0: a window's hairline), the band's cap
     // Apple's lens (`glass_look.inApp`): the picture pulled inward from a band near the rim,
     // magnified and, past a bend of 1, folded there. Off, the earlier glass: pulled from outside.
@@ -103,6 +105,8 @@ float4 main(PSInput input) : SV_Target0
     // The two nearest shapes, for the outline and for the way out.
     float d1 = 1e9; float d2 = 1e9; float4 m1 = float4(0.0, 0.0, 0.0, 0.0); float4 m2 = float4(0.0, 0.0, 0.0, 0.0);
     float h1 = 1e9; float h2 = 1e9;
+    // Each nearest shape's vertical extent: its centre and half height, for the wash and the sweep.
+    float2 y1 = float2(0.0, 1.0); float2 y2 = float2(0.0, 1.0);
     float f1 = 1e9; float f2 = 1e9; float2 o1 = float2(0.0, 0.0); float2 o2 = float2(0.0, 0.0);
     for (int i = first; i < first + count && i < MAX_SHAPES; i++) {
         float4 s0 = uData[G + 3 * i];
@@ -111,7 +115,7 @@ float4 main(PSInput input) : SV_Target0
         float2 g;
         float d = sdRoundBox(p - s0.xy, s0.zw, min(s1, (float4)min(s0.z, s0.w)), g);
         float hs = min(s0.z, s0.w);
-        if (d < d1) { d2 = d1; m2 = m1; h2 = h1; d1 = d; m1 = s2; h1 = hs; } else if (d < d2) { d2 = d; m2 = s2; h2 = hs; }
+        if (d < d1) { d2 = d1; m2 = m1; h2 = h1; y2 = y1; d1 = d; m1 = s2; h1 = hs; y1 = s0.yw; } else if (d < d2) { d2 = d; m2 = s2; h2 = hs; y2 = s0.yw; }
         float2 o;
         float f = d;
         if (s2.w < 0.5) {
@@ -129,10 +133,10 @@ float4 main(PSInput input) : SV_Target0
     // own, its rim and bend along it.
     float inPlace = -1e9;
     float2 placeOut = float2(0.0, 0.0);
+    float4 e0 = uData[G + 3 * (MAX_SHAPES - 1)];
     float4 e2 = uData[G + 3 * (MAX_SHAPES - 1) + 2];
     bool cutEdge = e2.w > 2.5;
     if (e2.w > 1.5) {
-        float4 e0 = uData[G + 3 * (MAX_SHAPES - 1)];
         float4 e1 = uData[G + 3 * (MAX_SHAPES - 1) + 1];
         float2 ge;
         inPlace = sdRoundBox(p - e0.xy, e0.zw, min(e1, (float4)min(e0.z, e0.w)), ge);
@@ -142,7 +146,7 @@ float4 main(PSInput input) : SV_Target0
         float2 ge = placeOut;
         float d = EDGE_GAP - inPlace;
         float hs = h1;
-        if (d < d1) { d2 = d1; m2 = m1; h2 = h1; d1 = d; m1 = e2; h1 = hs; } else if (d < d2) { d2 = d; m2 = e2; h2 = hs; }
+        if (d < d1) { d2 = d1; m2 = m1; h2 = h1; y2 = y1; d1 = d; m1 = e2; h1 = hs; y1 = e0.yw; } else if (d < d2) { d2 = d; m2 = e2; h2 = hs; y2 = e0.yw; }
         float2 o = -ge;
         if (d < f1) { f2 = f1; o2 = o1; f1 = d; o1 = o; } else if (d < f2) { f2 = d; o2 = o; }
     }
@@ -241,6 +245,16 @@ float4 main(PSInput input) : SV_Target0
         c = float4(g3.rgb / max(g3.a, 1e-4), 1.0);
     } else {
         c += frost * (1.0 - c.a);
+        // The ceiling (`Look.ceiling`, 1: off): what is brighter than it is soft-clipped, from 0.6 of
+        // it, before any wash, so text over a bright backdrop keeps its contrast and the dark keeps
+        // its depth.
+        if (g7.w < 1.0) {
+            float lum = dot(c.rgb, float3(0.2126, 0.7152, 0.0722));
+            float knee = 0.6 * g7.w;
+            float room = max(g7.w - knee, 1e-4);
+            float capped = lum <= knee ? lum : knee + room * (1.0 - exp(-(lum - knee) / room));
+            c.rgb *= capped / max(lum, 1e-4);
+        }
     }
     // The way the edge faces, against a light from the top left.
     // From the top left, or turned a quarter to the top right (`LiquidField.light_across`, +2 on the
@@ -263,7 +277,7 @@ float4 main(PSInput input) : SV_Target0
     float af = abs(facing);
     bool diagonal = inward && dg > 0.0;
     float edge_dark = diagonal ? dg * (1.0 - smoothstep(0.2, 0.7, af)) * exp(-max(0.0, -D) / (2.0 * px))
-                               : 0.85 * (1.0 - smoothstep(0.0, 0.5 * px, -D));
+                               : g8.x * (1.0 - smoothstep(0.0, 0.5 * px, -D));
     // As much as the edge has formed (`lens`), as its bend, clearing and light are: glass that is
     // barely a lens yet — a drop sunk into its place's edge — draws no dark line round itself.
     float shade = inward ? max(g5.w * t * t, edge_dark) * min(lens, 1.0) : 0.0;
@@ -275,7 +289,12 @@ float4 main(PSInput input) : SV_Target0
              : inward ? smoothstep(0.25 * px, 0.5 * px, -D) * (1.0 - smoothstep(1.2 * px, 1.6 * px, -D))
                         : exp(-max(0.0, -D) / g2.z);
     float lit = line_ * spec + (inward ? 0.0 : 0.04 * steepL * toward);
-    float lift = (g4.z > 0.5 ? g4.y : 0.0) + mat.z;
+    // Down the shape (`v`, 0 at its top): the wash falls from `wash_top` to `wash_bottom`, and the
+    // sweep, a specular band over the top ~38%, is strongest at the top edge.
+    float2 ys = lerp(y1, y2, wm);
+    float v = clamp((p.y - (ys.x - ys.y)) / max(2.0 * ys.y, 1e-4), 0.0, 1.0);
+    float wash = g7.x + (g7.y - g7.x) * v + g7.z * (1.0 - smoothstep(0.0, 0.38, v));
+    float lift = (g4.z > 0.5 ? g4.y + wash : 0.0) + mat.z;
     // The glass's own light, added whole. Scaled with the picture, it went wherever the picture
     // was see-through — over the explorer, which is the window's OS glass — and the glass all but
     // vanished there, rim and all, where Liquid Glass keeps its bright rim over anything.
