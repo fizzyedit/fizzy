@@ -1017,7 +1017,7 @@ fn addTests(
     // `addTest` per pure-logic root, each rooted directly at the file under test.
     // Files reached from such a root by relative `@import` (the registry client's
     // registry/compat/download, say) are part of the same module and *are* collected.
-    var unit_test_artifacts: std.ArrayListUnmanaged(*std.Build.Step.Compile) = .empty;
+    var unit_test_artifacts: std.ArrayList(*std.Build.Step.Compile) = .empty;
 
     inline for (.{
         .{ "fizzy-lint-tests", "scripts/lint.zig" },

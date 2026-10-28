@@ -4841,7 +4841,8 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             // person's, or a tape's while one drives (`Host.setInputAuthor`). Plugins' frame hooks
             // outside it act for themselves, or are nobody's.
             editor.app.host.setInputAuthor(editor.demo.author() orelse .person);
-            var layout_root = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .background = false });
+            // The canvas keeps its size under the on-screen keyboard; the layout ends above it.
+            var layout_root = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .background = false, .padding = .{ .h = fizzy.core.keyboard.inset() } });
             for (editor.app.host.plugins.items) |plugin| plugin.tickActiveDocument(layout_root.data().id);
             editor.flushQueuedNativeMenuActions();
             editor.flushQueuedNativeMenuItems();

@@ -48,7 +48,7 @@ var gpa: std.mem.Allocator = undefined;
 var forced_width: ?f32 = null;
 var profile_blocks: bool = false;
 var frame_times: [10]i128 = @splat(0);
-var open_samples: std.ArrayListUnmanaged(render_ast.BlockSample) = .empty;
+var open_samples: std.ArrayList(render_ast.BlockSample) = .empty;
 
 fn frame() !dvui.App.Result {
     var b = dvui.box(@src(), .{ .dir = .vertical }, .{
@@ -173,7 +173,7 @@ fn run(label: []const u8, sample: []const u8, case: Case) !void {
     const per_frame_us: u64 = @intCast(@divTrunc(best_ns, iters * 1000));
 
     if (profile_blocks) {
-        var samples: std.ArrayListUnmanaged(render_ast.BlockSample) = .empty;
+        var samples: std.ArrayList(render_ast.BlockSample) = .empty;
         defer samples.deinit(gpa);
         render_ast.block_profile = &samples;
         render_ast.block_profile_gpa = gpa;
@@ -234,7 +234,7 @@ fn runOpen(sample: []const u8) !void {
         doc = sample;
         preview = .{};
         render_ast.stats.parse_ns = 0;
-        var samples: std.ArrayListUnmanaged(render_ast.BlockSample) = .empty;
+        var samples: std.ArrayList(render_ast.BlockSample) = .empty;
         defer samples.deinit(std.testing.allocator);
         if (profile_blocks) {
             render_ast.block_profile = &samples;

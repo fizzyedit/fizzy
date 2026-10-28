@@ -49,6 +49,67 @@ export function pointerInput(canvas, send, clockOrigin = performance.timeOrigin,
   for (const [name, kind] of [["pointerdown", 8], ["pointermove", 10], ["pointerup", 9], ["pointercancel", 9]]) {
     canvas.addEventListener(name, (ev) => handle(kind, ev), { capture: true });
   }
+  // A touch tap ends with compatibility mouse events whose `mousedown` focuses the tabindex'd
+  // canvas after `pointerup` has focused the hidden input, closing the keyboard again.
+  // Cancelling `touchstart` and `touchend` suppresses them; pointer events are unaffected.
+  for (const name of ["touchstart", "touchend"]) {
+    canvas.addEventListener(name, (ev) => ev.preventDefault(), { capture: true, passive: false });
+  }
+}
+
+// The on-screen keyboard's height over the page's bottom edge, posted as `{type: "inset", bottom}`
+// and never as a `size`: the canvas keeps its size, so nothing clears or re-lays out, and the app
+// lays out above the keyboard itself. Chrome on Android (a secure context) has the VirtualKeyboard
+// API: with `overlaysContent` the browser neither resizes nor pans for the keyboard. Elsewhere
+// (iOS Safari) the visual viewport says how much of the layout viewport the keyboard covers.
+// Returns the current inset reader for the hidden input to stay above.
+export function keyboardInset(win, send, canvas = null, owns = () => true) {
+  let bottom = 0;
+  let rest = null;
+  let savedHeight = null;
+  const rect = () => canvas?.getBoundingClientRect() ?? { bottom: win.innerHeight, height: win.innerHeight };
+  const post = (next) => {
+    next = owns() ? Math.max(0, Math.round(next)) : 0;
+    if (next === bottom) return;
+    bottom = next;
+    send({ type: "inset", bottom });
+  };
+  const vk = win.navigator?.virtualKeyboard;
+  const vv = win.visualViewport;
+  const update = () => {
+    const current = rect();
+    const base = rest ?? current;
+    const edge = vk ? (vk.boundingRect.height ? vk.boundingRect.y ?? win.innerHeight - vk.boundingRect.height : Infinity)
+      : vv ? vv.height + vv.offsetTop : win.innerHeight;
+    const next = owns() ? Math.max(0, base.bottom - edge) : 0;
+    // resizes-content pages shrink the CSS canvas as well. Keep the focused canvas's layout
+    // height until the keyboard closes, so both dvui loops see the same backing-store size.
+    if (canvas && next > 0 && current.height < base.height) {
+      if (savedHeight === null) savedHeight = canvas.style.height ?? "";
+      canvas.style.height = `${base.height}px`;
+    } else if (savedHeight !== null && next === 0) {
+      canvas.style.height = savedHeight;
+      savedHeight = null;
+    }
+    const closed = bottom > 0 && next === 0;
+    post(next);
+    if (closed) rest = null;
+  };
+  win.addEventListener?.("focusin", () => {
+    if (owns() && bottom === 0) rest = rect();
+    update();
+  });
+  win.addEventListener?.("focusout", () => win.setTimeout?.(update, 0));
+  win.addEventListener?.("resize", update);
+  win.addEventListener?.("orientationchange", () => { rest = null; update(); });
+  if (vk) {
+    vk.overlaysContent = true;
+    vk.addEventListener("geometrychange", update);
+  } else if (vv) {
+    vv.addEventListener("resize", update);
+    vv.addEventListener("scroll", update);
+  }
+  return () => bottom;
 }
 
 import { Dvui, TextInput } from "./web.js?cache-buster=TEMPLATE_HASH_WITH_PADDING__ITS_64_BYTES_LONG_THE_SAME_AS_SHA256";
@@ -1025,11 +1086,14 @@ export class Fizzy {
         }
         const rect = canvas.getBoundingClientRect();
         const left = window.scrollX + rect.left + textInputRect[0];
-        const top = window.scrollY + rect.top + textInputRect[1];
+        // Above the keyboard: the browser scrolls the page to keep a focused element visible, and
+        // an input at the caret under the keyboard is what made the page jump.
+        const above = Math.max(0, canvas.clientHeight - insetBottom() - textInputRect[3]);
+        const top = window.scrollY + rect.top + Math.min(textInputRect[1], above);
         hidden.style.left = left + "px";
         hidden.style.top = top + "px";
-        hidden.style.width = Math.max(0, Math.min(textInputRect[2], canvas.clientWidth - left)) + "px";
-        hidden.style.height = Math.max(0, Math.min(textInputRect[2], canvas.clientHeight - top)) + "px";
+        hidden.style.width = Math.max(0, Math.min(textInputRect[2], canvas.clientWidth - textInputRect[0])) + "px";
+        hidden.style.height = Math.max(0, Math.min(textInputRect[3], canvas.clientHeight - Math.min(textInputRect[1], above))) + "px";
         focusQuietly(hidden);
       }
 
@@ -1054,8 +1118,20 @@ export class Fizzy {
         baseURI: document.baseURI,
       }, [offscreen]));
 
-      new ResizeObserver(() => post({ type: "size", size: size() })).observe(canvas);
-      window.addEventListener("resize", () => post({ type: "size", size: size() }));
+      const insetBottom = keyboardInset(window, (m) => {
+        post(m);
+        if (ownsKey({ target: document.activeElement })) oskCheck();
+      }, canvas,
+        () => ownsKey({ target: document.activeElement }));
+      let lastSize = size();
+      const resize = () => {
+        const next = size();
+        if (next.w === lastSize.w && next.h === lastSize.h && next.dpr === lastSize.dpr) return;
+        lastSize = next;
+        post({ type: "size", size: next });
+      };
+      new ResizeObserver(resize).observe(canvas);
+      window.addEventListener("resize", resize);
       window.addEventListener("orientationchange", () => post({ type: "size", size: size() }));
       for (const q of ["(pointer: coarse)", "(hover: none)"]) {
         window.matchMedia(q).addEventListener("change", () => post({ type: "size", size: size() }));
@@ -1063,6 +1139,15 @@ export class Fizzy {
       for (const q of ["(prefers-color-scheme: dark)", "(prefers-reduced-motion: reduce)"]) {
         window.matchMedia(q).addEventListener("change", () => post({ type: "prefs", prefs: prefs() }));
       }
+
+      // What the keyboard does to the fragment before the caret reaches the worker as typing.
+      const inputFilter = new TextInput(hidden, {
+        text: (text) => post({ type: "text", text }),
+        backspace: () => {
+          post({ type: "key", kind: 5, key: "Backspace", repeat: 0, mods: 0 });
+          post({ type: "key", kind: 6, key: "Backspace", repeat: 0, mods: 0 });
+        },
+      });
 
       worker.onerror = (err) => {
         console.error(err);
@@ -1085,7 +1170,7 @@ export class Fizzy {
             canvas.style.cursor = m.name;
             break;
           case "textInput":
-            if ((textInputRect.length === 0) !== (m.rect.length === 0)) textInput.clear();
+            if ((textInputRect.length === 0) !== (m.rect.length === 0)) inputFilter.clear();
             textInputRect = m.rect;
             oskCheck();
             break;
@@ -1222,17 +1307,9 @@ export class Fizzy {
         axis(1, ev.deltaY, []);
       }, { passive: false });
 
-      // What the keyboard does to the fragment before the caret reaches the worker as typing.
-      const textInput = new TextInput(hidden, {
-        text: (text) => post({ type: "text", text }),
-        backspace: () => {
-          post({ type: "key", kind: 5, key: "Backspace", repeat: 0, mods: 0 });
-          post({ type: "key", kind: 6, key: "Backspace", repeat: 0, mods: 0 });
-        },
-      });
-      canvas.addEventListener("pointerdown", () => textInput.clear());
+      canvas.addEventListener("pointerdown", () => inputFilter.clear());
       const keydown = (ev) => {
-        textInput.keydown(ev);
+        inputFilter.keydown(ev);
         if (ev.key === "Tab") {
           if (ev.ctrlKey) return;
           ev.preventDefault();
@@ -1302,9 +1379,21 @@ export class Fizzy {
           // Late-bind the app reference so the capture-phase wheel listener above can
           // forward pinch deltas into the trackpad accumulator and kick a render.
           dvuiApp = app;
-          for (const name of ["touchstart", "touchmove", "touchend", "touchcancel", "mousedown", "mousemove", "mouseup"]) {
-            dvuiCanvas.addEventListener(name, (ev) => ev.stopImmediatePropagation(), { capture: true });
-          }
+          const insetBottom = keyboardInset(window, (m) => {
+            app.instance.exports.FizzyWebSetKeyboardInset?.(m.bottom);
+            app.requestRender();
+            if (ownsKey({ target: document.activeElement })) app.oskCheck();
+          }, dvuiCanvas, () => ownsKey({ target: document.activeElement }));
+          const oskCheck = app.oskCheck.bind(app);
+          app.oskCheck = () => {
+            const r = app.textInputRect;
+            if (!r?.length) return oskCheck();
+            const y = r[1];
+            r[1] = Math.min(y, Math.max(0, dvuiCanvas.clientHeight - insetBottom() - r[3]));
+            try { oskCheck(); } finally { r[1] = y; }
+          };
+          // Registered before the stoppers below: a stopper on the same element and phase would
+          // end propagation to pointerInput's touch listeners, which cancel the touch's default.
           pointerInput(dvuiCanvas, (m) => {
             for (const e of m.events) {
               const a = e.mouse ? [1, e.mods, 0, e.x * app.gl.drawingBufferWidth, e.y * app.gl.drawingBufferHeight] : e.a;
@@ -1312,6 +1401,9 @@ export class Fizzy {
             }
             app.requestRender();
           }, performance.timeOrigin, () => app.oskCheck());
+          for (const name of ["touchstart", "touchmove", "touchend", "touchcancel", "mousedown", "mousemove", "mouseup"]) {
+            dvuiCanvas.addEventListener(name, (ev) => ev.stopImmediatePropagation(), { capture: true });
+          }
           // The main-thread loop never sent the device to the editor, so Firefox and Safari
           // (which take this path) were always `.desktop`: send it now and on change.
           applyFormMain();

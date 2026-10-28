@@ -723,6 +723,11 @@ onmessage = (e) => {
             applyForm();
             if (dvuiApp) dvuiApp.requestRender();
             break;
+        case "inset":
+            // The keyboard's height: laid out above by the app, the canvas is not resized.
+            if (wasmInstance && wasmInstance.exports.FizzyWebSetKeyboardInset) wasmInstance.exports.FizzyWebSetKeyboardInset(m.bottom);
+            if (dvuiApp) dvuiApp.requestRender();
+            break;
         case "prefs":
             env.prefs = m.prefs;
             if (dvuiApp) dvuiApp.requestRender();

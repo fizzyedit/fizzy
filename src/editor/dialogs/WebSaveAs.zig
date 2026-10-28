@@ -47,7 +47,7 @@ pub fn requestExport(
     default_filename: []const u8,
 ) void {
     const gpa = fizzy.entry().allocator;
-    var patterns: std.ArrayListUnmanaged(u8) = .empty;
+    var patterns: std.ArrayList(u8) = .empty;
     for (filters) |f| {
         if (patterns.items.len > 0) patterns.append(gpa, ';') catch break;
         patterns.appendSlice(gpa, std.mem.span(f.pattern)) catch break;
@@ -114,7 +114,7 @@ pub fn dialog(id: dvui.Id) fizzy.core.dialogs.Error!bool {
 
     const placeholder = if (current_kind == .export_to) "filename" else "filename.fiz";
     const te = dvui.textEntry(@src(), .{ .placeholder = placeholder }, .{ .expand = .horizontal });
-    defer te.deinit();
+    defer fizzy.core.widgets.textEntryDeinit(te);
     _ = fizzy.core.widgets.textEntryMenu(te);
 
     if (dvui.firstFrame(te.data().id)) {

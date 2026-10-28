@@ -19,7 +19,7 @@ collapse_btn_anim_started: bool = false,
 /// caller reads it after `draw`.
 collapse_requested: bool = false,
 
-/// Draws the pane *chrome* — header, scroll policy, collapse button — around whichever
+/// Draws the pane *chrome* - header, scroll policy, collapse button - around whichever
 /// surface currently matches `keywords`. The chrome is the app's; the body is the plugin's.
 ///
 /// The body is resolved through the layout's match set rather than the registry, so a user's
@@ -54,7 +54,7 @@ pub fn draw(
 
     // A surface that scrolls itself (`Surface.scrolls_itself`) gets exactly the space this region
     // has, on both axes, and decides for itself. Scrolling it here as well meant two policies on
-    // one direction: a second vertical bar on top of its own, and horizontally a ratchet — the
+    // one direction: a second vertical bar on top of its own, and horizontally a ratchet - the
     // pane capped its width at its viewport, this made room for that width, and the viewport
     // could then never be narrower than it had just been told to be.
     const self_scrolling = if (f.selected(keywords)) |view| view.scrolls_itself else false;
@@ -72,7 +72,7 @@ pub fn draw(
 
     // No bars at all around a surface that scrolls itself, rather than bars decided against a size
     // that only says there is nothing to scroll: the scroll area decides on its bars from the size
-    // it was last given, a frame old — while the window shrank, every frame of it, last frame's
+    // it was last given, a frame old - while the window shrank, every frame of it, last frame's
     // height overflowed this frame's, and a bar showed beside the pane's own until it stopped.
     const bar: dvui.ScrollInfo.ScrollBarMode = if (self_scrolling) .hide else .auto_overlay;
     var scroll = core.widgets.ScrollArea.init(@src(), .{ .scroll_info = &self.scroll_info, .horizontal_bar = bar, .vertical_bar = bar }, .{
@@ -87,7 +87,7 @@ pub fn draw(
     // Through the layout, not `Host.selectedSurface`: the host remembers which
     // view was chosen here and hands it back whether or not this place still
     // holds it. Drag Files out to the main area and it is claimed by what it
-    // was dropped on — the rail drops the icon, and the host would still hand
+    // was dropped on - the rail drops the icon, and the host would still hand
     // back Files to draw in the body, until a click on some other icon moved
     // the remembered choice. `f.selected` reads the choice against what the
     // place actually shows, which is the only reading that can never say that.

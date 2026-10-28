@@ -276,9 +276,9 @@ fn seen(v: Vert, depth: f32, reach_px: f32, bd: dvui.Rect.Physical) @Vector(2, f
 }
 
 const Mesh = struct {
-    verts: std.ArrayListUnmanaged(Vert) = .empty,
-    inner: std.ArrayListUnmanaged(dvui.Vertex.Index) = .empty,
-    fringe: std.ArrayListUnmanaged(dvui.Vertex.Index) = .empty,
+    verts: std.ArrayList(Vert) = .empty,
+    inner: std.ArrayList(dvui.Vertex.Index) = .empty,
+    fringe: std.ArrayList(dvui.Vertex.Index) = .empty,
 
     fn deinit(self: *Mesh, arena: std.mem.Allocator) void {
         self.verts.deinit(arena);

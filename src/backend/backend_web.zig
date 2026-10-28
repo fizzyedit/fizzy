@@ -201,6 +201,12 @@ export fn FizzyWebGlassBench(ptr: [*]const u8, len: usize, factor: u32) void {
     core.widgets.BlurBackdrop.repeat = if (factor >= 1 and factor <= 32) @intCast(factor) else 1;
 }
 
+/// Called by the page (through the worker) when the on-screen keyboard opens, moves or closes:
+/// how far it covers the bottom of the page, in points. The canvas is not resized for it.
+export fn FizzyWebSetKeyboardInset(bottom: f32) void {
+    fizzy.core.platform.keyboard_inset = bottom;
+}
+
 /// Symmetric with the native API: nothing to install on web because the JS bootstrap wires
 /// the wheel listener at page load.
 pub fn installTrackpadGestureMonitor() void {}
