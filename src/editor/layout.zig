@@ -217,7 +217,8 @@ fn railSidePaneShown(ctx: ?*anyopaque) bool {
     return if (editor.regionFor(sidebar)) |r| !r.isClosed() and !r.isFolded() else !editor.explorer.closed;
 }
 
-fn railUndecidedCount(ctx: ?*anyopaque) usize {
+fn railUndecidedCount(ctx: ?*anyopaque, view_id: []const u8) usize {
+    if (!std.mem.eql(u8, view_id, app.store.Store.view_id)) return 0;
     const editor: *fizzy.Editor = @ptrCast(@alignCast(ctx.?));
     return editor.app.undecidedPluginCount();
 }

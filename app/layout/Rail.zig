@@ -3,7 +3,6 @@
 const std = @import("std");
 const dvui = @import("dvui");
 const core = @import("core");
-const PluginStore = @import("../store/PluginStore.zig");
 const Layout = @import("Layout.zig");
 const Chooser = Layout.Chooser;
 
@@ -20,8 +19,8 @@ pub const Host = struct {
         drawFooterItems: *const fn (ctx: ?*anyopaque, size: f32) void,
         /// Whether the side pane is on screen, as opposed to closed or folded away.
         sidePaneShown: *const fn (ctx: ?*anyopaque) bool,
-        /// How many installed plugins wait for the person to say whether to load them.
-        undecidedPluginCount: *const fn (ctx: ?*anyopaque) usize,
+        /// How many plugins wait for a load decision in this view; zero for other views.
+        undecidedPluginCount: *const fn (ctx: ?*anyopaque, view_id: []const u8) usize,
         /// An icon's rect in physical pixels, to register with a custom title bar it overlaps.
         iconRect: *const fn (ctx: ?*anyopaque, r: dvui.Rect.Physical) void,
     };
@@ -177,11 +176,7 @@ fn pickAction(host: Host, c: *const Chooser, so_far: Action) Action {
 /// One rail icon: the chooser's item, drawn as the view's glyph with the store's attention badge.
 /// Returns the bottom of the item's cell, in physical pixels.
 fn drawIcon(host: Host, c: *Chooser, view: *Layout.Surface, index: usize) f32 {
-    // Only the store view can carry one; nothing else in the rail has a pending-decision notion.
-    const undecided_count: usize = if (std.mem.eql(u8, view.id, PluginStore.view_id))
-        host.vtable.undecidedPluginCount(host.ctx)
-    else
-        0;
+    const undecided_count = host.vtable.undecidedPluginCount(host.ctx, view.id);
     // Say what the dot means — a bare badge on a 20px rail icon is otherwise a riddle.
     const detail: ?[]const u8 = if (undecided_count > 0)
         dvui.currentWindow().arena().print("{d} plugin{s} ready to load", .{
