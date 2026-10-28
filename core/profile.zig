@@ -22,6 +22,7 @@
 //! holding its own cost to a budget, an automation client measuring what a change costs, a
 //! benchmark. `report` writes what was measured as ZON, the same numbers the window shows.
 const std = @import("std");
+const builtin = @import("builtin");
 const dvui = @import("dvui");
 const perf = @import("gfx/perf.zig");
 /// What the profiler keeps past its half-second window: 30 seconds of windows, and the frames
@@ -39,7 +40,7 @@ pub const Gpu = @import("profile/Gpu.zig");
 /// Bumped whenever `Profiler`'s layout changes. Part of the key the host publishes it under
 /// (`publish_key`), so a plugin built against another layout finds none and records nothing: the
 /// `abi` field it would check sits wherever its own layout put it, which a reordered struct moves.
-pub const abi: u32 = 6;
+pub const abi: u32 = 7;
 
 pub const max_entries = 1024;
 const max_depth = 48;
@@ -114,6 +115,8 @@ pub const Cause = packed struct(u8) {
 
 pub const Profiler = struct {
     abi: u32 = abi,
+    /// Debug scroll discontinuities since startup.
+    scroll_jumps: u64 = 0,
     enabled: bool = false,
     paused: bool = false,
     /// Held still for a moment (the window's graph under the pointer): like `paused`, but the
@@ -704,6 +707,12 @@ pub fn section(name: []const u8) Scope {
     return .{ .p = p, .idx = idx };
 }
 
+/// Count a debug scroll discontinuity in the shared host profiler.
+pub fn scrollJump(content: f32, allowed: f32) void {
+    if (builtin.mode != .debug or @abs(content) <= allowed) return;
+    if (current()) |p| p.scroll_jumps +|= 1;
+}
+
 /// Record for the next `ms` milliseconds, whether or not the profiler window is open — or for
 /// longer, if someone already asked for longer. From any image: it records into the host's
 /// profiler. The next frame is the first recorded; `report` covers the half second
@@ -1034,6 +1043,20 @@ test "a frame's GPU counts land in its own slot and the window's average, not be
     p.win_start -= window_ns;
     p.frameEnd();
     try std.testing.expectEqual(@as(f64, 2), p.stats.gpu.?.targets);
+}
+
+test "scrollJump counts a debug discontinuity past what the finger allows, and only that" {
+    if (builtin.mode != .debug) return error.SkipZigTest;
+    is_host = true;
+    defer is_host = false;
+    host_profiler = .{};
+    defer host_profiler = .{};
+    scrollJump(1, 2);
+    scrollJump(-2, 2);
+    try std.testing.expectEqual(@as(u64, 0), host_profiler.scroll_jumps);
+    scrollJump(5, 2);
+    scrollJump(-5, 2);
+    try std.testing.expectEqual(@as(u64, 2), host_profiler.scroll_jumps);
 }
 
 test "hostDeinit frees what recording made, and a second call does nothing" {

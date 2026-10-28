@@ -95,11 +95,10 @@ pub fn release(self: *Fling, t: Tuning) bool {
     return self.coasting;
 }
 
-/// Touch sampling: record this frame's movement into the position/time history.
-/// Call once per frame the drag moved, exactly like `sample`.
-pub fn sampleTimed(self: *Fling, frame_delta: f32) void {
-    self.hist_pos += frame_delta;
-    self.hist[self.hist_head] = .{ .pos = self.hist_pos, .t = dvui.frameTimeNS() };
+/// Record one motion sample using its timestamp in the backend nanosecond clock.
+pub fn sampleTimed(self: *Fling, delta: f32, time_ns: i128) void {
+    self.hist_pos += delta;
+    self.hist[self.hist_head] = .{ .pos = self.hist_pos, .t = time_ns };
     self.hist_head = (self.hist_head + 1) % hist_cap;
     if (self.hist_len < hist_cap) self.hist_len += 1;
 }
@@ -115,6 +114,11 @@ fn histAt(self: *const Fling, i: usize) TimedSample {
 /// real motion, and to frame jitter because displacement and time come from the same
 /// pair of samples. Returns true if a coast started.
 pub fn releaseWindowed(self: *Fling, t: Tuning, window_s: f32) bool {
+    return self.releaseWindowedAt(t, window_s, dvui.frameTimeNS());
+}
+
+/// Release using the input event time in the backend nanosecond clock.
+pub fn releaseWindowedAt(self: *Fling, t: Tuning, window_s: f32, time_ns: i128) bool {
     self.coasting = false;
     var dbg: Debug = .{ .samples = self.hist_len };
     if (self.hist_len >= 2) {
@@ -132,7 +136,7 @@ pub fn releaseWindowed(self: *Fling, t: Tuning, window_s: f32) bool {
         }
 
         const dt: f32 = @floatCast(@as(f64, @floatFromInt(newest.t - old.t)) / 1_000_000_000.0);
-        const idle_s: f32 = @floatCast(@as(f64, @floatFromInt(dvui.frameTimeNS() - newest.t)) / 1_000_000_000.0);
+        const idle_s: f32 = @floatCast(@as(f64, @floatFromInt(time_ns - newest.t)) / 1_000_000_000.0);
         dbg.dt = dt;
         dbg.idle_s = idle_s;
         if (dt > 0.0) {

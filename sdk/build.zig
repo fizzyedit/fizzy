@@ -3,8 +3,8 @@
 const std = @import("std");
 
 // Build-time surface of this package, for the app as well as third-party plugins. The app consumes
-// `sdk/` as a dependency and reaches these through it (`@import("fizzy_sdk").plugin`) rather than by
-// relative path: a file may belong to only one module, and importing these from the root build
+// `sdk/` as a dependency and reaches these through it (`@import("fizzy_sdk").plugin`) rather than
+// by relative path: a file may belong to only one module, and importing these from the root build
 // scripts by path would claim them for the root's build module and make this package unusable as a
 // dependency of it. Going through the dependency is also what lets the app share this package's
 // dvui instead of pinning its own — see `build/sdk.zig`'s `dvuiDependency`.
