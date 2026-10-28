@@ -1005,6 +1005,9 @@ pub fn fieldPane(id: dvui.Id, field: LiquidField, scale: f32, pane: Pane) void {
     queuePane(id, field.bounds(), .{}, scale, pane, field);
 }
 
+/// Physical antialiasing fringe included when testing glass ink against the clip.
+pub const fringe_px: f32 = 1;
+
 /// Physical ink against the clip, including its antialiasing fringe.
 /// Kept in sync with core.glass.within by core's window tests; glass cannot import core.
 pub fn inkWithin(ink: Rect.Physical, clip: Rect.Physical, margin_px: f32) bool {
@@ -1016,13 +1019,14 @@ fn queuePane(id: dvui.Id, rect: Rect.Physical, corners: dvui.CornerRect, scale: 
     const job = dvui.dataGetPtrDefault(null, id, "_frost_job", FrostJob, .{});
     const backdrop = dvui.dataGetPtrDefault(null, id, "_frost", BlurBackdrop, .{});
     dvui.dataSetDeinitFunction(null, id, "_frost", &releaseTexture);
+    const cap = dvui.dataGetPtrDefault(null, id, "_frost_cap", dvui.Size, .{});
     const now = dvui.currentWindow().frame_time_ns;
     // How formed it is: the caller's, or its own from when it first came up. Per id, so it
     // lives exactly as long as the pane is drawn and a pane that comes back forms anew.
     const form = std.math.clamp(pane.form orelse selfForm(id, now), 0, 1);
-    // Touch the per-id state even while clipped, so scrolling back does not re-form the pane.
+    // Cull after touching per-id state so scrolling back preserves forming and capture size.
     const clip = dvui.clipGet();
-    if (clip.empty() or !inkWithin(rect, clip, 1)) return;
+    if (clip.empty() or !inkWithin(rect, clip, fringe_px)) return;
     // The blur comes in from sharp (`form`, at the full radius — see `BlurBackdrop.form`); the
     // edge squeezes in on the arrival curve, past its final shape and back when motion is playful.
     const radius = pane.radius;
@@ -1052,7 +1056,6 @@ fn queuePane(id: dvui.Id, rect: Rect.Physical, corners: dvui.CornerRect, scale: 
     // open, a dragged view shrinking into its card — keeps one capture size, and so one set of
     // targets, for many frames, where an exact capture was a new pyramid every frame it moved.
     const need = rect.insetAll(-margin);
-    const cap = dvui.dataGetPtrDefault(null, id, "_frost_cap", dvui.Size, .{});
     const want: dvui.Size = if (pane.reach) |r|
         .{ .w = @max(need.w, r.w + 2 * margin), .h = @max(need.h, r.h + 2 * margin) }
     else
@@ -1545,22 +1548,27 @@ fn passStrength(a: u32, b: u32) f32 {
     return @min(1.0, 2 * (1 - ratio));
 }
 
-test "a frost scrolled away for two frames keeps its birth and last queued rect" {
+test "a frost scrolled away for two frames keeps its birth, capture size and last queued rect" {
     const fns = struct {
         var away = false;
         var first = true;
         var birth: i128 = 0;
+        const kept_cap: dvui.Size = .{ .w = 150, .h = 150 };
         const id: dvui.Id = @fromBackingInt(9876);
         const home: Rect.Physical = .{ .x = 20, .y = 20, .w = 40, .h = 40 };
         fn frame() !dvui.App.Result {
             if (first) {
                 birth = dvui.currentWindow().frame_time_ns - std.time.ns_per_s;
                 dvui.dataSet(null, id, "_frost_born", birth);
+                dvui.dataSet(null, id, "_frost_cap", kept_cap);
                 first = false;
             }
             const rect: Rect.Physical = if (away) .{ .x = 500, .y = 500, .w = 40, .h = 40 } else home;
             frostPane(id, rect, .all(2), 1, .{ .radius = 20 });
-            if (!away) try std.testing.expectEqual(birth, dvui.dataGet(null, id, "_frost_born", i128).?);
+            if (!away) {
+                try std.testing.expectEqual(birth, dvui.dataGet(null, id, "_frost_born", i128).?);
+                try std.testing.expectEqual(kept_cap, dvui.dataGet(null, id, "_frost_cap", dvui.Size).?);
+            }
             try std.testing.expectEqual(home, dvui.dataGetPtr(null, id, "_frost_job", FrostJob).?.rect);
             return .ok;
         }
