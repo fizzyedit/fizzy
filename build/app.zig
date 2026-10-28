@@ -1655,33 +1655,13 @@ fn addTests(
         .optimize = optimize,
         .root_source_file = b.path("tests/integration.zig"),
     });
-    // Exercise SDL event delivery into the headless Window, with the same backend source.
-    if (main_fizzy.backend) |native_backend_module| {
-        const input_backend = b.createModule(.{
-            .root_source_file = native_backend_module.root_source_file,
-            .target = target,
-            .optimize = optimize,
-        });
-        var imports = native_backend_module.import_table.iterator();
-        while (imports.next()) |entry| {
-            input_backend.addImport(entry.key_ptr.*, entry.value_ptr.*);
-        }
-        input_backend.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
-        input_backend.addImport("glass", core_module_test.import_table.get("glass").?);
-        input_backend.addImport("glass_look", core_module_test.import_table.get("glass_look").?);
-        const native_platform = native_backend_module.import_table.get("platform").?;
-        const input_platform = b.createModule(.{
-            .root_source_file = native_platform.root_source_file,
-            .target = target,
-            .optimize = optimize,
-        });
-        input_platform.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
-        input_platform.addImport("backend", input_backend);
-        input_backend.addImport("platform", input_platform);
-        try input_backend.link_objects.appendSlice(b.allocator, native_backend_module.link_objects.items);
-
-        integration_module.addImport("input_backend", input_backend);
-    }
+    const input_time_module = b.createModule(.{
+        .root_source_file = b.path("backend/src/input_time.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    input_time_module.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
+    integration_module.addImport("input_time", input_time_module);
     integration_module.addImport("fizzy", fizzy_test_module);
     integration_module.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
 

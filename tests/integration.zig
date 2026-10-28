@@ -39,27 +39,33 @@ test "input timestamps cover motion replacing the trailing position event" {
     const input_time = fizzy.core.input_time;
     const time_ns: i128 = win.frame_time_ns + std.time.ns_per_ms;
 
-    const backend = @import("input_backend");
-    const c = backend.c;
-    var back: backend = .{
-        .io = std.testing.io,
-        .window = undefined,
-        .gpu = undefined,
-    };
-    // A direct touch motion needs no OS window or GPU. Its normalized position is
-    // converted by dvui, and it replaces the same trailing position slot as a mouse.
-    _ = back.touch_slots.down(.direct, 1, 1);
-    var motion = std.mem.zeroes(c.SDL_Event);
-    motion.tfinger = .{ .type = c.SDL_EVENT_FINGER_MOTION, .timestamp = @intCast(time_ns), .touchID = 1, .fingerID = 1, .x = 0.1, .y = 0.1, .dx = 0.01, .dy = 0.01, .pressure = 1, .windowID = 0, .reserved = 0 };
-    _ = try back.addEvent(win, motion);
+    const before = win.events.items.len;
+    _ = try win.addEventTouchMotion(.touch0, 0.1, 0.1, 0.01, 0.01);
+    @import("input_time").stamp(win, before, time_ns);
     var motions: usize = 0;
     for (win.events.items) |event| {
         if (event.evt == .mouse and event.evt.mouse.action == .motion) {
             motions += 1;
-            try std.testing.expect(input_time.get(event.num) != win.frame_time_ns);
+            try std.testing.expectEqual(time_ns, input_time.get(event.num));
         }
     }
     try std.testing.expectEqual(@as(usize, 1), motions);
+}
+
+test "an ignored input preserves preceding event timestamps" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+    const win = dvui.currentWindow();
+    const time_ns = win.frame_time_ns + std.time.ns_per_ms;
+    const before = win.events.items.len;
+    _ = try win.addEventTouchMotion(.touch0, 0.1, 0.1, 0.01, 0.01);
+    @import("input_time").stamp(win, before, time_ns);
+    @import("input_time").stamp(win, win.events.items.len, time_ns + std.time.ns_per_ms);
+    for (win.events.items) |event| {
+        if (event.evt == .mouse and event.evt.mouse.action == .motion) {
+            try std.testing.expectEqual(time_ns, fizzy.core.input_time.get(event.num));
+        }
+    }
 }
 
 // -- menu accelerators -------------------------------------------------------------------------

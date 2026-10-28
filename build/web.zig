@@ -84,6 +84,11 @@ pub fn framework(b: *std.Build, optimize: std.lang.OptimizeMode) Framework {
         "new_font",
     };
     web_backend.addImport("dvui", dvui_web);
+    const input_time_module = b.createModule(.{
+        .root_source_file = b.path("backend/src/input_time.zig"),
+    });
+    input_time_module.addImport("dvui", dvui_web);
+    web_backend.addImport("input_time", input_time_module);
     dvui_web.addImport("backend", web_backend);
     const dvui_web_proxy_bridge = sdk.addProxyBridgeModule(b, web_target, optimize, dvui_web_dep, dvui_web);
 
