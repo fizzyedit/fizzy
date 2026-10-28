@@ -57,6 +57,33 @@ export function pointerInput(canvas, send, clockOrigin = performance.timeOrigin,
   }
 }
 
+// The on-screen keyboard's height over the page's bottom edge, posted as `{type: "inset", bottom}`
+// and never as a `size`: the canvas keeps its size, so nothing clears or re-lays out, and the app
+// lays out above the keyboard itself. Chrome on Android (a secure context) has the VirtualKeyboard
+// API: with `overlaysContent` the browser neither resizes nor pans for the keyboard. Elsewhere
+// (iOS Safari) the visual viewport says how much of the layout viewport the keyboard covers.
+// Returns the current inset reader for the hidden input to stay above.
+export function keyboardInset(win, send) {
+  let bottom = 0;
+  const post = (next) => {
+    next = Math.max(0, Math.round(next));
+    if (next === bottom) return;
+    bottom = next;
+    send({ type: "inset", bottom });
+  };
+  const vk = win.navigator?.virtualKeyboard;
+  if (vk) {
+    vk.overlaysContent = true;
+    vk.addEventListener("geometrychange", () => post(vk.boundingRect.height));
+  } else if (win.visualViewport) {
+    const vv = win.visualViewport;
+    const update = () => post(win.innerHeight - (vv.height + vv.offsetTop));
+    vv.addEventListener("resize", update);
+    vv.addEventListener("scroll", update);
+  }
+  return () => bottom;
+}
+
 import { Dvui, TextInput } from "./web.js?cache-buster=TEMPLATE_HASH_WITH_PADDING__ITS_64_BYTES_LONG_THE_SAME_AS_SHA256";
 
 // The name this build files what it keeps in the browser under: its own files, the plugins it
@@ -1029,7 +1056,10 @@ export class Fizzy {
         }
         const rect = canvas.getBoundingClientRect();
         const left = window.scrollX + rect.left + textInputRect[0];
-        const top = window.scrollY + rect.top + textInputRect[1];
+        // Above the keyboard: the browser scrolls the page to keep a focused element visible, and
+        // an input at the caret under the keyboard is what made the page jump.
+        const above = Math.max(0, canvas.clientHeight - insetBottom() - textInputRect[3]);
+        const top = window.scrollY + rect.top + Math.min(textInputRect[1], above);
         hidden.style.left = left + "px";
         hidden.style.top = top + "px";
         hidden.style.width = Math.max(0, Math.min(textInputRect[2], canvas.clientWidth - left)) + "px";
@@ -1056,6 +1086,7 @@ export class Fizzy {
         baseURI: document.baseURI,
       }, [offscreen]));
 
+      const insetBottom = keyboardInset(window, post);
       new ResizeObserver(() => post({ type: "size", size: size() })).observe(canvas);
       window.addEventListener("resize", () => post({ type: "size", size: size() }));
       window.addEventListener("orientationchange", () => post({ type: "size", size: size() }));

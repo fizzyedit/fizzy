@@ -45,6 +45,11 @@ The page and its JavaScript (`index.html`, the app's `fizzy.js`, workers). The Z
   whenever the measurement changes: on a device that shows the wrong shape, that line says which
   number failed the rule (`coarse` = `(pointer: coarse)`, `hover` = `(hover: hover)`; w/h are
   `screen.*`). The main-thread loop (Firefox, Safari, `?worker=0`) sends the same message.
+- **The keyboard is an inset, never a resize.** `keyboardInset` (`fizzy.js`) posts `{type: "inset"}`
+  from `virtualKeyboard.geometrychange` (Chrome on Android, with `overlaysContent`) or the
+  `visualViewport` (iOS), the worker writes `core.platform.keyboard_inset`, and the root lays out
+  above it (`core.keyboard`). A page that sets `interactive-widget=resizes-content` makes the
+  browser resize the canvas for the keyboard, which clears it for a frame: leave it out.
 - **The heap never shrinks.** The wasm allocator rounds blocks over 64 KB up to a power-of-two
   class and reuses a freed block only within its class, so a large image can step memory from
   tens to hundreds of MB. Before blaming memory for a failed open, read the logged error.
