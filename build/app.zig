@@ -1124,6 +1124,8 @@ fn addTests(
         // Where a new view goes by the shape of the room, and which way an adaptive split runs.
         // std-only (see placement.zig); the workbench and the docking widget ask it.
         .{ "fizzy-placement-tests", "core/placement.zig" },
+        // Keyed layout motion and release arithmetic, independent of drawing.
+        .{ "fizzy-rearrange-tests", "core/rearrange.zig" },
         // A document state as the bytes that differ from another: how a track's checkpoints
         // stay small. std-only (see state_delta.zig); `Tracks` keeps its checkpoints with it.
         .{ "fizzy-state-delta-tests", "app/state_delta.zig" },
