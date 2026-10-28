@@ -136,7 +136,7 @@ fn drawZon(schema: *const settings.SettingsSchema, field_index: usize, id_extra:
             access.persist(value, schema.owner);
         }
     }
-    entry.deinit();
+    core.widgets.textEntryDeinit(&entry);
 }
 
 /// Text entry for a `[]const u8` setting. Committed on Enter only — the entry re-seeds itself
@@ -170,7 +170,7 @@ fn drawString(schema: *const settings.SettingsSchema, field: settings.Setting, f
         access.setString(value, field_index, entry.getText());
         access.persist(value, schema.owner);
     }
-    entry.deinit();
+    core.widgets.textEntryDeinit(&entry);
 }
 
 fn drawIntChoices(schema: *const settings.SettingsSchema, field: settings.Setting, choices: []const i64, field_index: usize, id_extra: usize) !void {
