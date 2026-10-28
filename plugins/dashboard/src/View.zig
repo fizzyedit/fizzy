@@ -40,7 +40,7 @@ pub fn draw(host: *sdk.Host) void {
     defer column.deinit();
 
     const api = provider(host);
-    // `act` moves `generation` and may free every card, so it comes after the last read of them.
+    // Finish reading cards before `act` can free them.
     const picked = drawCards(api) orelse return;
     api.act(picked.card_id, picked.action_id);
 }
@@ -154,7 +154,8 @@ fn drawCard(picked: *?Pick, card: Card, id_extra: usize, rect: dvui.Rect) void {
             .primary => .highlight,
             .destructive => .err,
         };
-        if (dvui.button(@src(), a.label, .{}, .{ .id_extra = i, .tag = a.id, .style = style, .margin = .{ .w = 6 } })) {
+        const tag = dvui.currentWindow().arena().print("dashboard.action.{d}.{d}", .{ id_extra, i }) catch null;
+        if (dvui.button(@src(), a.label, .{}, .{ .id_extra = i, .tag = tag, .style = style, .margin = .{ .w = 6 } })) {
             picked.* = .{ .card_id = card.id, .action_id = a.id };
         }
     }
@@ -247,7 +248,7 @@ test "an action picked on a card is acted on after the card is drawn, not while 
     try host.registerService(Api, &api, null);
 
     try dvui.testing.settle(testFrame);
-    try dvui.testing.moveTo("first");
+    try dvui.testing.moveTo("dashboard.action.0.0");
     try dvui.testing.click(.left);
     // `act` frees the card the loop was walking; a later action button read from it would be a
     // use after free, which the testing allocator and the filled freed memory turn into a crash.
@@ -260,6 +261,7 @@ test "an action picked on a card is acted on after the card is drawn, not while 
 test "a provider registered after the dashboard is the one listed, over the demo's cards" {
     var host: sdk.Host = .init(std.testing.allocator);
     defer host.deinit();
+    try @import("../plugin.zig").register(&host);
     try std.testing.expectEqual(&demo_cards.api, provider(&host));
 
     var heap: HeapProvider = .{ .gpa = std.testing.allocator };
@@ -270,4 +272,30 @@ test "a provider registered after the dashboard is the one listed, over the demo
 
     try std.testing.expectEqual(&api, provider(&host));
     try std.testing.expectEqualStrings("mine", provider(&host).list()[0].id);
+}
+
+test "cards with the same action id have distinct tags during a slide" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 400, .h = 400 } });
+    defer t.deinit();
+    var host: sdk.Host = .init(std.testing.allocator);
+    defer host.deinit();
+    test_host = &host;
+    carousel = .{};
+    defer carousel = .{};
+
+    var heap: HeapProvider = .{ .gpa = std.testing.allocator };
+    defer heap.freeCards();
+    try heap.add("one", &.{"approve"});
+    try heap.add("two", &.{"approve"});
+    var api = heap.api();
+    try host.registerService(Api, &api, null);
+
+    try dvui.testing.settle(testFrame);
+    const ids = [_]u64{ Carousel.hashId("one"), Carousel.hashId("two") };
+    try std.testing.expect(carousel.go(&ids, .next));
+    _ = try dvui.testing.step(testFrame);
+    try std.testing.expectEqual(@as(usize, 2), drawn);
+    const entering = try dvui.testing.tagGet("dashboard.action.0.0");
+    const leaving = try dvui.testing.tagGet("dashboard.action.1.0");
+    try std.testing.expect(entering.id != leaving.id);
 }
