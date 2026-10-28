@@ -1203,7 +1203,7 @@ fn addTests(
     tour_tests.root_module.addImport("tape", b.createModule(.{
         .target = target,
         .optimize = optimize,
-        .root_source_file = b.path("sdk/tape/root.zig"),
+        .root_source_file = b.dependency("fizzy_sdk", .{}).path("tape/root.zig"),
     }));
     try unit_test_artifacts.append(b.allocator, tour_tests);
 
@@ -1262,7 +1262,7 @@ fn addTests(
         keymap_module.addImport("tape", b.createModule(.{
             .target = target,
             .optimize = optimize,
-            .root_source_file = b.path("sdk/tape/root.zig"),
+            .root_source_file = b.dependency("fizzy_sdk", .{}).path("tape/root.zig"),
         }));
         try unit_test_artifacts.append(b.allocator, b.addTest(.{
             .name = "fizzy-keymap-tests",
@@ -1469,7 +1469,7 @@ fn addTests(
         replay_only.addImport("tape", b.createModule(.{
             .target = target,
             .optimize = optimize,
-            .root_source_file = b.path("sdk/tape/root.zig"),
+            .root_source_file = b.dependency("fizzy_sdk", .{}).path("tape/root.zig"),
         }));
         const replay_tests = b.addTest(.{
             .name = "fizzy-replay-tests",
@@ -2055,7 +2055,7 @@ fn addTests(
         bench_module.addImport("tape", b.createModule(.{
             .target = target,
             .optimize = optimize,
-            .root_source_file = b.path("sdk/tape/root.zig"),
+            .root_source_file = b.dependency("fizzy_sdk", .{}).path("tape/root.zig"),
         }));
         const bench_tape = b.addTest(.{ .name = "fizzy-bench-tape", .root_module = bench_module });
 
