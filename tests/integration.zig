@@ -4161,7 +4161,7 @@ const PlaceCase = struct {
         self.ctx.deinit(std.testing.allocator);
     }
 
-    fn frame() anyerror!dvui.App.Result {
+    fn frame() !dvui.App.Result {
         fizzy.core.anchor.want();
         const result = try ColumnCardFrame.frame();
         const e = ColumnCardFrame.editor.?;
@@ -4170,7 +4170,7 @@ const PlaceCase = struct {
         return result;
     }
 
-    fn palette() anyerror!dvui.App.Result {
+    fn palette() !dvui.App.Result {
         fizzy.core.anchor.want();
         const e = ColumnCardFrame.editor.?;
         e.command_palette.draw(e);
