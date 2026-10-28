@@ -40,7 +40,7 @@ const vtable: sdk.Plugin.VTable = .{};
 
 pub fn register(host: *sdk.Host) !void {
     // Calls into the C source of the package's own dependency: it must have reached the link.
-    if (fixture_lib.fixture_answer() != 42) return error.FixtureDependency;
+    if (fixture_lib.answer() != 42) return error.FixtureDependency;
     try writeAndLoadTape(host.allocator);
     try host.registerPlugin(&plugin);
     try host.registerSurface(.{

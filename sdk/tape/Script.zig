@@ -42,6 +42,9 @@ home: []const u8 = "",
 /// Set by the app that builds it; a tape built where there is no window (`zig build demos`) is the
 /// desktop's.
 compact: bool = false,
+/// Names the app cannot offer on this machine (a window material its OS cannot draw): a script
+/// leaves out the steps that show them. Only borrowed while the script is built.
+lacks: []const []const u8 = &.{},
 /// What the app says about a tape (`Tape.Check`): its spelling of key chords, checked as each is
 /// written and again when the tape is finished.
 check: Tape.Check = .{},
@@ -176,6 +179,12 @@ pub const CaptionOptions = struct {
     /// Hold the next action until the caption is done, rather than acting under it.
     hold: bool = false,
 };
+
+/// Whether the app said it cannot offer `name` (`lacks`).
+pub fn lacksName(self: *const Script, name: []const u8) bool {
+    for (self.lacks) |l| if (std.mem.eql(u8, l, name)) return true;
+    return false;
+}
 
 /// Words over the app, starting now.
 pub fn caption(self: *Script, text: []const u8, opts: CaptionOptions) !void {

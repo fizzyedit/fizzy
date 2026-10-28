@@ -153,3 +153,20 @@ What the table says:
 
 The numbers depend on the machine: rerun `scripts/perf-incremental` before relying on them, and
 put new runs in the PR that changes the build graph as well as here.
+
+## Recording frame causes
+
+`scripts/perf-frame-record` reads a profiler ZON report from stdin (request both `hitches > 0`
+and `causes > 0`) and appends each retained frame to the same monthly JSONL store. For example:
+
+```sh
+scripts/perf-frame-record --commit fa1402da --machine host/16cpu/27GiB --scenario tour < report.zon
+```
+
+Use the commit, machine and OS of the measured app (`--os` overrides the local OS). These rows
+use metric `frame_work`, unit `ms`, and the optional `causes` array of input/refresh flags.
+The report lists retained frames newest first; overlapping reports repeat samples, so export
+once per recording. This is a bounded history sample, not a continuous recording or a median.
+`--store DIR`, `$FIZZY_PERF_STORE`, then `$XDG_DATA_HOME/fizzy/perf` (defaulting to
+`~/.local/share/fizzy/perf`) select the store as for `perf-compile`. The script prints the same
+lines it appends and rejects reports without retained frame rows.

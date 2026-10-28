@@ -73,7 +73,9 @@ pub fn addImports(
 /// package — so the access check below picks whichever layout is present.
 pub fn repoPath(b: *std.Build, sub_path: []const u8) std.Build.LazyPath {
     b.root.access(b.graph.io, sub_path, .{}) catch {
-        return .{ .cwd_relative = b.root.joinString(b.allocator, b.pathJoin(&.{ "..", sub_path })) catch @panic("OOM") };
+        return .{
+            .cwd_relative = b.root.joinString(b.allocator, b.pathJoin(&.{ "..", sub_path })) catch @panic("OOM"),
+        };
     };
     return b.path(sub_path);
 }

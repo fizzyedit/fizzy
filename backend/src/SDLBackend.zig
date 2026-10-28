@@ -126,6 +126,9 @@ viewport_seen: bool = false,
 /// Added to the wall clock by `nanoTime`: how far a demo's silent frames have moved the app's
 /// clock on (`app.automation.Player.frames`). Only grows.
 clock_ahead_ns: i128 = 0,
+/// What `nanoTime` takes off the wall, so no frame begins more than a motion's step after the one
+/// before it (`glass.MotionClock`).
+motion_clock: glass.MotionClock = .{},
 /// Last known window rect while not maximized/fullscreen/minimized, tracked
 /// from move/resize events
 window_geometry: WindowGeometry = .{},
@@ -1368,7 +1371,7 @@ pub fn floatingWindowBackground(self: *SDLBackend, id: dvui.Id, rect: dvui.Rect.
             glass.programs.publishHost();
             glass.LiquidField.publishEnabled(liquid);
             const lens = builtin.target.os.tag == .macos and liquid and glass.LiquidField.ready();
-            glass.LiquidField.publishLook(if (lens) glass_look.inApp(opacity) else null);
+            if (lens) glass.LiquidField.publishLook(glass_look.Looks.fromOpacity(opacity));
             const s = dvui.windowNaturalScale();
             glass.BlurBackdrop.frostPane(id, rect, corners.scale(1 / s, dvui.CornerRect), s, .{
                 .radius = if (lens) glass_look.text_blur else if (m.kind == .blur) pane.blur / 2 else pane.blur,
@@ -1473,6 +1476,7 @@ fn materialPlatform(self: *SDLBackend) materials.Platform {
         .os = builtin.target.os.tag,
         .liquid_glass = liquidGlassAvailable(),
         .compositor_blur = platform.linux_titlebar.blurOffered(self.window),
+        .dwm_backdrop = platform.win32_titlebar.backdropOffered(self.window),
     };
     self.material_platform = p;
     return p;
@@ -2941,7 +2945,7 @@ pub fn backend(self: *SDLBackend) dvui.Backend {
 
 pub fn nanoTime(self: *SDLBackend) i128 {
     const ret = std.Io.Clock.awake.now(self.io);
-    return ret.nanoseconds + self.clock_ahead_ns;
+    return self.motion_clock.now(ret.nanoseconds + self.clock_ahead_ns);
 }
 
 pub fn sleep(self: *SDLBackend, ns: u64) void {
@@ -4083,7 +4087,8 @@ pub fn main(main_init: std.process.Init) !u8 {
 
         Health.current.frameBegin(c.SDL_GetTicksNS());
         // marks the beginning of a frame for dvui, can call dvui functions after this
-        try win.begin(nstime);
+        try win.begin(back.motion_clock.frameTime(win.frame_time_ns, nstime));
+        back.motion_clock.publish();
 
         // send all SDL events to dvui for processing
         try back.addAllEvents(&win);
@@ -4339,10 +4344,11 @@ fn appIterate(_: ?*anyopaque) callconv(.c) c.SDL_AppResult {
 
     app_frame_open = true;
     // marks the beginning of a frame for dvui, can call dvui functions after this
-    appState.win.begin(nstime) catch |err| {
+    appState.win.begin(appState.back.motion_clock.frameTime(appState.win.frame_time_ns, nstime)) catch |err| {
         log.err("dvui.Window.begin failed: {any}", .{err});
         return c.SDL_APP_FAILURE;
     };
+    appState.back.motion_clock.publish();
 
     const app = dvui.App.get() orelse unreachable;
     os_windows.beforeFrame();

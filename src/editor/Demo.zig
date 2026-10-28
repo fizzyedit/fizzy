@@ -173,6 +173,18 @@ pub fn active(self: *const Demo) bool {
     return self.player.state != .idle;
 }
 
+/// The window materials this machine cannot draw, by name, for a script to leave out
+/// (`Script.lacks`). Filled into `buf`; asks the backend, so only where there is a window.
+pub fn materialsLacking(buf: *[std.enums.values(core.material.Kind).len][]const u8) []const []const u8 {
+    var n: usize = 0;
+    for (std.enums.values(core.material.Kind)) |k| {
+        if (fizzy.Entry.materialMissing(k) == null) continue;
+        buf[n] = @tagName(k);
+        n += 1;
+    }
+    return buf[0..n];
+}
+
 /// Build the bundled demo `name` and play it.
 pub fn play(self: *Demo, name: []const u8) !void {
     const entry = catalog.find(name) orelse {
@@ -184,6 +196,8 @@ pub fn play(self: *Demo, name: []const u8) !void {
     errdefer script.deinit();
     script.check = automation.Input.check;
     script.compact = core.platform.formFactor() == .mobile;
+    var lacking: [std.enums.values(core.material.Kind).len][]const u8 = undefined;
+    script.lacks = materialsLacking(&lacking);
     try entry.build(&script);
     self.player.load(try script.finish(), .{});
 }

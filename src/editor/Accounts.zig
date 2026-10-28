@@ -28,13 +28,13 @@ var sub_phys: dvui.Rect.Physical = .{};
 /// rows) draws a popover row rather than a menubar row.
 pub var drawing_rows: bool = false;
 
-/// Draw the glyph as one rail cell. Drawn only when a provider exists (`Sidebar`).
+/// Draw the glyph as one rail cell. Drawn only when a provider exists (`Rail`).
 pub fn drawRailDisc(editor: *Editor, size: f32) !void {
     const host = &editor.app.host;
     const arena = host.arena();
     const theme = dvui.themeGet();
 
-    // The same cell as every other rail icon (`Sidebar.drawOption`): a button the icon's
+    // The same cell as every other rail icon (`Rail`): a button the icon's
     // height, the glyph in it, nothing else. Click toggles the flyout.
     var bw: dvui.ButtonWidget = undefined;
     bw.init(@src(), .{}, .{ .label = .{ .text = "Accounts" }, .min_size_content = .{ .h = size } });

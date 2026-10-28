@@ -14,6 +14,8 @@ test {
     _ = @import("widgets/ContextWidget.zig");
     // Touch drag and fling of a scroll area.
     _ = @import("widgets/ScrollArea.zig");
+    // Hold to select, tap to clear, on a text layout.
+    _ = @import("widgets/SelectableText.zig");
     // A tab's hand beside a split's arrow, and a tapped tab's hover look.
     _ = @import("widgets/Tabs.zig");
     // The local copies of upstream's docking (see `widgets.zig`): referenced here so they
@@ -21,6 +23,8 @@ test {
     _ = @import("widgets/DockingWidget.zig");
     _ = @import("widgets/DockingWidget/Layout.zig");
     _ = @import("widgets/DockingWidget/Row.zig");
+    // A variable-height list over `HeightIndex`: a screenful drawn, the reader's row held.
+    _ = @import("widgets/VirtualList.zig");
     // Not a sizing file, but it needs what this root has — dvui and the icon sets — and no other
     // test root carries both. Its tests are the key table and the modifier order per platform.
     _ = @import("keycaps.zig");
@@ -31,4 +35,6 @@ test {
     _ = @import("dialogs.zig");
     // Where a tooltip goes: inside its screen, flipped to the side with room.
     _ = @import("widgets/FloatingTooltipWidget.zig");
+    // One motion clock: a late frame holds motion, and real time still counts it.
+    _ = @import("motion_clock_tests.zig");
 }

@@ -1,0 +1,8 @@
+.{
+    .id = "tape_fixture",
+    .name = "Tape fixture",
+    .version = "0.1.0",
+    .min_sdk_version = "",
+    .description = "Imports tape and replay, as a dylib.",
+    .tags = .{"fixture"},
+}

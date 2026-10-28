@@ -1,0 +1,18 @@
+.{
+    .name = .tape_fixture,
+    .version = "0.1.0",
+    .minimum_zig_version = "0.17.0",
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "plugin.zig",
+        "plugin.zig.zon",
+        "play.zig",
+    },
+    .fingerprint = 0x39f10a95729a0ebe,
+    .dependencies = .{
+        .fizzy = .{
+            .path = "../../../sdk",
+        },
+    },
+}

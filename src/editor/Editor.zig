@@ -84,7 +84,6 @@ pub const KeptDocuments = @import("KeptDocuments.zig");
 pub const Checkpoint = @import("Checkpoint.zig");
 pub const Explorer = @import("explorer/Explorer.zig");
 pub const IgnoreRules = @import("explorer/IgnoreRules.zig");
-pub const Sidebar = @import("Sidebar.zig");
 pub const Infobar = @import("Infobar.zig");
 pub const Menu = @import("Menu.zig");
 /// Fizzy's own shape. A consumer that wants another one passes `-Dapp-layout=`.
@@ -196,8 +195,6 @@ plugins_service: sdk.services.plugins.Api = undefined,
 explorer: *Explorer,
 
 last_titlebar_color: dvui.Color,
-
-sidebar: Sidebar,
 
 infobar: Infobar,
 
@@ -460,7 +457,6 @@ pub fn init(
             .secrets = try .init(app.allocator, dvui.io, config_folder),
         },
         .explorer = try app.allocator.create(Explorer),
-        .sidebar = try .init(),
         .infobar = try .init(),
         .last_titlebar_color = dvui.themeGet().color(.control, .fill),
         .themes = .empty,
@@ -2738,10 +2734,10 @@ fn fizzyPanZoomScheme(ctx: *anyopaque) sdk.EditorAPI.PanZoomScheme {
     };
 }
 fn fizzyExplorerRect(ctx: *anyopaque) dvui.Rect {
-    return fizzyCtx(ctx).explorer.rect;
+    return fizzyCtx(ctx).explorer.pane.rect;
 }
 fn fizzyExplorerVirtualSize(ctx: *anyopaque) dvui.Size {
-    return fizzyCtx(ctx).explorer.scroll_info.virtual_size;
+    return fizzyCtx(ctx).explorer.pane.scroll_info.virtual_size;
 }
 fn fizzyShowSaveDialog(
     ctx: *anyopaque,
@@ -2777,7 +2773,7 @@ fn fizzyAllocDocId(ctx: *anyopaque) u64 {
     return fizzyCtx(ctx).app.newFileID();
 }
 fn fizzyExplorerViewportWidth(ctx: *anyopaque) f32 {
-    return fizzyCtx(ctx).explorer.scroll_info.viewport.w;
+    return fizzyCtx(ctx).explorer.pane.scroll_info.viewport.w;
 }
 fn fizzyDocFromPath(ctx: *anyopaque, path: []const u8) ?sdk.DocHandle {
     return fizzyCtx(ctx).docFromPath(path);
@@ -3705,7 +3701,7 @@ pub fn resetLayout(editor: *Editor) void {
 /// there is nothing to reveal and the user's layout is left alone.
 ///
 /// Must be called from inside the frame's explorer/center subtree, where `explorer.paned`
-/// exists — see the `Sidebar` note about deferring paned pokes to `tick`.
+/// exists — see the `Rail` note about deferring paned pokes to `tick`.
 pub fn revealCenter(editor: *Editor) void {
     const sidebar = editor.regionFor(sdk.keywords.ide.sidebar) orelse return;
     if (!sidebar.isPeeking()) return;
@@ -4429,9 +4425,9 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             .chrome = .{ chrome.r, chrome.g, chrome.b, chrome.a },
             .has_chrome = true,
         });
-        // The lens's bend fades with its own frost (`InApp.bend`): the whole of it here.
+        // The lens's bend fades with its own frost (`Look.bend`): the whole of it here.
         fizzy.core.dialogs.publishRefraction(if (lens) 1 else if (liquid) pane.refraction else 0);
-        fizzy.core.LiquidField.publishLook(if (lens) glass_look.inApp(opacity) else null);
+        fizzy.core.material.publishLook(if (lens) glass_look.Looks.fromOpacity(opacity) else null);
         fizzy.core.corners.publish(editor.app.settings.corner_roundness);
     }
     // How things move this frame, for every animation here and in every plugin (`core.motion`).
