@@ -303,9 +303,9 @@ pub fn main() !void {
         if (now - stats.since >= std.time.ns_per_s) {
             var title: [200]u8 = undefined;
             const fps = @as(f32, @floatFromInt(stats.frames)) * 1e9 / @as(f32, @floatFromInt(now - stats.since));
-            const text = std.fmt.bufPrintZ(&title, "spike {s} | timing {s} | in flight {d} | clip delay {d} | {d:.0} fps | {d:.0} px/s | opacity {s} | overlay {s}", .{
+            const text = std.mem.printSentinel(&title, "spike {s} | timing {s} | in flight {d} | clip delay {d} | {d:.0} fps | {d:.0} px/s | opacity {s} | overlay {s}", .{
                 @tagName(st.mode), @tagName(st.timing), st.frames_in_flight, st.clip_delay, fps, st.speed, if (st.translucent) "0.6" else "1", if (st.overlay_variant) |v| @tagName(v) else "off",
-            }) catch "spike";
+            }, 0) catch "spike";
             _ = c.SDL_SetWindowTitle(window, text.ptr);
             log.info("{s} | submit {d:.2} ms avg | {d} messages pumped | geometry: GetGeometry {d}, TryGetGeometryUsingFactory {d}", .{
                 text, @as(f32, @floatFromInt(stats.submit_ns)) / 1e6 / @as(f32, @floatFromInt(stats.frames)), stats.pumped, geometry.get_geometry_calls, geometry.try_factory_calls,
