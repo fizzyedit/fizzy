@@ -62,7 +62,7 @@ pub fn behind(display: *anyopaque, window: c_ulong, want: ?Want) bool {
         if (data.len == 0) {
             _ = s.lib.XDeleteProperty(d, window, s.blur_atom);
         } else {
-            _ = s.lib.XChangeProperty(d, window, s.blur_atom, xa_cardinal, 32, prop_mode_replace, @ptrCast(data.ptr), @intCast(data.len / 4 * 4));
+            _ = s.lib.XChangeProperty(d, window, s.blur_atom, xa_cardinal, 32, prop_mode_replace, @ptrCast(data.ptr), @intCast(data.len));
         }
     } else {
         _ = s.lib.XDeleteProperty(d, window, s.blur_atom);
@@ -93,6 +93,7 @@ const Lib = struct {
 };
 
 fn load() ?Lib {
+    if (builtin.is_test) return Probe.lib;
     // SDL's own copy, already loaded for the window: never a second one.
     const handle = std.c.dlopen("libX11.so.6", .{ .LAZY = true, .NOLOAD = true }) orelse return null;
     var lib: Lib = undefined;
@@ -199,4 +200,97 @@ test "only KWin's window managers read the property" {
     try std.testing.expect(!readsBlurProperty("GNOME Shell"));
     try std.testing.expect(!readsBlurProperty("Mutter"));
     try std.testing.expect(!readsBlurProperty(""));
+}
+
+// Test fixtures are written only by the serial tests in this file.
+const Probe = struct {
+    var lib: ?Lib = null;
+    var unreadable = false;
+    var check_window: c_ulong = 2;
+    var empty_name: [1]u8 = .{0};
+
+    fn intern(_: *Display, name: [*:0]const u8, _: c_int) callconv(.c) c_ulong {
+        return if (std.mem.eql(u8, std.mem.span(name), "_NET_SUPPORTING_WM_CHECK")) 1 else 2;
+    }
+
+    fn root(_: *Display) callconv(.c) c_ulong {
+        return 1;
+    }
+
+    fn property(_: *Display, _: c_ulong, atom: c_ulong, _: c_long, _: c_long, _: c_int, req_type: c_ulong, actual_type: *c_ulong, format: *c_int, items: *c_ulong, after: *c_ulong, data: *?[*]u8) callconv(.c) c_int {
+        if (atom != 1 and unreadable) return 1;
+        actual_type.* = req_type;
+        format.* = if (atom == 1) 32 else 8;
+        items.* = if (atom == 1) 1 else 0;
+        after.* = 0;
+        data.* = if (atom == 1) std.mem.asBytes(&check_window).ptr else &empty_name;
+        return 0;
+    }
+
+    fn free(_: ?*anyopaque) callconv(.c) c_int {
+        // Property storage belongs to this fixture.
+        return 0;
+    }
+
+    fn change(_: *Display, _: c_ulong, _: c_ulong, _: c_ulong, _: c_int, _: c_int, _: [*]const u8, _: c_int) callconv(.c) c_int {
+        @panic("a refused blur must not write a property");
+    }
+
+    fn delete(_: *Display, _: c_ulong, _: c_ulong) callconv(.c) c_int {
+        @panic("a refused blur must not delete a property");
+    }
+
+    fn flush(_: *Display) callconv(.c) c_int {
+        @panic("a refused blur must not flush");
+    }
+
+    const xlib: Lib = .{
+        .XInternAtom = intern,
+        .XChangeProperty = change,
+        .XDeleteProperty = delete,
+        .XFlush = flush,
+        .XDefaultRootWindow = root,
+        .XGetWindowProperty = property,
+        .XFree = free,
+    };
+};
+
+test "missing Xlib refuses blur and caches the failed probe" {
+    if (builtin.target.os.tag != .linux) return error.SkipZigTest;
+    defer {
+        tried = false;
+        bound = false;
+        Probe.lib = null;
+    }
+    Probe.lib = null;
+    var display: u8 = 0;
+    try std.testing.expect(ready(&display) == null);
+    // A later library cannot revive a probe that already failed.
+    Probe.lib = Probe.xlib;
+    try std.testing.expect(!offered(&display));
+    try std.testing.expect(!behind(&display, 3, .{ .frame = .{ .w = 100, .h = 80 }, .radius = 0 }));
+    try std.testing.expect(!behind(&display, 3, null));
+}
+
+test "empty or unreadable window manager names refuse blur without writing" {
+    if (builtin.target.os.tag != .linux) return error.SkipZigTest;
+    defer {
+        tried = false;
+        bound = false;
+        Probe.lib = null;
+        Probe.unreadable = false;
+    }
+    Probe.lib = Probe.xlib;
+    var display: u8 = 0;
+    for ([_]bool{ false, true }) |unreadable| {
+        tried = false;
+        bound = false;
+        Probe.unreadable = unreadable;
+        const s = ready(&display) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(!s.blurs);
+        try std.testing.expect(!offered(&display));
+        try std.testing.expect(!behind(&display, 3, .{ .frame = .{ .w = 100, .h = 80 }, .radius = 0 }));
+        try std.testing.expect(!behind(&display, 3, null));
+        try std.testing.expect(s.sent == null);
+    }
 }

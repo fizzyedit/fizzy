@@ -94,8 +94,11 @@ pub fn init(src: std.builtin.SourceLocation, init_opts: dvui.ScrollAreaWidget.In
 
     // A coast's last stretch moves a fraction of a pixel a frame: drawn at whole pixels it
     // steps instead of gliding. Content is drawn at the fractional offset until the coast
-    // ends, and `deinit` snaps it again so text is crisp at rest.
-    if (self.touch.x.coasting or self.touch.y.coasting or self.touch.over.nonZero()) _ = dvui.snapToPixelsSet(false);
+    // ends (`settle` puts it on whole pixels that frame), and `deinit` snaps it again so text
+    // is crisp at rest.
+    const was_coasting_x = self.touch.x.coasting;
+    const was_coasting_y = self.touch.y.coasting;
+    if (was_coasting_x or was_coasting_y or self.touch.over.nonZero()) _ = dvui.snapToPixelsSet(false);
 
     // A press while coasting or springing back only stops the motion: eat it so it doesn't also
     // tap what is under it.
@@ -129,6 +132,8 @@ pub fn init(src: std.builtin.SourceLocation, init_opts: dvui.ScrollAreaWidget.In
         self.coast();
         self.springBack();
     }
+    // A bounce ends its coast past an edge; only in-range axes settle onto pixels.
+    self.settle(was_coasting_x and !t.x.coasting and t.over.x == 0, was_coasting_y and !t.y.coasting and t.over.y == 0);
     self.si.viewport.x += t.over.x;
     self.si.viewport.y += t.over.y;
     if (c.init_opts.frame_viewport == null) c.frame_viewport = self.si.viewport.topLeft();
@@ -354,6 +359,34 @@ fn sameSide(v: f32, side: f32) f32 {
     return if (side < 0) @min(v, 0) else if (side > 0) @max(v, 0) else 0;
 }
 
+/// On the axes whose coast ended this frame (run out, or stopped by a press), move the content
+/// onto whole physical pixels. This last frame is still drawn unsnapped and the next ones
+/// snapped; at a fractional offset the snap would round every rect and texture to another
+/// pixel, so panes and cards would shift or change size by a pixel the moment the coast stops.
+fn settle(self: *ScrollArea, x: bool, y: bool) void {
+    if (!x and !y) return;
+    const rs = self.area.scroll.?.data().contentRectScale();
+    if (rs.s == 0) return;
+    const si = self.si;
+    self.scrollBy(.{
+        .x = if (x) settleBy(rs.r.x, si.viewport.x, si.scrollMax(.horizontal), rs.s) else 0,
+        .y = if (y) settleBy(rs.r.y, si.viewport.y, si.scrollMax(.vertical), rs.s) else 0,
+    });
+}
+
+/// How far to move a viewport at `viewport` (of `0..max`, in an area whose content starts at
+/// physical `area_px` with `scale` pixels a point) so the content's origin lands on a pixel.
+fn settleBy(area_px: f32, viewport: f32, max: f32, scale: f32) f32 {
+    // A child at content point p draws at `area_px + (p - viewport) * scale`. Round the
+    // content's origin, not the viewport: the area itself may sit between pixels.
+    const origin = area_px - viewport * scale;
+    var by = (origin - @round(origin)) / scale;
+    // Past an edge dvui's bounce would pull it back off the pixel, so round the other way.
+    if (viewport + by < 0) by += 1 / scale;
+    if (viewport + by > max) by -= 1 / scale;
+    return by;
+}
+
 // Evaluate from the release, rounding the position once rather than accumulating f32 deltas.
 // Clamp time at the stop speed so the final position also agrees across frame schedules.
 fn coastPosition(fling: *Fling, origin: f32, velocity: f32, elapsed: f64) f32 {
@@ -386,6 +419,11 @@ var t_raw_y: f32 = 0;
 var t_snapping: bool = false;
 /// The overscroll the area's content sees this frame.
 var t_over_y: f32 = 0;
+/// Lay the area out as a column of `t_rows` rows, `t_top` points below the window's top, and
+/// record where each row is drawn.
+var t_column: bool = false;
+var t_top: f32 = 0;
+var t_rows: [400]dvui.Point.Physical = undefined;
 
 fn testFrame() !dvui.App.Result {
     var root = dvui.box(@src(), .{}, .{ .expand = .both });
@@ -396,13 +434,22 @@ fn testFrame() !dvui.App.Result {
         _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 100, .h = 20000 } });
         t_viewport_y = scroll.si.viewport.y;
     } else {
-        var scroll = ScrollArea.init(@src(), .{ .horizontal = .none, .vertical_bar = .hide }, .{ .expand = .both });
+        var scroll = ScrollArea.init(@src(), .{ .horizontal = .none, .vertical_bar = .hide }, .{ .expand = .both, .margin = .{ .y = t_top } });
         // Read the final viewport after the area's event handling and edge correction.
         const si = scroll.si;
         defer t_viewport_y = si.viewport.y;
         defer {
             scroll.deinit();
             t_release_velocity = scroll.touch.y.last_debug.vel;
+        }
+        if (t_column) {
+            t_snapping = dvui.snapToPixels();
+            for (&t_rows, 0..) |*drawn, i| {
+                const r = dvui.spacer(@src(), .{ .id_extra = i, .min_size_content = .{ .w = 100, .h = 30 } }).rectScale().r;
+                // Where the renderer puts a texture or a glyph run: rounded while snapping.
+                drawn.* = if (t_snapping) .{ .x = @round(r.x), .y = @round(r.y) } else .{ .x = r.x, .y = r.y };
+            }
+            return .ok;
         }
         const child = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 100, .h = 20000 } });
         t_snapping = dvui.snapToPixels();
@@ -566,6 +613,68 @@ test "a slow coast draws at a new place every frame, then snaps at rest" {
     try std.testing.expect(t_snapping);
 }
 
+test "a settled viewport puts the content's origin on a pixel, inside the range" {
+    const cases = [_]struct { area_px: f32, viewport: f32, max: f32, scale: f32 }{
+        .{ .area_px = 0, .viewport = 10.3, .max = 100, .scale = 1 },
+        .{ .area_px = 0.5, .viewport = 10, .max = 100, .scale = 1 },
+        .{ .area_px = 3.25, .viewport = 41.7, .max = 100, .scale = 2 },
+        // The nearest pixel would put these past the top and the bottom.
+        .{ .area_px = 0.9, .viewport = 0.2, .max = 100, .scale = 1 },
+        .{ .area_px = 0, .viewport = 99.7, .max = 99.9, .scale = 1 },
+    };
+    for (cases) |c| {
+        const settled = c.viewport + settleBy(c.area_px, c.viewport, c.max, c.scale);
+        const origin = c.area_px - settled * c.scale;
+        try std.testing.expectApproxEqAbs(@round(origin), origin, 0.0001);
+        try std.testing.expect(settled >= 0 and settled <= c.max);
+        try std.testing.expect(@abs(settled - c.viewport) * c.scale < 1);
+    }
+}
+
+/// Step frames until the area snaps again and return the largest move of any row between the
+/// last unsnapped frame and the first snapped one.
+fn restJump(gap_ms: u64) !f32 {
+    var last_coast: [t_rows.len]dvui.Point.Physical = t_rows;
+    for (0..600) |_| {
+        try frameAfter(gap_ms);
+        if (t_snapping) break;
+        last_coast = t_rows;
+    } else return error.NeverSnapped;
+    var jump: f32 = 0;
+    for (last_coast, t_rows) |a, b| jump = @max(jump, @abs(a.x - b.x), @abs(a.y - b.y));
+    return jump;
+}
+
+test "the end of a coast draws where the rest frames do" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    t_use_dvui = false;
+    t_column = true;
+    defer t_column = false;
+    // The area sits between pixels, so rounding the viewport alone would not settle it.
+    t_top = 0.5;
+    defer t_top = 0;
+    _ = try swipe();
+    const jump = try restJump(8);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), jump, 0.001);
+}
+
+test "a press that stops a coast leaves the rows where they were drawn" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    t_use_dvui = false;
+    t_column = true;
+    defer t_column = false;
+    t_top = 0.5;
+    defer t_top = 0;
+    _ = try swipe();
+    for (0..7) |_| try frameAfter(16);
+    try std.testing.expect(!t_snapping);
+    _ = try dvui.currentWindow().addEventPointer(.{ .button = .touch0, .action = .press, .xynorm = .{ .x = 0.5, .y = 0.5 } });
+    const jump = try restJump(16);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), jump, 0.001);
+}
+
 test "a fling coasts at the speed of the last 100 ms, not of the last move" {
     var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
     defer t.deinit();
@@ -682,6 +791,23 @@ fn dragBy(points: f32, step: f32, press: bool, hold: usize) !void {
 
 fn lift() !void {
     _ = try dvui.currentWindow().addEventPointer(.{ .button = .touch0, .action = .release, .xynorm = .{ .x = 0.5, .y = 0.5 } });
+}
+
+test "releasing a held overscroll without a coast requests a spring frame" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    t_use_dvui = false;
+    try dvui.testing.settle(testFrame);
+    try dragBy(300, 10, true, 10);
+    try std.testing.expect(t_over_y < 0);
+
+    const cw = dvui.currentWindow();
+    try lift();
+    // Discard input and layout requests so only the release can request the next frame.
+    cw.extra_frames_needed = 0;
+    _ = try testFrame();
+    try std.testing.expect(@abs(t_release_velocity) < tuning.min_start);
+    try std.testing.expect(cw.extra_frames_needed > 0);
 }
 
 test "a drag 300 points past the top shows the rubber band and springs back within 400 ms" {
