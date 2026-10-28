@@ -713,3 +713,41 @@ test "a finger catches the content springing back where it is" {
     for (0..30) |_| try frameAfter(16);
     try std.testing.expectEqual(@as(f32, 0), t_over_y);
 }
+
+test "a finger catching the hardest bounce keeps it where it is, inside the band's limit" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    t_use_dvui = false;
+    try dvui.testing.settle(testFrame);
+    try dragBy(-300, 10, true, 10);
+    try lift();
+    for (0..10) |_| try frameAfter(16);
+    // A flick back at the speed clamp (`tuning.max`), released near the top: the fastest bounce.
+    try dragBy(260, 130, true, 0);
+    try lift();
+    var deepest: f32 = 0;
+    for (0..30) |_| {
+        try frameAfter(16);
+        deepest = @min(deepest, t_over_y);
+    }
+    // `unrubber` stops at the band's limit, so a bounce that passed it could not be caught where
+    // it is: it would jump back to the limit.
+    try std.testing.expect(deepest > -Fling.rubber_band.limit * 0.999);
+
+    // Catch it while it is still going out.
+    try dragBy(-260, 130, true, 0);
+    try lift();
+    try dragBy(260, 130, true, 0);
+    try lift();
+    var caught: f32 = 0;
+    for (0..30) |_| {
+        try frameAfter(16);
+        if (t_over_y < -20) {
+            caught = t_over_y;
+            break;
+        }
+    }
+    try std.testing.expect(caught < -20);
+    try dragBy(1, 1, true, 0);
+    try std.testing.expectApproxEqAbs(caught, t_over_y, 3);
+}
