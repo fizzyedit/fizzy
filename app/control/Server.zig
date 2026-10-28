@@ -1275,8 +1275,8 @@ test "a stopped server ends a keep-alive connection waiting for its next request
 }
 
 /// A client that asks for `GET /remote` to become a byte stream: reads the `101`, writes `ping`
-/// right behind its request, reads four bytes, then reads to the end unless `leave`, which closes
-/// the socket as soon as it has the head.
+/// right behind its request, then holds the socket open after four reply bytes until released.
+/// With `leave`, closes the socket as soon as it has the head.
 const UpgradePeer = struct {
     io: Io,
     path: []const u8,
@@ -1284,9 +1284,12 @@ const UpgradePeer = struct {
     head: [160]u8 = undefined,
     head_len: usize = 0,
     reply: [4]u8 = undefined,
-    ended: bool = false,
+    reply_complete: bool = false,
+    replied: Io.Event = .unset,
+    release: Io.Event = .unset,
 
     fn run(self: *UpgradePeer) void {
+        defer self.replied.set(self.io);
         const addr = Io.net.UnixAddress.init(self.path) catch return;
         const stream = addr.connect(self.io) catch return;
         defer stream.close(self.io);
@@ -1304,8 +1307,9 @@ const UpgradePeer = struct {
         }
         if (self.leave) return;
         r.interface.readSliceAll(&self.reply) catch return;
-        var more: [1]u8 = undefined;
-        self.ended = if (r.interface.readSliceShort(&more)) |n| n == 0 else |_| true;
+        self.reply_complete = true;
+        self.replied.set(self.io);
+        self.release.wait(self.io) catch return;
     }
 };
 
@@ -1331,18 +1335,25 @@ test "an upgraded connection carries bytes both ways until the app closes it" {
     const path = try testSocket(gpa, &tmp);
     defer gpa.free(path);
     defer removeTestSocket(path);
+    var link: Link = .init(gpa, io, noWake);
+    defer link.deinit();
     var server: Server = .{ .gpa = gpa, .io = io, .socket_path = path, .wake = noWake };
     try server.start();
-    defer server.stop();
 
     var peer: UpgradePeer = .{ .io = io, .path = path };
-    const thread = try std.Thread.spawn(.{}, UpgradePeer.run, .{&peer});
+    const thread = std.Thread.spawn(.{}, UpgradePeer.run, .{&peer}) catch |err| {
+        server.stop();
+        return err;
+    };
+    defer {
+        server.stop();
+        peer.release.set(io);
+        thread.join();
+    }
     var taken: std.ArrayList(*Request) = .empty;
     defer taken.deinit(gpa);
     const req = try takeOne(&server, &taken);
     try std.testing.expectEqualStrings("fizzy-remote-view/1", req.upgrade.?);
-    var link: Link = .init(gpa, io, noWake);
-    defer link.deinit();
     req.answerUpgrade(&server, &link);
 
     // What the client wrote behind its request is the link's.
@@ -1355,13 +1366,14 @@ test "an upgraded connection carries bytes both ways until the app closes it" {
     }
     try std.testing.expectEqualStrings("ping", got.items);
     try link.send("pong");
-    // Closing ends the client's read, after what was queued is written.
+    // The link finishes while the peer still holds its socket open: app close ends it.
+    // Windows AF_UNIX does not reliably deliver EOF to the peer.
     link.close();
-    thread.join();
+    try peer.replied.wait(io);
+    try std.testing.expect(peer.reply_complete);
     try std.testing.expect(std.mem.startsWith(u8, peer.head[0..peer.head_len], "HTTP/1.1 101 Switching Protocols\r\n"));
     try std.testing.expect(std.mem.find(u8, peer.head[0..peer.head_len], "upgrade: fizzy-remote-view/1\r\n") != null);
     try std.testing.expectEqualStrings("pong", &peer.reply);
-    try std.testing.expect(peer.ended);
     waited = 0;
     while (!link.isGone() and waited < 2000) : (waited += 1) io.sleep(.fromMilliseconds(1), .awake) catch {};
     try std.testing.expect(link.isGone());
