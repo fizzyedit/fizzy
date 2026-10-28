@@ -508,7 +508,8 @@ export fn add_event(which: u8, int1: u32, int2: u32, float1: f32, float2: f32, t
 }
 
 fn add_event_raw(w: *dvui.Window, which: u8, int1: u32, int2: u32, float1: f32, float2: f32, time_ms: f64) !void {
-    const first = w.events.items.len;
+    // dvui replaces the trailing position event when appending input.
+    const first = w.events.items.len -| 1;
     const time_ns: i128 = @as(i128, @intFromFloat((if (std.math.isFinite(time_ms)) time_ms else wasm.wasm_now()) * 1_000_000.0)) + w.backend.impl.clock_ahead_ns;
     defer for (w.events.items[first..]) |e| {
         var buf: [32]u8 = undefined;

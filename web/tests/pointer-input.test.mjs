@@ -57,3 +57,16 @@ listeners.pointerdown(mouse(5, 14));
 listeners.pointercancel(mouse(5, 15));
 assert.deepEqual(Array.from(sent.at(-1).events).filter((e) => e.a).map((e) => Array.from(e.a).slice(0, 2)), [[3, 0], [3, 1]]);
 console.log('pointer input: chord transitions and cancellation passed');
+
+// An empty coalesced list still carries the move's own time, including when
+// the worker receives it much later. Delivery time must not replace sample time.
+listeners.pointermove({ ...event(7, 60, 20), getCoalescedEvents: () => [] });
+const delayed = sent.at(-1);
+assert.equal(delayed.events.length, 1);
+const delayedCalls = [];
+runInNewContext('switch (m.type) { ' + batchCase + ' }', {
+  m: delayed, performance: { timeOrigin: 9500, now: () => 100000 },
+  dvuiApp: { instance: { exports: { add_event: (...a) => delayedCalls.push(a) } }, requestRender() {} },
+});
+assert.equal(delayedCalls[0][5], 520);
+console.log('pointer input: empty coalescing and delayed worker delivery passed');
