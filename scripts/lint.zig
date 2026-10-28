@@ -861,9 +861,11 @@ test "dvui.scrollArea is flagged" {
 test "a lint-allow with a reason silences it" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    const findings = try analyze(arena.allocator(), "// lint-allow(raw-scroll-area): wrapper implementation\n" ++
-        "fn f() void { _ = dvui.scrollArea(@src(), .{}, .{}); }");
-    try std.testing.expectEqual(@as(usize, 0), findings.len);
+    for ([_][:0]const u8{
+        "// lint-allow(raw-scroll-area): wrapper implementation\n" ++
+            "fn f() void { _ = dvui.scrollArea(@src(), .{}, .{}); }",
+        "fn f() void { _ = dvui.scrollArea(@src(), .{}, .{}); } // lint-allow(raw-scroll-area): wrapper implementation",
+    }) |source| try std.testing.expectEqual(@as(usize, 0), (try analyze(arena.allocator(), source)).len);
 }
 
 test "core.widgets.ScrollArea.init is not flagged" {
@@ -887,4 +889,7 @@ test "a file over its raw-scroll-area budget fails" {
     try std.testing.expect(try reportFile(&output.writer, "over.zig", findings, &allowances, &seen, false));
     try std.testing.expect(seen[0]);
     try std.testing.expect(std.mem.endsWith(u8, output.written(), "raw-scroll-area: count 2 exceeds allowance 1\n"));
+    output.clearRetainingCapacity();
+    try std.testing.expect(!try reportFile(&output.writer, "over.zig", findings[0..1], &allowances, &seen, false));
+    try std.testing.expectEqualStrings("", output.written());
 }
