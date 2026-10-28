@@ -206,8 +206,8 @@ pub fn deinit(self: *ScrollArea) void {
             t.springing = true;
             t.back = .{ .pos = .{ .x = t.over.x, .y = t.over.y }, .placed = true };
         }
-        // The release may contain no motion, so it must schedule the first coast frame itself.
-        if (t.x.coasting or t.y.coasting) dvui.refresh(null, @src(), self.data().id);
+        // The release may contain no motion, so it must schedule the first coast or spring frame itself.
+        if (t.x.coasting or t.y.coasting or t.springing) dvui.refresh(null, @src(), self.data().id);
     }
 
     // dvui's own deinit clamps and bounces a viewport out of range: hand it the edge.
@@ -307,6 +307,9 @@ fn coast(self: *ScrollArea) void {
     if (t.x.coasting or t.y.coasting) dvui.refresh(null, @src(), self.data().id);
 }
 
+/// How much of the band's limit a bounce's peak may reach: short of it, so the catch never clamps.
+const bounce_margin = 0.99;
+
 /// End one axis's coast at the end it went `past`, handing its speed to the spring back. A fast
 /// coast reaches an end with a long last step and a high speed, and the spring would swing out
 /// past the band's limit, where a finger could not catch it where it is (`Fling.unrubber` stops
@@ -318,7 +321,7 @@ fn bounce(fling: *Fling, pos: *f32, over: *f32, spring_pos: *f32, spring_vel: *f
     const a = @abs(past);
     const v = @abs(fling.vel);
     const peak = (a + v / w) * @exp(-v / (v + w * a));
-    const fit = @min(1, Fling.rubber_band.limit * 0.99 / peak);
+    const fit = @min(1, Fling.rubber_band.limit * bounce_margin / peak);
     pos.* -= past;
     over.* = past * fit;
     spring_pos.* = past * fit;
