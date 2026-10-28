@@ -2,6 +2,8 @@
 const std = @import("std");
 const dvui = @import("dvui");
 
+/// The antialiasing fringe, in physical pixels, that ink may reach past the clip and still show.
+/// The backend keeps a copy (`BlurBackdrop.fringe_px`), pinned to it by the test below.
 pub const fringe_px: f32 = 1;
 
 /// True when physical ink meets the clip grown by `margin_px` on both axes.

@@ -1024,8 +1024,9 @@ fn queuePane(id: dvui.Id, rect: Rect.Physical, corners: dvui.CornerRect, scale: 
     // How formed it is: the caller's, or its own from when it first came up. Per id, so it
     // lives exactly as long as the pane is drawn and a pane that comes back forms anew.
     const form = std.math.clamp(pane.form orelse selfForm(id, now), 0, 1);
+    const cap = dvui.dataGetPtrDefault(null, id, "_frost_cap", dvui.Size, .{});
     // Cull only after the per-id state is touched above: a pane scrolled out and back must not
-    // re-form or restart its frost.
+    // re-form, restart its frost, or lose its capture size.
     const clip = dvui.clipGet();
     if (clip.empty() or !inkWithin(rect, clip, fringe_px)) return;
     // The blur comes in from sharp (`form`, at the full radius — see `BlurBackdrop.form`); the
@@ -1057,7 +1058,6 @@ fn queuePane(id: dvui.Id, rect: Rect.Physical, corners: dvui.CornerRect, scale: 
     // open, a dragged view shrinking into its card — keeps one capture size, and so one set of
     // targets, for many frames, where an exact capture was a new pyramid every frame it moved.
     const need = rect.insetAll(-margin);
-    const cap = dvui.dataGetPtrDefault(null, id, "_frost_cap", dvui.Size, .{});
     const want: dvui.Size = if (pane.reach) |r|
         .{ .w = @max(need.w, r.w + 2 * margin), .h = @max(need.h, r.h + 2 * margin) }
     else
