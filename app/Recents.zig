@@ -35,7 +35,7 @@ last_save_folder: ?[]const u8 = null,
 last_open_folder: ?[]const u8 = null,
 /// Oldest first: the last row is the folder opened most recently.
 folders: std.array_list.Managed(Folder),
-/// Commands run from the command palette — what it lists as recently used (`RecentCommands`).
+/// Commands run from the command palette - what it lists as recently used (`RecentCommands`).
 commands: RecentCommands = .{},
 /// The app version whose offer to move to /Applications the user put off (`update.move_offer`);
 /// the offer comes back with any other. Owned by the list's allocator.
@@ -73,13 +73,13 @@ pub fn load(allocator: std.mem.Allocator, path: []const u8) !Recents {
         var disk_diag: std.zon.parse.Diagnostics = undefined;
         if (std.zon.parse.fromSlice(Disk, .{ .gpa = allocator, .arena = disk_arena.allocator(), .source = data, .diagnostics = &disk_diag, .ignore_unknown_fields = true }) catch null) |disk| {
             for (disk.folders, 0..) |folder, row| {
-                // A folder on a mount (`gdrive://…`) is not the disk's to check: it exists
+                // A folder on a mount (`gdrive://...`) is not the disk's to check: it exists
                 // whenever its plugin is signed in, which is decided at open time.
                 const present = core.paths.isMountPath(folder) or core.LocalFs.isDirAbsolute(dvui.io, folder);
                 if (present) {
                     const canon = canonicalize(allocator, folder) catch continue;
 
-                    // Duplicates collapse onto the *later* row — the list is ordered
+                    // Duplicates collapse onto the *later* row - the list is ordered
                     // oldest-first, so the last spelling of a directory is the recent one.
                     for (folders.items, 0..) |existing, i| {
                         if (std.mem.eql(u8, existing.path, canon)) {

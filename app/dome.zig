@@ -74,8 +74,8 @@ pub fn emerge(p: f32, delay: f32) f32 {
 /// button sliding. It changes from `home`'s shape to a drop up to `size` across as it sets off,
 /// travels small and inflates as it nears its place; along an arc, up and then across, rather than
 /// straight, `arc` times the usual height (so bubbles leaving together fan out rather than travel
-/// stacked); on one smooth curve (`smooth`) both ways, so going back is coming played backwards —
-/// in the reverse order, as the later a bubble buds, the sooner it is in — and one arriving takes
+/// stacked); on one smooth curve (`smooth`) both ways, so going back is coming played backwards -
+/// in the reverse order, as the later a bubble buds, the sooner it is in - and one arriving takes
 /// `home`'s shape. A dome's home is its bud (`bud`); a corner vial's is the vial's own circle
 /// (`Corner.home`), so the bubbles going back become the vial, and the glass the bar ends as is the
 /// vial at rest. All physical.
@@ -106,7 +106,7 @@ pub fn pullFrom(home: dvui.Rect.Physical, size: f32, to: dvui.Rect.Physical, p: 
 /// while it travels, as a share of its place's size; and how far along it starts to inflate.
 const pull_arc: f32 = 0.14;
 // Not much smaller than its place: the glass's rim is one for the whole field, fitted to its
-// smallest shape, and a tiny drop is all rim — a darker drop among the rest.
+// smallest shape, and a tiny drop is all rim - a darker drop among the rest.
 const pull_drop: f32 = 0.7;
 const pull_inflate: f32 = 0.55;
 /// How far along a bubble has gone from its home's size to its drop's.
@@ -318,7 +318,7 @@ fn fillTube(tube: dvui.Rect.Physical, tilt: f32, color: dvui.Color) void {
     pour(rules.cut(vessel, .{ tube.x + tube.w, tube.y + tube.h / 2 }, .{ @cos(a), @sin(a) }, &kept), color);
 }
 
-// ── The grip as a corner vial ────────────────────────────────────────────────────────────────
+// -- The grip as a corner vial ----------------------------------------------------------------
 //
 // The history's grip in the bottom-right corner of the card its document is on, the way a place's
 // arrange button is in its top-right (`layout/Region.zig`, `cornerPiece`): an orb on the card's
@@ -385,8 +385,8 @@ pub const Corner = struct {
     }
 
     /// Where the pointer is on it: the square from the corner that lies inside the quarter drawn
-    /// (its far corner on the circle), so nothing past the glass — the document's last columns,
-    /// a scroll bar's end — is taken for the grip's.
+    /// (its far corner on the circle), so nothing past the glass - the document's last columns,
+    /// a scroll bar's end - is taken for the grip's.
     pub fn hit(self: Corner, s: f32) dvui.Rect.Physical {
         const d = self.radiusPx(s) * std.math.sqrt1_2;
         const p = self.point();
@@ -576,7 +576,7 @@ fn pourStream(lip: [2]f32, end: [2]f32, tail: f32, head: f32, th: f32, color: dv
     r.fill(.all(hw), .{ .color = .{ .color = color }, .fade = 1 });
 }
 
-// ── Bars out this frame ──────────────────────────────────────────────────────────────────────
+// -- Bars out this frame ----------------------------------------------------------------------
 //
 // Each transport's bar that is out, and each corner vial at rest, says where it is (`publishBar`),
 // so a bar that would cover it can stand clear (`barsOut`): the tape's bar, out along the bottom

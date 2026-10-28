@@ -13,7 +13,7 @@ const LegacyRecents = struct {
     folders: [][]const u8,
 };
 
-/// On-disk shape of `recents.zon` — mirrors `Recents.Disk`.
+/// On-disk shape of `recents.zon` - mirrors `Recents.Disk`.
 const Disk = struct {
     last_save_folder: []const u8 = "",
     last_open_folder: []const u8 = "",
@@ -22,7 +22,7 @@ const Disk = struct {
 
 /// If `zon_path` doesn't exist yet but its sibling `<name>.json` does, parse the legacy
 /// JSON, write an equivalent `zon_path`, and delete the JSON file. No-op (including on
-/// any failure along the way — the caller falls back to defaults as usual) otherwise.
+/// any failure along the way - the caller falls back to defaults as usual) otherwise.
 pub fn migrateIfNeeded(allocator: std.mem.Allocator, zon_path: []const u8) void {
     // The web never had the JSON file.
     if (comptime @import("builtin").target.cpu.arch == .wasm32) return;
