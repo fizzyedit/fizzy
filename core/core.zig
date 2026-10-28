@@ -51,6 +51,8 @@ pub const motion = @import("glass").motion;
 pub const MotionClock = @import("glass").MotionClock;
 /// A motion's clock stepped by its frames, so a long frame holds it rather than skipping it on.
 pub const FrameClock = @import("glass").FrameClock;
+/// Where each row of a variable-height list sits and how far its height can be trusted; std-only.
+pub const HeightIndex = @import("HeightIndex.zig");
 /// How round the app's corners are: the one Corner roundness setting every radius scales by.
 pub const corners = @import("corners.zig");
 /// Frosted glass that bends what it shows — lens at the rim, ripples through it.
