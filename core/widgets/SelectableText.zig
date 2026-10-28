@@ -17,7 +17,9 @@
 //!
 //! A touch anywhere else clears the selection, in another floating window too. Only the layout's
 //! own Copy / Select all menu and selection handles are not elsewhere: they are windows of their
-//! own, and a press on one is taken (captured) inside `dvui.textLayout`.
+//! own, and `dvui.textLayout` takes a press on one before it returns, in the same frame as the
+//! release if need be, so ownership is read per press: a press the call handled (a menu button),
+//! or one on a window holding a handle's `_offset`.
 const std = @import("std");
 const dvui = @import("dvui");
 const TouchHold = @import("../TouchHold.zig");
@@ -31,13 +33,13 @@ hold: *TouchHold,
 pub fn init(src: std.builtin.SourceLocation, init_opts: dvui.TextLayoutWidget.InitOptions, opts: dvui.Options) SelectableText {
     var tl_opts = init_opts;
     tl_opts.touch_edit_just_focused = false;
-    const capture_before = dvui.captureMouseGet();
+    const unhandled = unhandledPresses();
     const tl = dvui.textLayout(src, tl_opts, opts);
     const self: SelectableText = .{
         .tl = tl,
         .hold = dvui.dataGetPtrDefault(null, tl.data().id, "_hold", TouchHold, .{}),
     };
-    self.processTouch(capture_before);
+    self.processTouch(unhandled);
     return self;
 }
 
@@ -51,25 +53,40 @@ pub fn deinit(self: *SelectableText) void {
     self.* = undefined;
 }
 
-/// `capture_before` is the capture as it was before `dvui.textLayout` ran: one taken inside it
-/// in another window is the layout's own menu or handle.
-fn processTouch(self: SelectableText, capture_before: ?dvui.CaptureMouse) void {
+/// The touch presses among the frame's first `max_presses` events that nothing has handled yet.
+const Presses = std.bit_set.IntegerBitSet(max_presses);
+const max_presses = 32;
+
+fn unhandledPresses() Presses {
+    var set: Presses = .empty;
+    for (dvui.events(), 0..) |*e, i| {
+        if (i == max_presses) break;
+        if (e.evt == .mouse and e.evt.mouse.action == .press and e.evt.mouse.button.touch() and !e.handled) set.set(i);
+    }
+    return set;
+}
+
+/// Whether `dvui.textLayout` took the press `e`, the `i`th event, in a window other than its own:
+/// its menu handles the press, and its selection handles keep an `_offset` under their window's id.
+fn tookPress(unhandled: Presses, i: usize, e: *const dvui.Event) bool {
+    if (i < max_presses and unhandled.isSet(i) and e.handled) return true;
+    return dvui.dataGet(null, e.evt.mouse.floating_win, "_offset", dvui.Point.Physical) != null;
+}
+
+/// `unhandled` is `unhandledPresses` as it was before `dvui.textLayout` ran.
+fn processTouch(self: SelectableText, unhandled: Presses) void {
     const tl = self.tl;
     const hold = self.hold;
     const rs = tl.data().borderRectScale();
     const slop = TouchHold.slop_pt * dvui.windowNaturalScale();
-    const own_window: ?dvui.Id = if (dvui.captureMouseGet()) |c|
-        if (capture_before == null or capture_before.?.id != c.id) c.subwindow_id else null
-    else
-        null;
 
-    for (dvui.events()) |*e| {
+    for (dvui.events(), 0..) |*e, i| {
         if (e.evt != .mouse or !e.evt.mouse.button.touch()) continue;
         const me = e.evt.mouse;
         switch (me.action) {
             .press => {
                 if (me.floating_win != dvui.subwindowCurrentId()) {
-                    if (me.floating_win != own_window) {
+                    if (!tookPress(unhandled, i, e)) {
                         hold.cancel();
                         clear(tl);
                     }
@@ -337,6 +354,50 @@ test "a touch on the selection's handle keeps it" {
 
     const wr = dvui.windowRectPixels();
     try touch(.press, t_end_handle.x / wr.w, t_end_handle.y / wr.h);
+    try frameAfter(16);
+    try frameAfter(16);
+    try std.testing.expect(selected());
+    try std.testing.expect(t_touch_editing);
+}
+
+/// Holds to select "alpha", lets go, and settles with the menu and handles showing.
+fn selectAlpha() !void {
+    try touch(.press, on_text_x, on_text_y);
+    try frameAfter(500);
+    try frameAfter(16);
+    try frameAfter(16);
+    try touch(.release, on_text_x, on_text_y);
+    try frameAfter(16);
+    try frameAfter(16);
+    try std.testing.expect(selected());
+}
+
+test "a tap on a button of the menu, press and release in one frame, keeps the selection" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 200 } });
+    defer t.deinit();
+    try dvui.testing.settle(testFrame);
+    try selectAlpha();
+
+    // dvui puts the menu at the layout's top right, pushed back onto the window: the last of its
+    // buttons is under this point.
+    const x = 286.0 / 300.0;
+    const y = 14.0 / 200.0;
+    try touch(.press, x, y);
+    try touch(.release, x, y);
+    try frameAfter(16);
+    try frameAfter(16);
+    try std.testing.expect(selected());
+}
+
+test "a tap on the selection's handle, press and release in one frame, keeps it" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 200 } });
+    defer t.deinit();
+    try dvui.testing.settle(testFrame);
+    try selectAlpha();
+
+    const wr = dvui.windowRectPixels();
+    try touch(.press, t_end_handle.x / wr.w, t_end_handle.y / wr.h);
+    try touch(.release, t_end_handle.x / wr.w, t_end_handle.y / wr.h);
     try frameAfter(16);
     try frameAfter(16);
     try std.testing.expect(selected());
