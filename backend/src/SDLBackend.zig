@@ -3390,7 +3390,8 @@ fn releaseTouches(self: *SDLBackend, win: *dvui.Window) !void {
 /// This allows "ontop" application main loop to ignore such events since they
 /// are meant for something visually floating on top of the main application.
 pub fn addEvent(self: *SDLBackend, win: *dvui.Window, event: c.SDL_Event) !bool {
-    // dvui replaces the trailing position event when appending input.
+    // dvui replaces the trailing position event when appending input. If no input is added,
+    // only that position slot is restamped; it does not contribute to release velocity.
     const first = win.events.items.len -| 1;
     const time_ns: i128 = self.nanoTime() - @as(i128, c.SDL_GetTicksNS()) + @as(i128, event.common.timestamp);
     defer for (win.events.items[first..]) |e| {

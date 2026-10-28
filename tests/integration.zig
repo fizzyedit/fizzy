@@ -32,6 +32,30 @@ test "shim brings up a dvui.testing window with usable fizzy globals" {
     try std.testing.expect(fizzy.editor() == ctx.editor);
 }
 
+test "input timestamps cover motion replacing the trailing position event" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+    const win = dvui.currentWindow();
+    const input_time = fizzy.core.input_time;
+    const time_ns: i128 = win.frame_time_ns + std.time.ns_per_ms;
+
+    // Mirror the backend range around dvui's public API: the motion occupies the
+    // position slot, so starting at the pre-input length misses its timestamp.
+    const first = win.events.items.len -| 1;
+    _ = try win.addEventMouseMotion(.{ .pt = .{ .x = 20, .y = 30 } });
+    for (win.events.items[first..]) |event| {
+        input_time.set(win, event.num, time_ns);
+    }
+    var motions: usize = 0;
+    for (win.events.items) |event| {
+        if (event.evt == .mouse and event.evt.mouse.action == .motion) {
+            motions += 1;
+            try std.testing.expectEqual(time_ns, input_time.get(event.num));
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 1), motions);
+}
+
 // -- menu accelerators -------------------------------------------------------------------------
 
 // The regression that made every plugin menu row show a blank accelerator: a chord that exists
