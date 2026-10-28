@@ -23,6 +23,18 @@ zig build test -Dtest-filter="lerp endpoints"
 `-Dtest-filter` accepts any substring of a test name and may be passed
 multiple times. It applies to every test artifact under the step.
 
+## Demo stall diagnostics
+
+`fizzy-demo-tests` bounds each phase of the bundled-demo test with a watchdog. A blocked
+frame, editor startup or teardown aborts after 180 seconds plus up to one second of
+observation delay, printing the full test name and phase. The `a-live-tape ... NoKeyframeAtStart`
+warning is expected: that test deliberately registers a tape that cannot play as a demo.
+
+Run `python3 scripts/test-demo-watchdog.py` to fault-inject a blocked frame and check the
+diagnostic, and to check that stopping and restarting the watchdog wakes and joins its thread.
+The check compiles the actual watchdog in isolation with a shorter deadline; an external
+five-second timeout bounds each invocation even if the watchdog breaks.
+
 ## How Zig tests work (quick orientation)
 
 Zig has tests built into the language. Anywhere in any `.zig` file you
