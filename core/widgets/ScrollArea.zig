@@ -28,7 +28,7 @@
 const std = @import("std");
 const dvui = @import("dvui");
 const Fling = @import("../Fling.zig");
-const FrameClock = @import("../FrameClock.zig");
+const FrameClock = @import("glass").FrameClock;
 const Spring = @import("../Spring.zig");
 
 const ScrollArea = @This();
