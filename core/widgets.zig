@@ -24,6 +24,8 @@ const draw = @import("draw.zig");
 const anchor = @import("replay").anchor;
 const icon_tex = @import("gfx/icon.zig");
 
+pub const Button = @import("widgets/Button.zig");
+
 pub const CanvasWidget = @import("widgets/CanvasWidget.zig");
 pub const ReorderWidget = @import("widgets/ReorderWidget.zig");
 pub const FloatingWindowWidget = @import("widgets/FloatingWindowWidget.zig");
@@ -475,4 +477,60 @@ pub fn tabCloseButtonOptions(over: dvui.Options) dvui.Options {
         .ninepatch_hover = &dvui.Ninepatch.none,
         .ninepatch_press = &dvui.Ninepatch.none,
     }));
+}
+
+pub fn button(src: std.builtin.SourceLocation, label_str: []const u8, init_opts: Button.InitOptions, opts: dvui.Options) bool {
+    var bw: Button = undefined;
+    bw.init(src, init_opts, opts);
+    bw.processEvents();
+    bw.drawBackground();
+    const click = bw.clicked();
+    dvui.labelNoFmt(@src(), label_str, .{ .align_x = 0.5, .align_y = 0.5 }, opts.strip().override(bw.style()).override(.{ .gravity_x = 0.5, .gravity_y = 0.5 }));
+    bw.drawFocus();
+    bw.deinit();
+
+    return click;
+}
+
+pub fn buttonIcon(src: std.builtin.SourceLocation, name: []const u8, tvg_bytes: []const u8, init_opts: Button.InitOptions, icon_opts: dvui.IconRenderOptions, opts: dvui.Options) bool {
+    const defaults = dvui.Options{ .padding = dvui.Rect.all(4), .label = .{ .text = name } };
+    var bw: Button = undefined;
+    bw.init(src, init_opts, defaults.override(opts));
+    bw.processEvents();
+    bw.drawBackground();
+    icon_tex.icon(
+        @src(),
+        name,
+        tvg_bytes,
+        icon_opts,
+        opts.strip().override(bw.style()).override(.{ .gravity_x = 0.5, .gravity_y = 0.5, .min_size_content = opts.min_size_content, .expand = .ratio, .color_text = opts.color_text, .role = .none }),
+    );
+
+    const click = bw.clicked();
+    bw.drawFocus();
+    bw.deinit();
+    return click;
+}
+
+pub const ButtonLabelAndIconOptions = dvui.ButtonLabelAndIconOptions;
+
+pub fn buttonLabelAndIcon(src: std.builtin.SourceLocation, combined_opts: ButtonLabelAndIconOptions, opts: dvui.Options) bool {
+    var bw: Button = undefined;
+    bw.init(src, combined_opts.button_opts, opts);
+    bw.processEvents();
+    const options = opts.strip().override(bw.style()).override(.{ .gravity_y = 0.5 });
+    bw.drawBackground();
+    {
+        var outer_hbox = dvui.box(src, .{ .dir = .horizontal }, .{ .expand = .horizontal, .gravity_y = 0.5 });
+        defer outer_hbox.deinit();
+        icon_tex.icon(@src(), combined_opts.icon_label orelse combined_opts.label, combined_opts.tvg_bytes, .{}, options.strip().override(.{ .gravity_x = if (combined_opts.icon_first) 0.0 else 1.0, .color_text = opts.color_text }));
+        dvui.labelEx(@src(), "{s}", .{combined_opts.label}, .{ .align_x = 0.5 }, options.strip().override(.{ .expand = .both }));
+    }
+
+    const click = bw.clicked();
+
+    bw.drawFocus();
+
+    bw.deinit();
+    return click;
 }
