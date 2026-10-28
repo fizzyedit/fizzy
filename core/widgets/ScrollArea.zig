@@ -20,6 +20,8 @@
 //! container's own `processMotionScroll`, so a dvui parent still scrolls (with dvui's coast).
 const std = @import("std");
 const dvui = @import("dvui");
+const input_time = @import("../input_time.zig");
+const profile = @import("../profile.zig");
 const Fling = @import("../Fling.zig");
 
 const ScrollArea = @This();
@@ -35,6 +37,8 @@ const Touch = struct {
     x: Fling = .{},
     y: Fling = .{},
     dragging: bool = false,
+    last_viewport: dvui.Point = .{},
+    last_coast: dvui.Point = .{},
     coast_start_ns: i128 = 0,
     coast_origin: dvui.Point = .{},
     coast_velocity: dvui.Point = .{},
@@ -68,8 +72,11 @@ pub fn init(src: std.builtin.SourceLocation, init_opts: dvui.ScrollAreaWidget.In
 
     // A coast's last stretch moves a fraction of a pixel a frame: drawn at whole pixels it
     // steps instead of gliding. Content is drawn at the fractional offset until the coast
-    // ends, and `deinit` snaps it again so text is crisp at rest.
-    if (self.touch.x.coasting or self.touch.y.coasting) _ = dvui.snapToPixelsSet(false);
+    // ends (`settle` puts it on whole pixels that frame), and `deinit` snaps it again so text
+    // is crisp at rest.
+    const was_coasting_x = self.touch.x.coasting;
+    const was_coasting_y = self.touch.y.coasting;
+    if (was_coasting_x or was_coasting_y) _ = dvui.snapToPixelsSet(false);
 
     // A press while coasting only stops the coast: eat it so it doesn't also tap what is under it.
     for (dvui.events()) |*e| {
@@ -84,10 +91,9 @@ pub fn init(src: std.builtin.SourceLocation, init_opts: dvui.ScrollAreaWidget.In
     // The coast moves the content before it is laid out, so a frame draws where the clock is at
     // that frame. Moved after the children, it would draw where the clock was one gap ago, and
     // an uneven gap would show as an uneven step.
-    if (!self.touch.dragging) {
-        self.coast();
-        if (c.init_opts.frame_viewport == null) c.frame_viewport = self.si.viewport.topLeft();
-    }
+    if (!self.touch.dragging) self.coast();
+    self.settle(was_coasting_x and !self.touch.x.coasting, was_coasting_y and !self.touch.y.coasting);
+    if (!self.touch.dragging and c.init_opts.frame_viewport == null) c.frame_viewport = self.si.viewport.topLeft();
     return self;
 }
 
@@ -103,13 +109,18 @@ pub fn deinit(self: *ScrollArea) void {
     dvui.clipSet(c.prevClip);
 
     const rs = c.data().borderRectScale();
-    var delta: dvui.Point = .{};
+    var finger_delta: dvui.Point = .{};
+    const was_dragging = t.dragging;
     var released = false;
+    var release_ns = dvui.frameTimeNS();
     for (dvui.events()) |*e| {
         if (e.evt != .mouse or !e.evt.mouse.button.touch()) continue;
         const finger = e.evt.mouse.button;
         switch (e.evt.mouse.action) {
-            .release => released = released or (t.dragging and finger == t.finger),
+            .release => if (t.dragging and finger == t.finger) {
+                released = true;
+                release_ns = input_time.get(e.num);
+            },
             .motion => |motion| {
                 if (t.dragging and finger != t.finger) continue;
                 if (!dvui.eventMatch(e, .{ .id = c.data().id, .r = c.init_opts.event_rect orelse rs.r })) continue;
@@ -119,23 +130,24 @@ pub fn deinit(self: *ScrollArea) void {
                 if (!t.dragging) {
                     t.dragging = true;
                     t.finger = finger;
+                    t.last_coast = .{};
                     t.x.begin();
                     t.y.begin();
                 }
-                delta = delta.plus(self.processMotionScroll(motion, rs.s));
+                finger_delta = finger_delta.plus(motion.scale(1 / rs.s, dvui.Point));
+                const delta = self.processMotionScroll(motion, rs.s);
+                const time_ns = input_time.get(e.num);
+                t.x.sampleTimed(delta.x, time_ns);
+                t.y.sampleTimed(delta.y, time_ns);
             },
             else => {},
         }
     }
 
-    if (delta.nonZero() or released) {
-        t.x.sampleTimed(delta.x);
-        t.y.sampleTimed(delta.y);
-    }
     if (released) {
         t.dragging = false;
-        _ = t.x.releaseWindowed(tuning, window_s);
-        _ = t.y.releaseWindowed(tuning, window_s);
+        _ = t.x.releaseWindowedAt(tuning, window_s, release_ns);
+        _ = t.y.releaseWindowedAt(tuning, window_s, release_ns);
         t.coast_start_ns = dvui.frameTimeNS();
         t.coast_origin = self.si.viewport.topLeft();
         t.coast_velocity = .{ .x = t.x.vel, .y = t.y.vel };
@@ -146,6 +158,12 @@ pub fn deinit(self: *ScrollArea) void {
     // A nested child's propagated motion sets this (parent) area's velocity through dvui's
     // `processMotionScroll`; clear it so dvui's coast never runs beside ours.
     self.si.velocity = .{};
+    if (was_dragging) {
+        const moved = self.si.viewport.topLeft().diff(t.last_viewport);
+        profile.scrollJump(moved.x, @abs(finger_delta.x) + 2);
+        profile.scrollJump(moved.y, @abs(finger_delta.y) + 2);
+    }
+    t.last_viewport = self.si.viewport.topLeft();
     self.area.deinit();
     _ = dvui.snapToPixelsSet(self.snap);
 }
@@ -205,10 +223,41 @@ fn coast(self: *ScrollArea) void {
     if (t.x.coasting) moved.x = coastPosition(&t.x, t.coast_origin.x, t.coast_velocity.x, elapsed) - si.viewport.x;
     if (t.y.coasting) moved.y = coastPosition(&t.y, t.coast_origin.y, t.coast_velocity.y, elapsed) - si.viewport.y;
 
+    if (t.last_coast.x != 0) profile.scrollJump(moved.x, @abs(t.last_coast.x) * 3);
+    if (t.last_coast.y != 0) profile.scrollJump(moved.y, @abs(t.last_coast.y) * 3);
+    t.last_coast = moved;
     self.scrollBy(moved);
     if (si.viewport.x < 0 or si.viewport.x > si.scrollMax(.horizontal)) t.x.cancel();
     if (si.viewport.y < 0 or si.viewport.y > si.scrollMax(.vertical)) t.y.cancel();
     if (t.x.coasting or t.y.coasting) dvui.refresh(null, @src(), self.data().id);
+}
+
+/// On the axes whose coast ended this frame (run out, or stopped by a press), move the content
+/// onto whole physical pixels. This last frame is still drawn unsnapped and the next ones
+/// snapped; at a fractional offset the snap would round every rect and texture to another
+/// pixel, so panes and cards would shift or change size by a pixel the moment the coast stops.
+fn settle(self: *ScrollArea, x: bool, y: bool) void {
+    if (!x and !y) return;
+    const rs = self.area.scroll.?.data().contentRectScale();
+    if (rs.s == 0) return;
+    const si = self.si;
+    self.scrollBy(.{
+        .x = if (x) settleBy(rs.r.x, si.viewport.x, si.scrollMax(.horizontal), rs.s) else 0,
+        .y = if (y) settleBy(rs.r.y, si.viewport.y, si.scrollMax(.vertical), rs.s) else 0,
+    });
+}
+
+/// How far to move a viewport at `viewport` (of `0..max`, in an area whose content starts at
+/// physical `area_px` with `scale` pixels a point) so the content's origin lands on a pixel.
+fn settleBy(area_px: f32, viewport: f32, max: f32, scale: f32) f32 {
+    // A child at content point p draws at `area_px + (p - viewport) * scale`. Round the
+    // content's origin, not the viewport: the area itself may sit between pixels.
+    const origin = area_px - viewport * scale;
+    var by = (origin - @round(origin)) / scale;
+    // Past an edge dvui's bounce would pull it back off the pixel, so round the other way.
+    if (viewport + by < 0) by += 1 / scale;
+    if (viewport + by > max) by -= 1 / scale;
+    return by;
 }
 
 // Evaluate from the release, rounding the position once rather than accumulating f32 deltas.
@@ -234,12 +283,18 @@ fn scrollBy(self: *ScrollArea, by: dvui.Point) void {
 // ---- tests ----
 
 var t_viewport_y: f32 = 0;
+var t_release_velocity: f32 = 0;
 var t_use_dvui: bool = false;
 /// Where a child of the area is drawn this frame (physical y, as the renderer would place it),
 /// and whether the renderer snaps there.
 var t_drawn_y: f32 = 0;
 var t_raw_y: f32 = 0;
 var t_snapping: bool = false;
+/// Lay the area out as a column of `t_rows` rows, `t_top` points below the window's top, and
+/// record where each row is drawn.
+var t_column: bool = false;
+var t_top: f32 = 0;
+var t_rows: [400]dvui.Point.Physical = undefined;
 
 fn testFrame() !dvui.App.Result {
     var root = dvui.box(@src(), .{}, .{ .expand = .both });
@@ -250,11 +305,23 @@ fn testFrame() !dvui.App.Result {
         _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 100, .h = 20000 } });
         t_viewport_y = scroll.si.viewport.y;
     } else {
-        var scroll = ScrollArea.init(@src(), .{ .horizontal = .none, .vertical_bar = .hide }, .{ .expand = .both });
+        var scroll = ScrollArea.init(@src(), .{ .horizontal = .none, .vertical_bar = .hide }, .{ .expand = .both, .margin = .{ .y = t_top } });
         // Read the final viewport after the area's event handling and edge correction.
         const si = scroll.si;
         defer t_viewport_y = si.viewport.y;
-        defer scroll.deinit();
+        defer {
+            scroll.deinit();
+            t_release_velocity = scroll.touch.y.last_debug.vel;
+        }
+        if (t_column) {
+            t_snapping = dvui.snapToPixels();
+            for (&t_rows, 0..) |*drawn, i| {
+                const r = dvui.spacer(@src(), .{ .id_extra = i, .min_size_content = .{ .w = 100, .h = 30 } }).rectScale().r;
+                // Where the renderer puts a texture or a glyph run: rounded while snapping.
+                drawn.* = if (t_snapping) .{ .x = @round(r.x), .y = @round(r.y) } else .{ .x = r.x, .y = r.y };
+            }
+            return .ok;
+        }
         const child = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 100, .h = 20000 } });
         t_snapping = dvui.snapToPixels();
         const y = child.rectScale().r.y;
@@ -416,6 +483,68 @@ test "a slow coast draws at a new place every frame, then snaps at rest" {
     try std.testing.expect(t_snapping);
 }
 
+test "a settled viewport puts the content's origin on a pixel, inside the range" {
+    const cases = [_]struct { area_px: f32, viewport: f32, max: f32, scale: f32 }{
+        .{ .area_px = 0, .viewport = 10.3, .max = 100, .scale = 1 },
+        .{ .area_px = 0.5, .viewport = 10, .max = 100, .scale = 1 },
+        .{ .area_px = 3.25, .viewport = 41.7, .max = 100, .scale = 2 },
+        // The nearest pixel would put these past the top and the bottom.
+        .{ .area_px = 0.9, .viewport = 0.2, .max = 100, .scale = 1 },
+        .{ .area_px = 0, .viewport = 99.7, .max = 99.9, .scale = 1 },
+    };
+    for (cases) |c| {
+        const settled = c.viewport + settleBy(c.area_px, c.viewport, c.max, c.scale);
+        const origin = c.area_px - settled * c.scale;
+        try std.testing.expectApproxEqAbs(@round(origin), origin, 0.0001);
+        try std.testing.expect(settled >= 0 and settled <= c.max);
+        try std.testing.expect(@abs(settled - c.viewport) * c.scale < 1);
+    }
+}
+
+/// Step frames until the area snaps again and return the largest move of any row between the
+/// last unsnapped frame and the first snapped one.
+fn restJump(gap_ms: u64) !f32 {
+    var last_coast: [t_rows.len]dvui.Point.Physical = t_rows;
+    for (0..600) |_| {
+        try frameAfter(gap_ms);
+        if (t_snapping) break;
+        last_coast = t_rows;
+    } else return error.NeverSnapped;
+    var jump: f32 = 0;
+    for (last_coast, t_rows) |a, b| jump = @max(jump, @abs(a.x - b.x), @abs(a.y - b.y));
+    return jump;
+}
+
+test "the end of a coast draws where the rest frames do" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    t_use_dvui = false;
+    t_column = true;
+    defer t_column = false;
+    // The area sits between pixels, so rounding the viewport alone would not settle it.
+    t_top = 0.5;
+    defer t_top = 0;
+    _ = try swipe();
+    const jump = try restJump(8);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), jump, 0.001);
+}
+
+test "a press that stops a coast leaves the rows where they were drawn" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    t_use_dvui = false;
+    t_column = true;
+    defer t_column = false;
+    t_top = 0.5;
+    defer t_top = 0;
+    _ = try swipe();
+    for (0..7) |_| try frameAfter(16);
+    try std.testing.expect(!t_snapping);
+    _ = try dvui.currentWindow().addEventPointer(.{ .button = .touch0, .action = .press, .xynorm = .{ .x = 0.5, .y = 0.5 } });
+    const jump = try restJump(16);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), jump, 0.001);
+}
+
 test "a fling coasts at the speed of the last 100 ms, not of the last move" {
     var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
     defer t.deinit();
@@ -506,4 +635,30 @@ test "dvui.scrollTo from a child moves a ScrollArea" {
     t_scroll_to = true;
     try dvui.testing.settle(scrollToFrame);
     try std.testing.expect(t_viewport_y > 500);
+}
+
+test "steady event times release at steady speed across bursts of 3, 0, 1" {
+    var test_window = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer test_window.deinit();
+    t_use_dvui = false;
+    const cw = dvui.currentWindow();
+    try dvui.testing.settle(testFrame);
+    const h = cw.data().rect.h;
+    var y: f32 = 0.8;
+    _ = try cw.addEventPointer(.{ .button = .touch0, .action = .press, .xynorm = .{ .x = 0.5, .y = y } });
+    try frameAfter(16);
+    const start = cw.frame_time_ns;
+    var sample: i128 = 0;
+    for ([_]usize{ 3, 0, 1 }) |count| {
+        for (0..count) |_| {
+            sample += 1;
+            y -= 10 / h;
+            _ = try cw.addEventTouchMotion(.touch0, 0.5, y, 0, -10 / h);
+            input_time.set(cw, cw.event_num, start + sample * 10 * std.time.ns_per_ms);
+        }
+        try frameAfter(16);
+    }
+    _ = try cw.addEventPointer(.{ .button = .touch0, .action = .release, .xynorm = .{ .x = 0.5, .y = y } });
+    try frameAfter(16);
+    try std.testing.expectApproxEqAbs(@as(f32, 1000), t_release_velocity, 0.1);
 }

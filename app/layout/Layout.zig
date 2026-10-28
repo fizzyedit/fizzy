@@ -1089,6 +1089,10 @@ pub const splitNamed = Region.splitNamed;
 pub const splitOn = Region.splitOn;
 /// Mark the split that minted a place as fizzy's own, so it follows its space's shape (`core.placement`).
 pub const markAdaptive = Region.markAdaptive;
+/// Divide a named place the way its space's shape asks, the split adaptive — the menu's Split.
+pub const splitAdaptive = Region.splitAdaptive;
+/// Make the split a place is one half of follow its space's shape, or stop.
+pub const setAdaptive = Region.setAdaptive;
 /// Move the visible surface from one place to another — a view-drag drop.
 pub const placeVisible = ViewDrag.place;
 

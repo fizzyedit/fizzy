@@ -22,6 +22,7 @@
 //! holding its own cost to a budget, an automation client measuring what a change costs, a
 //! benchmark. `report` writes what was measured as ZON, the same numbers the window shows.
 const std = @import("std");
+const builtin = @import("builtin");
 const dvui = @import("dvui");
 const perf = @import("gfx/perf.zig");
 /// What the profiler keeps past its half-second window: 30 seconds of windows, and the frames
@@ -39,7 +40,7 @@ pub const Gpu = @import("profile/Gpu.zig");
 /// Bumped whenever `Profiler`'s layout changes. Part of the key the host publishes it under
 /// (`publish_key`), so a plugin built against another layout finds none and records nothing: the
 /// `abi` field it would check sits wherever its own layout put it, which a reordered struct moves.
-pub const abi: u32 = 6;
+pub const abi: u32 = 7;
 
 pub const max_entries = 1024;
 const max_depth = 48;
@@ -100,7 +101,7 @@ pub const FrameStats = struct {
     inputs_per_s: f64 = 0,
 };
 
-/// Input kinds or the request that caused a recorded frame.
+/// Input kinds or the refresh request that caused a recorded frame.
 pub const Cause = packed struct(u8) {
     press: bool = false,
     release: bool = false,
@@ -114,6 +115,8 @@ pub const Cause = packed struct(u8) {
 
 pub const Profiler = struct {
     abi: u32 = abi,
+    /// Debug scroll discontinuities since startup.
+    scroll_jumps: u64 = 0,
     enabled: bool = false,
     paused: bool = false,
     /// Held still for a moment (the window's graph under the pointer): like `paused`, but the
@@ -125,10 +128,12 @@ pub const Profiler = struct {
     /// start, so a scope costs one branch either way.
     active: bool = false,
 
+    /// What caused the frame in progress; recorded with it and cleared at its end.
+    frame_cause: Cause = .{},
+    /// Each recorded frame's cause.
+    history_cause: [history_len]Cause = @splat(.{}),
     /// The last `history_len` frames: each one's work and submit, and each entry's time and
     /// calls in it.
-    frame_cause: Cause = .{},
-    history_cause: [history_len]Cause = @splat(.{}),
     history_work: [history_len]u32 = @splat(0),
     history_submit: [history_len]u32 = @splat(0),
     /// Each frame's GPU counts, landed like its submit.
@@ -310,8 +315,9 @@ pub const Profiler = struct {
     }
 
     fn frameEnd(self: *Profiler) void {
+        if (!self.active) return;
         defer self.frame_cause = .{};
-        if (!self.active or self.paused or self.frozen) {
+        if (self.paused or self.frozen) {
             // Still clear the frame's times, or a held frame's add to the next one recorded.
             for (self.slice()) |*e| {
                 e.frame_ns = 0;
@@ -704,6 +710,12 @@ pub fn section(name: []const u8) Scope {
     return .{ .p = p, .idx = idx };
 }
 
+/// Count a debug scroll discontinuity in the shared host profiler.
+pub fn scrollJump(content: f32, allowed: f32) void {
+    if (builtin.mode != .debug or @abs(content) <= allowed) return;
+    if (current()) |p| p.scroll_jumps +|= 1;
+}
+
 /// Record for the next `ms` milliseconds, whether or not the profiler window is open — or for
 /// longer, if someone already asked for longer. From any image: it records into the host's
 /// profiler. The next frame is the first recorded; `report` covers the half second
@@ -1036,6 +1048,20 @@ test "a frame's GPU counts land in its own slot and the window's average, not be
     try std.testing.expectEqual(@as(f64, 2), p.stats.gpu.?.targets);
 }
 
+test "scrollJump counts a debug discontinuity past what the finger allows, and only that" {
+    if (builtin.mode != .debug) return error.SkipZigTest;
+    is_host = true;
+    defer is_host = false;
+    host_profiler = .{};
+    defer host_profiler = .{};
+    scrollJump(1, 2);
+    scrollJump(-2, 2);
+    try std.testing.expectEqual(@as(u64, 0), host_profiler.scroll_jumps);
+    scrollJump(5, 2);
+    scrollJump(-5, 2);
+    try std.testing.expectEqual(@as(u64, 2), host_profiler.scroll_jumps);
+}
+
 test "hostDeinit frees what recording made, and a second call does nothing" {
     dvui.io = std.testing.io;
     const gpa = std.testing.allocator;
@@ -1130,4 +1156,25 @@ test "paused and frozen frames discard pending causes before recording resumes" 
         p.frameEnd();
         try std.testing.expect(!p.historyFrame(0).?.cause.press);
     }
+}
+
+test "inactive frame end leaves pending cause and scope counters untouched" {
+    var p: Profiler = .{};
+    // Sentinels expose writes and scans even when they would only clear zeroes.
+    p.frame_cause = .{ .press = true };
+    p.count = 1;
+    p.entries[0] = .{
+        .owner = "test",
+        .name = "sentinel",
+        .parent = none,
+        .depth = 0,
+        .key = 0,
+        .frame_ns = 1,
+        .frame_calls = 1,
+    };
+    p.frameEnd();
+    try std.testing.expect(p.frame_cause.press);
+    try std.testing.expectEqual(@as(u64, 1), p.entries[0].frame_ns);
+    try std.testing.expectEqual(@as(u32, 1), p.entries[0].frame_calls);
+    try std.testing.expectEqual(@as(usize, 0), p.history_filled);
 }

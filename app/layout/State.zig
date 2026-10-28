@@ -426,6 +426,55 @@ pub fn isMinted(self: *const State, name: []const u8) bool {
     return self.splits.canForget(name);
 }
 
+/// Whether the split place `name` is one half of follows its room (`core.placement`), or null
+/// when that split is not the person's to change so: `name` is no split's half, the shape declared
+/// the split (a shape's own splits stay as it wrote them), or the split is sized to its content
+/// or in points (`fit`, `fixed`), which a turn would not keep.
+pub fn adaptiveOf(self: *const State, name: []const u8) ?bool {
+    if (self.floatRoot(name) == null) {
+        if (self.dock) |*d| {
+            const idx = d.findPanel(name) orelse return null;
+            const parent = d.findParent(idx) orelse return null;
+            const split = switch (d.nodes.items[parent.idx]) {
+                .split => |sp| sp,
+                else => return null,
+            };
+            if (split.fit != null or split.fixed != null) return null;
+            const made = mintedFrom(d, split.first, split.second) or mintedFrom(d, split.second, split.first);
+            return if (made) split.adaptive else null;
+        }
+    }
+    const branch = self.splits.halfOf(name) orelse return null;
+    return branch.adaptive;
+}
+
+/// Whether a place under `at` was minted from one under `origin`: so a split made at runtime
+/// (`Region.splitDock`) has its halves, where a split the seed declared has places of its own.
+fn mintedFrom(d: *const core.widgets.DockLayout, at: core.widgets.DockLayout.NodeIndex, origin: core.widgets.DockLayout.NodeIndex) bool {
+    switch (d.nodes.items[at]) {
+        .split => |sp| return mintedFrom(d, sp.first, origin) or mintedFrom(d, sp.second, origin),
+        .leaf => |l| {
+            if (l.pinned) return false;
+            for (l.tabs.items) |panel| {
+                const slash = std.mem.findScalarLast(u8, panel, '/') orelse continue;
+                if (holds(d, origin, panel[0..slash])) return true;
+            }
+            return false;
+        },
+        .free => return false,
+    }
+}
+
+fn holds(d: *const core.widgets.DockLayout, at: core.widgets.DockLayout.NodeIndex, name: []const u8) bool {
+    return switch (d.nodes.items[at]) {
+        .split => |sp| holds(d, sp.first, name) or holds(d, sp.second, name),
+        .leaf => |l| for (l.tabs.items) |panel| {
+            if (std.mem.eql(u8, panel, name)) break true;
+        } else false,
+        .free => false,
+    };
+}
+
 /// The other half of the split place `name` is one half of, when that half is a single place:
 /// the place it would merge with. Null when `name` is no split's half, or its other half is
 /// split again.
@@ -1105,4 +1154,42 @@ test "a split nested in a split rounds only the outer corners" {
     try std.testing.expectEqual([4]bool{ false, true, false, false }, testCorners(&s, top));
     try std.testing.expectEqual([4]bool{ false, false, false, false }, testCorners(&s, bl));
     try std.testing.expectEqual([4]bool{ false, false, true, false }, testCorners(&s, br));
+}
+
+test "only a split made at runtime may follow its room, never one the seed declared" {
+    const gpa = std.testing.allocator;
+    const side: Seed.Tree = .{ .leaf = .{ .name = "Sidebar", .keywords = &.{"sidebar"}, .pinned = true } };
+    const main: Seed.Tree = .{ .leaf = .{ .name = "Main", .keywords = &.{"main"}, .pinned = true } };
+    const panel: Seed.Tree = .{ .leaf = .{ .name = "Panel", .keywords = &.{"panel"}, .pinned = true } };
+    const column: Seed.Tree = .{ .split = .{ .dir = .vertical, .first = &main, .second = &panel } };
+    const seed: Seed.Tree = .{ .split = .{
+        .dir = .horizontal,
+        .fixed = .{ .child = .first, .points = 260 },
+        .first = &side,
+        .second = &column,
+    } };
+    var s: State = .{};
+    s.dock = try seed.toDockLayout(gpa);
+    defer s.dock.?.deinit();
+    const dock = &s.dock.?;
+
+    // The seed's own: one in points, one plain. Neither is the person's to turn.
+    try std.testing.expectEqual(@as(?bool, null), s.adaptiveOf("Sidebar"));
+    try std.testing.expectEqual(@as(?bool, null), s.adaptiveOf("Main"));
+    try std.testing.expectEqual(@as(?bool, null), s.adaptiveOf("Nowhere"));
+
+    // Main split at runtime (`Region.splitDock`), then its new half split again.
+    try dock.splitLeaf(dock.findPanel("Main").?, .right, try gpa.dupe(u8, "Main/r1"));
+    try std.testing.expectEqual(@as(?bool, false), s.adaptiveOf("Main"));
+    try std.testing.expectEqual(@as(?bool, false), s.adaptiveOf("Main/r1"));
+    try dock.splitLeaf(dock.findPanel("Main/r1").?, .bottom, try gpa.dupe(u8, "Main/r1/b1"));
+    try std.testing.expectEqual(@as(?bool, false), s.adaptiveOf("Main/r1/b1"));
+    // Main's split holds the other split whole: still the runtime one.
+    try std.testing.expectEqual(@as(?bool, false), s.adaptiveOf("Main"));
+    // The column the seed declared, Main's split now inside it, stays the seed's.
+    try std.testing.expectEqual(@as(?bool, null), s.adaptiveOf("Panel"));
+
+    const parent = dock.findParent(dock.findPanel("Main/r1/b1").?).?;
+    dock.nodes.items[parent.idx].split.adaptive = true;
+    try std.testing.expectEqual(@as(?bool, true), s.adaptiveOf("Main/r1"));
 }

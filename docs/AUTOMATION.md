@@ -200,7 +200,7 @@ user's motion settings, timed in demo time.
 | `drop:center`, `drop:left`, `:right`, `:top`, `:bottom`, `:remove` | a bubble of the drop a carried view would land in, while it is carried over a place: only once the drag is under way, so `drag` carries it there `via` the place first |
 | `float-header:<place>`, `float-close:<place>` | a float's header, to carry it by, and its close button: `float-close:Float 1` |
 | `picker:<view id>` | a view's card in a place's picker |
-| `region.menu.split-right:<name>`, `.split-down:`, `.clear:`, `.reset:`, `.delete:` | the controls in the header of a place's menu, each only while it can be pressed (a dimmed Clear has no name); each runs its command (`layout.place.splitRight`, `splitDown`, `clear`, `reset`, `delete`), which a tape can call instead |
+| `region.menu.split-right:<name>`, `.split-down:`, `.split:`, `.adaptive:`, `.clear:`, `.reset:`, `.delete:` | the controls in the header of a place's menu, each only while it can be pressed (a dimmed Clear has no name); each runs its command (`layout.place.splitRight`, `splitDown`, `split`, `adaptive`, `clear`, `reset`, `delete`), which a tape can call instead |
 | `tabs:<name>` | a place's tab strip, drawn while it holds more than one view |
 | `picker.empty` | the header of a place with nothing in it |
 

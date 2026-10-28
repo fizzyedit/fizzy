@@ -25,7 +25,8 @@
 //! Each card carries a **snapshot** of the surface, not the live surface.
 //!
 //! The header is icons only, each a command (`place_commands`): split right or
-//! down, clear, reset to the layout's default, delete (in red). A **pinned**
+//! down, split the way the room asks, the split following its room or not (lit
+//! while it does), clear, reset to the layout's default, delete (in red). A **pinned**
 //! place (Sidebar, Main, Panel, Center) can be cleared or reset to its keywords;
 //! it cannot be deleted. A **created** place (`Main/r1`) can. A split keeps this
 //! place's view beside the new empty one — see `SPLITS.md`.
@@ -71,6 +72,8 @@ list_ns: i128 = 0,
 pub const Action = enum {
     split_right,
     split_down,
+    split,
+    adaptive,
     clear,
     reset,
     delete,
@@ -122,7 +125,8 @@ fn applies(f: *Layout, region: *const Layout.Region, action: Action) bool {
 pub fn allows(state: *State, name: []const u8, action: Action) bool {
     const created = state.isMinted(name);
     return switch (action) {
-        .split_right, .split_down => true,
+        .split_right, .split_down, .split => true,
+        .adaptive => state.adaptiveOf(name) != null,
         .clear => !created,
         .reset => !created and state.assignment(name) != null,
         // On the tree, any leaf with a sibling can go — a declared place's pin moves to the
@@ -156,6 +160,11 @@ fn applyRequest(self: *Picker, f: *Layout, req: *const Request) void {
         .split_right, .split_down => if (f.splitOn(name, if (req.action == .split_right) .right else .bottom) == null) {
             return dvui.log.warn("{s}: '{s}' is too small to split", .{ place_commands.title(req.action), name });
         },
+        .split => if (f.splitAdaptive(name) == null) {
+            return dvui.log.warn("{s}: '{s}' is too small to split", .{ place_commands.title(req.action), name });
+        },
+        // `applies` checked it is a split the person may turn.
+        .adaptive => f.setAdaptive(name, !f.state.adaptiveOf(name).?),
         .clear => clearRegion(f, name),
         .reset => {
             f.state.unassign(f.gpa, name);
@@ -166,11 +175,11 @@ fn applyRequest(self: *Picker, f: *Layout, req: *const Request) void {
     }
     // A split or a deleted place leaves the menu with nothing that is still true to show.
     switch (req.action) {
-        .split_right, .split_down, .delete => if (self.is_open and std.mem.eql(u8, self.region, name)) {
+        .split_right, .split_down, .split, .delete => if (self.is_open and std.mem.eql(u8, self.region, name)) {
             self.close(f.gpa);
             f.state.discardSnapshots(f.gpa);
         },
-        .clear, .reset => {},
+        .adaptive, .clear, .reset => {},
     }
 }
 
@@ -274,7 +283,8 @@ pub fn draw(self: *Picker, f: *Layout) void {
             defer actions.deinit();
             inline for (place_commands.all, 0..) |c, i| {
                 const enabled = applies(f, &region, c.action);
-                if (controlButton(@src(), c, region.name, enabled, i)) {
+                const lit = c.action == .adaptive and (f.state.adaptiveOf(region.name) orelse false);
+                if (controlButton(@src(), c, region.name, enabled, lit, i)) {
                     f.host.runCommand(c.id) catch |err| dvui.log.err("{s}: {t}", .{ c.id, err });
                     dvui.refresh(null, @src(), null);
                 }
@@ -772,13 +782,14 @@ fn drawLifted(self: *Picker, f: *Layout) void {
 /// One of the header's controls: an icon, a tooltip naming it, and its command run when pressed.
 /// Published as `region.menu.<action>:<place>` while it can be pressed — a dimmed one swallows the
 /// click, and a driver waiting for the name should wait for the action, not for the button.
-/// Delete wears the theme's error colour. Disabled, it keeps its place (dimmed, no hover).
-fn controlButton(src: std.lang.SourceLocation, c: place_commands.Command, place: []const u8, enabled: bool, id_extra: usize) bool {
+/// Delete wears the theme's error colour, a toggle that is on (`lit`) the highlight's. Disabled,
+/// it keeps its place (dimmed, no hover).
+fn controlButton(src: std.lang.SourceLocation, c: place_commands.Command, place: []const u8, enabled: bool, lit: bool, id_extra: usize) bool {
     const theme = dvui.themeGet();
     const destructive = c.action == .delete;
     // Destructive controls wear the error fill as it is (lightening it in dark darkened it);
     // `.err`'s text colour is not red in every theme.
-    const tint = if (destructive) theme.color(.err, .fill) else theme.color(.control, .text);
+    const tint = if (destructive) theme.color(.err, .fill) else if (lit) theme.color(.highlight, .fill) else theme.color(.control, .text);
     // Disabled keeps the place's slot but dimmer; delete stays red enough to read as delete.
     const toward_fill: f32 = if (destructive) 0.4 else 0.65;
     const fill = theme.color(.control, .fill);
