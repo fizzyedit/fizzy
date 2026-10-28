@@ -149,6 +149,8 @@ pub fn deinit(self: *ScrollArea) void {
         t.coast_start_ns = dvui.frameTimeNS();
         t.coast_origin = self.si.viewport.topLeft();
         t.coast_velocity = .{ .x = t.x.vel, .y = t.y.vel };
+        // The release may contain no motion, so it must schedule the first coast frame itself.
+        if (t.x.coasting or t.y.coasting) dvui.refresh(null, @src(), self.data().id);
     }
 
     // A nested child's propagated motion sets this (parent) area's velocity through dvui's
@@ -375,6 +377,40 @@ test "coast displacement follows each frame gap" {
         previous_speed = speed;
     }
     try std.testing.expect(follows_gaps);
+}
+
+test "a coast requests another frame even when its timestamp has not advanced" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    t_use_dvui = false;
+    _ = try swipe();
+    const cw = dvui.currentWindow();
+    _ = try testFrame();
+    const position = t_viewport_y;
+    _ = try cw.end(.{});
+    try cw.begin(cw.frame_time_ns);
+    // Isolate the coast's refresh from layout, input and displacement refreshes.
+    cw.extra_frames_needed = 0;
+    _ = try testFrame();
+    try std.testing.expectEqual(position, t_viewport_y);
+    try std.testing.expect(cw.extra_frames_needed > 0);
+}
+
+test "coast position matches the release integral through jitter and a long stall" {
+    var fling: Fling = .{ .coasting = true };
+    const origin: f32 = 137;
+    const velocity: f32 = -625;
+    var elapsed: f64 = 0;
+    for ([_]f64{ 0.008, 0.025, 0.008, 0.025, 0.5, 0.008, 0.025 }) |gap| {
+        elapsed += gap;
+        const expected = origin + velocity / 2.0 * (1 - @exp(-2.0 * elapsed));
+        try std.testing.expectApproxEqAbs(@as(f32, @floatCast(expected)), coastPosition(&fling, origin, velocity, elapsed), 0.0001);
+        try std.testing.expect(fling.coasting);
+    }
+    const stopped = coastPosition(&fling, origin, velocity, 10);
+    try std.testing.expectApproxEqAbs(origin + (velocity + tuning.stop) / tuning.decay, stopped, 0.0001);
+    try std.testing.expect(!fling.coasting);
+    try std.testing.expectEqual(stopped, coastPosition(&fling, origin, velocity, 20));
 }
 
 test "a slow coast draws at a new place every frame, then snaps at rest" {

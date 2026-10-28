@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const dvui = @import("dvui");
+const glass = @import("glass");
 
 pub const kind: dvui.enums.Backend = .web;
 
@@ -169,6 +170,9 @@ cursor_last: dvui.enums.Cursor = .wait,
 /// Added to the page's clock by `nanoTime`: how far a demo's silent frames have moved the app's
 /// clock on (`app.automation.Player.frames`). Only grows.
 clock_ahead_ns: i128 = 0,
+/// What `nanoTime` takes off the page's clock, so no frame begins more than a motion's step after
+/// the one before it (`glass.MotionClock`). The vsync-stamped base is the page's, unchanged.
+motion_clock: glass.MotionClock = .{},
 /// The frame running is one nobody will see — a demo catching up (`app.automation.Player.frames`):
 /// its draws to the canvas are dropped. Draws into render targets still run, since what is
 /// drawn there may be read back into the app's model.
@@ -760,7 +764,7 @@ pub fn backend(self: *WebBackend) dvui.Backend {
 }
 
 pub fn nanoTime(self: *WebBackend) i128 {
-    return @as(i128, @trunc(wasm.wasm_now())) * 1_000_000 + self.clock_ahead_ns;
+    return self.motion_clock.now(@as(i128, @trunc(wasm.wasm_now())) * 1_000_000 + self.clock_ahead_ns);
 }
 
 pub fn sleep(_: *WebBackend, ns: u64) void {
@@ -1507,7 +1511,8 @@ fn update() !i32 {
 
     const nstime = win.beginWait(back.hasEvent());
 
-    try win.begin(nstime);
+    try win.begin(back.motion_clock.frameTime(win.frame_time_ns, nstime));
+    back.motion_clock.publish();
 
     var window_ended = false;
     defer {

@@ -16,6 +16,11 @@ pos: dvui.Point.Physical = .{},
 vel: dvui.Point.Physical = .{},
 /// False until the first `step` puts it on its target.
 placed: bool = false,
+/// Whether the last `step` left it moving: one that was resting takes no step in the frame it
+/// starts, which has only the time since it was last drawn, however long ago that was.
+moving: bool = false,
+/// The frame time of the last `step`, so a second in the same frame changes nothing.
+stepped_ns: ?i128 = null,
 
 /// How a spring moves: how quickly it closes on its target, and how much it swings past.
 pub const Tune = struct {
@@ -33,11 +38,20 @@ pub fn damping(t: Tune) f32 {
 }
 
 /// Move toward `target` over `dt_s` seconds. Returns whether it is still moving — keep frames
-/// coming while it is.
+/// coming while it is. A second call in a frame returns what the first did and moves nothing, and
+/// a resting spring starts moving in the frame after the one that gave it a target.
 pub fn step(self: *Spring, target: dvui.Point.Physical, dt_s: f32, t: Tune) bool {
+    const frame_ns = dvui.frameTimeNS();
+    if (self.stepped_ns == frame_ns and self.placed) return self.moving;
+    self.stepped_ns = frame_ns;
     if (!self.placed or motion.off()) {
-        self.* = .{ .pos = target, .placed = true };
+        self.* = .{ .pos = target, .placed = true, .stepped_ns = frame_ns };
         return false;
+    }
+    if (!self.moving) {
+        const resting_on_target = self.pos.x == target.x and self.pos.y == target.y;
+        self.moving = !resting_on_target;
+        return self.moving;
     }
     const w = 2 * std.math.pi * t.hz * motion.rate();
     const z = damping(t);
@@ -62,5 +76,6 @@ pub fn step(self: *Spring, target: dvui.Point.Physical, dt_s: f32, t: Tune) bool
         self.pos = target;
         self.vel = .{};
     }
-    return !resting;
+    self.moving = !resting;
+    return self.moving;
 }

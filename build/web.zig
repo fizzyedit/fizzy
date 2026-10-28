@@ -105,6 +105,8 @@ pub fn framework(b: *std.Build, optimize: std.lang.OptimizeMode) Framework {
         null,
         null,
     );
+    // The motion clock the backend's `nanoTime` runs on (`glass.MotionClock`).
+    web_backend.addImport("glass", core_module_web.import_table.get("glass").?);
     return .{
         .dvui_dep = dvui_web_dep,
         .dvui = dvui_web,

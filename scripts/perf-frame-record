@@ -1,0 +1,52 @@
+#!/usr/bin/env python3
+"""Append the .frames emitted by profile.report to the shared monthly perf store."""
+import argparse
+import datetime
+import json
+import os
+from pathlib import Path
+import platform
+import re
+import sys
+
+
+def records(report, metadata):
+    # Match only report()'s numeric frame rows, never scope names or refresh source strings.
+    rows = re.findall(
+        r'^        \.\{ \.work_ns = (\d+), \.cause = \.\{((?: \.\w+ = true,)*) \} \},$',
+        report, re.MULTILINE,
+    )
+    if not rows:
+        raise ValueError('no frame rows; request a report with hitches > 0 and causes > 0')
+    for work, flags in rows:
+        yield dict(metadata, metric='frame_work', value=int(work) / 1_000_000,
+                   unit='ms', causes=re.findall(r'\.(\w+) = true', flags))
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--commit', required=True, help='commit of the measured app')
+    parser.add_argument('--scenario', required=True, help='stable scenario name')
+    parser.add_argument('--machine', required=True, help='identity of the measured machine')
+    parser.add_argument('--os', default=platform.system() + ' ' + platform.release())
+    parser.add_argument('--store', type=Path)
+    args = parser.parse_args()
+    date = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+    metadata = dict(date=date, commit=args.commit, machine=args.machine,
+                    os=args.os, scenario=args.scenario)
+    try:
+        lines = ''.join(json.dumps(row, separators=(',', ':')) + '\n'
+                        for row in records(sys.stdin.read(), metadata))
+    except ValueError as error:
+        parser.error(str(error))
+    store = args.store or Path(os.environ.get('FIZZY_PERF_STORE') or
+                              str(Path(os.environ.get('XDG_DATA_HOME', Path.home() / '.local/share')) /
+                                  'fizzy/perf'))
+    store.mkdir(parents=True, exist_ok=True)
+    with (store / (date[:7] + '.jsonl')).open('a', encoding='utf-8') as output:
+        output.write(lines)
+    sys.stdout.write(lines)
+
+
+if __name__ == '__main__':
+    main()
