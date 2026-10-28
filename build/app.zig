@@ -1191,6 +1191,22 @@ fn addTests(
             .filters = test_filters,
         }));
     }
+    const tour_tests = b.addTest(.{
+        .name = "fizzy-tour-tests",
+        .root_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("src/editor/demos/tour.zig"),
+        }),
+        .filters = test_filters,
+    });
+    tour_tests.root_module.addImport("tape", b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("sdk/tape/root.zig"),
+    }));
+    try unit_test_artifacts.append(b.allocator, tour_tests);
+
     // The backend package's std-only tests (window layout, the title-bar hit test, the blur
     // region, the viewport map, the health counters), from its own list, so `zig build test`
     // here still runs them.
