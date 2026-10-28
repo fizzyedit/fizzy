@@ -3067,6 +3067,23 @@ fn expectNoPanel(editor: *fizzy.Editor) !void {
     try std.testing.expect(editor.regionFor(fizzy.sdk.keywords.ide.panel) == null);
 }
 
+test "rail: the undecided-plugin badge counts for the store view and no other" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+    const editor = ctx.editor;
+    editor.app.gpa = std.testing.allocator;
+    defer {
+        for (editor.app.undecided_plugin_ids.items) |id| editor.app.gpa.free(id);
+        editor.app.undecided_plugin_ids.clearAndFree(editor.app.gpa);
+    }
+    try editor.app.trackUndecidedPlugin("one");
+    try editor.app.trackUndecidedPlugin("two");
+
+    const host = fizzy.layout.railHost(editor);
+    try std.testing.expectEqual(@as(usize, 2), host.vtable.undecidedPluginCount(host.ctx, @import("app").store.Store.view_id));
+    try std.testing.expectEqual(@as(usize, 0), host.vtable.undecidedPluginCount(host.ctx, "test.files"));
+}
+
 test "chrome: the defaults are fizzy's own frame, Sidebar left of Main with a Panel" {
     try std.testing.expectEqual(fizzy.Editor.Chrome{}, fizzy.Editor.Chrome.configured);
     try withChrome(.{}, expectSidebarLeft);

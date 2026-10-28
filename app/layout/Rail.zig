@@ -173,7 +173,7 @@ fn pickAction(host: Host, c: *const Chooser, so_far: Action) Action {
     return if (host.vtable.sidePaneShown(host.ctx)) .close else .open;
 }
 
-/// One rail icon: the chooser's item, drawn as the view's glyph with the store's attention badge.
+/// One rail icon: the chooser's item, drawn as the view's glyph with the host's attention badge for that view.
 /// Returns the bottom of the item's cell, in physical pixels.
 fn drawIcon(host: Host, c: *Chooser, view: *Layout.Surface, index: usize) f32 {
     const undecided_count = host.vtable.undecidedPluginCount(host.ctx, view.id);
