@@ -1,18 +1,18 @@
 //! What the plugin store needs from the application hosting it.
 //!
-//! The store — registry catalog, install/update jobs, the store pane — is framework an app
+//! The store - registry catalog, install/update jobs, the store pane - is framework an app
 //! either switches on or leaves out, exactly like watching and installers. It was reaching
 //! `fizzy.editor()` in sixty-odd places, which made "any fizzy app gets a plugin store" false:
 //! the code was fizzy's, not the framework's.
 //!
 //! This is the seam. An application fills one of these in once at startup and the store talks to
-//! nothing else — no `Editor`, no fizzy globals. The store is compiled *into* an app and never
+//! nothing else - no `Editor`, no fizzy globals. The store is compiled *into* an app and never
 //! into a dylib, so this is a plain `{ctx, vtable}` pair with no ABI implications; it is here
 //! because the store has one host per process, not because anything crosses a boundary.
 //!
 //! Everything on it is genuinely the app's: which plugins the user disabled, which failed to
 //! load, where they are installed, and what happens when one is installed or removed. The store
-//! decides none of that — it draws it and asks.
+//! decides none of that - it draws it and asks.
 const std = @import("std");
 const sdk = @import("fizzy_sdk");
 /// Via `app.zig` so this picks up the wasm stub on a web build: `LoadedLib` holds a `DynLib`,
@@ -30,8 +30,8 @@ pub const Failure = struct {
     plugin_version: ?std.SemanticVersion = null,
 };
 
-/// How the app applies available updates. The store reads it; where it is stored — a settings
-/// file, a flag, nowhere — is the app's business.
+/// How the app applies available updates. The store reads it; where it is stored - a settings
+/// file, a flag, nowhere - is the app's business.
 pub const UpdateMode = enum {
     /// Collect them and let the user apply them.
     prompt,
@@ -60,7 +60,7 @@ config_folder: []const u8,
 /// only its build can say what that is.
 bundled_plugin_ids: []const []const u8 = &.{},
 /// Where this app's plugin registry lives. `plugins.yourapp.com` is a config value, not a
-/// fork — the store is the same code pointed somewhere else.
+/// fork - the store is the same code pointed somewhere else.
 registry_url: []const u8,
 /// The running executable's path, for the dev-tree asset fallback (`plugin_repo_asset.zig`
 /// walks up from here looking for a sibling checkout before it reaches for the network).
@@ -70,13 +70,13 @@ vtable: *const VTable,
 
 /// Whether an update to the *application itself* is in flight. Plugin builds are made against
 /// one SDK generation, so the builds that pair with a newer app only become visible once it is
-/// running — the store waits rather than offering the older ones.
+/// running - the store waits rather than offering the older ones.
 pub const AppUpdate = enum {
     /// The launch check has not answered yet.
     checking,
     /// A newer application exists, or is installing.
     pending,
-    /// Nothing waiting — go ahead.
+    /// Nothing waiting - go ahead.
     none,
 };
 
@@ -157,11 +157,11 @@ pub const VTable = struct {
     reconcileDiscovered: *const fn (ctx: *anyopaque) void,
     /// See `AppUpdate`. An app with no self-updater returns `.none`.
     appUpdate: *const fn (ctx: *anyopaque) AppUpdate,
-    /// Tell the user updates are waiting, however this app does that — fizzy opens its "Plugin
+    /// Tell the user updates are waiting, however this app does that - fizzy opens its "Plugin
     /// updates" window. The store has already collected them (`pendingUpdates`); this is only
     /// the invitation, and doing nothing is a valid answer for an app that applies silently.
     offerUpdates: *const fn (ctx: *anyopaque) void,
-    /// Bring the main region into view — on a narrow layout the store's README page is drawn
+    /// Bring the main region into view - on a narrow layout the store's README page is drawn
     /// somewhere the user cannot see yet. A no-op is a perfectly good implementation.
     revealMain: *const fn (ctx: *anyopaque) void,
 };

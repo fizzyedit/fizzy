@@ -1,6 +1,6 @@
 //! What a place's menu does to the place (`Picker`'s header): split it, clear it, put it back
 //! to the layout's default, delete it. Each is a command, so the palette, a keymap, a tape or an
-//! agent reaches it as the menu's button does — the button runs the command.
+//! agent reaches it as the menu's button does - the button runs the command.
 //!
 //! A command only asks: it writes `Picker.request`, and the picker carries the request out in
 //! its next draw, where the live `Layout` is. A command may run outside a frame (a control
