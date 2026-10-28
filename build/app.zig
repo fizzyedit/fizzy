@@ -1598,6 +1598,11 @@ fn addTests(
         .core = core_module_test,
         .sdk = sdk_module_test,
     }, fizzy_test_module);
+    const dashboard_module_test = plugins.dashboard.addStaticModule(b, target, optimize, .{
+        .dvui = dvui_testing_dep.module("dvui_testing"),
+        .core = core_module_test,
+        .sdk = sdk_module_test,
+    }, fizzy_test_module);
     // A `.zip` opened as a mounted folder, as the web opens the site (`tests/demos.zig`).
     const archive_module_test = plugins.archive.addStaticModule(b, target, optimize, .{
         .dvui = dvui_testing_dep.module("dvui_testing"),
@@ -1612,6 +1617,7 @@ fn addTests(
         .{ .name = "image", .module = image_module_test },
         .{ .name = "markdown", .module = markdown_module_test },
         .{ .name = "devtools", .module = devtools_module_test },
+        .{ .name = "dashboard", .module = dashboard_module_test },
         .{ .name = "archive", .module = archive_module_test },
     }));
 
@@ -2128,6 +2134,18 @@ fn addTests(
         text_plugin_tests.root_module.link_libcpp = !target_is_windows_msvc;
         test_integration_step.dependOn(&b.addRunArtifact(text_plugin_tests).step);
         check_integration_step.dependOn(&text_plugin_tests.step);
+    }
+
+    // The dashboard plugin's own tests (its carousel state and demo provider). The integration
+    // tests import it as a module, and `addTest` collects only from a root module.
+    {
+        const dashboard_plugin_tests = b.addTest(.{
+            .name = "fizzy-dashboard-plugin-tests",
+            .root_module = dashboard_module_test,
+            .filters = test_filters,
+        });
+        test_integration_step.dependOn(&b.addRunArtifact(dashboard_plugin_tests).step);
+        check_integration_step.dependOn(&dashboard_plugin_tests.step);
     }
 
     // Give the file extension tests a root; the plugin's lazy exports do not collect them.
