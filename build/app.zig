@@ -33,7 +33,14 @@ pub const WebPluginDir = struct {
 /// The type of `Chrome.sidebar_edge`, for the build option.
 const ChromeEdge = enum { left, right };
 
+/// Initial presentation preferences, used until the person makes a shared choice.
+pub const Look = struct {
+    /// Motion level from 0 (off) to 1 (playful). The OS reduced-motion request wins.
+    motion: ?f32 = null,
+};
+
 pub const Options = struct {
+    look: Look = .{},
     /// Every plugin the application links, fizzy's own among them, each in the executables its
     /// `targets` names — see `build.zig`'s `buildApp`.
     app_plugins: []const @import("sdk.zig").BundledPlugin = &@import("plugins.zig").entries.all,
@@ -490,6 +497,7 @@ pub fn readConfig(b: *std.Build, target: std.Build.ResolvedTarget, opts: Options
     build_opts.addOption(bool, "app_repo_url_set", app_repo_url_set);
     build_opts.addOption([]const u8, "app_issues_url", app_issues_url);
     build_opts.addOption(bool, "velopack_enabled", velopack_enabled);
+    build_opts.addOption(?f32, "look_motion", opts.look.motion);
     // Off, the app runs only the plugins it links (`buildApp`'s list): no plugin dylib is built,
     // and nothing loads at runtime — not fizzy's own dylibs, not the user plugins directory, not
     // the store, not a web page's `?plugin=`. Comptime, so none of it is checked per frame.
@@ -807,6 +815,7 @@ fn native(
         pack_opts.addOption(bool, "app_repo_url_set", cfg.app_repo_url_set);
         pack_opts.addOption([]const u8, "app_issues_url", cfg.app_issues_url);
         pack_opts.addOption(bool, "velopack_enabled", true);
+        pack_opts.addOption(?f32, "look_motion", opts.look.motion);
         pack_opts.addOption(bool, "static_workbench", static_workbench);
         pack_opts.addOption(bool, "static_text", static_text);
         pack_opts.addOption(bool, "static_image", static_image);
@@ -1098,6 +1107,7 @@ fn addTests(
         // Hold / slop / tap rules of touch selection. std-only (see TouchHold.zig) — the dvui
         // half is widgets/SelectableText.zig.
         .{ "fizzy-touch-hold-tests", "core/TouchHold.zig" },
+        .{ "fizzy-person-tests", "core/person.zig" },
         // A motion's clock stepped by its frames, a long one held to a step. std-only (see
         // FrameClock.zig); the floats' landing and ghost run on it.
         .{ "fizzy-frame-clock-tests", "backend/src/glass/FrameClock.zig" },

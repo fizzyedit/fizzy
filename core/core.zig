@@ -139,3 +139,5 @@ pub const transport = struct {
 
 /// Fixed Fizzy accent colours — theme-independent. See `palette.zig`.
 pub const palette = @import("palette.zig");
+
+pub const person = @import("person.zig");

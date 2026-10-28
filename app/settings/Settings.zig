@@ -77,11 +77,6 @@ modal_dim: f32 = 0.0,
 /// theme's own corner. All the way round by default, on every platform.
 corner_roundness: f32 = 1.0,
 
-/// How the interface moves, 0 to 1: 0 is off (nothing animates), up to 0.5 (minimal) plain even
-/// motion, toward 1 (playful) an overshoot past the target and back, arriving on time throughout.
-/// Published each frame through `core.motion`, which every animation reads. Playful by default.
-motion: f32 = 1,
-
 /// How fast the interface moves, 0 (slow) to 1 (fast): half as fast to twice as fast as written,
 /// 0.5 as written. Never stops motion — that is `motion` at 0.
 motion_speed: f32 = core.motion.default_speed,

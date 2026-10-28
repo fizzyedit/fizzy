@@ -70,6 +70,7 @@ let fetches = 0;
 let compiles = 0;
 const bound = [];
 const toggles = [];
+const storageApis = [];
 const memory = new WebAssembly.Memory({ initial: 1 });
 globalThis.fetch = (url) => { fetches++; return Promise.resolve({ url }); };
 WebAssembly.compileStreaming = async () => { compiles++; return { fake: true }; };
@@ -77,6 +78,7 @@ WebAssembly.instantiate = async (module, imports) => {
   const id = bound.length;
   bound.push([]);
   toggles.push(imports.fizzy.fizzy_web_toggle_fullscreen);
+  storageApis.push(imports.fizzy);
   return {
     exports: {
       memory: { buffer: memory.buffer },
@@ -89,11 +91,11 @@ WebAssembly.Table = class {};
 
 const { Fizzy } = await import(pathToFileURL(path.join(dir, "fizzy.js")).href);
 
-const mount = async (parent) => {
+const mount = async (parent, options = {}) => {
   const canvas = document.createElement("canvas");
   canvas.parentElement = parent;
   const ready = new Promise((resolve, reject) => {
-    new Fizzy({ canvas, worker: false, persist: false, onReady: resolve, onError: reject, onInstance: () => {} }).run();
+    new Fizzy({ canvas, worker: false, persist: false, ...options, onReady: resolve, onError: reject, onInstance: () => {} }).run();
   });
   await ready;
   return canvas;
@@ -133,4 +135,36 @@ toggles[1]();
 assert.equal(document.fullscreenElement, parentB, "the other copy takes full screen for itself");
 toggles[1]();
 assert.equal(document.fullscreenElement, null, "and a second toggle leaves it");
+// Independent app namespaces share only the person's preferences.
+const stored = new Map();
+window.localStorage = {
+  getItem: (key) => stored.get(key) ?? null,
+  setItem: (key, value) => stored.set(key, value),
+  removeItem: (key) => stored.delete(key),
+  key: (i) => [...stored.keys()][i] ?? null,
+  get length() { return stored.size; },
+};
+await mount(new Element(), { persist: true, storage: "left" });
+await mount(new Element(), { persist: true, storage: "right" });
+const encoder = new TextEncoder();
+const put = (api, key, value) => {
+  const k = encoder.encode(key), v = encoder.encode(value);
+  new Uint8Array(memory.buffer, 0, k.length).set(k);
+  new Uint8Array(memory.buffer, 256, v.length).set(v);
+  api.fizzy_web_storage_set(0, k.length, 256, v.length);
+};
+const get = (api, key) => {
+  const k = encoder.encode(key);
+  new Uint8Array(memory.buffer, 0, k.length).set(k);
+  const n = api.fizzy_web_storage_get(0, k.length, 512, 256);
+  return n === 0xffffffff ? null : new TextDecoder().decode(new Uint8Array(memory.buffer, 512, n));
+};
+put(storageApis[2], "fizzyedit.person", ".{ .motion = 0.4 }");
+assert.equal(stored.get("fizzyedit.person"), ".{ .motion = 0.4 }");
+assert.equal(get(storageApis[3], "fizzyedit.person"), ".{ .motion = 0.4 }");
+put(storageApis[2], "settings.zon", ".{}");
+assert.equal(get(storageApis[3], "settings.zon"), null);
+const epoch = storageApis[3].fizzy_web_focus_epoch();
+window.dispatch("focus", {});
+assert.equal(storageApis[3].fizzy_web_focus_epoch(), epoch + 1);
 console.log("embed.test: ok");

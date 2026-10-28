@@ -267,3 +267,36 @@ pub fn windowGlass(allocator: std.mem.Allocator, data: [:0]const u8, settings: *
         settings.window_opacity_light = std.math.clamp(o, 0, 1);
     };
 }
+
+const LegacyMotion = struct {
+    motion: ?f32 = null,
+};
+
+/// Moves the app's saved level into the shared preferences without replacing a person's choice.
+/// Persists the shared file before dropping the field, so a failed write can be retried.
+pub fn personMotion(gpa: std.mem.Allocator, io: std.Io, settings_path: []const u8, person_dir: []const u8) !void {
+    const data = core.fs.readZ(gpa, io, settings_path) catch return;
+    defer gpa.free(data);
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    var diag: std.zon.parse.Diagnostics = undefined;
+    const legacy = std.zon.parse.fromSlice(LegacyMotion, .{
+        .gpa = gpa,
+        .arena = arena.allocator(),
+        .source = data,
+        .diagnostics = &diag,
+        .ignore_unknown_fields = true,
+    }) catch return;
+    const level = legacy.motion orelse return;
+    var person = core.person.load(io, person_dir);
+    if (person.motion == null) {
+        person.motion = level;
+        try core.person.save(io, person_dir, person);
+    }
+    const parsed = try Settings.parseOnly(gpa, arena.allocator(), data);
+    const own = try Settings.serialize(&parsed, gpa);
+    defer gpa.free(own);
+    const composed = try SettingsPluginsZon.composeMergedText(gpa, own, data, &.{});
+    defer gpa.free(composed);
+    try core.fs.write(io, settings_path, composed);
+}

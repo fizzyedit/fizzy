@@ -81,6 +81,7 @@ pub fn build(b: *std.Build) !void {
     const optimize = b.standardOptimizeOption(.{});
 
     const base: @import("build/app.zig").Options = .{
+        .look = .{ .motion = b.option(f32, "look-motion", "Initial motion level until the person chooses one") },
         .windows_msvc_libc_opt = windows_msvc_libc_opt,
         .fetch_msvc_opt = fetch_msvc_opt,
         .macos_sign_app_identity = macos_sign_app_identity,
