@@ -7,6 +7,56 @@
 // Stamped by the build (`build/web.zig`): the hash of what it loads, and the storage name
 // (`-Dweb-storage`).
 
+// Normalize wheel axes without browser side effects. The returned state retains the
+// smallest deltas; the caller resets lowestBatch after a second without wheel input.
+export function wheelTicks(ev, state) {
+  const lowest = [...state.lowest];
+  const lowestBatch = [...state.lowestBatch];
+  const events = [];
+  for (const [i, delta, shiftSizes] of [[0, ev.deltaX, [9, 40]], [1, ev.deltaY, []]]) {
+    if (delta === 0) continue;
+    lowest[i] = Math.min(Math.abs(delta), lowest[i]);
+    lowestBatch[i] = Math.min(Math.abs(delta), lowestBatch[i]);
+    let ticks = -delta;
+    let trackpad = 0;
+    const low = lowestBatch[i];
+    const touchpadAdj = 0.025;
+    if (ev.deltaMode !== 0) {
+      ticks /= low;
+    } else if (i === 1 && ev.wheelDeltaY && ev.wheelDeltaY % 120 === 0) {
+      // Chromium scales deltaY with Windows display scaling, but a notch stays 120.
+      ticks = ev.wheelDeltaY / 120;
+    } else if (low >= 100 || low === 16 || shiftSizes.includes(low) || low === 4.000244140625) {
+      ticks /= low;
+      if (low === 4.000244140625) ticks *= touchpadAdj;
+    } else {
+      trackpad = 1;
+      ticks = ticks / lowest[i] * touchpadAdj;
+    }
+    events.push({ axis: i, ticks, trackpad });
+  }
+  return { events, state: { lowest, lowestBatch } };
+}
+
+// One wheel reader per canvas, for the worker path and the page's own loop. The classifier's
+// batch minima reset after a second without wheel input: the user may have switched devices.
+// A trackpad pinch is the pinch listener's.
+export function wheelInput(canvas, send, now = () => Date.now()) {
+  let state = { lowest: [99999, 99999], lowestBatch: [99999, 99999] };
+  let lastMs = now();
+  canvas.addEventListener("wheel", (ev) => {
+    if (ev.ctrlKey && ev.deltaMode === 0) return;
+    ev.preventDefault();
+    ev.stopImmediatePropagation();
+    const ms = now();
+    if (ms - lastMs > 1000) state.lowestBatch = [99999, 99999];
+    lastMs = ms;
+    const result = wheelTicks(ev, state);
+    state = result.state;
+    for (const { axis, trackpad, ticks } of result.events) send(axis, trackpad, ticks);
+  }, { capture: true, passive: false });
+}
+
 // Pointer input is batched before crossing the worker boundary. Times are absolute
 // performance-clock milliseconds; subtracting the receiver's origin preserves latency.
 export function pointerInput(canvas, send, clockOrigin = performance.timeOrigin, done = () => {}) {
@@ -845,8 +895,8 @@ export class Fizzy {
     // (every modern browser synthesizes this). Two things to do here in the capture phase,
     // before dvui's bubble-phase listener on the canvas:
     //   1. preventDefault + stopImmediatePropagation — keeps the browser from page-zooming
-    //      and keeps dvui's wheel handler from folding the tiny pinch delta into its
-    //      `scroll_lowest` minimum (an all-time min that never resets and otherwise
+    //      and keeps the wheel reader from folding the tiny pinch delta into its
+    //      `lowest` minimum (an all-time min that never resets and otherwise
     //      poisons trackpad scroll sensitivity for the rest of the session).
     //   2. Forward the magnification into the wasm trackpad accumulator
     //      (`FizzyWebTrackpadMagnification`). The canvas widget drains it each frame and
@@ -1188,35 +1238,7 @@ export class Fizzy {
       canvas.addEventListener("contextmenu", (ev) => ev.preventDefault());
       pointerInput(canvas, post, performance.timeOrigin, oskCheck);
 
-      const scrollLowest = [99999, 99999];
-      let scrollLowestBatch = [99999, 99999];
-      let scrollLastMs = Date.now();
-      canvas.addEventListener("wheel", (ev) => {
-        ev.preventDefault();
-        if (Date.now() - scrollLastMs > 1000) scrollLowestBatch = [99999, 99999];
-        scrollLastMs = Date.now();
-        const touchpadAdj = 0.025;
-        const axis = (i, delta, shiftSizes) => {
-          if (delta === 0) return;
-          scrollLowest[i] = Math.min(Math.abs(delta), scrollLowest[i]);
-          scrollLowestBatch[i] = Math.min(Math.abs(delta), scrollLowestBatch[i]);
-          let ticks = -delta;
-          let trackpad = 0;
-          const low = scrollLowestBatch[i];
-          if (ev.deltaMode !== 0) {
-            ticks /= low;
-          } else if (low >= 100 || low === 16 || shiftSizes.includes(low) || low === 4.000244140625) {
-            ticks /= low;
-            if (low === 4.000244140625) ticks *= touchpadAdj;
-          } else {
-            trackpad = 1;
-            ticks = ticks / scrollLowest[i] * touchpadAdj;
-          }
-          event(4, i, trackpad, ticks, 0);
-        };
-        axis(0, ev.deltaX, [9, 40]);
-        axis(1, ev.deltaY, []);
-      }, { passive: false });
+      wheelInput(canvas, (axis, trackpad, ticks) => event(4, axis, trackpad, ticks, 0));
 
       // What the keyboard does to the fragment before the caret reaches the worker as typing.
       const textInput = new TextInput(hidden, {
@@ -1308,6 +1330,10 @@ export class Fizzy {
             }
             app.requestRender();
           }, performance.timeOrigin, () => app.oskCheck());
+          wheelInput(dvuiCanvas, (axis, trackpad, ticks) => {
+            app.instance.exports.add_event(4, axis, trackpad, ticks, 0);
+            app.requestRender();
+          });
           // The main-thread loop never sent the device to the editor, so Firefox and Safari
           // (which take this path) were always `.desktop`: send it now and on change.
           applyFormMain();
