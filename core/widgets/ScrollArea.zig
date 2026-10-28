@@ -83,6 +83,7 @@ pub const tuning: Fling.Tuning = .{
 };
 
 pub fn init(src: std.builtin.SourceLocation, init_opts: dvui.ScrollAreaWidget.InitOpts, opts: dvui.Options) ScrollArea {
+    // lint-allow(raw-scroll-area): Wrapper implementation delegates layout to dvui.
     const area = dvui.scrollArea(src, init_opts, opts);
     const c = &area.scroll.?;
     var self: ScrollArea = .{
@@ -433,6 +434,7 @@ fn testFrame() !dvui.App.Result {
     var root = dvui.box(@src(), .{}, .{ .expand = .both });
     defer root.deinit();
     if (t_use_dvui) {
+        // lint-allow(raw-scroll-area): Raw dvui baseline for the touch-scroll comparison test.
         var scroll = dvui.scrollArea(@src(), .{ .horizontal = .none, .vertical_bar = .hide }, .{ .expand = .both });
         defer scroll.deinit();
         _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 100, .h = 20000 } });
