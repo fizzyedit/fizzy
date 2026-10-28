@@ -1179,10 +1179,10 @@ test "only a split made at runtime may follow its room, never one the seed decla
     try std.testing.expectEqual(@as(?bool, null), s.adaptiveOf("Nowhere"));
 
     // Main split at runtime (`Region.splitDock`), then its new half split again.
-    try dock.splitLeaf(dock.findPanel("Main").?, .right, "Main/r1");
+    try dock.splitLeaf(dock.findPanel("Main").?, .right, try gpa.dupe(u8, "Main/r1"));
     try std.testing.expectEqual(@as(?bool, false), s.adaptiveOf("Main"));
     try std.testing.expectEqual(@as(?bool, false), s.adaptiveOf("Main/r1"));
-    try dock.splitLeaf(dock.findPanel("Main/r1").?, .bottom, "Main/r1/b1");
+    try dock.splitLeaf(dock.findPanel("Main/r1").?, .bottom, try gpa.dupe(u8, "Main/r1/b1"));
     try std.testing.expectEqual(@as(?bool, false), s.adaptiveOf("Main/r1/b1"));
     // Main's split holds the other split whole: still the runtime one.
     try std.testing.expectEqual(@as(?bool, false), s.adaptiveOf("Main"));
