@@ -3076,12 +3076,19 @@ test "rail: the undecided-plugin badge counts for the store view and no other" {
         for (editor.app.undecided_plugin_ids.items) |id| editor.app.gpa.free(id);
         editor.app.undecided_plugin_ids.clearAndFree(editor.app.gpa);
     }
+    const host = fizzy.layout.railHost(editor);
+    const store_view = @import("app").store.Store.view_id;
+    try std.testing.expectEqual(@as(usize, 0), host.vtable.undecidedPluginCount(host.ctx, store_view));
+
     try editor.app.trackUndecidedPlugin("one");
     try editor.app.trackUndecidedPlugin("two");
-
-    const host = fizzy.layout.railHost(editor);
-    try std.testing.expectEqual(@as(usize, 2), host.vtable.undecidedPluginCount(host.ctx, @import("app").store.Store.view_id));
+    try std.testing.expectEqual(@as(usize, 2), host.vtable.undecidedPluginCount(host.ctx, store_view));
     try std.testing.expectEqual(@as(usize, 0), host.vtable.undecidedPluginCount(host.ctx, "test.files"));
+
+    editor.app.untrackUndecidedPlugin("one");
+    try std.testing.expectEqual(@as(usize, 1), host.vtable.undecidedPluginCount(host.ctx, store_view));
+    editor.app.untrackUndecidedPlugin("two");
+    try std.testing.expectEqual(@as(usize, 0), host.vtable.undecidedPluginCount(host.ctx, store_view));
 }
 
 test "chrome: the defaults are fizzy's own frame, Sidebar left of Main with a Panel" {
