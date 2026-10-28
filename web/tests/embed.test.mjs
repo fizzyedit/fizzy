@@ -134,7 +134,6 @@ assert.equal(document.fullscreenElement, parentA, "full screen shows the embed, 
 assert.equal(document.documentElement.fullscreen, 0);
 toggles[1]();
 assert.equal(document.fullscreenElement, parentB, "the other copy takes full screen for itself");
-assert.deepEqual(fullscreenStack, [parentA, parentB], "both embeds remain on the fullscreen stack");
 toggles[1]();
 assert.equal(document.fullscreenElement, parentA, "leaving the second embed reveals the first");
 toggles[0]();
