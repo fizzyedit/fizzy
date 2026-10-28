@@ -31,6 +31,31 @@ pub const Tuning = struct {
     idle_s: f32 = 0.08,
 };
 
+/// How far content follows a finger dragged past its end: the farther past, the less it moves.
+pub const Rubber = struct {
+    /// How much of the finger's travel shows at the edge itself.
+    c: f32,
+    /// The overscroll the drag approaches but never reaches (units).
+    limit: f32,
+};
+
+/// iOS's rubber band in points: about a third of the finger's travel shows at 120 points past.
+/// Android stretches or glows instead; when it is done, its value sits beside this one.
+pub const rubber_band: Rubber = .{ .c = 0.55, .limit = 101.5 };
+
+/// The overscroll shown for a finger `excess` past the end (either sign).
+pub fn rubber(excess: f32, r: Rubber) f32 {
+    const x = @abs(excess);
+    return std.math.copysign(r.c * x * r.limit / (r.c * x + r.limit), excess);
+}
+
+/// The finger travel past the end that `rubber` shows as `overscroll`: where a drag that
+/// catches a springing area takes over from.
+pub fn unrubber(overscroll: f32, r: Rubber) f32 {
+    const o = @min(@abs(overscroll), r.limit * 0.999);
+    return std.math.copysign(o * r.limit / (r.c * (r.limit - o)), overscroll);
+}
+
 /// True while a release coast is still running.
 coasting: bool = false,
 /// Current coast velocity (units/s).
@@ -173,4 +198,13 @@ pub fn step(self: *Fling, t: Tuning) ?f32 {
 pub fn cancel(self: *Fling) void {
     self.coasting = false;
     self.vel = 0.0;
+}
+
+test "the rubber band shows a third of the travel at 120 points and never reaches its limit" {
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0 / 3.0), rubber(120, rubber_band) / 120, 0.01);
+    try std.testing.expectEqual(@as(f32, -rubber(300, rubber_band)), rubber(-300, rubber_band));
+    try std.testing.expect(rubber(1e6, rubber_band) < rubber_band.limit);
+    for ([_]f32{ -250, -3, 0, 40, 300 }) |x| {
+        try std.testing.expectApproxEqAbs(x, unrubber(rubber(x, rubber_band), rubber_band), 0.01);
+    }
 }
