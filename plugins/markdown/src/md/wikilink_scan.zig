@@ -15,8 +15,8 @@
 //! the node's literal exactly, the flags line up with it positionally and a link whose opening
 //! brackets are flagged is dropped. When they *don't* match — an HTML entity expanded, say — the
 //! mapping is untrustworthy and we **fail open**: the link renders. A link that renders when the
-//! author wanted literal text is a visible, correctable annoyance; a link that silently vanishes
-//! is a bug someone spends an afternoon on.
+//! author wanted literal text is a visible, correctable annoyance; a link that silently vanishes is
+//! a bug someone spends an afternoon on.
 const std = @import("std");
 const ast = @import("ast.zig");
 const wikilink = @import("fizzy_sdk").services.wikilink;

@@ -130,8 +130,10 @@ pub fn rowAt(self: *const HeightIndex, y: f32) ?usize {
 /// forgets the size of a widget that goes undrawn, so a row needs drawing before it is seen.
 pub fn visibleRange(self: *const HeightIndex, y: f32, h: f32, overscan: f32) ?Range {
     const first = self.rowAt(y - overscan) orelse return null;
-    // A row starting exactly at the bottom edge is not in view.
-    const last = self.rowAt(@max(y, y + h + overscan - 0.01)).?;
+    const bottom = y + h + overscan;
+    var last = self.rowAt(bottom).?;
+    // A row starting exactly at the bottom edge is not in view; any overlap past it is.
+    if (last > first and self.yAt(last) >= bottom) last -= 1;
     return .{ .first = first, .end = last + 1 };
 }
 
@@ -408,6 +410,10 @@ test "visibleRange covers the view plus overscan and is null only without rows" 
     const wide = index.visibleRange(400, 200, 80).?;
     try testing.expectEqual(@as(usize, 8), wide.first);
     try testing.expectEqual(@as(usize, 17), wide.end);
+    const sliver = index.visibleRange(0, 40.005, 0).?;
+    try testing.expectEqual(@as(usize, 2), sliver.end);
+    const flush = index.visibleRange(0, 40, 0).?;
+    try testing.expectEqual(@as(usize, 1), flush.end);
     const past = index.visibleRange(1e7, 200, 0).?;
     try testing.expectEqual(@as(usize, 99), past.first);
 

@@ -254,7 +254,8 @@ passed. `.github/rulesets/main.json` is the record of that ruleset; changing it 
 as well as a PR. Admins can merge a PR past a failing check in an emergency, never push to
 `main` directly.
 
-`ci-ok` passes when every other CI job passed or was skipped: a PR changing only Markdown skips
-the builds and still gets its check. `main` merges through the merge
+`ci-ok` requires success from every job selected by `changes`; a PR changing only Markdown
+deliberately skips the builds and still gets its check. Drafts run only `changes` and skip
+`ci-ok`; marking ready starts the full selected checks. `main` merges through the merge
 queue (squash, up to 4 PRs a batch, `ci-ok` rerun on the `merge_group` ref): `gh pr merge N --auto`
 queues a PR once its checks pass, and the queue lands it.
