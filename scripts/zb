@@ -58,11 +58,23 @@ slot_pid() { cat "$1/pid" 2>/dev/null; }
 
 # Take a free slot, reclaiming one whose holder died. Sets $mine. A slot appears with its pid
 # already inside (a rename of a directory made in private), so a live holder is never seen without
-# one and is never reclaimed by age; a slot with no pid file is a taker that died mid-way, held
-# until it is a minute old, then claimed by an exclusive create of its pid. A rename onto a slot
+# one and is never reclaimed by age; a slot with no pid file is a taker that died mid-way (or a
+# reclaimer under the lock), held until it is a minute old, then claimed by an exclusive create of
+# its pid. A rename onto a slot
 # taken meanwhile nests inside it instead of failing, so the take counts only when the slot's pid
 # is ours.
 mine=
+# The mutations of an existing slot (reclaim, pid-less claim, put-back) run under one short lock, a
+# directory made with mkdir. Without it a reclaimer paused over a minute after moving a pid away
+# lets a waiter claim the pid-less slot, and the put-back then overwrites that claim: two builds on
+# one slot. A lock a minute old is its holder's death and is broken.
+lock() {
+    mkdir "$dir/lock" 2>/dev/null && return 0
+    [ -n "$(find "$dir/lock" -maxdepth 0 -mmin +1 2>/dev/null)" ] && rmdir "$dir/lock" 2>/dev/null
+    return 1
+}
+unlock() { rmdir "$dir/lock" 2>/dev/null; }
+
 try_slot() {
     i=0
     while [ "$i" -lt "$slots" ]; do
@@ -79,22 +91,17 @@ try_slot() {
             rm -rf "$dir/take.$$" "$s/take.$$"
             continue
         fi
+        lock || continue
         p=$(slot_pid "$s")
         if [ -z "$p" ]; then
-            [ -n "$(find "$s" -maxdepth 0 -mmin +1 2>/dev/null)" ] || continue
-            # Exclusive create: it fails if a taker has put its pid there since we looked.
-            if (set -C && echo "$$" >"$s/pid") 2>/dev/null; then
+            if [ -n "$(find "$s" -maxdepth 0 -mmin +1 2>/dev/null)" ] && (set -C && echo "$$" >"$s/pid") 2>/dev/null; then
                 mine=$s
+                unlock
                 return 0
             fi
-            continue
-        elif alive "$p"; then
-            continue
-        fi
-        # Moving the pid file away leaves a young pid-less slot that every other waiter holds, and
-        # fails if another reclaimer got there first. What was moved is checked: if the slot was
-        # taken after we read the pid, it holds a live pid, which goes back.
-        if mv "$s/pid" "$s/pid.$$" 2>/dev/null; then
+        elif ! alive "$p" && mv "$s/pid" "$s/pid.$$" 2>/dev/null; then
+            # The slot is young and pid-less while we check what we moved; if it was taken after we
+            # read the pid, it holds a live pid, which goes back.
             if [ "$(cat "$s/pid.$$")" = "$p" ] && ! alive "$p"; then
                 rm -rf "$s"
                 i=$((i - 1))
@@ -102,6 +109,7 @@ try_slot() {
                 mv "$s/pid.$$" "$s/pid"
             fi
         fi
+        unlock
     done
     return 1
 }

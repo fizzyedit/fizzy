@@ -1,0 +1,197 @@
+test
++- run test rehome-fixture
+   +- compile test rehome-fixture debug native
+      +- translate-c dvui-c
+         +- compile exe translate-c debug native failure
+Can't find C:\Strawberry\perl\bin\pkg-config.BAT on PATH, '.' not in PATH.
+error: Can't find C:\Strawberry\perl\bin\pkg-config.BAT on PATH, '.' not in PATH.
+       
+failed command: pkg-config --list-all
+
+test
++- run test rehome-fixture
+   +- compile test rehome-fixture debug native failure
+Can't find C:\Strawberry\perl\bin\pkg-config.BAT on PATH, '.' not in PATH.
+error: Can't find C:\Strawberry\perl\bin\pkg-config.BAT on PATH, '.' not in PATH.
+       
+error: Can't find C:\Strawberry\perl\bin\pkg-config.BAT on PATH, '.' not in PATH.
+       
+failed command: pkg-config --list-all
+
+test
++- run test fizzy-control-server-tests 18 pass, 1 crash (19 total)
+error: 'Server.test.an upgraded connection carries bytes both ways until the app closes it' exited with code 3 with stderr:
+       fizzy-control-server-tests: test.an upgraded connection carries bytes both ways until the app closes it still running after 60 s: a client or the server is blocked; aborting
+failed command: ".\\.zig-cache\\o\\63a90a2b571b2854b481898f8a5839fe\\fizzy-control-server-tests.exe" "--cache-dir=.\\.zig-cache" --seed=0x50e66707 --listen=-
+
+Build Summary: 183/185 steps succeeded (1 failed); 872/891 tests passed (18 skipped, 1 crashed)
+test transitive failure
++- run test fizzy-lint-tests 16 pass (16 total) 30ms MaxRSS:4M
+|  +- compile test fizzy-lint-tests debug native cached 46ms MaxRSS:18M
++- run test fizzy-direction-tests 7 pass (7 total) 15ms MaxRSS:3M
+|  +- compile test fizzy-direction-tests debug native cached 46ms MaxRSS:42M
++- run test fizzy-easing-tests 5 pass (5 total) 16ms MaxRSS:3M
+|  +- compile test fizzy-easing-tests debug native cached 35ms MaxRSS:43M
++- run test fizzy-layout-anchor-tests 7 pass (7 total) 14ms MaxRSS:3M
+|  +- compile test fizzy-layout-anchor-tests debug native cached 49ms MaxRSS:43M
++- run test fizzy-plugin-store-tests 7 pass (7 total) 15ms MaxRSS:4M
+|  +- compile test fizzy-plugin-store-tests debug native cached 47ms MaxRSS:42M
++- run test fizzy-paths-tests 2 pass, 3 skip (5 total) 16ms MaxRSS:3M
+|  +- compile test fizzy-paths-tests debug native cached 46ms MaxRSS:18M
++- run test fizzy-viz-scale-tests 6 pass (6 total) 12ms MaxRSS:3M
+|  +- compile test fizzy-viz-scale-tests debug native cached 49ms MaxRSS:43M
++- run test fizzy-profile-lookback-tests 6 pass (6 total) 45ms MaxRSS:3M
+|  +- compile test fizzy-profile-lookback-tests debug native cached 57ms MaxRSS:43M
++- run test fizzy-profile-spans-tests 4 pass (4 total) 50ms MaxRSS:7M
+|  +- compile test fizzy-profile-spans-tests debug native cached 51ms MaxRSS:18M
++- run test fizzy-profile-causes-tests 2 pass (2 total) 28ms MaxRSS:3M
+|  +- compile test fizzy-profile-causes-tests debug native cached 56ms MaxRSS:42M
++- run test fizzy-shell-env-tests 3 pass (3 total) 26ms MaxRSS:4M
+|  +- compile test fizzy-shell-env-tests debug native cached 73ms MaxRSS:18M
++- run test fizzy-darwin-spawn-tests 0 pass, 1 skip (1 total) 20ms MaxRSS:3M
+|  +- compile test fizzy-darwin-spawn-tests debug native cached 60ms MaxRSS:42M
++- run test fizzy-secrets-tests 1 pass (1 total) 26ms MaxRSS:6M
+|  +- compile test fizzy-secrets-tests debug native cached 68ms MaxRSS:18M
++- run test fizzy-lsp-protocol-tests 4 pass (4 total) 29ms MaxRSS:4M
+|  +- compile test fizzy-lsp-protocol-tests debug native cached 64ms MaxRSS:18M
++- run test fizzy-lsp-uri-tests 2 pass, 1 skip (3 total) 42ms MaxRSS:3M
+|  +- compile test fizzy-lsp-uri-tests debug native cached 49ms MaxRSS:43M
++- run test fizzy-settings-plugins-zon-tests 24 pass (24 total) 27ms MaxRSS:4M
+|  +- compile test fizzy-settings-plugins-zon-tests debug native cached 41ms MaxRSS:43M
++- run test fizzy-sdk-manifest-tests 8 pass (8 total) 66ms MaxRSS:4M
+|  +- compile test fizzy-sdk-manifest-tests debug native cached 54ms MaxRSS:18M
++- run test fizzy-sdk-wikilink-tests 18 pass (18 total) 23ms MaxRSS:3M
+|  +- compile test fizzy-sdk-wikilink-tests debug native cached 55ms MaxRSS:43M
++- run test fizzy-textcore-tests 94 pass (94 total) 293ms MaxRSS:4M
+|  +- compile test fizzy-textcore-tests debug native cached 54ms MaxRSS:43M
++- run test fizzy-text-doc-state-tests 2 pass (2 total) 19ms MaxRSS:3M
+|  +- compile test fizzy-text-doc-state-tests debug native cached 54ms MaxRSS:18M
++- run test fizzy-profile-tests 2 pass (2 total) 16ms MaxRSS:3M
+|  +- compile test fizzy-profile-tests debug native cached 49ms MaxRSS:43M
++- run test fizzy-quiet-tests 1 pass (1 total) 23ms MaxRSS:3M
+|  +- compile test fizzy-quiet-tests debug native cached 51ms MaxRSS:18M
++- run test fizzy-md-html-images-tests 11 pass (11 total) 19ms MaxRSS:3M
+|  +- compile test fizzy-md-html-images-tests debug native cached 49ms MaxRSS:43M
++- run test fizzy-md-url-join-tests 4 pass (4 total) 17ms MaxRSS:3M
+|  +- compile test fizzy-md-url-join-tests debug native cached 52ms MaxRSS:18M
++- run test fizzy-md-image-format-tests 5 pass (5 total) 15ms MaxRSS:3M
+|  +- compile test fizzy-md-image-format-tests debug native cached 36ms MaxRSS:43M
++- run test fizzy-md-block-heights-tests 50 pass (50 total) 18ms MaxRSS:4M
+|  +- compile test fizzy-md-block-heights-tests debug native cached 51ms MaxRSS:18M
++- run test fizzy-chat-composer-tests 5 pass (5 total) 14ms MaxRSS:3M
+|  +- compile test fizzy-chat-composer-tests debug native cached 59ms MaxRSS:43M
++- run test fizzy-md-code-language-tests 5 pass (5 total) 15ms MaxRSS:3M
+|  +- compile test fizzy-md-code-language-tests debug native cached 48ms MaxRSS:18M
++- run test fizzy-md-supermd-tests 8 pass (8 total) 17ms MaxRSS:3M
+|  +- compile test fizzy-md-supermd-tests debug native cached 93ms MaxRSS:18M
++- run test fizzy-reveal-tests 4 pass (4 total) 32ms MaxRSS:3M
+|  +- compile test fizzy-reveal-tests debug native cached 53ms MaxRSS:43M
++- run test fizzy-form-factor-tests 9 pass (9 total) 16ms MaxRSS:3M
+|  +- compile test fizzy-form-factor-tests debug native cached 41ms MaxRSS:18M
++- run test fizzy-crossfade-tests 8 pass (8 total) 22ms MaxRSS:3M
+|  +- compile test fizzy-crossfade-tests debug native cached 69ms MaxRSS:18M
++- run test fizzy-frame-clock-tests 3 pass (3 total) 18ms MaxRSS:3M
+|  +- compile test fizzy-frame-clock-tests debug native cached 41ms MaxRSS:42M
++- run test fizzy-folder-events-tests 31 pass, 3 skip (34 total) 272ms MaxRSS:6M
+|  +- compile test fizzy-folder-events-tests debug native cached 50ms MaxRSS:18M
++- run test fizzy-install-location-tests 10 pass (10 total) 22ms MaxRSS:3M
+|  +- compile test fizzy-install-location-tests debug native cached 53ms MaxRSS:43M
++- run test fizzy-bounded-join-tests 2 pass (2 total) 115ms MaxRSS:3M
+|  +- compile test fizzy-bounded-join-tests debug native cached 47ms MaxRSS:43M
++- run test fizzy-recent-commands-tests 2 pass (2 total) 18ms MaxRSS:3M
+|  +- compile test fizzy-recent-commands-tests debug native cached 59ms MaxRSS:43M
++- run test fizzy-plugin-folders-tests 3 pass (3 total) 21ms MaxRSS:5M
+|  +- compile test fizzy-plugin-folders-tests debug native cached 55ms MaxRSS:18M
++- run test fizzy-float-rules-tests 13 pass (13 total) 27ms MaxRSS:3M
+|  +- compile test fizzy-float-rules-tests debug native cached 39ms MaxRSS:18M
++- run test fizzy-placement-tests 3 pass (3 total) 22ms MaxRSS:3M
+|  +- compile test fizzy-placement-tests debug native cached 75ms MaxRSS:18M
++- run test fizzy-state-delta-tests 9 pass (9 total) 535ms MaxRSS:13M
+|  +- compile test fizzy-state-delta-tests debug native cached 64ms MaxRSS:18M
++- run test fizzy-state-pack-tests 3 pass (3 total) 265ms MaxRSS:21M
+|  +- compile test fizzy-state-pack-tests debug native cached 53ms MaxRSS:43M
++- run test fizzy-diff-tests 21 pass (21 total) 139ms MaxRSS:4M
+|  +- compile test fizzy-diff-tests debug native cached 42ms MaxRSS:43M
++- run test fizzy-history-transport-tests 12 pass (12 total) 13ms MaxRSS:3M
+|  +- compile test fizzy-history-transport-tests debug native cached 56ms MaxRSS:18M
++- run test fizzy-feed-lift-tests 4 pass (4 total) 13ms MaxRSS:3M
+|  +- compile test fizzy-feed-lift-tests debug native cached 76ms MaxRSS:43M
++- run test fizzy-dome-tests 7 pass (7 total) 19ms MaxRSS:3M
+|  +- compile test fizzy-dome-tests debug native cached 47ms MaxRSS:43M
++- run test fizzy-control-json-tests 3 pass (3 total) 16ms MaxRSS:4M
+|  +- compile test fizzy-control-json-tests debug native cached 50ms MaxRSS:43M
++- run test fizzy-mcp-names-tests 4 pass (4 total) 26ms MaxRSS:3M
+|  +- compile test fizzy-mcp-names-tests debug native cached 62ms MaxRSS:18M
++- run test fizzy-control-server-tests 18 pass, 1 crash (19 total)
+|  +- compile test fizzy-control-server-tests debug native cached 76ms MaxRSS:18M
++- run test fizzy-control-screen-diff-tests 4 pass (4 total) 18ms MaxRSS:4M
+|  +- compile test fizzy-control-screen-diff-tests debug native cached 57ms MaxRSS:18M
++- run test fizzy-glass-look-tests 12 pass (12 total) 20ms MaxRSS:3M
+|  +- compile test fizzy-glass-look-tests debug native cached 54ms MaxRSS:42M
++- run test fizzy-material-tests 3 pass (3 total) 19ms MaxRSS:3M
+|  +- compile test fizzy-material-tests debug native cached 56ms MaxRSS:43M
++- run test fizzy-orb-geometry-tests 5 pass (5 total) 16ms MaxRSS:3M
+|  +- compile test fizzy-orb-geometry-tests debug native cached 50ms MaxRSS:43M
++- run test fizzy-liquid-tests 5 pass (5 total) 24ms MaxRSS:3M
+|  +- compile test fizzy-liquid-tests debug native cached 68ms MaxRSS:43M
++- run test fizzy-menu-order-tests 1 pass (1 total) 14ms MaxRSS:3M
+|  +- compile test fizzy-menu-order-tests debug native cached 49ms MaxRSS:18M
++- run test fizzy-tape-tests 79 pass (79 total) 1s MaxRSS:8M
+|  +- compile test fizzy-tape-tests debug native cached 58ms MaxRSS:18M
++- run test fizzy-issues-url-tests 1 pass (1 total) 17ms MaxRSS:3M
+|  +- compile test fizzy-issues-url-tests debug native cached 48ms MaxRSS:42M
++- run test fizzy-bundle-id-tests 1 pass (1 total) 12ms MaxRSS:3M
+|  +- compile test fizzy-bundle-id-tests debug native cached 51ms MaxRSS:42M
++- run test backend-window-layout-tests 20 pass (20 total) 17ms MaxRSS:3M
+|  +- compile test backend-window-layout-tests debug native cached 60ms MaxRSS:43M
++- run test backend-titlebar-tests 3 pass (3 total) 14ms MaxRSS:3M
+|  +- compile test backend-titlebar-tests debug native cached 40ms MaxRSS:43M
++- run test backend-materials-tests 5 pass (5 total) 14ms MaxRSS:3M
+|  +- compile test backend-materials-tests debug native cached 50ms MaxRSS:42M
++- run test backend-blur-region-tests 5 pass (5 total) 17ms MaxRSS:3M
+|  +- compile test backend-blur-region-tests debug native cached 54ms MaxRSS:18M
++- run test backend-viewport-map-tests 14 pass (14 total) 21ms MaxRSS:3M
+|  +- compile test backend-viewport-map-tests debug native cached 42ms MaxRSS:42M
++- run test backend-health-tests 5 pass (5 total) 87ms MaxRSS:4M
+|  +- compile test backend-health-tests debug native cached 60ms MaxRSS:43M
++- run test backend-touch-slots-tests 5 pass (5 total) 13ms MaxRSS:3M
+|  +- compile test backend-touch-slots-tests debug native cached 51ms MaxRSS:43M
++- run test backend-winsys-tests 60 pass (60 total) 1s MaxRSS:4M
+|  +- compile test backend-winsys-tests debug native cached 48ms MaxRSS:43M
++- run test backend-gpu-tests 7 pass (7 total) 16ms MaxRSS:4M
+|  +- compile test backend-gpu-tests debug native cached 58ms MaxRSS:18M
++- run test fizzy-singleton-unix-tests 0 pass, 1 skip (1 total) 53ms MaxRSS:4M
+|  +- compile test fizzy-singleton-unix-tests debug native cached 81ms MaxRSS:18M
++- run test fizzy-crash-tests 16 pass (16 total) 16ms MaxRSS:5M
+|  +- compile test fizzy-crash-tests debug native cached 59ms MaxRSS:18M
++- run test fizzy-keymap-tests 31 pass (31 total) 28ms MaxRSS:4M
+|  +- compile test fizzy-keymap-tests debug native cached 42ms MaxRSS:42M
++- run test fizzy-fuzzy-tests 12 pass (12 total) 33ms MaxRSS:3M
+|  +- compile test fizzy-fuzzy-tests debug native cached 40ms MaxRSS:43M
++- run test fizzy-file-table-tests 47 pass (47 total) 29s MaxRSS:403M
+|  +- compile test fizzy-file-table-tests debug native cached 50ms MaxRSS:43M
++- run test fizzy-native-transport-tests 21 pass (21 total) 114ms MaxRSS:11M
+|  +- compile test fizzy-native-transport-tests debug native cached 39ms MaxRSS:42M
++- run test fizzy-work-tests 4 pass (4 total) 173ms MaxRSS:3M
+|  +- compile test fizzy-work-tests debug native cached 53ms MaxRSS:43M
++- run test fizzy-remote-tests 27 pass, 9 skip (36 total) 126ms MaxRSS:5M
+|  +- compile test fizzy-remote-tests debug native cached 61ms MaxRSS:43M
+|     +- options cached
+|        +- compile exe fake-fizzy debug native cached 53ms MaxRSS:43M
++- run test rehome-fixture 1 pass (1 total) 83ms MaxRSS:9M
+   +- compile test rehome-fixture debug native success 9s MaxRSS:304M
+      +- WriteFile freetype success
+      +- compile lib freetype debug native success 10s MaxRSS:34M
+      +- WriteFile . success
+      +- compile lib tree-sitter debug native success 4s MaxRSS:22M
+      +- compile lib freetype debug native (reused)
+      +- compile lib tree-sitter debug native (reused)
+      +- translate-c dvui-c success 540ms
+      |  +- compile exe translate-c debug native success 23s MaxRSS:882M
+      |     +- options success
+      |     +- options success
+      |     +- options success
+      +- options success
+      +- options success
+
+error: the following build command exited with code 1:

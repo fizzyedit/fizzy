@@ -39,7 +39,7 @@ known_mtime: std.AutoArrayHashMapUnmanaged(u64, i64) = .empty,
 /// Documents whose next save overwrites regardless: the user was told of the conflict and
 /// chose to save again.
 force_next: std.AutoArrayHashMapUnmanaged(u64, void) = .empty,
-/// When each document's last save landed (`dvui.frameTimeNS`): for the saved check an indicator
+/// When each document's last save landed (`core.MotionClock.wallFrameNs`): for the saved check an indicator
 /// shows after the spinner (`state`).
 landed: std.AutoArrayHashMapUnmanaged(u64, i128) = .empty,
 
@@ -75,7 +75,7 @@ pub fn documentClosed(self: *DocumentIo, doc_id: u64) void {
 pub fn state(self: *const DocumentIo, doc_id: u64) sdk.EditorAPI.SaveState {
     return .{
         .saving = self.saves.contains(doc_id),
-        .landed_ns_ago = if (self.landed.get(doc_id)) |t| dvui.frameTimeNS() - t else null,
+        .landed_ns_ago = if (self.landed.get(doc_id)) |t| core.MotionClock.wallFrameNs() - t else null,
     };
 }
 
@@ -460,7 +460,7 @@ const Save = struct {
         if (!io.owns(job.path)) {
             editor.documentSaved(doc);
         } else editor.app.host.emitZon("fizzy.document.saved", .{ .path = job.path });
-        io.landed.put(editor.app.gpa, job.doc_id, dvui.frameTimeNS()) catch {};
+        io.landed.put(editor.app.gpa, job.doc_id, core.MotionClock.wallFrameNs()) catch {};
         // What we just wrote is now the known state; the backend's own modified time is not
         // known until the next read, so a stat is asked for and the precondition waits on it.
         _ = io.known_mtime.swapRemove(job.doc_id);

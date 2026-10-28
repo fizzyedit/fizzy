@@ -94,16 +94,50 @@ fn startCheck() void {
         return;
     }
 
-    const thread = std.Thread.spawn(.{}, worker, .{io}) catch {
+    // The worker may outlive `deinit` (see there), so it cannot borrow the app's allocator.
+    check_thread = std.Thread.spawn(.{}, worker, .{ std.heap.page_allocator, auto_update.checkRemoteVersionSummary }) catch {
         phase.store(@backingInt(Phase.done_no), .release);
         return;
     };
-    thread.detach();
 }
 
-fn worker(io: std.Io) void {
+/// The launch check's thread, joined by `deinit`. Written on the GUI thread only. Builds without
+/// an updater (the web has no threads) never name `std.Thread`.
+var check_thread: if (auto_update.impl) ?std.Thread else void = if (auto_update.impl) null else {};
+
+/// Set by the check's thread as its last act.
+var check_done: std.Io.Event = .unset;
+
+/// How long quit waits on a check still in flight: Velopack's request blocks in C and cannot be
+/// cancelled, so past this the thread is detached and the process exit ends it.
+const quit_wait_ms = 250;
+
+/// Waits for the launch check, up to `quit_wait_ms`. The check's thread runs on its own allocator,
+/// so the one given to `setAllocator` may be torn down after this returns.
+pub fn deinit(io: std.Io) void {
+    if (comptime !auto_update.impl) return;
+    if (check_thread) |thread| {
+        if (check_done.waitTimeout(io, .{ .duration = .{ .raw = .fromMilliseconds(quit_wait_ms), .clock = .awake } })) |_| {
+            thread.join();
+        } else |_| {
+            // Timeout or cancellation must both let shutdown proceed.
+            thread.detach();
+        }
+    }
+    check_thread = null;
+}
+
+fn worker(
+    gpa: std.mem.Allocator,
+    check: *const fn (std.Io, std.mem.Allocator, []u8) error{OutOfMemory}!auto_update.CheckSummary,
+) void {
+    // A detached check must also outlive teardown of the application's Io.
+    var threaded: std.Io.Threaded = .init(gpa, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    defer check_done.set(io);
     var ver_buf: [128]u8 = undefined;
-    const summary = auto_update.checkRemoteVersionSummary(io, std.heap.page_allocator, &ver_buf) catch {
+    const summary = check(io, gpa, &ver_buf) catch {
         phase.store(@backingInt(Phase.done_no), .release);
         return;
     };
@@ -396,5 +430,24 @@ fn displayProgressToast(id: dvui.Id) !void {
 
     if (animator.end()) {
         animator.data().min_size = .{};
+    }
+}
+
+test "launch worker signals completion on success and error" {
+    const Check = struct {
+        fn success(_: std.Io, _: std.mem.Allocator, _: []u8) error{OutOfMemory}!auto_update.CheckSummary {
+            return .no_update;
+        }
+        fn failure(_: std.Io, _: std.mem.Allocator, _: []u8) error{OutOfMemory}!auto_update.CheckSummary {
+            return error.OutOfMemory;
+        }
+    };
+    defer check_done = .unset;
+    defer phase.store(@backingInt(Phase.pending), .release);
+    for ([_]@TypeOf(&Check.success){ &Check.success, &Check.failure }) |check| {
+        check_done = .unset;
+        worker(std.testing.allocator, check);
+        try std.testing.expect(check_done.isSet());
+        try std.testing.expectEqual(AppUpdateState.none, appUpdateState());
     }
 }

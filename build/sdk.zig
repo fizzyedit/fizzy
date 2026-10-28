@@ -59,6 +59,9 @@ pub fn wireSdkModule(
     sdk_module.addImport("dvui", dvui_module);
     sdk_module.addImport("proxy_bridge", proxy_bridge_module);
     sdk_module.addImport("core", core_module);
+    // Their data types are on the plugin boundary (`sdk/src/dylib.zig`).
+    sdk_module.addImport("tape", core_module.import_table.get("tape").?);
+    sdk_module.addImport("replay", core_module.import_table.get("replay").?);
     // `sdk_version` as a *named* module rather than a relative `@import`: `sdk/sdk_version.zig`
     // is the single edit site for the triplet, but it sits outside this module's root
     // (`sdk/src/`), and Zig confines a module's relative imports to its own root — a named
@@ -176,13 +179,6 @@ pub const BundledPlugin = struct {
         /// Null: the plugin's `module`.
         module: ?*std.Build.Module = null,
     };
-
-    /// One of fizzy's own: no module for any executable.
-    pub fn isFizzys(self: BundledPlugin) bool {
-        if (self.module != null) return false;
-        for (self.targets orelse &.{}) |t| if (t.module != null) return false;
-        return true;
-    }
 
     /// The entry as `platform`'s executables link it, or null if they do not.
     pub fn forPlatform(self: BundledPlugin, platform: Platform) ?BundledPlugin {

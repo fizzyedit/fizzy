@@ -104,8 +104,12 @@ export fn FizzyWebKeyBound(key_len: usize, mods: u32) bool {
 /// backend natively.
 const page = if (builtin.target.cpu.arch == .wasm32) struct {
     extern "fizzy" fn fizzy_web_toggle_fullscreen() void;
+    extern "fizzy" fn fizzy_web_fullscreen_supported() bool;
 } else struct {
     fn fizzy_web_toggle_fullscreen() void {}
+    fn fizzy_web_fullscreen_supported() bool {
+        return true;
+    }
 };
 
 /// The page's Fullscreen API (`web/fizzy.js`), which also takes the keyboard lock so the
@@ -115,6 +119,10 @@ const page = if (builtin.target.cpu.arch == .wasm32) struct {
 pub fn toggleFullscreen() void {
     page.fizzy_web_toggle_fullscreen();
 }
+
+/// False where the browser has no Fullscreen API for a page (Safari on iPhone), so the command
+/// that asks for it can stand down instead of doing nothing.
+pub const fullscreenSupported = page.fizzy_web_fullscreen_supported;
 
 /// Symmetric with the native API: no window state to restore on web.
 pub fn restoreWindowState(_: *dvui.Window) void {}

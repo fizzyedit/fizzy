@@ -18,9 +18,10 @@ pub const Entry = @import("Entry.zig");
 pub const Editor = @import("editor/Editor.zig");
 /// The mobile shape (`Editor` picks it on mobile); public so the integration tests can drive it.
 pub const layout_mobile = @import("editor/layout_mobile.zig");
+/// fizzy's own desktop shape; public so the integration tests can drive it.
+pub const layout = @import("editor/layout.zig");
 pub const Explorer = @import("editor/explorer/Explorer.zig");
 //pub const Popups = @import("editor/popups/Popups.zig");
-pub const Sidebar = @import("editor/Sidebar.zig");
 pub const OutputLog = @import("editor/OutputLog.zig");
 pub const OutputPanel = @import("editor/OutputPanel.zig");
 /// A run that plays a tape and ends in a verdict (`FIZZY_VERDICT`).

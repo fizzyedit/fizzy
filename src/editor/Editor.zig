@@ -67,6 +67,7 @@ const PluginManager = @import("app").store.Manager;
 pub const FilesService = @import("FilesService.zig");
 const SettingsTree = @import("SettingsTree.zig");
 const OutputPanel = @import("OutputPanel.zig");
+pub const Chrome = @import("Chrome.zig");
 const SettingsPluginsZon = @import("app").settings.PluginsZon;
 const file_glyphs = @import("file_glyphs.zig");
 const SettingsWatcher = @import("app").watch.SettingsWatcher;
@@ -83,7 +84,6 @@ pub const KeptDocuments = @import("KeptDocuments.zig");
 pub const Checkpoint = @import("Checkpoint.zig");
 pub const Explorer = @import("explorer/Explorer.zig");
 pub const IgnoreRules = @import("explorer/IgnoreRules.zig");
-pub const Sidebar = @import("Sidebar.zig");
 pub const Infobar = @import("Infobar.zig");
 pub const Menu = @import("Menu.zig");
 /// Fizzy's own shape. A consumer that wants another one passes `-Dapp-layout=`.
@@ -196,9 +196,11 @@ explorer: *Explorer,
 
 last_titlebar_color: dvui.Color,
 
-sidebar: Sidebar,
-
 infobar: Infobar,
+
+/// The frame of fizzy's shape this build keeps. A field and not a `comptime` read so a test can
+/// draw the shape either way.
+chrome: Chrome = .configured,
 
 /// Whether a text-input widget held keyboard focus at the end of the last frame.
 ///
@@ -455,7 +457,6 @@ pub fn init(
             .secrets = try .init(app.allocator, dvui.io, config_folder),
         },
         .explorer = try app.allocator.create(Explorer),
-        .sidebar = try .init(),
         .infobar = try .init(),
         .last_titlebar_color = dvui.themeGet().color(.control, .fill),
         .themes = .empty,
@@ -493,8 +494,6 @@ pub fn init(
             KeptDocuments.noteRecoveredFromCheckpoint();
         }
     }
-
-    // Save-queue worker is owned by the pixel-art plugin (`initPlugin` in `postInit`).
 
     { // Setup themes
         var fizzy_dark = dvui.themeGet();
@@ -843,7 +842,7 @@ pub fn loadUserPlugins(editor: *Editor, config_folder: []const u8) void {
                 dvui.log.info("user plugin '{s}': already loaded as a built-in; skipped", .{plugin_id});
             } else {
                 dvui.log.err("user plugin '{s}': id already registered by a built-in; skipped", .{plugin_id});
-                const probe = PluginLoader.probeVersionInfo(path);
+                const probe = PluginLoader.probeVersionInfo(editor.app.gpa, path);
                 editor.app.recordPluginFailure(plugin_id, "id already registered by a built-in plugin", null, if (probe) |info| info.plugin_version else null, .of(path));
             }
             editor.app.gpa.free(path);
@@ -937,8 +936,8 @@ fn unloadPluginLibs(editor: *Editor) void {
 
 // ---- runtime plugin lifecycle (store: install / enable / disable / update) ---------
 //
-// Only dylib-loaded *user* plugins are managed here. Bundled built-ins (pixi/workbench/
-// code) ship in the app and are never unloaded, even though they also appear in
+// Only dylib-loaded *user* plugins are managed here. Bundled built-ins (workbench,
+// text, …) ship in the app and are never unloaded, even though they also appear in
 // `loaded_plugin_libs` when loaded from their bundled dylibs.
 
 /// True when `id` names one of the bundled built-ins (ships in the app, must never be
@@ -2316,13 +2315,15 @@ pub fn postInit(editor: *Editor) !void {
     // even with no document open, since it's a diagnostic view, not a per-file one. Before the
     // plugins, so it is the bottom panel's first view and a plugin's (the dashboard, a terminal)
     // comes after it: a region shows its first view until someone picks another.
-    try editor.app.host.registerSurface(.{
-        .id = "fizzy.output",
-        .title = "Output",
-        .keywords = sdk.keywords.ide.panel,
-        .persistent = true,
-        .draw = OutputPanel.draw,
-    });
+    if (editor.chrome.panel) {
+        try editor.app.host.registerSurface(.{
+            .id = "fizzy.output",
+            .title = "Output",
+            .keywords = sdk.keywords.ide.panel,
+            .persistent = true,
+            .draw = OutputPanel.draw,
+        });
+    }
 
     inline for (bundled_plugins) |m| {
         const extra: ?*anyopaque = if (comptime std.mem.eql(u8, m.plugin_id, "workbench")) @ptrCast(&editor.workbench) else null;
@@ -2733,10 +2734,10 @@ fn fizzyPanZoomScheme(ctx: *anyopaque) sdk.EditorAPI.PanZoomScheme {
     };
 }
 fn fizzyExplorerRect(ctx: *anyopaque) dvui.Rect {
-    return fizzyCtx(ctx).explorer.rect;
+    return fizzyCtx(ctx).explorer.pane.rect;
 }
 fn fizzyExplorerVirtualSize(ctx: *anyopaque) dvui.Size {
-    return fizzyCtx(ctx).explorer.scroll_info.virtual_size;
+    return fizzyCtx(ctx).explorer.pane.scroll_info.virtual_size;
 }
 fn fizzyShowSaveDialog(
     ctx: *anyopaque,
@@ -2772,7 +2773,7 @@ fn fizzyAllocDocId(ctx: *anyopaque) u64 {
     return fizzyCtx(ctx).app.newFileID();
 }
 fn fizzyExplorerViewportWidth(ctx: *anyopaque) f32 {
-    return fizzyCtx(ctx).explorer.scroll_info.viewport.w;
+    return fizzyCtx(ctx).explorer.pane.scroll_info.viewport.w;
 }
 fn fizzyDocFromPath(ctx: *anyopaque, path: []const u8) ?sdk.DocHandle {
     return fizzyCtx(ctx).docFromPath(path);
@@ -3700,7 +3701,7 @@ pub fn resetLayout(editor: *Editor) void {
 /// there is nothing to reveal and the user's layout is left alone.
 ///
 /// Must be called from inside the frame's explorer/center subtree, where `explorer.paned`
-/// exists — see the `Sidebar` note about deferring paned pokes to `tick`.
+/// exists — see the `Rail` note about deferring paned pokes to `tick`.
 pub fn revealCenter(editor: *Editor) void {
     const sidebar = editor.regionFor(sdk.keywords.ide.sidebar) orelse return;
     if (!sidebar.isPeeking()) return;
@@ -7306,7 +7307,7 @@ pub fn deinit(editor: *Editor) !void {
     // Owned outright rather than cached by dvui, so it has to be released explicitly.
     editor.app.layout.center_transition.discard();
     editor.app.layout.center_prev_id = null;
-    editor.app.layout.view_drag.discard();
+    editor.app.layout.view_drag.discard(editor.app.gpa);
     editor.app.layout.deinitSwaps(editor.app.gpa);
     editor.app.layout.regions.deinit(editor.app.gpa);
     editor.preview_docs.deinit(editor.app.gpa);
@@ -7346,6 +7347,7 @@ pub fn deinit(editor: *Editor) !void {
     editor.checkpoint.deinit(editor);
     // Rebuilds still opening: their threads joined, what they opened dropped unregistered.
     editor.plugin_reloads.deinit(editor.app.gpa);
+    if (comptime builtin.target.cpu.arch != .wasm32) PluginLoader.deinitOpenedPaths(editor.app.gpa);
     if (editor.session) |*kept| kept.deinit();
     // Before the plugin `deinit` loop below: `tick` fans out into plugin vtables, and this
     // joins the thread that feeds it.

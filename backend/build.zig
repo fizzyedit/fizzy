@@ -100,6 +100,8 @@ pub const unit_tests = [_]struct { name: []const u8, root: []const u8 }{
     .{ .name = "backend-materials-tests", .root = "src/materials.zig" },
     // The rounded frame Linux's blur behind the window is stepped into (`wayland_blur`).
     .{ .name = "backend-blur-region-tests", .root = "src/platform/blur_region.zig" },
+    // The X11 arm of it: the `_KDE_NET_WM_BLUR_BEHIND_REGION` payload and which window managers read it.
+    .{ .name = "backend-x11-blur-tests", .root = "src/platform/x11_blur.zig" },
     // Where a viewport's OS window is on the desktop and where its part of the frame lies.
     .{ .name = "backend-viewport-map-tests", .root = "src/viewport_map.zig" },
     // The backend's health counters: frame-time percentiles, per-frame counts, SDL's log counted

@@ -65,7 +65,9 @@ pub fn uriToPath(allocator: std.mem.Allocator, uri: []const u8) ![]u8 {
     if (comptime is_windows) {
         // `file:///C:/Users/...` decodes to `/C:/Users/...` above; strip the leading slash and
         // swap separators back to `\` so this round-trips into a usable native Windows path.
-        if (out.items.len >= 3 and out.items[0] == '/' and std.ascii.isAlphabetic(out.items[1]) and out.items[2] == ':') {
+        if (out.items.len >= 3 and out.items[0] == '/' and
+            std.ascii.isAlphabetic(out.items[1]) and out.items[2] == ':')
+        {
             _ = out.orderedRemove(0);
         }
         for (out.items) |*c| {

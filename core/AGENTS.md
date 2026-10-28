@@ -32,6 +32,10 @@ paths, fuzzy matching, the LSP client, the profiler.
   selects instead of expanding, until you type. Fizzy's backends set `win.modifiers` from the OS
   before each mouse event (`backend/src/SDLBackend.zig`, `src/backend/WebBackend.zig`); a new
   backend must too.
+- **Touch selection of read-only text is `widgets.SelectableText`, not a bare `dvui.textLayout`.**
+  dvui selects a word on the first tap, so a finger landing on a message to scroll it selects it.
+  `SelectableText` selects on a 0.45 s hold within 14 pt (`TouchHold.zig`), a tap clears; the mouse
+  is dvui's. `st.tl` is the layout: draw into it with `addText` / `addLink` as before.
 - **Touch or mouse: ask dvui, never infer it.** `dvui.pointerKind()` is the window's answer,
   set as the backend adds events, the same in the app, a plugin dylib and a wasm side module.
   State kept by scanning events (a global, a per-frame key) differs per module and per frame.
@@ -51,6 +55,9 @@ paths, fuzzy matching, the LSP client, the profiler.
   min size, so a row scrolled back into view is zero-height for a frame. A virtualized list must
   overscan, size its spacers from `count × pitch` rather than from what was drawn, and measure
   pitch as the *largest* gap between drawn rows.
+  Rows of different heights use `core.widgets.VirtualList` over `core.HeightIndex`, which holds
+  the reader's place as a row key + offset and the rows' total under that 2e6 limit by being
+  given a window of the history, not all of it.
 - **dvui draws dialogs and toasts in `Window.endRendering`,** after the app's frame and after
   floats have taken their subwindows. Anything that must see a dialog's subwindow that frame
   draws it earlier itself. dvui also stops its widget capture at `drawRetained`, so snapshots

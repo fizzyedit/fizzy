@@ -40,6 +40,7 @@ Fizzy (Editor) ←── Host registries + EditorAPI ──→ Plugin (register(
 - **`archive`** — opens a `.zip` as a mounted folder (the web's "open a vault" path, too).
 - **`devtools`** — the dashboard: where the app's time goes, from `core.profile`, for a person and an agent alike.
 - **`guides`** — every demo the app can play, on the rail: fizzy's tour and each plugin's own, by chapter, through the `demos` service.
+- **`dashboard`** — what needs the person, one card at a time (a carousel with a slide between cards), drawn from the `dashboard.cards` service; with no provider it offers a demo of three cards.
 - `shared` — build helpers used across plugins' `static/integration.zig` (not a plugin itself).
 
 **Pixi (pixel-art editor) and Drive (Google Drive as a mount) live outside this repo** as third-party-style plugins ([`fizzyedit/pixi`](https://github.com/fizzyedit/pixi), [`fizzyedit/drive`](https://github.com/fizzyedit/drive)) — they ship and update purely through the plugin store (`docs/PLUGINS.md` §6), with no special treatment in Fizzy itself. **Trust `ls plugins/` and `jj log` over any doc's plugin list.**
@@ -102,6 +103,14 @@ shape) and `fizzyedit/example-plugin` (the plugin template) live outside this re
 both against each pull request's own tree (`scripts/check-examples.sh`, which you can run
 locally): a change here that breaks either fails here. A change that needs them changed too
 lands its PR in that repo alongside.
+
+An app that wants fizzy's own shape with a different frame sets the **`Chrome`** build options
+(`src/editor/Chrome.zig`): `-Dchrome-sidebar-edge=right` puts the rail and Sidebar on the right
+(the width stays the Sidebar's `extent`), `-Dchrome-panel=false` leaves out the Panel and fizzy's
+Output view, `-Dchrome-menu-bar=false` and `-Dchrome-infobar=false` leave out those bars
+(macOS keeps its native menu). The defaults are fizzy's own frame. An app-supplied layout
+(`-Dapp-layout=`) draws its own frame. The phone shape reads only `sidebar_edge` (landscape
+sheets) and `panel`.
 
 ## Plugin store: built, not forward-looking
 

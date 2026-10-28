@@ -100,7 +100,7 @@ pub const FrameStats = struct {
     inputs_per_s: f64 = 0,
 };
 
-/// Input kinds or the request that caused a recorded frame.
+/// Input kinds or the refresh request that caused a recorded frame.
 pub const Cause = packed struct(u8) {
     press: bool = false,
     release: bool = false,
@@ -125,10 +125,12 @@ pub const Profiler = struct {
     /// start, so a scope costs one branch either way.
     active: bool = false,
 
+    /// What caused the frame in progress; recorded with it and cleared at its end.
+    frame_cause: Cause = .{},
+    /// Each recorded frame's cause.
+    history_cause: [history_len]Cause = @splat(.{}),
     /// The last `history_len` frames: each one's work and submit, and each entry's time and
     /// calls in it.
-    frame_cause: Cause = .{},
-    history_cause: [history_len]Cause = @splat(.{}),
     history_work: [history_len]u32 = @splat(0),
     history_submit: [history_len]u32 = @splat(0),
     /// Each frame's GPU counts, landed like its submit.
