@@ -56,6 +56,8 @@ pub const corners = @import("corners.zig");
 /// Frosted glass that bends what it shows — lens at the rim, ripples through it.
 pub const liquid_glass = @import("glass").liquid_glass;
 pub const liquid_blob = @import("glass").liquid_blob;
+/// Visibility of glass ink, including shadows and the physical antialiasing fringe.
+pub const glass = @import("glass.zig");
 /// One material on one value: every glass at the window's opacity, the OS's form and the app's.
 pub const glass_look = @import("glass_look");
 pub const LiquidField = @import("glass").LiquidField;

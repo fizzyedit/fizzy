@@ -1005,6 +1005,13 @@ pub fn fieldPane(id: dvui.Id, field: LiquidField, scale: f32, pane: Pane) void {
     queuePane(id, field.bounds(), .{}, scale, pane, field);
 }
 
+/// Physical ink against the clip, including its antialiasing fringe.
+/// Kept in sync with core.glass.within by core's window tests; glass cannot import core.
+pub fn inkWithin(ink: Rect.Physical, clip: Rect.Physical, margin_px: f32) bool {
+    return ink.x <= clip.x + clip.w + margin_px and ink.x + ink.w >= clip.x - margin_px and
+        ink.y <= clip.y + clip.h + margin_px and ink.y + ink.h >= clip.y - margin_px;
+}
+
 fn queuePane(id: dvui.Id, rect: Rect.Physical, corners: dvui.CornerRect, scale: f32, pane: Pane, field: ?LiquidField) void {
     const job = dvui.dataGetPtrDefault(null, id, "_frost_job", FrostJob, .{});
     const backdrop = dvui.dataGetPtrDefault(null, id, "_frost", BlurBackdrop, .{});
@@ -1013,6 +1020,9 @@ fn queuePane(id: dvui.Id, rect: Rect.Physical, corners: dvui.CornerRect, scale: 
     // How formed it is: the caller's, or its own from when it first came up. Per id, so it
     // lives exactly as long as the pane is drawn and a pane that comes back forms anew.
     const form = std.math.clamp(pane.form orelse selfForm(id, now), 0, 1);
+    // Touch the per-id state even while clipped, so scrolling back does not re-form the pane.
+    const clip = dvui.clipGet();
+    if (clip.empty() or !inkWithin(rect, clip, 1)) return;
     // The blur comes in from sharp (`form`, at the full radius — see `BlurBackdrop.form`); the
     // edge squeezes in on the arrival curve, past its final shape and back when motion is playful.
     const radius = pane.radius;
@@ -1533,4 +1543,38 @@ fn passStrength(a: u32, b: u32) f32 {
     const bf: f32 = @floatFromInt(b);
     const ratio = @min(af, bf) / @max(af, bf);
     return @min(1.0, 2 * (1 - ratio));
+}
+
+test "a frost scrolled away for two frames keeps its birth and last queued rect" {
+    const fns = struct {
+        var away = false;
+        var first = true;
+        var birth: i128 = 0;
+        const id: dvui.Id = @fromBackingInt(9876);
+        const home: Rect.Physical = .{ .x = 20, .y = 20, .w = 40, .h = 40 };
+        fn frame() !dvui.App.Result {
+            if (first) {
+                birth = dvui.currentWindow().frame_time_ns - std.time.ns_per_s;
+                dvui.dataSet(null, id, "_frost_born", birth);
+                first = false;
+            }
+            const rect: Rect.Physical = if (away) .{ .x = 500, .y = 500, .w = 40, .h = 40 } else home;
+            frostPane(id, rect, .all(2), 1, .{ .radius = 20 });
+            if (!away) try std.testing.expectEqual(birth, dvui.dataGet(null, id, "_frost_born", i128).?);
+            try std.testing.expectEqual(home, dvui.dataGetPtr(null, id, "_frost_job", FrostJob).?.rect);
+            return .ok;
+        }
+    };
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 200 } });
+    defer t.deinit();
+    fns.away = false;
+    fns.first = true;
+    _ = try dvui.testing.step(fns.frame);
+    const birth = dvui.dataGet(null, fns.id, "_frost_born", i128).?;
+    fns.away = true;
+    _ = try dvui.testing.step(fns.frame);
+    _ = try dvui.testing.step(fns.frame);
+    fns.away = false;
+    _ = try dvui.testing.step(fns.frame);
+    try std.testing.expectEqual(birth, dvui.dataGet(null, fns.id, "_frost_born", i128).?);
 }
