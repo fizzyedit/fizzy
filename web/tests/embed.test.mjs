@@ -40,19 +40,20 @@ class Element extends Target {
   setAttribute() {}
   focus() {}
   getBoundingClientRect() { return { left: 0, top: 0, right: 100, bottom: 100 }; }
-  requestFullscreen() { document.fullscreenElement = this; this.fullscreen++; document.dispatch("fullscreenchange", {}); return Promise.resolve(); }
+  requestFullscreen() { fullscreenStack.push(this); document.fullscreenElement = this; this.fullscreen++; document.dispatch("fullscreenchange", {}); return Promise.resolve(); }
 }
 class Canvas extends Element {
   constructor() { super(); this.clientWidth = 100; this.clientHeight = 100; }
   getContext() { return {}; }
 }
+const fullscreenStack = [];
 const document = Object.assign(new Target(), {
   fullscreenElement: null,
   baseURI: "http://localhost/",
   body: new Element(),
   documentElement: new Element(),
   createElement: (tag) => (tag === "canvas" ? new Canvas() : new Element()),
-  exitFullscreen() { document.fullscreenElement = null; document.dispatch("fullscreenchange", {}); return Promise.resolve(); },
+  exitFullscreen() { fullscreenStack.pop(); document.fullscreenElement = fullscreenStack.at(-1) ?? null; document.dispatch("fullscreenchange", {}); return Promise.resolve(); },
 });
 const window = Object.assign(new Target(), {
   devicePixelRatio: 1, scrollX: 0, scrollY: 0, localStorage: new Map(), parent: null,
@@ -132,5 +133,7 @@ assert.equal(document.documentElement.fullscreen, 0);
 toggles[1]();
 assert.equal(document.fullscreenElement, parentB, "the other copy takes full screen for itself");
 toggles[1]();
-assert.equal(document.fullscreenElement, null, "and a second toggle leaves it");
+assert.equal(document.fullscreenElement, parentA, "leaving the second embed reveals the first");
+toggles[0]();
+assert.equal(document.fullscreenElement, null, "leaving the first embed exits full screen");
 console.log("embed.test: ok");
