@@ -7,7 +7,7 @@ const fizzy = @import("../../fizzy.zig");
 const dvui = @import("dvui");
 
 pub const IgnoreRules = @This();
-lines: std.ArrayListUnmanaged([]const u8) = .empty,
+lines: std.ArrayList([]const u8) = .empty,
 blob: ?[]u8 = null,
 
 pub fn deinit(self: *IgnoreRules, gpa: std.mem.Allocator) void {

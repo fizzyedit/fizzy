@@ -74,7 +74,7 @@ pub fn draw(_: ?*anyopaque) anyerror!dvui.App.Result {
     const arena = dvui.currentWindow().arena();
     const selected = selectedScope();
     line_pitch = dvui.Font.theme(.mono).lineHeight();
-    var scopes: std.ArrayListUnmanaged([]const u8) = .empty;
+    var scopes: std.ArrayList([]const u8) = .empty;
     var shown_total: usize = 0;
     var lines: []OutputLog.Line = &.{};
     var first: usize = 0;

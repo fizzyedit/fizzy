@@ -47,7 +47,7 @@ pub fn requestExport(
     default_filename: []const u8,
 ) void {
     const gpa = fizzy.entry().allocator;
-    var patterns: std.ArrayListUnmanaged(u8) = .empty;
+    var patterns: std.ArrayList(u8) = .empty;
     for (filters) |f| {
         if (patterns.items.len > 0) patterns.append(gpa, ';') catch break;
         patterns.appendSlice(gpa, std.mem.span(f.pattern)) catch break;
