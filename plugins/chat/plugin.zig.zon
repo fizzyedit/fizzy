@@ -1,8 +1,0 @@
-.{
-    .id = "chat",
-    .name = "Chat",
-    .version = "0.1.0",
-    .min_sdk_version = "",
-    .description = "A conversation and its composer, over the chat.provider service: whoever has a conversation shows it here.",
-    .tags = .{ "chat", "ai" },
-}

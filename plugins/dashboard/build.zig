@@ -1,5 +1,5 @@
-//! Standalone build for the chat plugin — the canonical third-party shape.
-//! `cd plugins/chat && zig build` produces `chat.<dylib|dll|so>`. The fizzy-internal
+//! Standalone build for the dashboard plugin — the canonical third-party shape.
+//! `cd plugins/dashboard && zig build` produces `dashboard.<dylib|dll|so>`. The fizzy-internal
 //! static-embed build lives separately in `static/` and is driven by the root build.
 const std = @import("std");
 const fizzy = @import("fizzy");

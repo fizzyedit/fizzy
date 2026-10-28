@@ -135,21 +135,29 @@ pub fn build(s: *Script) !void {
     }
 
     try s.chapter("Materials");
-    try s.commandWith("fizzy.windowMaterial", .{ .kind = "liquid" });
-    try s.caption("Over the code you can see what it is made of. The window, its floats, menus and dialogs are one material, Liquid Glass here…", .{ .near = floatNear(s, "float-header:Float 1") });
-    s.pause(1800);
-    try s.caption("…or frosted…", .{ .near = floatNear(s, "float-header:Float 1") });
-    try s.commandWith("fizzy.windowMaterial", .{ .kind = "frost" });
-    s.pause(1400);
-    try s.caption("…blurred…", .{ .near = floatNear(s, "float-header:Float 1") });
-    try s.commandWith("fizzy.windowMaterial", .{ .kind = "blur" });
-    s.pause(1400);
-    try s.caption("…clear, or opaque. Settings › Window keeps your choice.", .{ .near = floatNear(s, "float-header:Float 1") });
-    try s.commandWith("fizzy.windowMaterial", .{ .kind = "transparent" });
-    s.pause(1200);
-    try s.commandWith("fizzy.windowMaterial", .{ .kind = "none" });
-    s.pause(1200);
-    try s.commandWith("fizzy.windowMaterial", .{ .kind = "liquid" });
+    // Only what this OS draws: a material it lacks is left out, with its caption.
+    const materials = [_]struct { kind: []const u8, name: []const u8, caption: ?[]const u8, ms: u32 }{
+        .{ .kind = "liquid", .name = "Liquid Glass", .caption = null, .ms = 1800 },
+        .{ .kind = "frost", .name = "frost", .caption = "…frosted…", .ms = 1400 },
+        .{ .kind = "blur", .name = "blur", .caption = "…blurred…", .ms = 1400 },
+        .{ .kind = "transparent", .name = "clear glass", .caption = "…clear, or opaque. Settings › Window keeps your choice.", .ms = 1200 },
+        .{ .kind = "none", .name = "opaque", .caption = null, .ms = 1200 },
+    };
+    var first: ?[]const u8 = null;
+    for (materials) |m| {
+        if (s.lacksName(m.kind)) continue;
+        if (first == null) {
+            first = m.kind;
+            try s.commandWith("fizzy.windowMaterial", .{ .kind = m.kind });
+            const text = try s.print("Over the code you can see what it is made of. The window, its floats, menus and dialogs are one material, {s} here…", .{m.name});
+            try s.caption(text, .{ .near = floatNear(s, "float-header:Float 1") });
+        } else {
+            if (m.caption) |text| try s.caption(text, .{ .near = floatNear(s, "float-header:Float 1") });
+            try s.commandWith("fizzy.windowMaterial", .{ .kind = m.kind });
+        }
+        s.pause(m.ms);
+    }
+    if (first) |kind| try s.commandWith("fizzy.windowMaterial", .{ .kind = kind });
     if (!s.compact) {
         try s.waitFor("float-close:Float 1", .{});
         try s.caption("Close a float, and its views go back where they came from.", .{ .near = "float-close:Float 1" });

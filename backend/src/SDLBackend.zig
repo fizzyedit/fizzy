@@ -1473,6 +1473,7 @@ fn materialPlatform(self: *SDLBackend) materials.Platform {
         .os = builtin.target.os.tag,
         .liquid_glass = liquidGlassAvailable(),
         .compositor_blur = platform.linux_titlebar.blurOffered(self.window),
+        .dwm_backdrop = platform.win32_titlebar.backdropOffered(self.window),
     };
     self.material_platform = p;
     return p;

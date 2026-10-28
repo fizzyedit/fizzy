@@ -1,13 +1,13 @@
-//! Chat plugin — fizzy-internal static-embed + bundled-dylib module graph.
+//! Dashboard plugin — fizzy-internal static-embed + bundled-dylib module graph.
 //! Runs only from the fizzy build root, so paths are single fizzy-relative literals.
 const std = @import("std");
 const helpers = @import("../../shared/build/helpers.zig");
 
-pub const id = "chat";
+pub const id = "dashboard";
 pub const installDylib = helpers.installDylib;
 
-const module_path = "plugins/chat/plugin.zig";
-const zon_path = "plugins/chat/plugin.zig.zon";
+const module_path = "plugins/dashboard/plugin.zig";
+const zon_path = "plugins/dashboard/plugin.zig.zon";
 
 pub const ModuleImports = struct {
     dvui: *std.Build.Module,
@@ -23,7 +23,7 @@ fn applyImports(module: *std.Build.Module, imports: ModuleImports) void {
     if (imports.proxy_bridge) |proxy_bridge| module.addImport("proxy_bridge", proxy_bridge);
 }
 
-/// Static `@import("chat")` module for exe / web / tests.
+/// Static `@import("dashboard")` module for exe / web / tests.
 pub fn addStaticModule(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
@@ -44,7 +44,7 @@ pub fn addStaticModule(
     return mod;
 }
 
-/// Native dynamic library bundled beside the app (`chat.dylib` / `.dll` / `.so`).
+/// Native dynamic library bundled beside the app (`dashboard.dylib` / `.dll` / `.so`).
 pub fn addDylib(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
