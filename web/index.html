@@ -28,6 +28,8 @@
       html, body {
         margin: 0;
         height: 100%;
+        /* The app bands its own scroll ends; the browser's pull-to-refresh and glow must not run beside it. */
+        overscroll-behavior: none;
         background: var(--bg);
         color: var(--text-muted);
         font-family: "Noto Sans", system-ui, sans-serif;
