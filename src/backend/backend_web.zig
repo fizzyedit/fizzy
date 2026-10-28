@@ -122,9 +122,7 @@ pub fn toggleFullscreen() void {
 
 /// False where the browser has no Fullscreen API for a page (Safari on iPhone), so the command
 /// that asks for it can stand down instead of doing nothing.
-pub fn fullscreenSupported() bool {
-    return page.fizzy_web_fullscreen_supported();
-}
+pub const fullscreenSupported = page.fizzy_web_fullscreen_supported;
 
 /// Symmetric with the native API: no window state to restore on web.
 pub fn restoreWindowState(_: *dvui.Window) void {}

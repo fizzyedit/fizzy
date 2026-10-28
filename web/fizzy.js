@@ -277,7 +277,7 @@ export class Fizzy {
             document.documentElement.requestFullscreen().catch((err) => console.warn("fizzy: full screen refused:", err));
           }
         },
-        // False where a page cannot go full screen (Safari on iPhone), so the command hides.
+        // False where a page cannot go full screen (Safari on iPhone), so the command is disabled.
         fizzy_web_fullscreen_supported() {
           return fullscreenSupported ? 1 : 0;
         },
