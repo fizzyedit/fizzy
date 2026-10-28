@@ -1,7 +1,8 @@
 #!/bin/sh
 # The hidden input's tests (web/tests/text-input.test.js) against the web.js the web build
-# writes: `zig build web` first. Node also runs pointer-input and two-copy embed checks.
-# Use --embed-only for the build-independent Node check; hidden-input tests also support jsc.
+# writes: `zig build web` first. Node also runs the pointer-input and two-copy embed checks.
+# CI builds the web assets and runs both suites. Use --embed-only for the build-independent
+# Node check; hidden-input tests also support jsc.
 set -eu
 cd "$(dirname "$0")/.."
 if [ "${1:-}" = --embed-only ]; then
