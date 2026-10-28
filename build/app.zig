@@ -1100,7 +1100,7 @@ fn addTests(
         .{ "fizzy-touch-hold-tests", "core/TouchHold.zig" },
         // A motion's clock stepped by its frames, a long one held to a step. std-only (see
         // FrameClock.zig); the floats' landing and ghost run on it.
-        .{ "fizzy-frame-clock-tests", "core/FrameClock.zig" },
+        .{ "fizzy-frame-clock-tests", "backend/src/glass/FrameClock.zig" },
         // Variable-height row bookkeeping for a virtualized list. std-only, so anchors, measurements
         // and width changes are tested without a Window.
         .{ "fizzy-height-index-tests", "core/HeightIndex.zig" },
@@ -2091,6 +2091,7 @@ fn addTests(
         split_tests_module.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
         if (icons_test) |icons| split_tests_module.addImport("icons", icons);
         // `core/widgets.zig` names widgets through `replay`'s anchors; the test `core`'s own.
+        split_tests_module.addImport("tape", core_module_test.import_table.get("tape").?);
         split_tests_module.addImport("replay", core_module_test.import_table.get("replay").?);
         split_tests_module.addImport("glass_look", core_module_test.import_table.get("glass_look").?);
         split_tests_module.addImport("glass", core_module_test.import_table.get("glass").?);

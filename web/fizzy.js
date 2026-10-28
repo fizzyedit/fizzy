@@ -7,6 +7,50 @@
 // Stamped by the build (`build/web.zig`): the hash of what it loads, and the storage name
 // (`-Dweb-storage`).
 
+// Pointer input is batched before crossing the worker boundary. Times are absolute
+// performance-clock milliseconds; subtracting the receiver's origin preserves latency.
+export function pointerInput(canvas, send, clockOrigin = performance.timeOrigin, done = () => {}) {
+  canvas.style.touchAction = "none";
+  const slots = new Map();
+  let mouseButtons = 0;
+  const mods = (e) => (e.metaKey << 3) | (e.altKey << 2) | (e.ctrlKey << 1) | (e.shiftKey << 0);
+  const handle = (kind, ev) => {
+    const touch = ev.pointerType === "touch";
+    if (touch && kind === 8) {
+      const slot = Array.from({ length: 10 }, (_, i) => i).find((i) => !Array.from(slots.values()).includes(i));
+      if (slot === undefined) return;
+      slots.set(ev.pointerId, slot);
+    }
+    if (touch && !slots.has(ev.pointerId)) return;
+    if (kind === 8) canvas.setPointerCapture(ev.pointerId);
+    const rect = canvas.getBoundingClientRect();
+    let samples = kind === 10 ? ev.getCoalescedEvents?.() : null;
+    if (!samples?.length) samples = [ev];
+    const events = [];
+    for (const e of samples) {
+      const x = (e.clientX - rect.left) / rect.width;
+      const y = (e.clientY - rect.top) / rect.height;
+      const time = e.timeStamp + clockOrigin;
+      if (touch) events.push({ a: [kind, slots.get(ev.pointerId), 0, x, y], time });
+      else {
+        events.push({ mouse: true, x, y, mods: mods(e), time });
+        // Pointer moves also carry intermediate presses and releases in a mouse chord.
+        const buttons = kind === 9 ? 0 : e.buttons;
+        const changed = mouseButtons ^ buttons;
+        for (const [bit, button] of [[1, 0], [2, 2], [4, 1], [8, 3], [16, 4]]) {
+          if (changed & bit) events.push({ a: [buttons & bit ? 2 : 3, button, mods(e), 0, 0], time });
+        }
+        mouseButtons = buttons;
+      }
+    }
+    send({ type: "input", events });
+    if (kind === 9) { slots.delete(ev.pointerId); done(); }
+  };
+  for (const [name, kind] of [["pointerdown", 8], ["pointermove", 10], ["pointerup", 9], ["pointercancel", 9]]) {
+    canvas.addEventListener(name, (ev) => handle(kind, ev), { capture: true });
+  }
+}
+
 import { Dvui, TextInput } from "./web.js?cache-buster=TEMPLATE_HASH_WITH_PADDING__ITS_64_BYTES_LONG_THE_SAME_AS_SHA256";
 
 // The name this build files what it keeps in the browser under: its own files, the plugins it
@@ -18,6 +62,31 @@ const buildStorageName = "__FIZZY_WEB_STORAGE__";
 // iPhone Safari has no Fullscreen API for pages (iPad does); there, "Add to Home Screen"
 // is the way to lose the address bar (manifest.webmanifest).
 const fullscreenSupported = !!(document.fullscreenEnabled && document.documentElement.requestFullscreen);
+
+/** The editor's compiled wasm by URL, shared by every copy on the page: one download, one compile. */
+const compiledEditors = new Map();
+
+/**
+ * The compiled editor at `url`, started on the first ask and shared after. Null when it could not
+ * be fetched or compiled (a later copy tries again); the caller then fetches it itself.
+ * @param {string} url
+ * @returns {Promise<WebAssembly.Module | null>}
+ */
+function compiledEditor(url) {
+  let compiled = compiledEditors.get(url);
+  if (!compiled) {
+    compiled = WebAssembly.compileStreaming(fetch(url)).catch((err) => {
+      console.warn("fizzy: compiling the editor early failed; the copy fetches it", err);
+      compiledEditors.delete(url);
+      return null;
+    });
+    compiledEditors.set(url, compiled);
+  }
+  return compiled;
+}
+
+/** The copy whose canvas or input was last used, which gets keys that land on the page itself. */
+let activeCopy = null;
 
 /**
  * @typedef {object} FizzyOptions
@@ -34,6 +103,8 @@ const fullscreenSupported = !!(document.fullscreenEnabled && document.documentEl
  *   Default: in a worker on Chromium only. Never in a worker with `imports`.
  * @property {"desktop" | "tablet" | "mobile"} [form] - The form factor to take, in place of the
  *   device's (`core.platform.formFactor()`). Anything else is ignored.
+ * @property {HTMLElement} [fullscreenElement] - What View › Toggle Full Screen shows full screen.
+ *   Default: the canvas's parent, so an embed fills the screen and the page around it does not.
  * @property {string[]} [plugins] - Ids of plugins to load from `plugins/<id>/<id>.wasm` beside the
  *   app once it is up, each in place of an installed one of the same id: how a developer tries a
  *   build.
@@ -271,11 +342,7 @@ export class Fizzy {
         // View › Toggle Full Screen. The request runs a frame after the key press or click
         // that asked for it, which is still inside the browser's user-activation window.
         fizzy_web_toggle_fullscreen() {
-          if (document.fullscreenElement) {
-            document.exitFullscreen().catch(() => {});
-          } else if (document.documentElement.requestFullscreen) {
-            document.documentElement.requestFullscreen().catch((err) => console.warn("fizzy: full screen refused:", err));
-          }
+          toggleFullscreen();
         },
         // False where a page cannot go full screen (Safari on iPhone), so the command is disabled.
         fizzy_web_fullscreen_supported() {
@@ -792,13 +859,40 @@ export class Fizzy {
     // "pinch fingers together = zoom out".
     let dvuiApp = null;
     const dvuiCanvas = opts.canvas;
+    // The element dvui's text input lives in (set once the editor is up): where text arrives.
+    let textInput = null;
+    for (const type of ["pointerdown", "focus"]) dvuiCanvas.addEventListener(type, () => { activeCopy = this; }, { capture: true });
+
+    // View › Toggle Full Screen shows this copy's element, not the whole page, and switches to it
+    // when another element (another copy) is already full screen.
+    function fullscreenTarget() {
+      return opts.fullscreenElement ?? dvuiCanvas.parentElement ?? dvuiCanvas;
+    }
+    function toggleFullscreen() {
+      const target = fullscreenTarget();
+      if (document.fullscreenElement === target) {
+        document.exitFullscreen().catch(() => {});
+      } else if (target.requestFullscreen) {
+        target.requestFullscreen().catch((err) => console.warn("fizzy: full screen refused:", err));
+      }
+    }
 
     // Shortcuts the app binds are the app's, not the browser's: ⌘S must not also save the
     // page. Capture phase, so this runs before dvui's own listener (which still receives the
     // key — preventDefault stops the browser, not the event). The app answers synchronously
     // from its keymap (`Keybinds.webKeyBound`), which also keeps typing, copy/cut/paste and
     // unbound chords with the browser.
+    //
+    // Only the keys meant for this copy: typed into the page's own field, or a chord aimed at
+    // another copy, they stay the page's. A key lands on this copy when its canvas or its text
+    // input has the focus, or when nothing has and this copy was the last one used.
+    const ownsKey = (ev) => {
+      const target = ev.target;
+      if (target === dvuiCanvas || (textInput && target === textInput)) return true;
+      return (target === document.body || target === document.documentElement) && activeCopy === this;
+    };
     window.addEventListener("keydown", (ev) => {
+      if (!ownsKey(ev)) return;
       const ex = wasmInstance && wasmInstance.exports;
       if (!ex || !ex.FizzyWebKeyBound) return;
       const bytes = utf8encode(ev.key);
@@ -813,9 +907,13 @@ export class Fizzy {
     // and those chords stay the browser's.
     document.addEventListener("fullscreenchange", () => {
       const kb = navigator.keyboard;
+      const full = document.fullscreenElement === fullscreenTarget();
+      // The text input is the page's, outside the element shown full screen, where it cannot
+      // take focus; it goes in with the editor and comes out again.
+      if (textInput) (full ? fullscreenTarget() : document.body).prepend(textInput);
       if (!kb || !kb.lock) return;
-      if (document.fullscreenElement) kb.lock().catch(() => {});
-      else kb.unlock();
+      if (full) kb.lock().catch(() => {});
+      else if (!document.fullscreenElement) kb.unlock();
     });
     dvuiCanvas.addEventListener("wheel", (ev) => {
       if (ev.ctrlKey && ev.deltaMode === 0) {
@@ -905,6 +1003,7 @@ export class Fizzy {
       hidden.setAttribute("autocapitalize", "none");
       Object.assign(hidden.style, { position: "absolute", left: 0, top: 0, padding: 0, border: 0, margin: 0, opacity: 0, zIndex: -1 });
       document.body.prepend(hidden);
+      textInput = hidden;
       let textInputRect = [];
       // Focus never scrolls the page; and a copy embedded in another page (fizzyed.it's
       // examples, in an iframe) takes none until it is clicked, tapped or tabbed into.
@@ -1027,8 +1126,7 @@ export class Fizzy {
             }
             break;
           case "fullscreen":
-            if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
-            else if (document.documentElement.requestFullscreen) document.documentElement.requestFullscreen().catch((err) => console.warn("fizzy: full screen refused:", err));
+            toggleFullscreen();
             break;
           case "oauth": {
             let blobUrl = null;
@@ -1088,12 +1186,7 @@ export class Fizzy {
       const mods = (ev) => (ev.metaKey << 3) | (ev.altKey << 2) | (ev.ctrlKey << 1) | (ev.shiftKey << 0);
       const event = (a0, a1, a2, a3, a4) => post({ type: "event", a: [a0, a1, a2, a3, a4] });
       canvas.addEventListener("contextmenu", (ev) => ev.preventDefault());
-      canvas.addEventListener("mousemove", (ev) => {
-        const rect = canvas.getBoundingClientRect();
-        post({ type: "mouse", x: (ev.clientX - rect.left) / (rect.right - rect.left), y: (ev.clientY - rect.top) / (rect.bottom - rect.top), mods: mods(ev) });
-      });
-      canvas.addEventListener("mousedown", (ev) => event(2, ev.button, mods(ev), 0, 0));
-      canvas.addEventListener("mouseup", (ev) => event(3, ev.button, mods(ev), 0, 0));
+      pointerInput(canvas, post, performance.timeOrigin, oskCheck);
 
       const scrollLowest = [99999, 99999];
       let scrollLowestBatch = [99999, 99999];
@@ -1149,33 +1242,6 @@ export class Fizzy {
       canvas.addEventListener("keyup", keyup);
       hidden.addEventListener("keyup", keyup);
 
-      const touches = [];
-      const touchIndex = (id) => {
-        let idx = touches.findIndex((t) => t[0] === id);
-        if (idx < 0) {
-          idx = touches.length;
-          touches.push([id, idx]);
-        }
-        return idx;
-      };
-      const touchEvents = (kind, ev, done) => {
-        ev.preventDefault();
-        const rect = canvas.getBoundingClientRect();
-        for (const touch of ev.changedTouches) {
-          const x = (touch.clientX - rect.left) / (rect.right - rect.left);
-          const y = (touch.clientY - rect.top) / (rect.bottom - rect.top);
-          const tidx = touchIndex(touch.identifier);
-          event(kind, touches[tidx][1], 0, x, y);
-          if (done) touches.splice(tidx, 1);
-        }
-      };
-      canvas.addEventListener("touchstart", (ev) => touchEvents(8, ev, false), { passive: false });
-      canvas.addEventListener("touchend", (ev) => {
-        touchEvents(9, ev, true);
-        oskCheck();
-      }, { passive: false });
-      canvas.addEventListener("touchmove", (ev) => touchEvents(10, ev, false), { passive: false });
-
       pinchSink = (amount) => post({ type: "pinch", amount });
     }
 
@@ -1199,10 +1265,7 @@ export class Fizzy {
       // editor's download used to wait with it, tens of seconds on a slow link. The worker is
       // handed the compiled module and fetches nothing itself, so a page shown at once never
       // downloads it twice. Null on failure: the worker then fetches it as before.
-      const wasmModule = WebAssembly.compileStreaming(fetch(wasmUrl)).catch((err) => {
-        console.warn("fizzy: compiling the editor early failed; the worker fetches it", err);
-        return null;
-      });
+      const wasmModule = compiledEditor(wasmUrl);
       waitForLayout().then(() => startWorker(wasmUrl, wasmModule)).catch((err) => {
         console.error(err);
         onError(`Failed to load the editor (${err instanceof Error ? err.message : String(err)}).`);
@@ -1212,17 +1275,22 @@ export class Fizzy {
       waitForLayout()
         .then(() => {
           const app = new Dvui();
-          return WebAssembly.instantiateStreaming(fetch(wasmUrl), {
+          const imports = {
             ...opts.imports,
             dvui: app.imports,
             fizzy: fizzyImports(() => wasmInstance),
             env: { __indirect_function_table: functionTable },
-          }).then((result) => {
+          };
+          return compiledEditor(wasmUrl).then((module) => module
+            ? WebAssembly.instantiate(module, imports).then((instance) => ({ instance }))
+            : WebAssembly.instantiateStreaming(fetch(wasmUrl), imports)
+          ).then((result) => {
             wasmInstance = result.instance;
             if (opts.onInstance) opts.onInstance(result.instance);
             app.setInstance(result.instance);
             app.setCanvas(dvuiCanvas);
             app.run();
+            textInput = app.hidden_input ?? null;
             return app;
           });
         })
@@ -1230,6 +1298,16 @@ export class Fizzy {
           // Late-bind the app reference so the capture-phase wheel listener above can
           // forward pinch deltas into the trackpad accumulator and kick a render.
           dvuiApp = app;
+          for (const name of ["touchstart", "touchmove", "touchend", "touchcancel", "mousedown", "mousemove", "mouseup"]) {
+            dvuiCanvas.addEventListener(name, (ev) => ev.stopImmediatePropagation(), { capture: true });
+          }
+          pointerInput(dvuiCanvas, (m) => {
+            for (const e of m.events) {
+              const a = e.mouse ? [1, e.mods, 0, e.x * app.gl.drawingBufferWidth, e.y * app.gl.drawingBufferHeight] : e.a;
+              app.instance.exports.add_event(...a, e.time - performance.timeOrigin);
+            }
+            app.requestRender();
+          }, performance.timeOrigin, () => app.oskCheck());
           // The main-thread loop never sent the device to the editor, so Firefox and Safari
           // (which take this path) were always `.desktop`: send it now and on change.
           applyFormMain();

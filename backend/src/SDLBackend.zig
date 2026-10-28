@@ -126,6 +126,9 @@ viewport_seen: bool = false,
 /// Added to the wall clock by `nanoTime`: how far a demo's silent frames have moved the app's
 /// clock on (`app.automation.Player.frames`). Only grows.
 clock_ahead_ns: i128 = 0,
+/// What `nanoTime` takes off the wall, so no frame begins more than a motion's step after the one
+/// before it (`glass.MotionClock`).
+motion_clock: glass.MotionClock = .{},
 /// Last known window rect while not maximized/fullscreen/minimized, tracked
 /// from move/resize events
 window_geometry: WindowGeometry = .{},
@@ -1368,7 +1371,7 @@ pub fn floatingWindowBackground(self: *SDLBackend, id: dvui.Id, rect: dvui.Rect.
             glass.programs.publishHost();
             glass.LiquidField.publishEnabled(liquid);
             const lens = builtin.target.os.tag == .macos and liquid and glass.LiquidField.ready();
-            glass.LiquidField.publishLook(if (lens) glass_look.inApp(opacity) else null);
+            if (lens) glass.LiquidField.publishLook(glass_look.Looks.fromOpacity(opacity));
             const s = dvui.windowNaturalScale();
             glass.BlurBackdrop.frostPane(id, rect, corners.scale(1 / s, dvui.CornerRect), s, .{
                 .radius = if (lens) glass_look.text_blur else if (m.kind == .blur) pane.blur / 2 else pane.blur,
@@ -2942,7 +2945,7 @@ pub fn backend(self: *SDLBackend) dvui.Backend {
 
 pub fn nanoTime(self: *SDLBackend) i128 {
     const ret = std.Io.Clock.awake.now(self.io);
-    return ret.nanoseconds + self.clock_ahead_ns;
+    return self.motion_clock.now(ret.nanoseconds + self.clock_ahead_ns);
 }
 
 pub fn sleep(self: *SDLBackend, ns: u64) void {
@@ -3387,6 +3390,16 @@ fn releaseTouches(self: *SDLBackend, win: *dvui.Window) !void {
 /// This allows "ontop" application main loop to ignore such events since they
 /// are meant for something visually floating on top of the main application.
 pub fn addEvent(self: *SDLBackend, win: *dvui.Window, event: c.SDL_Event) !bool {
+    const first = win.events.items.len;
+    const time_ns: i128 = self.nanoTime() - @as(i128, c.SDL_GetTicksNS()) + @as(i128, event.common.timestamp);
+    defer for (win.events.items[first..]) |e| {
+        var buf: [32]u8 = undefined;
+        // The prefix and a u16 event number fit in 32 bytes.
+        // Backend packages cannot import core; match core/input_time.zig key().
+        const key = std.fmt.bufPrint(&buf, "_input_time_{d}", .{e.num}) catch unreachable;
+        dvui.dataSet(win, win.data().id, key, time_ns);
+    };
+
     switch (event.type) {
         if (sdl3) c.SDL_EVENT_KEY_DOWN else c.SDL_KEYDOWN => {
             const sdl_key: i32 = if (sdl3) @intCast(event.key.key) else event.key.keysym.sym;
@@ -4084,7 +4097,8 @@ pub fn main(main_init: std.process.Init) !u8 {
 
         Health.current.frameBegin(c.SDL_GetTicksNS());
         // marks the beginning of a frame for dvui, can call dvui functions after this
-        try win.begin(nstime);
+        try win.begin(back.motion_clock.frameTime(win.frame_time_ns, nstime));
+        back.motion_clock.publish();
 
         // send all SDL events to dvui for processing
         try back.addAllEvents(&win);
@@ -4340,10 +4354,11 @@ fn appIterate(_: ?*anyopaque) callconv(.c) c.SDL_AppResult {
 
     app_frame_open = true;
     // marks the beginning of a frame for dvui, can call dvui functions after this
-    appState.win.begin(nstime) catch |err| {
+    appState.win.begin(appState.back.motion_clock.frameTime(appState.win.frame_time_ns, nstime)) catch |err| {
         log.err("dvui.Window.begin failed: {any}", .{err});
         return c.SDL_APP_FAILURE;
     };
+    appState.back.motion_clock.publish();
 
     const app = dvui.App.get() orelse unreachable;
     os_windows.beforeFrame();

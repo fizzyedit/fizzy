@@ -14,6 +14,10 @@ The page and its JavaScript (`index.html`, the app's `fizzy.js`, workers). The Z
   turns its query (`?storage=`, `?persist=`, `?worker=`, `?form=`, `?plugin=`, ...) into options
   and shows `onReady`/`onError` itself, and an app built on fizzy passes its own. Nothing wraps
   `WebAssembly.instantiateStreaming`.
+- **Several copies share a page.** `fizzy.js` keeps no per-page state but the compiled wasm (shared by
+  URL) and the last copy used. A window-level listener must check its event is for this copy
+  (`ownsKey`), and full screen takes `fullscreenElement` (default the canvas's parent), never the
+  document. `node web/tests/embed.test.mjs` mounts two copies against a fake DOM (CI runs it).
 - **`web.js` is dvui's,** with `patches/dvui` applied at build time (`docs/DEPENDENCIES.md`). A
   change to it is a change to a patch: make it on the dvui branch the patches come from and export
   them again, so it can go upstream. Never keep a copy of `web.js` here.

@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const dvui = @import("dvui");
+const glass = @import("glass");
 
 pub const kind: dvui.enums.Backend = .web;
 
@@ -169,6 +170,9 @@ cursor_last: dvui.enums.Cursor = .wait,
 /// Added to the page's clock by `nanoTime`: how far a demo's silent frames have moved the app's
 /// clock on (`app.automation.Player.frames`). Only grows.
 clock_ahead_ns: i128 = 0,
+/// What `nanoTime` takes off the page's clock, so no frame begins more than a motion's step after
+/// the one before it (`glass.MotionClock`). The vsync-stamped base is the page's, unchanged.
+motion_clock: glass.MotionClock = .{},
 /// The frame running is one nobody will see — a demo catching up (`app.automation.Player.frames`):
 /// its draws to the canvas are dropped. Draws into render targets still run, since what is
 /// drawn there may be read back into the app's model.
@@ -495,15 +499,25 @@ export fn new_font(ptr: [*c]u8, len: usize) void {
     }
 }
 
-export fn add_event(which: u8, int1: u32, int2: u32, float1: f32, float2: f32) void {
+export fn add_event(which: u8, int1: u32, int2: u32, float1: f32, float2: f32, time_ms: f64) void {
     if (win_ok) {
-        add_event_raw(&win, which, int1, int2, float1, float2) catch |err| {
+        add_event_raw(&win, which, int1, int2, float1, float2, time_ms) catch |err| {
             log.err("add_event_raw returned {any}", .{err});
         };
     }
 }
 
-fn add_event_raw(w: *dvui.Window, which: u8, int1: u32, int2: u32, float1: f32, float2: f32) !void {
+fn add_event_raw(w: *dvui.Window, which: u8, int1: u32, int2: u32, float1: f32, float2: f32, time_ms: f64) !void {
+    const first = w.events.items.len;
+    const time_ns: i128 = @as(i128, @intFromFloat((if (std.math.isFinite(time_ms)) time_ms else wasm.wasm_now()) * 1_000_000.0)) + w.backend.impl.clock_ahead_ns;
+    defer for (w.events.items[first..]) |e| {
+        var buf: [32]u8 = undefined;
+        // The prefix and a u16 event number fit in 32 bytes.
+        // Backend packages cannot import core; match core/input_time.zig key().
+        const key = std.fmt.bufPrint(&buf, "_input_time_{d}", .{e.num}) catch unreachable;
+        dvui.dataSet(w, w.data().id, key, time_ns);
+    };
+
     have_event = true;
     //event_temps.append(.{
     //    .which = which,
@@ -750,7 +764,7 @@ pub fn backend(self: *WebBackend) dvui.Backend {
 }
 
 pub fn nanoTime(self: *WebBackend) i128 {
-    return @as(i128, @trunc(wasm.wasm_now())) * 1_000_000 + self.clock_ahead_ns;
+    return self.motion_clock.now(@as(i128, @trunc(wasm.wasm_now())) * 1_000_000 + self.clock_ahead_ns);
 }
 
 pub fn sleep(_: *WebBackend, ns: u64) void {
@@ -1497,7 +1511,8 @@ fn update() !i32 {
 
     const nstime = win.beginWait(back.hasEvent());
 
-    try win.begin(nstime);
+    try win.begin(back.motion_clock.frameTime(win.frame_time_ns, nstime));
+    back.motion_clock.publish();
 
     var window_ended = false;
     defer {

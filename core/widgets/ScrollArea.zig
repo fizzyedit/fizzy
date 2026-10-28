@@ -20,6 +20,8 @@
 //! container's own `processMotionScroll`, so a dvui parent still scrolls (with dvui's coast).
 const std = @import("std");
 const dvui = @import("dvui");
+const input_time = @import("../input_time.zig");
+const profile = @import("../profile.zig");
 const Fling = @import("../Fling.zig");
 
 const ScrollArea = @This();
@@ -35,6 +37,8 @@ const Touch = struct {
     x: Fling = .{},
     y: Fling = .{},
     dragging: bool = false,
+    last_viewport: dvui.Point = .{},
+    last_coast: dvui.Point = .{},
     coast_start_ns: i128 = 0,
     coast_origin: dvui.Point = .{},
     coast_velocity: dvui.Point = .{},
@@ -105,13 +109,18 @@ pub fn deinit(self: *ScrollArea) void {
     dvui.clipSet(c.prevClip);
 
     const rs = c.data().borderRectScale();
-    var delta: dvui.Point = .{};
+    var finger_delta: dvui.Point = .{};
+    const was_dragging = t.dragging;
     var released = false;
+    var release_ns = dvui.frameTimeNS();
     for (dvui.events()) |*e| {
         if (e.evt != .mouse or !e.evt.mouse.button.touch()) continue;
         const finger = e.evt.mouse.button;
         switch (e.evt.mouse.action) {
-            .release => released = released or (t.dragging and finger == t.finger),
+            .release => if (t.dragging and finger == t.finger) {
+                released = true;
+                release_ns = input_time.get(e.num);
+            },
             .motion => |motion| {
                 if (t.dragging and finger != t.finger) continue;
                 if (!dvui.eventMatch(e, .{ .id = c.data().id, .r = c.init_opts.event_rect orelse rs.r })) continue;
@@ -121,31 +130,40 @@ pub fn deinit(self: *ScrollArea) void {
                 if (!t.dragging) {
                     t.dragging = true;
                     t.finger = finger;
+                    t.last_coast = .{};
                     t.x.begin();
                     t.y.begin();
                 }
-                delta = delta.plus(self.processMotionScroll(motion, rs.s));
+                finger_delta = finger_delta.plus(motion.scale(1 / rs.s, dvui.Point));
+                const delta = self.processMotionScroll(motion, rs.s);
+                const time_ns = input_time.get(e.num);
+                t.x.sampleTimed(delta.x, time_ns);
+                t.y.sampleTimed(delta.y, time_ns);
             },
             else => {},
         }
     }
 
-    if (delta.nonZero() or released) {
-        t.x.sampleTimed(delta.x);
-        t.y.sampleTimed(delta.y);
-    }
     if (released) {
         t.dragging = false;
-        _ = t.x.releaseWindowed(tuning, window_s);
-        _ = t.y.releaseWindowed(tuning, window_s);
+        _ = t.x.releaseWindowedAt(tuning, window_s, release_ns);
+        _ = t.y.releaseWindowedAt(tuning, window_s, release_ns);
         t.coast_start_ns = dvui.frameTimeNS();
         t.coast_origin = self.si.viewport.topLeft();
         t.coast_velocity = .{ .x = t.x.vel, .y = t.y.vel };
+        // The release may contain no motion, so it must schedule the first coast frame itself.
+        if (t.x.coasting or t.y.coasting) dvui.refresh(null, @src(), self.data().id);
     }
 
     // A nested child's propagated motion sets this (parent) area's velocity through dvui's
     // `processMotionScroll`; clear it so dvui's coast never runs beside ours.
     self.si.velocity = .{};
+    if (was_dragging) {
+        const moved = self.si.viewport.topLeft().diff(t.last_viewport);
+        profile.scrollJump(moved.x, @abs(finger_delta.x) + 2);
+        profile.scrollJump(moved.y, @abs(finger_delta.y) + 2);
+    }
+    t.last_viewport = self.si.viewport.topLeft();
     self.area.deinit();
     _ = dvui.snapToPixelsSet(self.snap);
 }
@@ -205,6 +223,9 @@ fn coast(self: *ScrollArea) void {
     if (t.x.coasting) moved.x = coastPosition(&t.x, t.coast_origin.x, t.coast_velocity.x, elapsed) - si.viewport.x;
     if (t.y.coasting) moved.y = coastPosition(&t.y, t.coast_origin.y, t.coast_velocity.y, elapsed) - si.viewport.y;
 
+    if (t.last_coast.x != 0) profile.scrollJump(moved.x, @abs(t.last_coast.x) * 3);
+    if (t.last_coast.y != 0) profile.scrollJump(moved.y, @abs(t.last_coast.y) * 3);
+    t.last_coast = moved;
     self.scrollBy(moved);
     if (si.viewport.x < 0 or si.viewport.x > si.scrollMax(.horizontal)) t.x.cancel();
     if (si.viewport.y < 0 or si.viewport.y > si.scrollMax(.vertical)) t.y.cancel();
@@ -262,6 +283,7 @@ fn scrollBy(self: *ScrollArea, by: dvui.Point) void {
 // ---- tests ----
 
 var t_viewport_y: f32 = 0;
+var t_release_velocity: f32 = 0;
 var t_use_dvui: bool = false;
 /// Where a child of the area is drawn this frame (physical y, as the renderer would place it),
 /// and whether the renderer snaps there.
@@ -287,7 +309,10 @@ fn testFrame() !dvui.App.Result {
         // Read the final viewport after the area's event handling and edge correction.
         const si = scroll.si;
         defer t_viewport_y = si.viewport.y;
-        defer scroll.deinit();
+        defer {
+            scroll.deinit();
+            t_release_velocity = scroll.touch.y.last_debug.vel;
+        }
         if (t_column) {
             t_snapping = dvui.snapToPixels();
             for (&t_rows, 0..) |*drawn, i| {
@@ -396,6 +421,40 @@ test "coast displacement follows each frame gap" {
         previous_speed = speed;
     }
     try std.testing.expect(follows_gaps);
+}
+
+test "a coast requests another frame even when its timestamp has not advanced" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    t_use_dvui = false;
+    _ = try swipe();
+    const cw = dvui.currentWindow();
+    _ = try testFrame();
+    const position = t_viewport_y;
+    _ = try cw.end(.{});
+    try cw.begin(cw.frame_time_ns);
+    // Isolate the coast's refresh from layout, input and displacement refreshes.
+    cw.extra_frames_needed = 0;
+    _ = try testFrame();
+    try std.testing.expectEqual(position, t_viewport_y);
+    try std.testing.expect(cw.extra_frames_needed > 0);
+}
+
+test "coast position matches the release integral through jitter and a long stall" {
+    var fling: Fling = .{ .coasting = true };
+    const origin: f32 = 137;
+    const velocity: f32 = -625;
+    var elapsed: f64 = 0;
+    for ([_]f64{ 0.008, 0.025, 0.008, 0.025, 0.5, 0.008, 0.025 }) |gap| {
+        elapsed += gap;
+        const expected = origin + velocity / 2.0 * (1 - @exp(-2.0 * elapsed));
+        try std.testing.expectApproxEqAbs(@as(f32, @floatCast(expected)), coastPosition(&fling, origin, velocity, elapsed), 0.0001);
+        try std.testing.expect(fling.coasting);
+    }
+    const stopped = coastPosition(&fling, origin, velocity, 10);
+    try std.testing.expectApproxEqAbs(origin + (velocity + tuning.stop) / tuning.decay, stopped, 0.0001);
+    try std.testing.expect(!fling.coasting);
+    try std.testing.expectEqual(stopped, coastPosition(&fling, origin, velocity, 20));
 }
 
 test "a slow coast draws at a new place every frame, then snaps at rest" {
@@ -576,4 +635,30 @@ test "dvui.scrollTo from a child moves a ScrollArea" {
     t_scroll_to = true;
     try dvui.testing.settle(scrollToFrame);
     try std.testing.expect(t_viewport_y > 500);
+}
+
+test "steady event times release at steady speed across bursts of 3, 0, 1" {
+    var test_window = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer test_window.deinit();
+    t_use_dvui = false;
+    const cw = dvui.currentWindow();
+    try dvui.testing.settle(testFrame);
+    const h = cw.data().rect.h;
+    var y: f32 = 0.8;
+    _ = try cw.addEventPointer(.{ .button = .touch0, .action = .press, .xynorm = .{ .x = 0.5, .y = y } });
+    try frameAfter(16);
+    const start = cw.frame_time_ns;
+    var sample: i128 = 0;
+    for ([_]usize{ 3, 0, 1 }) |count| {
+        for (0..count) |_| {
+            sample += 1;
+            y -= 10 / h;
+            _ = try cw.addEventTouchMotion(.touch0, 0.5, y, 0, -10 / h);
+            input_time.set(cw, cw.event_num, start + sample * 10 * std.time.ns_per_ms);
+        }
+        try frameAfter(16);
+    }
+    _ = try cw.addEventPointer(.{ .button = .touch0, .action = .release, .xynorm = .{ .x = 0.5, .y = y } });
+    try frameAfter(16);
+    try std.testing.expectApproxEqAbs(@as(f32, 1000), t_release_velocity, 0.1);
 }
