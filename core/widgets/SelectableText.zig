@@ -150,7 +150,8 @@ fn testScrollFrame() !dvui.App.Result {
 /// The text, and an unrelated floating window in the bottom right corner.
 fn testFloatingFrame() !dvui.App.Result {
     _ = try testFrame();
-    var fw = dvui.floatingWindow(@src(), .{}, .{ .rect = .{ .x = 200, .y = 120, .w = 90, .h = 70 } });
+    const widgets = @import("../widgets.zig");
+    var fw = widgets.floatingWindow(@src(), .{}, .{ .rect = .{ .x = 200, .y = 120, .w = 90, .h = 70 } });
     defer fw.deinit();
     dvui.label(@src(), "panel", .{}, .{});
     return .ok;
@@ -161,7 +162,7 @@ fn frameAfter(ms: u64) !void {
     try frameOfAfter(testFrame, ms);
 }
 
-fn frameOfAfter(frame: fn () anyerror!dvui.App.Result, ms: u64) !void {
+fn frameOfAfter(frame: dvui.App.frameFunction, ms: u64) !void {
     const cw = dvui.currentWindow();
     _ = try frame();
     _ = try cw.end(.{});
