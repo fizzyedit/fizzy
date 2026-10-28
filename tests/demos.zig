@@ -63,17 +63,18 @@ const BundledApp = struct {
     }
 };
 
-/// Ends the test binary, naming the phase, when the test stays in one phase for `limit_ms`: every
+/// Ends the test binary, naming the test and phase, after `limit_ms` in one phase: every
 /// frame loop here is bounded, so what stalls is a block outside them (a join, an await, a futex)
 /// that `zig build test-integration` would otherwise wait on until its runner is killed.
 const Watchdog = struct {
     const limit_ms = 180_000;
+    const poll_ms = 1000;
 
-    /// Guards `phase_name` and `phase_count`: `enter` writes them on the test thread, `watch` reads
+    /// Guards `phase_name` and `phase_started`: `enter` writes them on the test thread, `watch` reads
     /// them on the watchdog thread.
     var lock: std.Io.Mutex = .init;
     var phase_name: []const u8 = "setup";
-    var phase_count: usize = 0;
+    var phase_started: std.Io.Timestamp = .zero;
     /// Set by `stop` on the test thread to end `watch`; reset after the join so the next test can
     /// `start` again.
     var done: std.Io.Event = .unset;
@@ -81,6 +82,7 @@ const Watchdog = struct {
     var thread: ?std.Thread = null;
 
     fn start() !void {
+        enter("setup");
         thread = try std.Thread.spawn(.{}, watch, .{});
     }
 
@@ -96,21 +98,21 @@ const Watchdog = struct {
         lock.lockUncancelable(std.testing.io);
         defer lock.unlock(std.testing.io);
         phase_name = name;
-        phase_count += 1;
+        phase_started = std.Io.Clock.awake.now(std.testing.io);
     }
 
     fn watch() void {
-        var seen: ?usize = null;
         while (true) {
-            done.waitTimeout(std.testing.io, .{ .duration = .{ .raw = .fromMilliseconds(limit_ms), .clock = .awake } }) catch |err| switch (err) {
+            done.waitTimeout(std.testing.io, .{ .duration = .{ .raw = .fromMilliseconds(poll_ms), .clock = .awake } }) catch |err| switch (err) {
                 error.Timeout => {
                     lock.lockUncancelable(std.testing.io);
                     defer lock.unlock(std.testing.io);
-                    if (seen == phase_count) {
-                        std.debug.print("\nfizzy-demo-tests: phase '{s}' has not ended in {d} s: something outside the bounded frame loops is blocked; aborting\n", .{ phase_name, limit_ms / 1000 });
+                    // Check elapsed time: event waits can wake spuriously, and phase changes
+                    // must not buy another whole timeout interval.
+                    if (phase_started.untilNow(std.testing.io, .awake).toMilliseconds() >= limit_ms) {
+                        std.debug.print("\nfizzy-demo-tests: test '{s}', phase '{s}' has not ended in {d} s: something outside the bounded frame loops is blocked; aborting\n", .{ bundled_test_name, phase_name, limit_ms / 1000 });
                         std.process.abort();
                     }
-                    seen = phase_count;
                     continue;
                 },
                 // Nothing cancels this thread; a cancellation would mean the test is already ending.
@@ -133,6 +135,8 @@ test "demo: the rail's Files anchor the scripts spell out is the one fizzy publi
     try std.testing.expectEqualStrings("fizzy.rail:" ++ workbench.view_files, fizzy.Editor.Demo.catalog.files_icon);
     try std.testing.expectEqualStrings("fizzy.mobile.tab:" ++ workbench.view_files, fizzy.Editor.Demo.catalog.files_tab);
 }
+
+const bundled_test_name = "demo: every bundled demo plays to the end through fizzy's stage, a seek lands on what playing reached, and the person's own folder is theirs again after";
 
 test "demo: every bundled demo plays to the end through fizzy's stage, a seek lands on what playing reached, and the person's own folder is theirs again after" {
     try Watchdog.start();
