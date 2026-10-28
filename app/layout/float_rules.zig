@@ -1,7 +1,7 @@
 //! The rules a floating view follows, as values: where its window opens, what keeps it on
 //! screen, what it is called, how the floats stack, when a view may float and where it goes when
 //! its float closes. `Floats.zig` and `ViewDrag.zig` apply them; nothing here draws or holds
-//! state. std-only, so the rules are unit-tested without a Window (`build/app.zig`) — tests in
+//! state. std-only, so the rules are unit-tested without a Window (`build/app.zig`) - tests in
 //! the dvui-facing layout files are never collected.
 const std = @import("std");
 
@@ -26,7 +26,7 @@ pub const Rect = struct {
     }
 };
 
-/// A float opens at this share of the place it came out of — big enough to read the view in,
+/// A float opens at this share of the place it came out of - big enough to read the view in,
 /// small enough that what it floated off is still there round it.
 pub const share: f32 = 0.6;
 /// The smallest a float opens: a view shrunk below this is not one anybody can use.
@@ -37,7 +37,7 @@ pub const open_max_share: f32 = 0.9;
 /// How far a float keeps from the window's edge when it is placed for the user.
 pub const margin: f32 = 8;
 /// How far a float floated out of another float steps down and right, so the two never sit
-/// exactly over one another — the step dvui's own windows take (`window_avoid`).
+/// exactly over one another - the step dvui's own windows take (`window_avoid`).
 pub const nudge: f32 = 24;
 /// The smallest the user may resize a float to: its header and a little of its view.
 pub const resize_min_w: f32 = 160;
@@ -61,7 +61,7 @@ pub fn initialRect(source: Rect, window: Rect) Rect {
 
 /// Where a float opens for a view carried out of `source` and let go as a drop with its picture:
 /// the place itself, its size and where it was, kept inside the window and no smaller than a float
-/// may be resized to — so the picture it grows with lands on the view as the float shows it (the
+/// may be resized to - so the picture it grows with lands on the view as the float shows it (the
 /// user: the size the popped out region was, aligned with its snapshot).
 pub fn asTaken(source: Rect, window: Rect) Rect {
     const cap_w = @max(0, window.w - 2 * margin);
@@ -93,7 +93,7 @@ pub fn reachable(r: Rect, window: Rect) Rect {
     }, window);
 }
 
-/// `r` moved, not resized, to lie `margin` inside `window` — or as close to its top left as it
+/// `r` moved, not resized, to lie `margin` inside `window` - or as close to its top left as it
 /// can when it is too large to.
 fn inside(r: Rect, window: Rect) Rect {
     var out = r;
@@ -109,7 +109,7 @@ pub fn resized(r: Rect) Rect {
     return .{ .x = r.x, .y = r.y, .w = @max(r.w, resize_min_w), .h = @max(r.h, resize_min_h) };
 }
 
-/// `a` toward `b` by `t` (0…1): a landing float on its way from the carried drop to its window.
+/// `a` toward `b` by `t` (0...1): a landing float on its way from the carried drop to its window.
 pub fn lerp(a: Rect, b: Rect, t: f32) Rect {
     return .{
         .x = std.math.lerp(a.x, b.x, t),
@@ -140,7 +140,7 @@ pub fn isUnder(name: []const u8, root: []const u8) bool {
 
 /// The floats' order once dvui has had its say: `out[i]` is the index into `ids` of the float
 /// `i`th from the bottom. `ids` are the floats' window ids in their current order, `stack` the
-/// window stack bottom to top — a press raises a window there. A float not in the stack (it has
+/// window stack bottom to top - a press raises a window there. A float not in the stack (it has
 /// not drawn yet: it was made this frame) keeps its place among the others like it, above
 /// every float that is.
 pub fn stackOrder(out: []usize, ids: []const u64, stack: []const u64) void {
@@ -164,7 +164,7 @@ pub fn stackOrder(out: []usize, ids: []const u64, stack: []const u64) void {
 pub const Carried = struct {
     /// Out of the picker (or a plugin's own drag): it has no place to float out of.
     loose: bool = false,
-    /// A tab's content — an open document — whose place is the slot a plugin made for it.
+    /// A tab's content - an open document - whose place is the slot a plugin made for it.
     slotted: bool = false,
     /// Already the only view of a float nobody split: floating it again would only move it.
     alone_in_float: bool = false,
@@ -183,7 +183,7 @@ pub const Home = struct {
     /// It holds what the user put there (an assignment), rather than what its keywords choose.
     assigned: bool,
     /// Let go, the view's keywords would show it in a place of the main window's of their own
-    /// accord — a view merged into the float from elsewhere may have keywords no place answers.
+    /// accord - a view merged into the float from elsewhere may have keywords no place answers.
     keywords_place: bool,
 };
 
@@ -192,7 +192,7 @@ pub const Home = struct {
 pub const GoHome = enum {
     /// Added to its home's list, beside what is there: a tab, when something is.
     add,
-    /// Let go: its keywords bring it back wherever they choose — its home, when that is a place
+    /// Let go: its keywords bring it back wherever they choose - its home, when that is a place
     /// its keywords fill. Writing it into such a place would freeze the place's list against
     /// every view a plugin registers from then on.
     keywords,
@@ -212,7 +212,7 @@ pub fn goHome(home: Home) GoHome {
     return .elsewhere;
 }
 
-// ── Tests ──────────────────────────────────────────────────────────────────────────────────────
+// -- Tests --------------------------------------------------------------------------------------
 
 const test_window: Rect = .{ .w = 1600, .h = 1000 };
 

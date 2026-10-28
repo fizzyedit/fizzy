@@ -38,4 +38,6 @@ test {
     _ = @import("widgets/FloatingTooltipWidget.zig");
     // One motion clock: a late frame holds motion, and real time still counts it.
     _ = @import("motion_clock_tests.zig");
+    // The keyboard inset: the root ends above it and a focused field scrolls above it.
+    _ = @import("keyboard.zig");
 }

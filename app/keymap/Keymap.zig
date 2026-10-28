@@ -1,7 +1,7 @@
-//! Keybinding resolution: chord → command id.
+//! Keybinding resolution: chord -> command id.
 //!
 //! **Invariant: nothing under `keymap/` may import dvui.** dvui's keybind map is a
-//! `name → Keybind` lookup where `Keybind` is a single key plus modifier flags — it cannot hold
+//! `name -> Keybind` lookup where `Keybind` is a single key plus modifier flags - it cannot hold
 //! a chord, and it is matched by *bind name* rather than by command, which is why today's
 //! `Keybinds.tick()` is a hardcoded if-chain wired straight to `fizzy.editor().*` calls with
 //! nothing addressable by a config file. This module owns the real table; the dvui-facing
@@ -10,7 +10,7 @@
 //!
 //! Staying dvui-free also puts this in the `addTest`-per-pure-root list in `build/app.zig`.
 //!
-//! This file is the single test root for the tree — Zig collects `test` blocks only from an
+//! This file is the single test root for the tree - Zig collects `test` blocks only from an
 //! artifact's root module, and relative imports are part of that same module.
 
 const std = @import("std");
@@ -30,7 +30,7 @@ pub const ParseError = chord_mod.ParseError;
 
 const Allocator = std.mem.Allocator;
 
-/// Context gate — VSCode's `when` clauses, reduced to a fixed set. Deliberately a small closed
+/// Context gate - VSCode's `when` clauses, reduced to a fixed set. Deliberately a small closed
 /// set rather than an expression language: a binding either applies in a context or it doesn't,
 /// and every entry here has to be *supplied* by fizzy each frame, so an open-ended grammar
 /// would just be a way to write conditions nothing ever satisfies.
@@ -56,7 +56,7 @@ pub const When = packed struct {
         return true;
     }
 
-    /// How many flags a binding constrains — the specificity used to break ties, so a
+    /// How many flags a binding constrains - the specificity used to break ties, so a
     /// context-specific binding always wins over a global one on the same chord.
     pub fn weight(self: When) u8 {
         var n: u8 = 0;
@@ -70,7 +70,7 @@ pub const When = packed struct {
         return @as(u6, @bitCast(a)) == @as(u6, @bitCast(b));
     }
 
-    /// Parse a `when` string. Unknown names are *not* an error — they're reported so a config
+    /// Parse a `when` string. Unknown names are *not* an error - they're reported so a config
     /// written against a newer fizzy round-trips instead of being silently dropped.
     pub fn parse(text: []const u8, unknown: ?*std.ArrayList([]const u8), gpa: ?Allocator) !When {
         var out: When = .{};
@@ -93,7 +93,7 @@ pub const When = packed struct {
     }
 };
 
-/// `completionVisible` and `completion_visible` both name the same flag — the ZON file leans
+/// `completionVisible` and `completion_visible` both name the same flag - the ZON file leans
 /// snake_case, VSCode docs use camelCase, and there's no value in making people care.
 fn eqlCamelOrSnake(input: []const u8, snake: []const u8) bool {
     if (std.ascii.eqlIgnoreCase(input, snake)) return true;
@@ -125,7 +125,7 @@ pub const Source = enum(u8) {
 
 pub const Binding = struct {
     stroke: Stroke,
-    /// Command id to run, or null to *unbind* this chord — how a user turns off a default
+    /// Command id to run, or null to *unbind* this chord - how a user turns off a default
     /// without having to know what it was bound to.
     command: ?[]const u8,
     /// The command's arguments as ZON, keyed by its parameters (`.{ .line = 1 }`), or empty to
@@ -142,7 +142,7 @@ pub const Binding = struct {
 pub const Resolution = union(enum) {
     /// No binding; the event should fall through to whatever else wants it.
     none,
-    /// First half of a chord matched — swallow the key and wait for the second stroke.
+    /// First half of a chord matched - swallow the key and wait for the second stroke.
     pending,
     command: Invocation,
     /// An explicit unbind matched. Distinct from `.none` because the key *was* claimed: the
@@ -183,7 +183,7 @@ pub fn add(self: *Keymap, gpa: Allocator, b: Binding) !void {
     try self.bindings.append(gpa, b);
 }
 
-/// Cancel a half-entered chord — call on focus loss or Escape, so a stray `ctrl+k` doesn't
+/// Cancel a half-entered chord - call on focus loss or Escape, so a stray `ctrl+k` doesn't
 /// silently eat the next keystroke minutes later.
 pub fn cancelPending(self: *Keymap) void {
     self.pending = null;
@@ -207,7 +207,7 @@ fn best(self: Keymap, stroke: Stroke, ctx: When, active_owner: ?[]const u8) ?Bin
         };
         const b_rank = (@as(u16, @backingInt(b.source)) << 8) | b.when.weight();
         const w_rank = (@as(u16, @backingInt(w.source)) << 8) | w.when.weight();
-        // Owner-scoped bindings beat otherwise equal-rank global ones — that's the whole
+        // Owner-scoped bindings beat otherwise equal-rank global ones - that's the whole
         // point of active-owner conflict resolution (pixi Export vs fizzy Quick Open).
         const b_owner_boost: u16 = if (b.owner_id != null) 1 else 0;
         const w_owner_boost: u16 = if (w.owner_id != null) 1 else 0;
@@ -238,7 +238,7 @@ fn opensChord(self: Keymap, c: Chord, ctx: When, active_owner: ?[]const u8) bool
 /// Feed one key press. Stateful: consecutive calls complete a chord.
 /// `active_owner` is the focused document's plugin id, or null when none.
 pub fn resolve(self: *Keymap, c: Chord, ctx: When, active_owner: ?[]const u8) Resolution {
-    // Modifier keys alone never resolve, and must not cancel a pending chord — otherwise
+    // Modifier keys alone never resolve, and must not cancel a pending chord - otherwise
     // pressing Ctrl for the second half of `ctrl+k ctrl+c` would abort the chord.
     if (keyIsModifier(c.key)) return .none;
 
@@ -274,14 +274,14 @@ pub fn resolve(self: *Keymap, c: Chord, ctx: When, active_owner: ?[]const u8) Re
     return .none;
 }
 
-/// What `resolve` would answer for `c`, leaving the chord state as it was — for asking about a
+/// What `resolve` would answer for `c`, leaving the chord state as it was - for asking about a
 /// key before it is delivered (the web page's `keydown`) without feeding it twice.
 pub fn peek(self: Keymap, c: Chord, ctx: When, active_owner: ?[]const u8) Resolution {
     var copy = self;
     return copy.resolve(c, ctx, active_owner);
 }
 
-/// Every binding currently mapped to `command` with no arguments — its shortcuts, for rendering
+/// Every binding currently mapped to `command` with no arguments - its shortcuts, for rendering
 /// hints and the Keyboard Shortcuts pane. A binding that carries arguments runs something a menu
 /// row does not, so it is not one.
 pub fn bindingsFor(self: Keymap, gpa: Allocator, command: []const u8) ![]Binding {
@@ -303,7 +303,7 @@ pub fn bindingsFor(self: Keymap, gpa: Allocator, command: []const u8) ![]Binding
 /// 1. Duplicate entries for the same command (e.g. `fizzy.openFolder` from both the dvui
 ///    `open_folder` bind and the profile default) keep only the highest-ranked claim.
 /// 2. Within one owner bucket (all-global, or one plugin), only *adjacent* ranks are
-///    reported — if A shadows B and B shadows C, "A shadows C" is omitted because C is
+///    reported - if A shadows B and B shadows C, "A shadows C" is omitted because C is
 ///    already dead under B.
 /// 3. Owner-scoped claims fork against the top global on that chord (context-dependent).
 pub fn conflicts(self: Keymap, gpa: Allocator) ![]Conflict {
@@ -326,7 +326,7 @@ pub fn conflicts(self: Keymap, gpa: Allocator) ![]Conflict {
         for (claims.items) |*c| {
             if (!c.stroke.eql(b.stroke) or !c.when.eql(b.when)) continue;
             if (!std.mem.eql(u8, c.command, cmd) or !std.mem.eql(u8, c.args, b.args)) continue;
-            // Later equal-rank wins — same tie-break `best()` uses.
+            // Later equal-rank wins - same tie-break `best()` uses.
             if (rank >= c.rank) {
                 c.rank = rank;
                 c.owner_id = b.owner_id;
@@ -422,7 +422,7 @@ pub fn conflicts(self: Keymap, gpa: Allocator) ![]Conflict {
             }
         }
 
-        // Owner-scoped top vs global top — context-dependent, either can win.
+        // Owner-scoped top vs global top - context-dependent, either can win.
         if (global_top) |gt| {
             for (bucket_keys.items, 0..) |key, bi| {
                 if (key == null) continue;
@@ -504,7 +504,7 @@ test "an unmatched second stroke is swallowed, not misfired" {
     defer k.deinit(a);
 
     try t.expect(k.resolve(keys("ctrl+k").first, .{}, null) == .pending);
-    // `ctrl+x` must NOT run cut here — it was typed as the tail of an abandoned chord.
+    // `ctrl+x` must NOT run cut here - it was typed as the tail of an abandoned chord.
     try t.expect(k.resolve(keys("ctrl+x").first, .{}, null) == .unbound);
     // ...and afterwards it works normally again.
     try t.expectEqualStrings("fizzy.cut", k.resolve(keys("ctrl+x").first, .{}, null).command.id);
@@ -540,7 +540,7 @@ test "null command unbinds and claims the key" {
         .{ .stroke = keys("ctrl+b"), .command = null, .source = .user },
     });
     defer k.deinit(a);
-    // Not `.none` — the whole point is to stop the profile binding firing.
+    // Not `.none` - the whole point is to stop the profile binding firing.
     try t.expect(k.resolve(keys("ctrl+b").first, .{}, null) == .unbound);
 }
 

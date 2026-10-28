@@ -114,7 +114,7 @@ live: bool = false,
 seek_stats: SeekStats = .{},
 /// Snapshots taken while the demo played, in tape order: where a seek back goes instead of the
 /// keyframe (see the file comment). Freed when the demo unloads.
-snapshots: std.ArrayListUnmanaged(Snapshot) = .empty,
+snapshots: std.ArrayList(Snapshot) = .empty,
 /// Demo time between snapshots, at most.
 snapshot_every_ms: f64 = 3000,
 /// The snapshot a seek is going back to, put back at the start of the next frame — a seek can
