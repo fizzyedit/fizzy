@@ -100,6 +100,21 @@ pub fn applyChrome(win: *dvui.Window) void {
     _ = win32.ui.windows_and_messaging.SetWindowPos(hwnd_h, null, 0, 0, 0, 0, swp_flags);
 }
 
+/// Whether DWM draws a system backdrop behind `window`: it answers `DWMWA_SYSTEMBACKDROP_TYPE`
+/// only from Windows 11 22H2 (build 22621), and refuses the attribute before it.
+pub fn backdropOffered(window: *c.SDL_Window) bool {
+    if (comptime builtin.target.os.tag != .windows) return false;
+    const hwnd = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(window), c.SDL_PROP_WINDOW_WIN32_HWND_POINTER, null) orelse return false;
+    var kind: u32 = 0;
+    const hr = win32.graphics.dwm.DwmGetWindowAttribute(
+        @as(win32.foundation.HWND, @ptrCast(hwnd)),
+        @as(win32.graphics.dwm.DWMWINDOWATTRIBUTE, @fromBackingInt(@intCast(DWMWA_SYSTEMBACKDROP_TYPE))),
+        &kind,
+        @sizeOf(u32),
+    );
+    return hr >= 0;
+}
+
 /// The backdrop's tint follows the app's theme: DWM draws Acrylic's dark or light variant by this
 /// window attribute, which otherwise follows the system's light or dark mode.
 pub fn setDarkMode(win: *dvui.Window, dark: bool) void {

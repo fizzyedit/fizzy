@@ -18,7 +18,6 @@ const fizzy = @import("fizzy");
 const Tracks = @import("app").Tracks;
 const shim = @import("fizzy_shim.zig");
 const TextEntryWidget = @import("text").TextEntryWidget;
-const chat = @import("chat");
 const sdk = @import("fizzy_sdk");
 
 test "shim brings up a dvui.testing window with usable fizzy globals" {
@@ -93,109 +92,6 @@ test "a shell command shadowed by a user binding gives up its native chord" {
     try std.testing.expect(fizzy.Editor.Keybinds.menuKeybindFor(editor, "fizzy.openFolder").key == null);
     try std.testing.expect(!fizzy.Editor.Keybinds.chordShadowed(editor, "text.format"));
     try std.testing.expect(fizzy.Editor.Keybinds.chordShadowed(editor, "fizzy.openFolder"));
-}
-
-// -- chat composer -----------------------------------------------------------------------------
-//
-// The composer is a dvui text entry that grows with its text to a cap; Enter sends on a desktop and
-// breaks the line on a phone or with Shift. What it decides is unit-tested in
-// `plugins/chat/src/composer.zig`; these run it in real frames with real key and text events.
-
-var chat_view: chat.View = .{};
-var chat_provider: chat.DemoProvider = .{ .allocator = std.testing.allocator };
-var chat_api: sdk.services.chat.Api = undefined;
-
-fn chatFrame() !dvui.App.Result {
-    chat_view.draw(std.testing.allocator, &chat_api);
-    return .ok;
-}
-
-fn chatCtx() !dvui.testing {
-    chat_view = .{};
-    chat_provider = .{ .allocator = std.testing.allocator };
-    chat_api = chat_provider.api();
-    var t = try dvui.testing.init(.{ .allocator = std.testing.allocator });
-    errdefer t.deinit();
-    try dvui.testing.settle(chatFrame);
-    dvui.focusWidget(chat_view.entry_id, null, null);
-    try dvui.testing.settle(chatFrame);
-    return t;
-}
-
-fn deinitChat(t: *dvui.testing) void {
-    t.deinit();
-    chat_view.deinit(std.testing.allocator);
-    chat_provider.deinit();
-}
-
-test "the composer grows with its lines to the cap, then scrolls" {
-    var t = try chatCtx();
-    defer deinitChat(&t);
-
-    const one = chat_view.entry_rect.h;
-    var heights: [12]f32 = undefined;
-    for (&heights) |*h| {
-        try dvui.testing.writeText("line\n");
-        try dvui.testing.settle(chatFrame);
-        h.* = chat_view.entry_rect.h;
-    }
-    // Each new line makes it taller until the cap; 8 lines (7 typed newlines on top of the
-    // first) is the last that does.
-    try std.testing.expect(heights[2] > one);
-    try std.testing.expect(heights[5] > heights[2]);
-    const cap = heights[11];
-    try std.testing.expect(cap > heights[5]);
-    try std.testing.expectApproxEqAbs(cap, heights[8], 0.5);
-    try std.testing.expectApproxEqAbs(cap, heights[10], 0.5);
-    try std.testing.expect(chat_view.entry_scroll.virtual_size.h > chat_view.entry_scroll.viewport.h);
-}
-
-test "Enter sends on a desktop and Shift+Enter breaks the line" {
-    var t = try chatCtx();
-    defer deinitChat(&t);
-
-    try dvui.testing.writeText("hi");
-    try dvui.testing.settle(chatFrame);
-    try dvui.testing.pressKey(.enter, .lshift);
-    try dvui.testing.settle(chatFrame);
-    try std.testing.expectEqual(@as(usize, 0), chat_api.messages().len);
-    try std.testing.expectEqualStrings("hi\n", chat_view.text.items);
-
-    try dvui.testing.pressKey(.enter, .none);
-    try dvui.testing.settle(chatFrame);
-    try std.testing.expectEqual(@as(usize, 2), chat_api.messages().len);
-    try std.testing.expectEqualStrings("hi", chat_api.messages()[0].text);
-    try std.testing.expectEqual(@as(usize, 0), chat_view.text.items.len);
-}
-
-test "Enter is a new line on a phone" {
-    fizzy.core.platform.cached_form_factor = .mobile;
-    defer fizzy.core.platform.cached_form_factor = .desktop;
-    var t = try chatCtx();
-    defer deinitChat(&t);
-
-    try dvui.testing.writeText("hi");
-    try dvui.testing.settle(chatFrame);
-    try dvui.testing.pressKey(.enter, .none);
-    try dvui.testing.settle(chatFrame);
-    try std.testing.expectEqual(@as(usize, 0), chat_api.messages().len);
-    try std.testing.expectEqualStrings("hi\n", chat_view.text.items);
-}
-
-test "three messages go through the demo provider and each is answered" {
-    var t = try chatCtx();
-    defer deinitChat(&t);
-
-    for ([_][]const u8{ "one", "two", "three" }) |word| {
-        try dvui.testing.writeText(word);
-        try dvui.testing.settle(chatFrame);
-        try dvui.testing.pressKey(.enter, .none);
-        try dvui.testing.settle(chatFrame);
-    }
-    const log = chat_api.messages();
-    try std.testing.expectEqual(@as(usize, 6), log.len);
-    try std.testing.expectEqualStrings("three", log[4].text);
-    try std.testing.expectEqualStrings("You said: three", log[5].text);
 }
 
 // -- text editing: auto-closing pairs + auto-indent Enter ---------------------------------------
@@ -12793,6 +12689,42 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         _ = host.revealSurface("fizzy.output");
         try dvui.testing.settle(headlessFrame);
         try std.testing.expect(!(fizzy.core.profile.current() orelse return error.TestUnexpectedResult).enabled);
+    }
+
+    // The dashboard plugin's Needs-you carousel, over the demo provider of three cards: it draws one
+    // card at a time, and a card the person answers leaves the count.
+    {
+        const host = &editor.app.host;
+        const Status = struct { count: usize, index: usize, drawn: usize };
+        const Reader = struct {
+            fn read(h: *sdk.Host) !Status {
+                const zon = switch (h.callCommand("dashboard.status", "", h.arena())) {
+                    .ok => |r| r orelse return error.TestUnexpectedResult,
+                    else => return error.TestUnexpectedResult,
+                };
+                var diag: std.zon.parse.Diagnostics = undefined;
+                return std.zon.parse.fromSlice(Status, .{ .gpa = h.arena(), .arena = h.arena(), .source = try h.arena().dupeSentinel(u8, zon, 0), .diagnostics = &diag });
+            }
+        };
+        try std.testing.expect(host.callCommand("dashboard.show", "", host.arena()) == .ok);
+        for (0..4) |_| _ = try dvui.testing.step(headlessFrame);
+        try std.testing.expectEqualStrings("dashboard.view", host.selectionFor(sdk.keywords.ide.sidebar) orelse "");
+        const cards = host.getServiceTyped(sdk.services.dashboard_cards.Api) orelse return error.TestUnexpectedResult;
+        const before = try Reader.read(host);
+        try std.testing.expectEqual(@as(usize, 3), before.count);
+        try std.testing.expectEqual(@as(usize, 1), before.drawn);
+        try std.testing.expectEqual(@as(usize, 0), before.index);
+
+        cards.act(cards.list()[0].id, cards.list()[0].actions[0].id);
+        for (0..4) |_| _ = try dvui.testing.step(headlessFrame);
+        const after = try Reader.read(host);
+        try std.testing.expectEqual(@as(usize, 2), after.count);
+        try std.testing.expectEqual(@as(usize, 0), after.index);
+        // Settled again: the card that was answered is not drawn, and only one is.
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expectEqual(@as(usize, 1), (try Reader.read(host)).drawn);
+        _ = host.revealSurface("fizzy.output");
+        try dvui.testing.settle(headlessFrame);
     }
 
     // The black box (`fizzy.capture`): the last frames' input written out exactly, and read back.

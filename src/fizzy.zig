@@ -22,7 +22,6 @@ pub const layout_mobile = @import("editor/layout_mobile.zig");
 pub const layout = @import("editor/layout.zig");
 pub const Explorer = @import("editor/explorer/Explorer.zig");
 //pub const Popups = @import("editor/popups/Popups.zig");
-pub const Sidebar = @import("editor/Sidebar.zig");
 pub const OutputLog = @import("editor/OutputLog.zig");
 pub const OutputPanel = @import("editor/OutputPanel.zig");
 /// A run that plays a tape and ends in a verdict (`FIZZY_VERDICT`).

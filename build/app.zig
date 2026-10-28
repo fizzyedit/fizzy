@@ -1079,9 +1079,6 @@ fn addTests(
         // never-blank visible-range guarantee. std-only by design (see block_heights.zig) so
         // the rules the preview's scroll stability rests on are testable without a Window.
         .{ "fizzy-md-block-heights-tests", "plugins/markdown/src/md/block_heights.zig" },
-        // What the chat composer decides (Enter, its height cap, fences). std-only, so it tests
-        // without a Window.
-        .{ "fizzy-chat-composer-tests", "plugins/chat/src/composer.zig" },
         // Fence language tag → file extension, which is the whole of what the markdown plugin
         // knows about languages: the grammar itself comes from whichever plugin claims that
         // extension. std-only, so the table is testable without a Window.
@@ -1098,9 +1095,15 @@ fn addTests(
         // Fade / blur-fade timeline. std-only (see crossfade.zig) — pictures and the clock
         // live in core/anim.zig.
         .{ "fizzy-crossfade-tests", "core/crossfade.zig" },
+        // Hold / slop / tap rules of touch selection. std-only (see TouchHold.zig) — the dvui
+        // half is widgets/SelectableText.zig.
+        .{ "fizzy-touch-hold-tests", "core/TouchHold.zig" },
         // A motion's clock stepped by its frames, a long one held to a step. std-only (see
         // FrameClock.zig); the floats' landing and ghost run on it.
-        .{ "fizzy-frame-clock-tests", "core/FrameClock.zig" },
+        .{ "fizzy-frame-clock-tests", "backend/src/glass/FrameClock.zig" },
+        // Variable-height row bookkeeping for a virtualized list. std-only, so anchors, measurements
+        // and width changes are tested without a Window.
+        .{ "fizzy-height-index-tests", "core/HeightIndex.zig" },
         // Ring buffering and dot-segment filtering for the folder watcher. std-only so it can
         // be tested here; FolderWatcher.zig itself needs a live editor.
         .{ "fizzy-folder-events-tests", "app/watch/folder_events.zig" },
@@ -1108,8 +1111,6 @@ fn addTests(
         // /Applications, and what happens to the copy it leaves. std-only (see
         // install_location.zig); `macos_bundle.zig` asks the system and acts on it.
         .{ "fizzy-install-location-tests", "app/update/install_location.zig" },
-        // Quit's bounded wait on the launch update check's thread. std-only (see bounded_join.zig).
-        .{ "fizzy-bounded-join-tests", "app/update/bounded_join.zig" },
         // The command palette's recently used commands: order, re-use, the cap. std-only
         // (see RecentCommands.zig); `Recents` holds it and stores it in recents.zon.
         .{ "fizzy-recent-commands-tests", "app/RecentCommands.zig" },
@@ -1597,7 +1598,7 @@ fn addTests(
         .core = core_module_test,
         .sdk = sdk_module_test,
     }, fizzy_test_module);
-    const chat_module_test = plugins.chat.addStaticModule(b, target, optimize, .{
+    const dashboard_module_test = plugins.dashboard.addStaticModule(b, target, optimize, .{
         .dvui = dvui_testing_dep.module("dvui_testing"),
         .core = core_module_test,
         .sdk = sdk_module_test,
@@ -1616,6 +1617,7 @@ fn addTests(
         .{ .name = "image", .module = image_module_test },
         .{ .name = "markdown", .module = markdown_module_test },
         .{ .name = "devtools", .module = devtools_module_test },
+        .{ .name = "dashboard", .module = dashboard_module_test },
         .{ .name = "archive", .module = archive_module_test },
     }));
 
@@ -1662,8 +1664,6 @@ fn addTests(
     // built above rather than rooting a second one at the widget — a file may belong to only
     // one module per compilation, and the plugin's own module already owns it.
     integration_module.addImport("text", text_module_test);
-    // The chat composer's growth and Enter are drawn behaviour, so a headless frame checks them.
-    integration_module.addImport("chat", chat_module_test);
     // Same reasoning for the markdown preview: its block virtualization is a claim about what
     // gets *drawn*, which only a real headless frame can check.
     integration_module.addImport("markdown", markdown_module_test);
@@ -2091,6 +2091,7 @@ fn addTests(
         split_tests_module.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
         if (icons_test) |icons| split_tests_module.addImport("icons", icons);
         // `core/widgets.zig` names widgets through `replay`'s anchors; the test `core`'s own.
+        split_tests_module.addImport("tape", core_module_test.import_table.get("tape").?);
         split_tests_module.addImport("replay", core_module_test.import_table.get("replay").?);
         split_tests_module.addImport("glass_look", core_module_test.import_table.get("glass_look").?);
         split_tests_module.addImport("glass", core_module_test.import_table.get("glass").?);
@@ -2136,14 +2137,16 @@ fn addTests(
         check_integration_step.dependOn(&text_plugin_tests.step);
     }
 
+    // The dashboard plugin's own tests (its carousel state and demo provider). The integration
+    // tests import it as a module, and `addTest` collects only from a root module.
     {
-        const chat_plugin_tests = b.addTest(.{
-            .name = "fizzy-chat-plugin-tests",
-            .root_module = chat_module_test,
+        const dashboard_plugin_tests = b.addTest(.{
+            .name = "fizzy-dashboard-plugin-tests",
+            .root_module = dashboard_module_test,
             .filters = test_filters,
         });
-        test_integration_step.dependOn(&b.addRunArtifact(chat_plugin_tests).step);
-        check_integration_step.dependOn(&chat_plugin_tests.step);
+        test_integration_step.dependOn(&b.addRunArtifact(dashboard_plugin_tests).step);
+        check_integration_step.dependOn(&dashboard_plugin_tests.step);
     }
 
     // Give the file extension tests a root; the plugin's lazy exports do not collect them.

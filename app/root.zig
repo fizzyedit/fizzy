@@ -72,6 +72,8 @@ pub const layout = struct {
     /// A place's views as something to pick from — a tab strip, an icon rail, or anything drawn
     /// over the same reorder, select and drag-off behaviour.
     pub const Chooser = @import("layout/Chooser.zig");
+    pub const Rail = @import("layout/Rail.zig");
+    pub const SidePane = @import("layout/SidePane.zig");
     pub const Seed = @import("layout/Seed.zig").Tree;
     /// One place in a static shape written as data, for `-Dapp-layout=<file>.zon` — a tree of
     /// them is the whole shape. See its own doc comment for what data can and cannot say.
@@ -218,6 +220,7 @@ pub const store = struct {
 // whose tests no std-only test root of their own reaches. `Layout`'s own `test` block brings in
 // the split trees, seeds, regions, drop plans and view drag beside it.
 test {
+    _ = update.update_notify;
     _ = settings.Settings;
     _ = view.ViewHost;
     _ = layout.Layout;

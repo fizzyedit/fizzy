@@ -39,7 +39,7 @@ pub const Gpu = @import("profile/Gpu.zig");
 /// Bumped whenever `Profiler`'s layout changes. Part of the key the host publishes it under
 /// (`publish_key`), so a plugin built against another layout finds none and records nothing: the
 /// `abi` field it would check sits wherever its own layout put it, which a reordered struct moves.
-pub const abi: u32 = 5;
+pub const abi: u32 = 6;
 
 pub const max_entries = 1024;
 const max_depth = 48;
@@ -100,6 +100,18 @@ pub const FrameStats = struct {
     inputs_per_s: f64 = 0,
 };
 
+/// Input kinds or the request that caused a recorded frame.
+pub const Cause = packed struct(u8) {
+    press: bool = false,
+    release: bool = false,
+    key: bool = false,
+    text: bool = false,
+    scroll: bool = false,
+    window: bool = false,
+    other: bool = false,
+    refresh: bool = false,
+};
+
 pub const Profiler = struct {
     abi: u32 = abi,
     enabled: bool = false,
@@ -115,6 +127,8 @@ pub const Profiler = struct {
 
     /// The last `history_len` frames: each one's work and submit, and each entry's time and
     /// calls in it.
+    frame_cause: Cause = .{},
+    history_cause: [history_len]Cause = @splat(.{}),
     history_work: [history_len]u32 = @splat(0),
     history_submit: [history_len]u32 = @splat(0),
     /// Each frame's GPU counts, landed like its submit.
@@ -178,21 +192,23 @@ pub const Profiler = struct {
         self.stats = .{};
         self.history_head = 0;
         self.history_filled = 0;
+        self.frame_cause = .{};
+        self.history_cause = @splat(.{});
         self.history_work = @splat(0);
         self.history_submit = @splat(0);
         self.history_gpu = @splat(.{});
         for (&self.history_ns) |*h| h.* = @splat(0);
         for (&self.history_calls) |*h| h.* = @splat(0);
-        if (host_lookback) |lb| lb.reset();
+        if (lookback()) |lb| lb.reset();
     }
 
     /// The frame `ago` frames back (0 the latest recorded): its work, its submit and GPU counts
     /// (0 until the next frame reports them), and entries' times and calls, indexed as `slice`.
     /// Null past what the history holds.
-    pub fn historyFrame(self: *Profiler, ago: usize) ?struct { work_ns: u32, submit_ns: u32, gpu: Gpu, ns: []const u32, calls: []const u16 } {
+    pub fn historyFrame(self: *const Profiler, ago: usize) ?struct { cause: Cause, work_ns: u32, submit_ns: u32, gpu: Gpu, ns: []const u32, calls: []const u16 } {
         if (ago >= self.history_filled) return null;
         const slot = (self.history_head + history_len - 1 - ago) % history_len;
-        return .{ .work_ns = self.history_work[slot], .submit_ns = self.history_submit[slot], .gpu = self.history_gpu[slot], .ns = self.history_ns[slot][0..self.count], .calls = self.history_calls[slot][0..self.count] };
+        return .{ .cause = self.history_cause[slot], .work_ns = self.history_work[slot], .submit_ns = self.history_submit[slot], .gpu = self.history_gpu[slot], .ns = self.history_ns[slot][0..self.count], .calls = self.history_calls[slot][0..self.count] };
     }
 
     pub fn slice(self: *Profiler) []Entry {
@@ -294,6 +310,7 @@ pub const Profiler = struct {
     }
 
     fn frameEnd(self: *Profiler) void {
+        defer self.frame_cause = .{};
         if (!self.active or self.paused or self.frozen) {
             // Still clear the frame's times, or a held frame's add to the next one recorded.
             for (self.slice()) |*e| {
@@ -307,6 +324,7 @@ pub const Profiler = struct {
         const work: u64 = @intCast(@max(0, t - self.frame_start));
         {
             const slot = self.history_head;
+            self.history_cause[slot] = self.frame_cause;
             self.history_work[slot] = @intCast(@min(work, std.math.maxInt(u32)));
             self.history_submit[slot] = 0;
             self.history_gpu[slot] = .{};
@@ -512,13 +530,22 @@ pub fn interceptPluginLine(level: std.log.Level, message: []const u8) bool {
 
 /// The events this frame has to handle, less the one dvui adds to every frame (the pointer's
 /// `position`, so hover follows it): it causes nothing.
-fn causingEvents() usize {
-    var n: usize = 0;
-    for (dvui.events()) |e| {
-        if (e.evt == .mouse and e.evt.mouse.action == .position) continue;
-        n += 1;
-    }
-    return n;
+fn causingEvents(events: []const dvui.Event) Cause {
+    var cause: Cause = .{};
+    for (events) |e| switch (e.evt) {
+        .mouse => |mouse| switch (mouse.action) {
+            .position => {},
+            .press => cause.press = true,
+            .release => cause.release = true,
+            .wheel_x, .wheel_y => cause.scroll = true,
+            else => cause.other = true,
+        },
+        .key => cause.key = true,
+        .text => cause.text = true,
+        .window => cause.window = true,
+        .app => cause.other = true,
+    };
+    return cause;
 }
 
 /// Host only: the app's start has reached `name` (a string literal). The first call is time zero.
@@ -565,7 +592,15 @@ pub fn hostFrameBegin(gpa: std.mem.Allocator, prev_submit_ns: ?u64, gpu_total: ?
     if (host_causes == null and active) host_causes = gpa.create(FrameCauses) catch null;
     if (host_causes) |c| {
         if (active and !was_active) c.* = .{};
-        if (active) c.frameBegin(causingEvents());
+        if (active) {
+            var cause = causingEvents(dvui.events());
+            switch (c.frameBegin(@as(u8, @bitCast(cause)) != 0)) {
+                .events => {},
+                .refresh => cause.refresh = true,
+                .other => cause.other = true,
+            }
+            host_profiler.frame_cause = cause;
+        }
         dvui.dataSet(null, publish_id, causes_key, @as(usize, @intFromPtr(c)));
     }
     was_active = active;
@@ -774,6 +809,18 @@ pub fn report(p: *const Profiler, w: *std.Io.Writer, opts: ReportOptions) std.Io
         try c.write(w, "    ", opts.causes);
         try w.writeAll(",\n");
     };
+    if (opts.hitches > 0 and opts.causes > 0) {
+        try w.writeAll("    .frames = .{\n");
+        for (0..@min(opts.hitches, p.history_filled)) |ago| {
+            const f = p.historyFrame(ago).?;
+            try w.print("        .{{ .work_ns = {d}, .cause = .{{", .{f.work_ns});
+            inline for (comptime std.meta.fieldNames(Cause)) |name| {
+                if (@field(f.cause, name)) try w.writeAll(" ." ++ name ++ " = true,");
+            }
+            try w.writeAll(" } },\n");
+        }
+        try w.writeAll("    },\n");
+    }
     if (opts.spans > 0) if (spans()) |sp| try writeSpans(sp, w, opts.spans);
     try w.writeAll("}\n");
 }
@@ -1012,4 +1059,75 @@ test "hostDeinit frees what recording made, and a second call does nothing" {
     try std.testing.expect(host_lookback == null and host_causes == null and host_spans == null and host_gpa == null);
     try std.testing.expectEqual(@as(usize, 0), Spans.image.load(.acquire));
     hostDeinit();
+}
+
+fn recordTestFrame() !dvui.App.Result {
+    hostFrameBegin(std.testing.allocator, null, null);
+    begin("test", "frame").end();
+    section("section").end();
+    hostFrameEnd();
+    return .ok;
+}
+
+test "inactive event frames do not classify, allocate or time scopes" {
+    var t = try dvui.testing.init(.{});
+    defer t.deinit();
+    defer hostDeinit();
+    host_profiler = .{};
+    for (0..3) |_| {
+        _ = try dvui.currentWindow().addEventMouseButton(.left, .press);
+        _ = try dvui.testing.step(recordTestFrame);
+    }
+    try std.testing.expectEqual(@as(usize, 0), host_profiler.history_filled);
+    try std.testing.expectEqual(@as(u16, 0), host_profiler.count);
+    try std.testing.expectEqual(@as(u8, 0), @as(u8, @bitCast(host_profiler.frame_cause)));
+    try std.testing.expect(host_causes == null and host_lookback == null);
+}
+
+test "recorded frames retain their input or refresh cause and reset forgets them" {
+    var t = try dvui.testing.init(.{});
+    defer t.deinit();
+    defer hostDeinit();
+    host_profiler = .{};
+    is_host = true;
+    want(1000);
+    _ = try dvui.currentWindow().addEventMouseButton(.left, .press);
+    _ = try dvui.testing.step(recordTestFrame);
+    const press = host_profiler.historyFrame(0).?;
+    try std.testing.expect(press.cause.press);
+    try std.testing.expect(press.work_ns > 0);
+    host_causes.?.noteRefresh("test", 1, false);
+    _ = try dvui.testing.step(recordTestFrame);
+    try std.testing.expect(host_profiler.historyFrame(0).?.cause.refresh);
+    try std.testing.expect(!host_profiler.historyFrame(0).?.cause.press);
+    host_profiler.paused = true;
+    _ = try dvui.testing.step(recordTestFrame);
+    try std.testing.expectEqual(@as(usize, 2), host_profiler.history_filled);
+    host_profiler.paused = false;
+    host_profiler.frozen = true;
+    _ = try dvui.testing.step(recordTestFrame);
+    try std.testing.expectEqual(@as(usize, 2), host_profiler.history_filled);
+    current().?.reset();
+    try std.testing.expect(host_profiler.historyFrame(0) == null);
+    try std.testing.expectEqual(@as(u8, 0), @as(u8, @bitCast(host_profiler.frame_cause)));
+}
+
+test "paused and frozen frames discard pending causes before recording resumes" {
+    dvui.io = std.testing.io;
+    var p: Profiler = .{};
+    p.enabled = true;
+    for (0..2) |held| {
+        p.frameBegin(null, null);
+        p.paused = held == 0;
+        p.frozen = held == 1;
+        p.frame_cause = .{ .press = true };
+        p.frameEnd();
+        try std.testing.expectEqual(@as(u8, 0), @as(u8, @bitCast(p.frame_cause)));
+        try std.testing.expectEqual(@as(usize, held), p.history_filled);
+        p.paused = false;
+        p.frozen = false;
+        p.frameBegin(null, null);
+        p.frameEnd();
+        try std.testing.expect(!p.historyFrame(0).?.cause.press);
+    }
 }

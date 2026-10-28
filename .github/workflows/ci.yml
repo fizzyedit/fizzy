@@ -132,6 +132,8 @@ jobs:
       - name: lint
         # Not `zig build lint`: the root build fetches the app's URL dependencies.
         run: zig run scripts/lint.zig
+      - name: scripts/ci-known-failing (Windows' merge-group list)
+        run: bash scripts/test-ci-known-failing.sh
       - name: scripts/zb (build lock)
         run: sh scripts/test-zb.sh
       - name: scripts/check-kickoff
@@ -240,12 +242,27 @@ jobs:
       - name: Compile tests
         shell: bash
         run: bash scripts/ci-retry.sh zig build check --summary all
+      # The merge queue's known-failing wrapper on the awk it runs with there (Git Bash's).
+      - name: scripts/ci-known-failing on Windows
+        if: matrix.name == 'Windows'
+        shell: bash
+        run: bash scripts/test-ci-known-failing.sh
       - name: Run tests
         shell: bash
         # The step the hang is in, bounded on its own: the job's 30 minutes also cover a cold
         # cache, which a healthy run may spend most of before this step starts.
         timeout-minutes: 15
-        run: bash scripts/ci-retry.sh zig build test --summary all
+        # In the merge queue, Windows tolerates the intermittent failures listed in
+        # `.github/known-failing-windows.txt`, which fail on main too and ejected passing PRs;
+        # anything not listed, by binary and test name, still fails (scripts/ci-known-failing.sh).
+        env:
+          KNOWN_FAILING: ${{ github.event_name == 'merge_group' && matrix.name == 'Windows' && '.github/known-failing-windows.txt' || '' }}
+        run: |
+          if [ -n "$KNOWN_FAILING" ]; then
+            bash scripts/ci-retry.sh bash scripts/ci-known-failing.sh "$KNOWN_FAILING" zig build test --summary all
+          else
+            bash scripts/ci-retry.sh zig build test --summary all
+          fi
 
       # Not on Windows: the wasm it compiles is the same from any host, Linux and macOS compile it
       # too, and Windows is the matrix's longest job.
@@ -257,7 +274,9 @@ jobs:
       - name: Compile web (wasm) build
         if: matrix.name != 'Windows'
         shell: bash
-        run: bash scripts/ci-retry.sh zig build check-web
+        run: |
+          bash scripts/ci-retry.sh zig build check-web
+          scripts/test-web-text-input.sh --embed-only
 
       # `check-web` sets no `-Dapp-layout`, so the web build's layout wiring is a no-op there; this
       # builds wasm with an app-owned `.zon` and `.zig` layout, and fails if that wiring is gone.
