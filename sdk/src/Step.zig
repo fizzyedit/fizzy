@@ -1,4 +1,5 @@
-//! One step of a document's history, as its owner reports it to whoever records (`Host.recordStep`):
+//! One step of a document's history, as its owner reports it to whoever records
+//! (`Host.recordStep`):
 //! what the document became, not the input that made it, so it replays exactly at any window size
 //! and in any layout (`plans/RECORDING_PLAN.md`).
 //!
