@@ -1,0 +1,136 @@
+// Two copies of fizzy on one page, against a fake DOM and a fake wasm: the page's own fields keep
+// their keys, a chord goes to the copy it is aimed at, full screen takes the embed, and the editor
+// is fetched and compiled once. Run: `node web/tests/embed.test.mjs`.
+
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+// fizzy.js as the build stamps it, beside a `web.js` that is only a stand-in for dvui's.
+const dir = fs.mkdtempSync(path.join(os.tmpdir(), "fizzy-embed-"));
+const source = fs.readFileSync(new URL("../fizzy.js", import.meta.url), "utf8")
+  .replace("__FIZZY_WEB_STORAGE__", "test")
+  .replaceAll("?cache-buster=TEMPLATE_HASH_WITH_PADDING__ITS_64_BYTES_LONG_THE_SAME_AS_SHA256", "");
+fs.writeFileSync(path.join(dir, "fizzy.js"), source);
+fs.writeFileSync(path.join(dir, "web.js"), `
+export class TextInput {
+  keydown() {}
+  clear() {}
+}
+export class Dvui {
+  constructor() { this.imports = {}; this.hidden_input = null; }
+  setInstance(instance) { this.instance = instance; }
+  setCanvas(canvas) { this.canvas = canvas; }
+  run() { this.hidden_input = globalThis.document.createElement("input"); }
+  requestRender() {}
+}
+`);
+
+class Target {
+  constructor() { this.listeners = {}; this.children = []; this.parentElement = null; }
+  addEventListener(type, fn) { (this.listeners[type] ??= []).push(fn); }
+  removeEventListener() {}
+  dispatch(type, ev) { for (const fn of this.listeners[type] ?? []) fn(ev); }
+  prepend(child) { child.parentElement = this; this.children.unshift(child); }
+}
+class Element extends Target {
+  constructor() { super(); this.style = {}; this.fullscreen = 0; }
+  setAttribute() {}
+  focus() {}
+  getBoundingClientRect() { return { left: 0, top: 0, right: 100, bottom: 100 }; }
+  requestFullscreen() { document.fullscreenElement = this; this.fullscreen++; document.dispatch("fullscreenchange", {}); return Promise.resolve(); }
+}
+class Canvas extends Element {
+  constructor() { super(); this.clientWidth = 100; this.clientHeight = 100; }
+  getContext() { return {}; }
+}
+const document = Object.assign(new Target(), {
+  fullscreenElement: null,
+  baseURI: "http://localhost/",
+  body: new Element(),
+  documentElement: new Element(),
+  createElement: (tag) => (tag === "canvas" ? new Canvas() : new Element()),
+  exitFullscreen() { document.fullscreenElement = null; document.dispatch("fullscreenchange", {}); return Promise.resolve(); },
+});
+const window = Object.assign(new Target(), {
+  devicePixelRatio: 1, scrollX: 0, scrollY: 0, localStorage: new Map(), parent: null,
+  dispatchEvent() {}, matchMedia: () => ({ matches: false, addEventListener() {} }),
+});
+window.parent = window;
+Object.assign(globalThis, {
+  window, document, HTMLCanvasElement: Canvas, Event: class {}, requestAnimationFrame: (f) => setTimeout(f, 0),
+  screen: { width: 800, height: 600 }, TextEncoder, TextDecoder, location: { href: "http://localhost/" },
+});
+Object.defineProperty(globalThis, "navigator", { value: {}, configurable: true });
+
+// The editor: a module that answers FizzyWebKeyBound for the chord Ctrl+S, counting its asks.
+let fetches = 0;
+let compiles = 0;
+const bound = [];
+const toggles = [];
+const memory = new WebAssembly.Memory({ initial: 1 });
+globalThis.fetch = (url) => { fetches++; return Promise.resolve({ url }); };
+WebAssembly.compileStreaming = async () => { compiles++; return { fake: true }; };
+WebAssembly.instantiate = async (module, imports) => {
+  const id = bound.length;
+  bound.push([]);
+  toggles.push(imports.fizzy.fizzy_web_toggle_fullscreen);
+  return {
+    exports: {
+      memory: { buffer: memory.buffer },
+      FizzyWebKeyBuffer: () => 0,
+      FizzyWebKeyBound: (len, mods) => { bound[id].push([len, mods]); return 1; },
+    },
+  };
+};
+WebAssembly.Table = class {};
+
+const { Fizzy } = await import(pathToFileURL(path.join(dir, "fizzy.js")).href);
+
+const mount = async (parent) => {
+  const canvas = document.createElement("canvas");
+  canvas.parentElement = parent;
+  const ready = new Promise((resolve, reject) => {
+    new Fizzy({ canvas, worker: false, persist: false, onReady: resolve, onError: reject, onInstance: () => {} }).run();
+  });
+  await ready;
+  return canvas;
+};
+const a = await mount(new Element());
+const b = await mount(new Element());
+
+assert.equal(compiles, 1, "two copies share one compile");
+assert.equal(fetches, 1, "two copies share one download");
+
+const key = (target) => {
+  const ev = { target, key: "s", ctrlKey: true, metaKey: false, altKey: false, shiftKey: false, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } };
+  window.dispatch("keydown", ev);
+  return ev;
+};
+
+const field = new Element();
+assert.equal(key(field).defaultPrevented, false, "a chord typed into the page's own field stays the page's");
+assert.deepEqual(bound, [[], []], "the editors were not asked");
+
+assert.equal(key(a).defaultPrevented, true, "a chord on the first copy is its");
+assert.deepEqual(bound.map((asks) => asks.length), [1, 0], "only the copy it was aimed at is asked");
+assert.equal(key(b).defaultPrevented, true);
+assert.deepEqual(bound.map((asks) => asks.length), [1, 1]);
+
+b.dispatch("pointerdown", {});
+assert.equal(key(document.body).defaultPrevented, true, "with nothing focused the last copy used has the key");
+assert.deepEqual(bound.map((asks) => asks.length), [1, 2]);
+
+// View › Toggle Full Screen: the copy's own element, not the page; the other copy switches to its own.
+const parentA = a.parentElement;
+const parentB = b.parentElement;
+toggles[0]();
+assert.equal(document.fullscreenElement, parentA, "full screen shows the embed, not the page");
+assert.equal(document.documentElement.fullscreen, 0);
+toggles[1]();
+assert.equal(document.fullscreenElement, parentB, "the other copy takes full screen for itself");
+toggles[1]();
+assert.equal(document.fullscreenElement, null, "and a second toggle leaves it");
+console.log("embed.test: ok");

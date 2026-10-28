@@ -32,6 +32,10 @@ paths, fuzzy matching, the LSP client, the profiler.
   selects instead of expanding, until you type. Fizzy's backends set `win.modifiers` from the OS
   before each mouse event (`backend/src/SDLBackend.zig`, `src/backend/WebBackend.zig`); a new
   backend must too.
+- **Touch selection of read-only text is `widgets.SelectableText`, not a bare `dvui.textLayout`.**
+  dvui selects a word on the first tap, so a finger landing on a message to scroll it selects it.
+  `SelectableText` selects on a 0.45 s hold within 14 pt (`TouchHold.zig`), a tap clears; the mouse
+  is dvui's. `st.tl` is the layout: draw into it with `addText` / `addLink` as before.
 - **Touch or mouse: ask dvui, never infer it.** `dvui.pointerKind()` is the window's answer,
   set as the backend adds events, the same in the app, a plugin dylib and a wasm side module.
   State kept by scanning events (a global, a per-frame key) differs per module and per frame.

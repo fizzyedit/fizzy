@@ -46,6 +46,8 @@ pub const ScrollArea = @import("widgets/ScrollArea.zig");
 /// A scrolling list of rows of different heights that draws only the rows in view, anchored to a
 /// row so rows added or measured above the reader never move it (see `HeightIndex`).
 pub const VirtualList = @import("widgets/VirtualList.zig");
+/// A `dvui.textLayout` whose touch selection is a hold, not a tap (`core/TouchHold.zig`).
+pub const SelectableText = @import("widgets/SelectableText.zig");
 
 /// The menu chain, copied from dvui so a menu can be frosted and so its rows are the same rows
 /// the command palette and the flyouts draw — see `widgets/menu/FloatingMenu.zig`'s header for

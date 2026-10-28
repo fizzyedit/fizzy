@@ -1095,9 +1095,12 @@ fn addTests(
         // Fade / blur-fade timeline. std-only (see crossfade.zig) — pictures and the clock
         // live in core/anim.zig.
         .{ "fizzy-crossfade-tests", "core/crossfade.zig" },
+        // Hold / slop / tap rules of touch selection. std-only (see TouchHold.zig) — the dvui
+        // half is widgets/SelectableText.zig.
+        .{ "fizzy-touch-hold-tests", "core/TouchHold.zig" },
         // A motion's clock stepped by its frames, a long one held to a step. std-only (see
         // FrameClock.zig); the floats' landing and ghost run on it.
-        .{ "fizzy-frame-clock-tests", "core/FrameClock.zig" },
+        .{ "fizzy-frame-clock-tests", "backend/src/glass/FrameClock.zig" },
         // Variable-height row bookkeeping for a virtualized list. std-only, so anchors, measurements
         // and width changes are tested without a Window.
         .{ "fizzy-height-index-tests", "core/HeightIndex.zig" },
@@ -1595,6 +1598,11 @@ fn addTests(
         .core = core_module_test,
         .sdk = sdk_module_test,
     }, fizzy_test_module);
+    const dashboard_module_test = plugins.dashboard.addStaticModule(b, target, optimize, .{
+        .dvui = dvui_testing_dep.module("dvui_testing"),
+        .core = core_module_test,
+        .sdk = sdk_module_test,
+    }, fizzy_test_module);
     // A `.zip` opened as a mounted folder, as the web opens the site (`tests/demos.zig`).
     const archive_module_test = plugins.archive.addStaticModule(b, target, optimize, .{
         .dvui = dvui_testing_dep.module("dvui_testing"),
@@ -1609,6 +1617,7 @@ fn addTests(
         .{ .name = "image", .module = image_module_test },
         .{ .name = "markdown", .module = markdown_module_test },
         .{ .name = "devtools", .module = devtools_module_test },
+        .{ .name = "dashboard", .module = dashboard_module_test },
         .{ .name = "archive", .module = archive_module_test },
     }));
 
@@ -2082,6 +2091,7 @@ fn addTests(
         split_tests_module.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
         if (icons_test) |icons| split_tests_module.addImport("icons", icons);
         // `core/widgets.zig` names widgets through `replay`'s anchors; the test `core`'s own.
+        split_tests_module.addImport("tape", core_module_test.import_table.get("tape").?);
         split_tests_module.addImport("replay", core_module_test.import_table.get("replay").?);
         split_tests_module.addImport("glass_look", core_module_test.import_table.get("glass_look").?);
         split_tests_module.addImport("glass", core_module_test.import_table.get("glass").?);
@@ -2125,6 +2135,18 @@ fn addTests(
         text_plugin_tests.root_module.link_libcpp = !target_is_windows_msvc;
         test_integration_step.dependOn(&b.addRunArtifact(text_plugin_tests).step);
         check_integration_step.dependOn(&text_plugin_tests.step);
+    }
+
+    // The dashboard plugin's own tests (its carousel state and demo provider). The integration
+    // tests import it as a module, and `addTest` collects only from a root module.
+    {
+        const dashboard_plugin_tests = b.addTest(.{
+            .name = "fizzy-dashboard-plugin-tests",
+            .root_module = dashboard_module_test,
+            .filters = test_filters,
+        });
+        test_integration_step.dependOn(&b.addRunArtifact(dashboard_plugin_tests).step);
+        check_integration_step.dependOn(&dashboard_plugin_tests.step);
     }
 
     // Give the file extension tests a root; the plugin's lazy exports do not collect them.
