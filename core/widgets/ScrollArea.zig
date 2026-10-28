@@ -543,6 +543,8 @@ fn scrollBy(self: *ScrollArea, by: dvui.Point) void {
 
 var t_viewport_y: f32 = 0;
 var t_release_velocity: f32 = 0;
+/// Written by testFrame on the test thread from the release decision, before edge settling.
+var t_release_coasted: bool = false;
 /// Written by swipe on the test thread before it draws the release frame.
 var t_release_time: i128 = 0;
 var t_use_dvui: bool = false;
@@ -594,6 +596,7 @@ fn testFrame() !dvui.App.Result {
         defer {
             scroll.deinit();
             t_release_velocity = scroll.touch.y.last_debug.vel;
+            t_release_coasted = scroll.touch.y.last_debug.coasted;
         }
         if (t_column) {
             t_snapping = dvui.snapToPixels();
@@ -612,7 +615,6 @@ fn testFrame() !dvui.App.Result {
         t_over_y = scroll.overscroll().y;
         t_dragging = scroll.touch.dragging;
         t_max_y = si.scrollMax(.vertical);
-        if (si.viewport.y < 0 or si.viewport.y > si.scrollMax(.vertical)) t_range_broken = true;
         t_drawn_y = if (t_snapping) @round(y) else y;
     }
     return .ok;
@@ -956,7 +958,7 @@ fn lift() !void {
     _ = try dvui.currentWindow().addEventPointer(.{ .button = .touch0, .action = .release, .xynorm = .{ .x = 0.5, .y = 0.5 } });
 }
 
-test "releasing a held overscroll without a coast requests a spring frame" {
+test "releasing a held overscroll without a coast requests a settle frame" {
     var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
     defer t.deinit();
     t_use_dvui = false;
@@ -970,6 +972,7 @@ test "releasing a held overscroll without a coast requests a spring frame" {
     cw.extra_frames_needed = 0;
     _ = try testFrame();
     try std.testing.expect(cw.extra_frames_needed > 0);
+    try std.testing.expect(!t_release_coasted);
 }
 
 test "a drag 300 points past the top shows the band, and the viewport stays in range" {

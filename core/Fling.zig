@@ -263,7 +263,7 @@ pub fn cancel(self: *Fling) void {
     self.vel = 0.0;
 }
 
-test "band and pullFor are inverses, and the band follows a third of the finger at 120 points" {
+test "band and pullFor are inverses, and the band stays inside the viewport" {
     for ([_]f32{ 1, 50, 300 }) |b| {
         try std.testing.expectApproxEqAbs(b, band(pullFor(b, 400, .{}), 400, .{}), 1e-3);
         try std.testing.expectApproxEqAbs(-b, band(pullFor(-b, 400, .{}), 400, .{}), 1e-3);
