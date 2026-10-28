@@ -126,8 +126,8 @@ fn tap(self: TextEntry, p: dvui.Point.Physical, was_focused: bool, slop: f32, ev
     if (on_caret) {
         // dvui may toggle on this release before our tap policy runs.
         tl.state.touch_editing = !touch_editing;
-        tl.state.te_show_draggables = true;
-        tl.state.te_show_context_menu = true;
+        tl.state.te_show_draggables = tl.state.touch_editing;
+        tl.state.te_show_context_menu = tl.state.touch_editing;
     } else {
         tl.state.touch_editing = false;
         tl.sel_move = .{ .mouse = .{ .down_pt = tl.data().contentRectScale().pointFromPhysical(p) } };
@@ -147,6 +147,10 @@ var t_focused = false;
 
 // Written by testFrame on the serial test runner thread.
 var t_caret: dvui.Point.Physical = .{};
+// Written by testFrame on the serial test runner thread.
+var t_show_draggables = false;
+// Written by testFrame on the serial test runner thread.
+var t_show_context_menu = false;
 
 fn testFrame() !dvui.App.Result {
     var box = dvui.box(@src(), .{}, .{ .expand = .both });
@@ -157,6 +161,8 @@ fn testFrame() !dvui.App.Result {
     t_caret = te.entry.textLayout.screenRectScale(te.entry.textLayout.state.sel_end_r).r.center();
     t_selection = te.entry.textLayout.selection.*;
     t_touch_editing = te.entry.textLayout.state.touch_editing;
+    t_show_draggables = te.entry.textLayout.state.te_show_draggables;
+    t_show_context_menu = te.entry.textLayout.state.te_show_context_menu;
     t_focused = dvui.focusedWidgetId() == te.entry.data().id;
     return .ok;
 }
@@ -315,9 +321,13 @@ test "a tap on the focused caret opens the menu and another closes it" {
     try frameAfter(400);
     try frameAfter(16);
     try std.testing.expect(t_touch_editing);
+    try std.testing.expect(t_show_draggables);
+    try std.testing.expect(t_show_context_menu);
     try touch(.press, t_caret.x / dvui.currentWindow().rect_pixels.w, t_caret.y / dvui.currentWindow().rect_pixels.h);
     try touch(.release, t_caret.x / dvui.currentWindow().rect_pixels.w, t_caret.y / dvui.currentWindow().rect_pixels.h);
     try frameAfter(400);
     try frameAfter(16);
     try std.testing.expect(!t_touch_editing);
+    try std.testing.expect(!t_show_draggables);
+    try std.testing.expect(!t_show_context_menu);
 }
