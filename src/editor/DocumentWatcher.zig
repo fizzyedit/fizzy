@@ -360,7 +360,7 @@ fn refreshPendingBaselines(self: *DocumentWatcher, editor: *fizzy.Editor) void {
 
 fn reconcile(self: *DocumentWatcher, editor: *fizzy.Editor) void {
     // Collect ids first — `applyEntry` may re-enter `track` and mutate the map.
-    var ids: std.ArrayListUnmanaged(u64) = .empty;
+    var ids: std.ArrayList(u64) = .empty;
     defer ids.deinit(self.gpa);
     var it = self.by_id.iterator();
     while (it.next()) |e| {

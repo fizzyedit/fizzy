@@ -82,7 +82,7 @@ pub fn state(self: *const DocumentIo, doc_id: u64) sdk.EditorAPI.SaveState {
 /// `plugin` is about to be unloaded: its saves still encoding run its code on their workers.
 /// Wait for each, and take it on to its write, which needs nothing of the plugin's.
 pub fn settle(self: *DocumentIo, plugin: *sdk.Plugin) void {
-    var mine: std.ArrayListUnmanaged(*Save) = .empty;
+    var mine: std.ArrayList(*Save) = .empty;
     defer mine.deinit(self.editor.app.gpa);
     for (self.saves.values()) |job| {
         if (job.owner == plugin and job.stage == .encoding) mine.append(self.editor.app.gpa, job) catch {};
@@ -133,7 +133,7 @@ pub fn unmounting(self: *DocumentIo, prefix: []const u8) void {
 /// mount's upload) or their end (the disk's, already written).
 pub fn tick(self: *DocumentIo) void {
     if (self.saves.count() == 0) return;
-    var ready: std.ArrayListUnmanaged(*Save) = .empty;
+    var ready: std.ArrayList(*Save) = .empty;
     defer ready.deinit(self.editor.app.gpa);
     for (self.saves.values()) |job| {
         if (job.stage == .encoding and job.done.load(.acquire)) ready.append(self.editor.app.gpa, job) catch return;
