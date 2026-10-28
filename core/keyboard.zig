@@ -19,8 +19,8 @@ const spring_key = "_keyboard_inset";
 pub fn inset() f32 {
     const win = dvui.currentWindow();
     const spring = dvui.dataGetPtrDefault(null, win.data().id, spring_key, Spring, .{});
-    const target: dvui.Point.Physical = .{ .y = platform.keyboardInset() };
-    if (spring.step(target, @min(dvui.secondsSinceLastFrame(), max_step_s), tune)) dvui.refresh(null, @src(), win.data().id);
+    // Spring stores an unscaled pair; here its coordinates are logical layout points.
+    if (spring.step(.{ .y = platform.keyboard_inset }, @min(dvui.secondsSinceLastFrame(), max_step_s), tune)) dvui.refresh(null, @src(), win.data().id);
     return spring.pos.y;
 }
 
@@ -48,7 +48,9 @@ pub fn scrollIntoView(wd: *dvui.WidgetData, focused: bool) void {
     dvui.scrollTo(.{ .screen_rect = wd.borderRectScale().r });
 }
 
+/// Written by the field test on the test UI thread.
 var t_lines: f32 = 1;
+/// Written by fieldFrame on the test UI thread.
 var t_field_bottom: f32 = 0;
 
 fn fieldFrame() !dvui.App.Result {
@@ -57,11 +59,12 @@ fn fieldFrame() !dvui.App.Result {
     var scroll = ScrollArea.init(@src(), .{ .horizontal = .none, .vertical_bar = .hide }, .{ .expand = .both });
     defer scroll.deinit();
     _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 100, .h = 1000 } });
-    var field = dvui.box(@src(), .{}, .{ .min_size_content = .{ .w = 100, .h = 20 * t_lines } });
-    scrollIntoView(field.data(), true);
+    const field = dvui.textEntry(@src(), .{ .multiline = true }, .{ .min_size_content = .{ .w = 100, .h = 20 * t_lines } });
+    dvui.focusWidget(field.data().id, null, null);
+    _ = @import("widgets.zig").textEntryMenu(field);
     const r = field.data().borderRectScale();
     t_field_bottom = (r.r.y + r.r.h) / r.s;
-    field.deinit();
+    @import("widgets.zig").textEntryDeinit(field);
     return .ok;
 }
 
@@ -69,6 +72,7 @@ test "a focused field ends above the keyboard, and stays there when it grows" {
     var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
     defer t.deinit();
     defer platform.keyboard_inset = 0;
+    t_lines = 1;
     // Laid out once first, so the area knows its content when the keyboard opens.
     try dvui.testing.settle(fieldFrame);
     platform.keyboard_inset = 200;
@@ -81,6 +85,7 @@ test "a focused field ends above the keyboard, and stays there when it grows" {
     try std.testing.expect(t_field_bottom > 400 - 200 - 60);
 }
 
+/// Written by rootFrame on the test UI thread.
 var t_root_h: f32 = 0;
 
 fn rootFrame() !dvui.App.Result {

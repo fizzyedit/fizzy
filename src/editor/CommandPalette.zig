@@ -789,7 +789,7 @@ pub fn draw(self: *CommandPalette, editor: *Editor) void {
             entry.textLayout.selection.moveCursor(std.math.maxInt(usize), false);
         }
         _ = core.widgets.textEntryMenu(entry);
-        entry.deinit();
+        core.widgets.textEntryDeinit(entry);
     }
 
     if (asked) |a| self.drawAskedHint(a, text_color);

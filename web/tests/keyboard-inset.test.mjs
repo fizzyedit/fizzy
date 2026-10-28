@@ -47,4 +47,25 @@ class Target {
   assert.deepEqual(sent, [{ type: 'inset', bottom: 300 }, { type: 'inset', bottom: 260 }, { type: 'inset', bottom: 0 }]);
   assert.ok(sent.every((m) => m.type !== 'size'));
 }
+// A resizes-content page must retain the focused canvas's height; embeds measure overlap.
+{
+  const vv = Object.assign(new Target(), { height: 800, offsetTop: 0 });
+  const win = Object.assign(new Target(), { navigator: {}, innerHeight: 800, visualViewport: vv });
+  let height = 600;
+  let owned = true;
+  const canvas = { style: { height: '100%' }, getBoundingClientRect: () => ({ bottom: 100 + height, height }) };
+  const sent = [];
+  keyboardInset(win, (m) => sent.push(m), canvas, () => owned);
+  win.fire('focusin');
+  height = 300;
+  vv.height = 500;
+  win.innerHeight = 500;
+  win.fire('resize');
+  assert.equal(canvas.style.height, '600px');
+  assert.equal(sent.at(-1).bottom, 200, 'overlap uses the original canvas bottom, not the window bottom');
+  owned = false;
+  vv.fire('resize');
+  assert.equal(sent.at(-1).bottom, 0, 'another focused copy clears the inset');
+  assert.equal(canvas.style.height, '100%', 'the original CSS height is restored');
+}
 console.log('keyboard-inset: ok');

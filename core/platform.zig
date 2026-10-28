@@ -37,12 +37,8 @@ pub var cached_form_override: ?FormFactor = null;
 
 /// How far the on-screen keyboard covers the bottom of the window, in points; 0 when there is
 /// none. The web backend writes it (the canvas keeps its size under a keyboard), and the app lays
-/// out above it. Read it with `keyboardInset()`.
+/// out above it. Written on the UI thread.
 pub var keyboard_inset: f32 = 0;
-
-pub inline fn keyboardInset() f32 {
-    return keyboard_inset;
-}
 
 /// The person's Layout setting, written by the editor each frame (held while a demo plays).
 pub var cached_layout_mode: form_factor.LayoutMode = .auto;
