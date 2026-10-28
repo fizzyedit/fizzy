@@ -19,7 +19,7 @@ the `tape` library (`sdk/tape/`): std-only, no window, shipped with the SDK so a
 author a demo too. The `Player`, the live driver and their input are the `replay` library
 (`sdk/replay/`: dvui and `tape`, nothing of fizzy's), which any dvui app can drive by filling in
 a `Stage`; fizzy's glass overlay and its plugin service are host framework (`app/automation/`). `src/editor/Demo.zig` is fizzy's stage and
-`src/editor/demos/` its bundled demos. Where this is going: `plans/AUTOMATION_PLAN.md`.
+`src/app_demos.zig` + `src/demos/` the app's demos, registered at startup. Where this is going: `plans/AUTOMATION_PLAN.md`.
 
 ## Playing one
 
@@ -27,6 +27,7 @@ a `Stage`; fizzy's glass overlay and its plugin service are host framework (`app
 |---|---|
 | Command palette | **Demo: A Tour of Fizzy**, **Demo: Markdown, Previewed as You Type**; **Demo: Play / Pause**, **Demo: Restart**, **Demo: Stop**; **Demo: Play by Name…** (`fizzy.demo.play`, with a `name` and a start `at`) plays any demo the `demos` service lists, a plugin's too |
 | A plugin | `host.registerDemo(.{ .name, .title, .tape })` in `register` adds its demo to the list; the `demos` service (`sdk.services.demos`) lists every demo and plays one by name |
+| An app | `editor.demos.registerScript(...)` at startup adds its own; Fizzy's app registers its tour and markdown demo in `Entry` |
 | Menu | Help › Take the Tour |
 | Desktop | `FIZZY_DEMO=tour fizzy` plays from launch (how a screen recording is made); `FIZZY_DEMO=<file>.zon` (or `.tape`) plays a tape file, a live one through the live driver |
 | Web | `?demo=tour` plays a bundled demo; `?demo=<url>.zon` (or `.tape`) fetches a tape and plays it. Add `&storage=<name>` to an embed so it keeps its own settings and layout |
@@ -38,7 +39,7 @@ length and whether it is live (`scripts/demos.zig`). Each copy of the app on the
 tapes built from its own commit, so a page embeds `fizzyed.it/app/?demo=demos/hello.tape` and
 the tape always matches the app that plays it. A new tape for the site is a `.zon` in
 `docs/demos/`, and nothing else. A bundled demo plays without fetching anything (`?demo=tour`);
-its tape is for a player that is not that build of fizzy. The scripts in `src/editor/demos/` need
+its tape is for a player that is not that build of fizzy. The scripts in `src/demos/` need
 only `tape`, so the tool builds them on the host; one that needs more breaks `zig build demos`.
 
 While a demo plays:
@@ -205,7 +206,7 @@ user's motion settings, timed in demo time.
 | `picker.empty` | the header of a place with nothing in it |
 
 A demo's files live under its keyframe's `root`, so a path is `demo://tour/src/main.zig`.
-`src/editor/demos/catalog.zig` has helpers (`catalog.file(s, "src/main.zig")`) that build these.
+`src/demos/catalog.zig` has helpers (`catalog.file(s, "src/main.zig")`) that build these.
 
 To make something new targetable, mark it where it is drawn:
 
@@ -225,8 +226,9 @@ natural pixels from its top left.
 
 ## Writing a demo
 
-A bundled demo is a Zig file in `src/editor/demos/` with `pub fn build(s: *Script) !void`, listed
-in `catalog.zig`. It then has a command, a `FIZZY_DEMO` name and a `?demo=` name.
+An app's demo is a Zig file in `src/demos/` with `pub fn build(s: *Script) !void`, listed in
+`src/app_demos.zig` and registered at startup by `Entry`. It then has a command, a `FIZZY_DEMO`
+name and a `?demo=` name. A plugin ships its tape with `Host.registerDemo` in `register`.
 
 ```zig
 pub fn build(s: *Script) !void {

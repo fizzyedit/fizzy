@@ -1,34 +1,11 @@
-//! The demos fizzy ships with. Each is a script (`app.automation.Script`) built when it is played,
-//! so it reads the keymap and window it plays in rather than the ones it was written against.
+//! The anchor names and helpers Fizzy's demo scripts aim at. The demos themselves are the
+//! application's (`src/app_demos.zig`, registered at startup by `Entry`); this file is the
+//! framework half: the names Fizzy and its bundled plugins publish, so a demo reads the keymap
+//! and window it plays in rather than the ones it was written against.
 //!
-//! Adding one: a file beside this with `pub fn build(s: *Script) !void`, and a row below. It is
-//! then a command ("Demo: <title>", `fizzy.demo.<name>`), `FIZZY_DEMO=<name>` natively and
-//! `?demo=<name>` on the web. What a script can aim at is in `docs/AUTOMATION.md`.
-//!
-//! They need nothing but `tape`, so `zig build demos` builds them on the host too, into the tapes
-//! the site's copies of the app serve beside themselves (`scripts/demos.zig`).
-const std = @import("std");
+//! What a script can aim at is in `docs/AUTOMATION.md`.
 const Script = @import("tape").Script;
 const Tape = @import("tape").Tape;
-
-pub const Entry = struct {
-    /// Stable id: the command's suffix, the web's `?demo=`, the mount `demo://<name>`.
-    name: []const u8,
-    title: []const u8,
-    build: *const fn (s: *Script) anyerror!void,
-};
-
-pub const entries = [_]Entry{
-    .{ .name = "tour", .title = "A Tour of Fizzy", .build = @import("tour.zig").build },
-    .{ .name = "markdown", .title = "Markdown, Previewed as You Type", .build = @import("markdown.zig").build },
-};
-
-pub fn find(name: []const u8) ?*const Entry {
-    for (&entries) |*e| {
-        if (std.mem.eql(u8, e.name, name)) return e;
-    }
-    return null;
-}
 
 // ---- what fizzy's demos aim at -------------------------------------------------------------
 //

@@ -1,5 +1,5 @@
 //! `zig build demos`: every tape fizzy hosts, in the binary form, deflated, for a page to fetch.
-//! The bundled demos (`src/editor/demos/catalog.zig`) are built from their scripts, and each
+//! The app's demos (`src/app_demos.zig`) are built from their scripts, and each
 //! hand-written tape (`docs/demos/*.zon`) is read and written again. Beside them, `index.json`
 //! says what each one is, for a page that lists them:
 //!

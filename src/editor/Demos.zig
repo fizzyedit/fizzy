@@ -1,11 +1,12 @@
-//! The `demos` service (`sdk.services.demos`): every demo fizzy can play, and playing one. Fizzy's
-//! own (`Demo.catalog`) first, then each a plugin registered (`Host.registerDemo`).
+//! The `demos` service (`sdk.services.demos`): every demo the app can play, and playing one. The
+//! app registers its own script demos at startup (`Demos.registerScript`); a plugin registers a
+//! tape (`Host.registerDemo`).
 //!
-//! The list is built when it is first asked for and again only once the host's demos change
-//! (`Host.demos_generation`): each bundled script is built once to read its length and chapters,
-//! and each plugin's tape is loaded as a demo would be, so one that would not play (a live tape,
-//! a step no plugin applies, a name fizzy already has) is left out with a warning rather than
-//! listed and then refused.
+//! The list is built when it is first asked for and again only once a registration or the form
+//! factor changes: each script demo is built when listed, so it reads the keymap, window and form
+//! factor it plays in, and each plugin's tape is loaded as a demo would be, so one that would not
+//! play (a live tape, a step no plugin applies, a name the app already has) is left out with a
+//! warning rather than listed and then refused.
 const Demos = @This();
 
 const std = @import("std");
@@ -18,14 +19,33 @@ const Demo = @import("Demo.zig");
 
 const Api = sdk.services.demos.Api;
 
+/// A script demo the app registered at startup. Built when listed, so it can adapt to the form
+/// factor and the materials this machine can draw.
+pub const ScriptDemo = struct {
+    /// Stable id: the command's suffix, the web's `?demo=`, the mount `demo://<name>`.
+    name: []const u8,
+    title: []const u8,
+    build: *const fn (s: *automation.Script) anyerror!void, // lint-allow(anyerror): the script's own error set
+    /// Help row title, when the app asks for one. Null: palette and service only.
+    menu_title: ?[]const u8 = null,
+    /// SF Symbol name for the Help row's macOS item.
+    menu_symbol: ?[]const u8 = null,
+};
+
 editor: *Editor,
 /// The value registered (`Host.registerService`), pointing back here.
 api: Api = undefined,
+/// The app's own script demos, in registration order. Strings are copies.
+script_demos: std.ArrayListUnmanaged(ScriptDemo) = .empty,
+/// Moves whenever `script_demos` changes, so the service lists again.
+script_generation: u32 = 0,
 /// Holds `infos` and every string and chapter list in them, until the next build.
 arena: std.heap.ArenaAllocator,
 infos: std.ArrayList(Api.Info) = .empty,
 /// The host's demos generation `infos` was built for; null: never built.
 built_for: ?u32 = null,
+/// The script-demos generation `infos` was built for; null: never built.
+built_scripts: ?u32 = null,
 /// The form factor the tapes were built for: a phone's tour has other steps and other timings.
 built_phone: bool = false,
 /// The form factor `generation` last saw, and how many times it has changed since: a different
@@ -48,7 +68,44 @@ pub fn bind(self: *Demos) void {
     self.api = .{ .ctx = self, .vtable = &vtable };
 }
 
+/// Register one of the app's own demos. A name already registered is refused; the strings are
+/// copied, so the caller's can go away.
+pub fn registerScript(self: *Demos, demo: ScriptDemo) !void {
+    if (self.scriptDemo(demo.name) != null) return error.DemoExists;
+    const gpa = self.editor.app.gpa;
+    const name = try gpa.dupe(u8, demo.name);
+    errdefer gpa.free(name);
+    const title = try gpa.dupe(u8, demo.title);
+    errdefer gpa.free(title);
+    const menu_title: ?[]u8 = if (demo.menu_title) |t| try gpa.dupe(u8, t) else null;
+    errdefer if (menu_title) |t| gpa.free(t);
+    const menu_symbol: ?[]u8 = if (demo.menu_symbol) |s| try gpa.dupe(u8, s) else null;
+    errdefer if (menu_symbol) |s| gpa.free(s);
+    try self.script_demos.append(gpa, .{
+        .name = name,
+        .title = title,
+        .build = demo.build,
+        .menu_title = menu_title,
+        .menu_symbol = menu_symbol,
+    });
+    self.script_generation +%= 1;
+}
+
+/// The app's script demo named `name`, or null.
+pub fn scriptDemo(self: *const Demos, name: []const u8) ?*const ScriptDemo {
+    for (self.script_demos.items) |*d| if (std.mem.eql(u8, d.name, name)) return d;
+    return null;
+}
+
 pub fn deinit(self: *Demos) void {
+    const gpa = self.editor.app.gpa;
+    for (self.script_demos.items) |d| {
+        gpa.free(d.name);
+        gpa.free(d.title);
+        if (d.menu_title) |t| gpa.free(t);
+        if (d.menu_symbol) |s| gpa.free(s);
+    }
+    self.script_demos.deinit(gpa);
     self.forgetPlaying();
     self.arena.deinit();
 }
@@ -67,7 +124,7 @@ fn from(ctx: *anyopaque) *Demos {
 fn generation(ctx: *anyopaque) u32 {
     const self = from(ctx);
     self.noteFormFactor();
-    return self.editor.app.host.demos_generation +% self.form_changes;
+    return self.editor.app.host.demos_generation +% self.script_generation +% self.form_changes;
 }
 
 fn noteFormFactor(self: *Demos) void {
@@ -81,7 +138,8 @@ fn list(ctx: *anyopaque) []const Api.Info {
     const self = from(ctx);
     self.noteFormFactor();
     const phone = self.seen_phone;
-    if (self.built_for != self.editor.app.host.demos_generation or self.built_phone != phone) self.build();
+    if (self.built_for != self.editor.app.host.demos_generation or
+        self.built_scripts != self.script_generation or self.built_phone != phone) self.build();
     return self.infos.items;
 }
 
@@ -89,11 +147,12 @@ fn build(self: *Demos) void {
     _ = self.arena.reset(.retain_capacity);
     self.infos = .empty;
     self.built_for = self.editor.app.host.demos_generation;
+    self.built_scripts = self.script_generation;
     self.built_phone = fizzy.core.platform.formFactor() == .mobile;
     const gpa = self.editor.app.gpa;
     var lacking: [std.enums.values(fizzy.core.material.Kind).len][]const u8 = undefined;
     const lacks = Demo.materialsLacking(&lacking);
-    for (&Demo.catalog.entries) |*e| {
+    for (self.script_demos.items) |*e| {
         var script: automation.Script = .init(gpa, e.name, e.title);
         script.check = automation.Input.check;
         script.compact = self.built_phone;
@@ -112,7 +171,7 @@ fn build(self: *Demos) void {
     }
     for (self.editor.app.host.demos.items) |d| {
         if (self.find(d.name) != null) {
-            dvui.log.warn("demos: a plugin's demo is named '{s}', as one fizzy has: it is left out", .{d.name});
+            dvui.log.warn("demos: a plugin's demo is named '{s}', as one the app has: it is left out", .{d.name});
             continue;
         }
         var owned = Demo.loadDemoTape(gpa, d.tape) catch |err| {

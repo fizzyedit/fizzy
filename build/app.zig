@@ -1220,7 +1220,7 @@ fn addTests(
         .root_module = b.createModule(.{
             .target = target,
             .optimize = optimize,
-            .root_source_file = b.path("src/editor/demos/tour.zig"),
+            .root_source_file = b.path("src/demos/tour.zig"),
         }),
         .filters = test_filters,
     });

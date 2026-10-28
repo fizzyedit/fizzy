@@ -128,8 +128,8 @@ pub fn wireAppModule(
     );
     if (consumer) |c| {
         c.addImport("app", app_module);
-        // The bundled demos' scripts (`src/editor/demos/`) need only `tape`, so they build on the
-        // host too (`zig build demos`).
+        // Demo scripts (`src/demos/`) need only `tape`, so they build on the host too
+        // (`zig build demos`).
         c.addImport("tape", core_module.import_table.get("tape").?);
     }
     return app_module;

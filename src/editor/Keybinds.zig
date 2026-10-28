@@ -190,10 +190,11 @@ const fizzy_commands = [_]FizzyCommand{
     // control server reads the screen as text, and waits for a load to land before it looks.
     .{ .id = "fizzy.screen", .title = "What Is on Screen", .bind = null, .params = ScreenArgs.params, .runWith = ScreenArgs.bind(cmdScreen), .visibility = .internal },
     .{ .id = "fizzy.settled", .title = "Wait Until Settled", .bind = null, .params = SettledArgs.params, .runWith = SettledArgs.bind(cmdSettled), .visibility = .internal },
-} ++ open_folder_commands ++ demo_commands ++ automation_commands;
+} ++ open_folder_commands ++ automation_commands;
 
-/// Demo automation (`Editor.Demo`): one command per bundled demo, and the transport for whichever
-/// is loaded — so the palette plays, pauses and stops a demo, and a key can be bound to each.
+/// Demo automation (`Editor.Demo`): the transport for whichever demo is loaded — the palette
+/// plays, pauses and stops a demo, and a key can be bound to each. The app's own demos register
+/// their play commands at startup (`Entry.registerAppDemos`).
 const automation_commands = [_]FizzyCommand{
     .{ .id = "fizzy.demo.playPause", .title = "Demo: Play / Pause", .bind = null, .run = cmdDemoPlayPause, .isEnabled = demoLoaded, .icon = icons.tvg.lucide.@"circle-play" },
     .{ .id = "fizzy.demo.restart", .title = "Demo: Restart", .bind = null, .run = cmdDemoRestart, .isEnabled = demoLoaded, .icon = icons.tvg.lucide.@"rotate-ccw" },
@@ -202,7 +203,7 @@ const automation_commands = [_]FizzyCommand{
     .{ .id = "fizzy.demo.play", .title = "Demo: Play by Name…", .bind = null, .params = DemoByName.params, .runWith = DemoByName.bind(cmdDemoPlayNamed), .icon = icons.tvg.lucide.@"circle-play" },
     .{ .id = "fizzy.windowMaterial", .title = "Window Material…", .bind = null, .run = cmdWindowMaterialStep, .params = WindowMaterial.params, .runWith = WindowMaterial.bind(cmdWindowMaterial), .icon = icons.tvg.lucide.@"app-window" },
     .{ .id = "fizzy.demo.speed", .title = "Demo: Speed…", .bind = null, .run = cmdDemoSpeedStep, .isEnabled = demoLoaded, .params = DemoSpeed.params, .runWith = DemoSpeed.bind(cmdDemoSpeed), .icon = icons.tvg.lucide.gauge },
-} ++ demoCatalogCommands();
+};
 
 const TapePath = sdk.Command.Params(struct {
     path: sdk.Command.Arg([]const u8, .{ .description = "The tape to play, a .tape or .zon file, as an absolute path: a recording, an agent's session, a demo. Empty asks with the open dialog." }) = .init(""),
@@ -242,11 +243,11 @@ fn playTapeFile(editor: *Editor, path: []const u8) !void {
 }
 
 const DemoByName = sdk.Command.Params(struct {
-    name: sdk.Command.Arg([]const u8, .{ .description = "The demo to play, by name: fizzy's own (\"tour\") or one a plugin registered. The `demos` service lists them." }) = .init(""),
+    name: sdk.Command.Arg([]const u8, .{ .description = "The demo to play, by name: the app's own (\"tour\") or one a plugin registered. The `demos` service lists them." }) = .init(""),
     at: sdk.Command.Arg(u32, .{ .description = "Where to start, in demo milliseconds: a chapter's start, say. 0 is the beginning." }) = .init(0),
 });
 
-/// Any demo the `demos` service lists (`Demos`), fizzy's or a plugin's.
+/// Any demo the `demos` service lists (`Demos`), the app's or a plugin's.
 fn cmdDemoPlayNamed(state: *anyopaque, args: DemoByName.Args, call: *sdk.Command.Call) anyerror!void {
     if (args.name.len == 0) return call.fail("name the demo to play: the `demos` service lists them", .{});
     const api = editorFromState(state).demos.api;
@@ -312,22 +313,6 @@ fn cmdDemoSpeed(state: *anyopaque, args: DemoSpeed.Args, call: *sdk.Command.Call
     const player = &editorFromState(state).demo.player;
     if (args.rate == 0) player.seq.stepSpeed() else player.seq.setSpeed(args.rate);
     try call.returns(.{ .rate = player.seq.speed });
-}
-
-fn demoCatalogCommands() [Editor.Demo.catalog.entries.len]FizzyCommand {
-    var out: [Editor.Demo.catalog.entries.len]FizzyCommand = undefined;
-    for (Editor.Demo.catalog.entries, &out) |d, *c| c.* = .{
-        .id = "fizzy.demo." ++ d.name,
-        .title = "Demo: " ++ d.title,
-        .bind = null,
-        .run = struct {
-            fn run(state: *anyopaque) anyerror!void {
-                try editorFromState(state).demo.play(d.name);
-            }
-        }.run,
-        .icon = icons.tvg.lucide.@"circle-play",
-    };
-    return out;
 }
 
 fn demoLoaded(state: *anyopaque) bool {
@@ -938,6 +923,12 @@ fn cmdReportBug(_: *anyopaque) anyerror!void {
 /// An app with nowhere to send reports greys Report a Bug out rather than sending them to fizzy.
 fn canReportBug(_: *anyopaque) bool {
     return AppInfo.current.issues_url.len > 0;
+}
+
+/// The pseudo-plugin Fizzy's own commands hang off (`registerCommands`): an app demo command uses
+/// it too, so `runCommand` has an owner to report against.
+pub fn plugin() *sdk.Plugin {
+    return &fizzy_plugin;
 }
 
 /// Register every fizzy action in the Host command registry. Called once during `Editor.init`.

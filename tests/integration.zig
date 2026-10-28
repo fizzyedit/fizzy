@@ -8087,7 +8087,7 @@ test "demo: a slow browser plays it at its pace, not in slow motion" {
 }
 
 test "demo: every bundled demo builds into a valid tape" {
-    for (fizzy.Editor.Demo.catalog.entries) |e| {
+    for (fizzy.Entry.app_demos.entries) |e| {
         var s: automation.Script = .init(std.testing.allocator, e.name, e.title);
         s.check = automation.Input.check;
         e.build(&s) catch |err| {
