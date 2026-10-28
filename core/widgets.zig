@@ -41,6 +41,8 @@ pub const BlurBackdrop = @import("glass").BlurBackdrop;
 pub const LiquidField = @import("glass").LiquidField;
 pub const Popover = @import("widgets/Popover.zig");
 pub const ContextWidget = @import("widgets/ContextWidget.zig");
+/// Keyed variable-height rows with overscan and a stable reading anchor.
+pub const VirtualList = @import("widgets/VirtualList.zig");
 /// `dvui.scrollArea` with a phone's touch drag and fling (see the file for what differs).
 pub const ScrollArea = @import("widgets/ScrollArea.zig");
 

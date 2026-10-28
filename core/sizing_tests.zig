@@ -10,6 +10,7 @@
 //! nothing else: every bug this pair has had was a dvui event-routing or layout-settle rule rather
 //! than arithmetic, and reading the code caught none of them.
 test {
+    _ = @import("widgets/VirtualList.zig");
     _ = @import("widgets/Split.zig");
     _ = @import("widgets/ContextWidget.zig");
     // Touch drag and fling of a scroll area.

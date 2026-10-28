@@ -164,8 +164,9 @@ pub fn wantsMeasure(self: *const HeightIndex, index: usize) bool {
     return self.states.items[index] != .measured;
 }
 
-/// Records what a laid-out row measured. Returns whether the height moved.
+/// Records a finite, nonnegative measured height. Returns whether the height moved.
 pub fn record(self: *HeightIndex, index: usize, h: f32) bool {
+    std.debug.assert(std.math.isFinite(h) and h >= 0);
     const was = self.heights.items[index];
     self.states.items[index] = .measured;
     if (@abs(was - h) < unchanged) return false;
@@ -174,22 +175,43 @@ pub fn record(self: *HeightIndex, index: usize, h: f32) bool {
     return @abs(was - h) >= epsilon;
 }
 
+/// Distrusts measurements at a different width and refreshes estimates in O(n).
+/// Returns whether the width changed. `source` must describe the reconciled rows.
+pub fn invalidateForWidth(self: *HeightIndex, source: Source, width: f32) bool {
+    if (@abs(self.width - width) < epsilon) return false;
+    for (self.states.items, 0..) |*state, i| {
+        switch (state.*) {
+            .estimated => self.heights.items[i] = source.estimate(source.ctx, i, width),
+            .measured => state.* = .stale,
+            .stale => {},
+        }
+    }
+    self.width = width;
+    if (self.len() > 0) self.rebuild();
+    return true;
+}
+
 /// Brings the rows in line with the caller's `count` rows laid out `width` wide. A row whose key
 /// is still present keeps its height and state wherever it moved to; a new row starts at its
 /// estimate. A change of `width` keeps the heights of measured rows as guesses that want measuring
 /// again, and re-estimates the rows never measured. Estimates are only asked of rows in `count`.
 ///
+/// Keys must be unique; estimates must be finite and nonnegative.
 /// Without a `revision` every row's key is compared on each call. A caller that can say when its
 /// rows changed passes a number that changes with them, and an unchanged number skips the scan, so
 /// a steady frame costs nothing in the number of rows.
 pub fn reconcile(self: *HeightIndex, gpa: std.mem.Allocator, source: Source, count: usize, width: f32, revision: ?u64) std.mem.Allocator.Error!void {
     const width_changed = @abs(self.width - width) >= epsilon;
-    if (!width_changed and count == self.len()) {
+    if (count == self.len()) {
         if (count == 0) return;
-        if (revision != null and revision == self.revision) return;
+        if (revision != null and revision == self.revision) {
+            _ = self.invalidateForWidth(source, width);
+            return;
+        }
         for (self.keys.items, 0..) |key, i| {
             if (key != source.key(source.ctx, i)) break;
         } else {
+            _ = self.invalidateForWidth(source, width);
             self.revision = revision;
             return;
         }
@@ -210,6 +232,7 @@ pub fn reconcile(self: *HeightIndex, gpa: std.mem.Allocator, source: Source, cou
     for (0..count) |i| {
         const key = source.key(source.ctx, i);
         keys.appendAssumeCapacity(key);
+        std.debug.assert(!by_key.contains(key));
         by_key.putAssumeCapacity(key, @intCast(i));
         if (self.by_key.get(key)) |was| {
             const state = old_states[was];
@@ -520,4 +543,17 @@ test "an unchanged revision skips the key scan, a new one does not" {
     try testing.expectEqual(@as(?usize, 4), index.indexOf(4));
     try index.reconcile(testing.allocator, rows.source(), rows.count, 100, 2);
     try testing.expectEqual(@as(?usize, null), index.indexOf(4));
+}
+
+test "explicit width invalidation refreshes estimates while retaining stale measurements" {
+    var rows: Rows = .{ .first_id = 0, .count = 10 };
+    var index = try fresh(&rows);
+    defer index.deinit(testing.allocator);
+    _ = index.record(2, 77);
+    try testing.expect(index.invalidateForWidth(rows.source(), 50));
+    try testing.expectEqual(State.stale, index.stateAt(2));
+    try testing.expectEqual(@as(f32, 77), index.heightAt(2));
+    try testing.expectEqual(@as(f32, 80), index.heightAt(3));
+    try testing.expectApproxEqAbs(naiveY(&index, 10), index.total(), 0.01);
+    try testing.expect(!index.invalidateForWidth(rows.source(), 50));
 }
