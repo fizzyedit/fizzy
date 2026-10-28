@@ -4,7 +4,7 @@
 //! **this file draws all controls** so every plugin's settings share the same appearance.
 //! Plugins do not supply a `draw` callback.
 //!
-//! Which controls appear, and where, is `SettingsTree`'s decision — it owns the Settings pane,
+//! Which controls appear, and where, is `SettingsTree`'s decision - it owns the Settings pane,
 //! draws each field's label (with search highlighting), and calls `drawField` for the control
 //! body only. Loaded-with-settings-only still holds: a plugin gets rows only if it registered a
 //! schema. Enabling/disabling a plugin is the Plugins store tab's job (`PluginStore.zig`), never
@@ -15,14 +15,14 @@ const core = @import("core");
 const sdk = @import("fizzy_sdk");
 const settings = sdk.settings;
 
-/// Draw the control for `field` — no label. `SettingsTree` draws the setting name above this.
+/// Draw the control for `field` - no label. `SettingsTree` draws the setting name above this.
 pub fn drawField(schema: *const settings.SettingsSchema, field: settings.Setting, field_index: usize, id_extra: usize) !void {
     const access = schema.access;
     const value = schema.value;
 
     switch (field.kind) {
         // Drawn by `SettingRow.beginInlineControl` on the description's line, so it is
-        // deliberately label-less and non-expanding — the description *is* its label.
+        // deliberately label-less and non-expanding - the description *is* its label.
         .bool => {
             var b = access.getBool(value, field_index);
             if (dvui.checkbox(@src(), &b, null, .{
@@ -114,8 +114,8 @@ pub fn drawField(schema: *const settings.SettingsSchema, field: settings.Setting
 }
 
 /// Fallback control for a setting whose type the pane has no dedicated widget for (a struct, an
-/// array, an optional…): the value as zon text, edited in place. Same commit-on-Enter,
-/// re-seed-when-unfocused contract as `drawString` — plus a rejected parse simply doesn't
+/// array, an optional...): the value as zon text, edited in place. Same commit-on-Enter,
+/// re-seed-when-unfocused contract as `drawString` - plus a rejected parse simply doesn't
 /// commit, so the next unfocused frame reverts the entry to the live value.
 fn drawZon(schema: *const settings.SettingsSchema, field_index: usize, id_extra: usize) !void {
     const access = schema.access;
@@ -129,17 +129,17 @@ fn drawZon(schema: *const settings.SettingsSchema, field_index: usize, id_extra:
     entry.processEvents();
     entry.draw();
     // A paste from the field's menu is an edit made while the field was not focused, so it
-    // commits here — there will be no Enter for it, and the resync above would undo it.
+    // commits here - there will be no Enter for it, and the resync above would undo it.
     const pasted = core.widgets.textEntryMenu(&entry);
     if ((entry.enter_pressed or pasted) and !std.mem.eql(u8, entry.getText(), current)) {
         if (access.setZonText(value, field_index, entry.getText())) {
             access.persist(value, schema.owner);
         }
     }
-    entry.deinit();
+    core.widgets.textEntryDeinit(&entry);
 }
 
-/// Text entry for a `[]const u8` setting. Committed on Enter only — the entry re-seeds itself
+/// Text entry for a `[]const u8` setting. Committed on Enter only - the entry re-seeds itself
 /// from the live value whenever it isn't focused, so an abandoned edit reverts on blur and an
 /// external change (a hand-edit reconciled by `SettingsWatcher`) shows up here without the pane
 /// needing its own change notification. `Access.setString` copies the bytes into schema-owned
@@ -170,7 +170,7 @@ fn drawString(schema: *const settings.SettingsSchema, field: settings.Setting, f
         access.setString(value, field_index, entry.getText());
         access.persist(value, schema.owner);
     }
-    entry.deinit();
+    core.widgets.textEntryDeinit(&entry);
 }
 
 fn drawIntChoices(schema: *const settings.SettingsSchema, field: settings.Setting, choices: []const i64, field_index: usize, id_extra: usize) !void {

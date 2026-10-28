@@ -66,8 +66,8 @@ fn lowerRow(_: void, a: Row, b: Row) bool {
 /// already made a decision about (so an extension assigned to the fallback editor, which offers
 /// nothing, still has a row), plus anything named by a conflict (so a flagged row is reachable —
 /// that row's dropdown is the only way to repair the file).
-fn collectRows(arena: std.mem.Allocator, query: *const fuzzy.Query) std.ArrayListUnmanaged(Row) {
-    var rows: std.ArrayListUnmanaged(Row) = .empty;
+fn collectRows(arena: std.mem.Allocator, query: *const fuzzy.Query) std.ArrayList(Row) {
+    var rows: std.ArrayList(Row) = .empty;
 
     const editor = fizzy.editor();
     const table_hit = fuzzy.scoreBest(&table_keywords, query, .{ .plain = true });
@@ -93,7 +93,7 @@ fn collectRows(arena: std.mem.Allocator, query: *const fuzzy.Query) std.ArrayLis
         else
             "—";
 
-        var candidates: std.ArrayListUnmanaged(*fizzy.sdk.Plugin) = .empty;
+        var candidates: std.ArrayList(*fizzy.sdk.Plugin) = .empty;
         for (editor.app.host.plugins.items) |plugin| {
             if (plugin == editor.app.host.fallback_editor) continue;
             for (plugin.fileTypes()) |e| {

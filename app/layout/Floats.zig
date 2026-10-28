@@ -4,8 +4,8 @@
 //! or closed from its header, it goes back.
 //!
 //! A float is a place like any other: its name keys its assignment, its splits (`Float 1/r1`)
-//! live in the split forest, and the saved layout keeps it. What only a float has — where its
-//! window is, where it came from, how it is landing or closing — is kept here, in z order. The
+//! live in the split forest, and the saved layout keeps it. What only a float has - where its
+//! window is, where it came from, how it is landing or closing - is kept here, in z order. The
 //! rules it follows are values in `float_rules.zig`.
 const std = @import("std");
 const dvui = @import("dvui");
@@ -56,23 +56,23 @@ pub const Float = struct {
     closing: bool = false,
     /// Its window's id, once it has drawn: what dvui's subwindow stack knows it by.
     win_id: dvui.Id = .zero,
-    /// Its window last frame, physical — what a drag reads occlusion against.
+    /// Its window last frame, physical - what a drag reads occlusion against.
     bounds: dvui.Rect.Physical = .{},
-    /// Its header last frame, physical — the handle that moves it. Nothing is aimed at over it.
+    /// Its header last frame, physical - the handle that moves it. Nothing is aimed at over it.
     header: dvui.Rect.Physical = .{},
     /// Its header's close button last frame, physical: the part of the header that does not move
-    /// it — what the OS leaves to the app when it moves a popped-out float's window by its header.
+    /// it - what the OS leaves to the app when it moves a popped-out float's window by its header.
     header_close: dvui.Rect.Physical = .{},
-    /// Its title last frame — the view it shows, as its header says (`titleText`): what its OS
+    /// Its title last frame - the view it shows, as its header says (`titleText`): what its OS
     /// window is called, out of the main window.
     title_buf: [96]u8 = undefined,
     title_len: u8 = 0,
     /// A ghost of itself while a view carried out of it is aimed elsewhere (`ViewDrag.ghosted`): 0
     /// itself, 1 its ghost (`ghostLook`), and on to `gone` when it closes as one. As a ghost it
-    /// still draws its place — the drag is held by that place's corner button — but nothing of the
+    /// still draws its place - the drag is held by that place's corner button - but nothing of the
     /// live float shows: its photograph is what does.
     aside: Fade = .{},
-    /// The float as the drag found it — window, glass, view and shadow — photographed from the
+    /// The float as the drag found it - window, glass, view and shadow - photographed from the
     /// frame at the lift (`liftedFrom`): what fades to the ghost, faint and out of focus, and back
     /// whenever the view is aimed at it again or let go over nothing. A photograph, not the live
     /// float under an alpha: a view may draw in ways no alpha reaches (its own triangles, an alpha
@@ -107,7 +107,7 @@ pub const Viewport = struct {
     /// what stands behind the glass (`Popout.backing`) is the main window's base over it, as
     /// translucent as the main window. Without one, that is opaque.
     material: bool = false,
-    /// Its OS window is framed by the OS — its corners, shadow and resizing from its edges (macOS's
+    /// Its OS window is framed by the OS - its corners, shadow and resizing from its edges (macOS's
     /// titled window, DWM on Windows): the window is the float's glass, and the float resizes
     /// nothing itself.
     os_frame: bool = false,
@@ -117,10 +117,10 @@ pub const Viewport = struct {
     /// Natural units from its window's left edge past the OS's own buttons (`os_buttons`), this
     /// frame (`Popout`): the part of its header that is theirs, not the float's to be moved by.
     buttons_w: f32 = 0,
-    /// The OS asked to close its window (its close button, ⌘W): it closes as from its header.
+    /// The OS asked to close its window (its close button, CmdW): it closes as from its header.
     close_asked: bool = false,
     /// Physical: from where the float is drawn in its band to where its window is over the main
-    /// window's frame, this frame (`Popout`) — for a drag to read the window where it lies over the
+    /// window's frame, this frame (`Popout`) - for a drag to read the window where it lies over the
     /// main window's places (`ViewDrag.mapOccluders`).
     main_delta: dvui.Point.Physical = .{},
     /// Its window lies under the main window in the OS's stacking (`Popout`): a float a window like
@@ -140,8 +140,8 @@ fn osButtons(f: Float) bool {
     return false;
 }
 
-/// Natural units a float out of the main window draws past its window rect — its shadow's reach,
-/// less the margin its rect already holds — and its OS window holds round it, clear: the float
+/// Natural units a float out of the main window draws past its window rect - its shadow's reach,
+/// less the margin its rect already holds - and its OS window holds round it, clear: the float
 /// draws the shadow it draws round its glass in the main window, and looks the same in either.
 /// Its rect is the same size out as in, so going out and coming back moves it and nothing else.
 pub fn outReach() f32 {
@@ -202,11 +202,11 @@ pub const Fade = struct {
 pub const aside_ms: f32 = 300;
 
 /// A float's ghost: how much of it shows, and how far it is out of focus (0 sharp, 1 its whole
-/// frost) — enough to say where it is and that it is coming back, little enough that what it lies
+/// frost) - enough to say where it is and that it is coming back, little enough that what it lies
 /// over reads through it.
 const ghost_alpha: f32 = 0.22;
 const ghost_blur: f32 = 0.55;
-/// Where `Float.aside` goes for a ghost closing — its last view landed elsewhere: past the ghost,
+/// Where `Float.aside` goes for a ghost closing - its last view landed elsewhere: past the ghost,
 /// to nothing.
 const gone: f32 = 2;
 /// The leading traffic light of a titled macOS window, points: its diameter, and how far its left
@@ -216,7 +216,7 @@ const traffic_light_diameter: f32 = 12;
 const traffic_light_inset: f32 = 7;
 
 /// How a float looks `v` of the way aside (`Float.aside`): itself at 0, its ghost at 1, nothing
-/// at `gone` — how much of it shows, and how far out of focus.
+/// at `gone` - how much of it shows, and how far out of focus.
 pub fn ghostLook(v: f32) struct { alpha: f32, blur: f32 } {
     const in = smoothstep(std.math.clamp(v, 0, 1));
     const out = smoothstep(std.math.clamp(v - 1, 0, 1));
@@ -283,14 +283,14 @@ fn dropAsidePhoto(f: *Float) void {
 pub fn endLanding(f: *Float) void {
     const l = f.landing orelse return;
     if (l.photo) |tex| {
-        // Destroyed with the frame — and only in one. With no window (teardown) the GPU is going
+        // Destroyed with the frame - and only in one. With no window (teardown) the GPU is going
         // with the process.
         if (dvui.current_window != null) dvui.Texture.destroyLater(tex);
     }
     f.landing = null;
 }
 
-/// Every float gone — Reset Layout.
+/// Every float gone - Reset Layout.
 pub fn clear(self: *Floats) void {
     for (self.items.items) |*f| {
         endLanding(f);
@@ -328,7 +328,7 @@ pub fn fromRules(r: rules.Rect) dvui.Rect {
     return .{ .x = r.x, .y = r.y, .w = r.w, .h = r.h };
 }
 
-// ── Its ghost ───────────────────────────────────────────────────────────────────────────────────
+// -- Its ghost -----------------------------------------------------------------------------------
 
 /// A drag has just lifted `view` out of place `place`. When that place is a float's (or a split
 /// of one), photograph the float now, while the frame it was last drawn in shows it whole and
@@ -350,8 +350,8 @@ pub fn liftedFrom(l: *Layout, place: []const u8, view: []const u8) void {
 
 /// The photograph of a float fading to its ghost, `blur` of the way to its frost and at `alpha`, in
 /// the window's own rounded shape with its shadow round it fading too. As `core.anim.blit` mixes
-/// a snapshot with its frost — the sharp picture over the frost, at what makes the two `alpha` of
-/// the mix between them — but cut to the window's corners, so the defocus stays the window's.
+/// a snapshot with its frost - the sharp picture over the frost, at what makes the two `alpha` of
+/// the mix between them - but cut to the window's corners, so the defocus stays the window's.
 fn drawAsidePhoto(photo: *Photo, blur: f32, alpha: f32) void {
     const a = std.math.clamp(alpha, 0, 1);
     if (a <= 0.001) return;
@@ -392,7 +392,7 @@ fn holdsView(l: *Layout, name: []const u8, view: []const u8) bool {
     return false;
 }
 
-// ── Closing ─────────────────────────────────────────────────────────────────────────────────────
+// -- Closing -------------------------------------------------------------------------------------
 
 pub const Closing = enum {
     /// Its last view left it: there is nothing to send anywhere.
@@ -424,7 +424,7 @@ pub fn flyShut(state: *Layout.State, i: usize) void {
     const f = &state.floats.items.items[i];
     if (f.closing) return;
     endLanding(f);
-    // Marked, not removed: `draw` may be walking the list, and drops it when it comes to it —
+    // Marked, not removed: `draw` may be walking the list, and drops it when it comes to it -
     // at once if it never drew a window or was a ghost, after the flight shut if it did.
     f.closing = true;
     // Out of the main window, its OS window just goes, as any window does when closed: the
@@ -442,12 +442,12 @@ pub fn flyShut(state: *Layout.State, i: usize) void {
     dvui.refresh(null, @src(), null);
 }
 
-// ── Drawing ─────────────────────────────────────────────────────────────────────────────────────
+// -- Drawing -------------------------------------------------------------------------------------
 
-/// How long a float takes to grow out of the carried glass into its window, as written — the
+/// How long a float takes to grow out of the carried glass into its window, as written - the
 /// card's own change of shape (`ViewDrag.morphProgress`) and a dialog's open.
 const landing_ms: f32 = 300;
-/// How opaque the landing photograph is at its start — the carried card's own (`ViewDrag`).
+/// How opaque the landing photograph is at its start - the carried card's own (`ViewDrag`).
 const photo_opacity: f32 = 0.8;
 
 /// How far a landing has got in time: 0 at the release, 1 in its window.
@@ -464,7 +464,7 @@ pub fn landedAt(land: Landing) f32 {
 /// Draw every float, bottom to top: each a glass window holding its place. Called by the
 /// application after its shape has run and before it publishes the shape's regions, from the
 /// base window (`Layout.drawFloats`), so a float's places register this frame like any other's
-/// — each stamped with its float's layer, the `n`th from the bottom being `n`.
+/// - each stamped with its float's layer, the `n`th from the bottom being `n`.
 pub fn draw(l: *Layout) void {
     const floats = &l.state.floats;
     if (floats.items.items.len == 0) return;
@@ -502,7 +502,7 @@ fn drawOne(l: *Layout, i: usize) bool {
     const scale = cw.natural_scale;
     if (state.floats.items.items[i].closing and state.floats.items.items[i].win_id == .zero) return false;
     // Not drawn before: made this frame by a release inside the place it left, which has drawn
-    // that view already this frame — or brought back from a saved layout before any place has
+    // that view already this frame - or brought back from a saved layout before any place has
     // said it is not theirs. Its place goes in the registry, so from the next frame it claims the
     // view away from where it was; the view in it starts then. Drawn now, the view would be drawn
     // twice in one frame.
@@ -521,7 +521,7 @@ fn drawOne(l: *Layout, i: usize) bool {
             .by_name = true,
         });
         // Brought back, its window starts with its view, next frame. Landing, its window is the
-        // carried glass from this frame on — glass and photograph, the view not yet — so the drop
+        // carried glass from this frame on - glass and photograph, the view not yet - so the drop
         // let go never leaves a frame with nothing where it was. And the window's own first frame,
         // which lays its header out from nothing and makes its glass, is this one, not one of the
         // landing's.
@@ -538,12 +538,12 @@ fn drawOne(l: *Layout, i: usize) bool {
         if (f.landing) |*land| land.clock.step(now);
         if (!f.closing) {
             f.aside.toward(if (ghosted) 1 else 0, now);
-            // The drag is over and the view is not in it any more — it landed elsewhere: the
+            // The drag is over and the view is not in it any more - it landed elsewhere: the
             // photograph is of what the float was, so it comes back as it is now, the live float
             // fading in.
             if (!carried_out and f.aside_photo != null and !holdsView(l, f.name, f.aside_view)) dropAsidePhoto(f);
         } else if (f.aside.to > 0 or f.aside.at() > 0.01) {
-            // Closing as a ghost — its last view landed elsewhere: what is left of it finishes
+            // Closing as a ghost - its last view landed elsewhere: what is left of it finishes
             // going, then so does it, with no flight shut.
             f.aside.toward(gone, now);
         }
@@ -554,14 +554,14 @@ fn drawOne(l: *Layout, i: usize) bool {
     const closing_aside = first.closing and first.aside.to > 0;
     if (closing_aside and (first.aside_photo == null or aside >= gone)) return false;
     // A ghost, on its way to or from one, or going: its photograph is what shows, and nothing of
-    // the live float. By where it is heading as well as where it is — the frame it sets off it
+    // the live float. By where it is heading as well as where it is - the frame it sets off it
     // has not moved yet.
     const stepping = first.aside.to > 0 or aside > 0;
     const as_photo = first.aside_photo != null and (closing_aside or stepping);
-    // Back for good: the live float again. Not while the drag is on — it may go back to its ghost.
+    // Back for good: the live float again. Not while the drag is on - it may go back to its ghost.
     if (!as_photo and first.aside_photo != null and !carried_out) dropAsidePhoto(&state.floats.items.items[i]);
-    // With no photograph it is the live float that fades to its ghost — its view whole, where it
-    // can be drawn into a picture of itself (`Whole`), though not out of focus — and gone, nothing
+    // With no photograph it is the live float that fades to its ghost - its view whole, where it
+    // can be drawn into a picture of itself (`Whole`), though not out of focus - and gone, nothing
     // of it shows.
     // In an OS window of its own, the window fades whole, its material and all (`Popout`): its
     // content stays as it is in it.
@@ -591,7 +591,7 @@ fn drawOne(l: *Layout, i: usize) bool {
     // forming a second time. Fading to its ghost under its alpha, the glass dissolves as a closing
     // window's does; as a photograph, the window draws no glass at all.
     // In an OS window the OS frames (`Viewport.os_frame`), it is a window as the main window is,
-    // drawn as it is: no glass and no shadow of its own — the window's base stands under it, its
+    // drawn as it is: no glass and no shadow of its own - the window's base stands under it, its
     // chrome at the window's opacity over the window's material (`Popout.backing`), and the OS
     // draws the shadow. Imitating a glass window in the main window out there, its frost had to read
     // the main window's picture behind it, which the OS moves the window over faster than fizzy can
@@ -602,7 +602,7 @@ fn drawOne(l: *Layout, i: usize) bool {
     var frost = if (as_photo or plain) null else dialogs.dialogFrost();
     if (frost) |*fr| {
         fr.form = shown;
-        // Landing, it grows into its window — past it and back, when motion is playful — and its
+        // Landing, it grows into its window - past it and back, when motion is playful - and its
         // glass is captured that size from the start.
         if (landing) {
             const grown = scale * (1 + core.motion.overshoot_max);
@@ -611,15 +611,15 @@ fn drawOne(l: *Layout, i: usize) bool {
     }
     var shadow = dialogs.surfaceShadow();
     shadow.alpha *= shown;
-    // Everything else the window draws — its fill, header, the view — fades with it.
+    // Everything else the window draws - its fill, header, the view - fades with it.
     const prev_alpha_window = dvui.alpha(shown);
     defer dvui.alphaSet(prev_alpha_window);
     // Held by the pointer as the frame begins: the user is moving or resizing it. Read before the
-    // window runs, because it lets go of the pointer on the release while it handles its events —
+    // window runs, because it lets go of the pointer on the release while it handles its events -
     // a last move and the release in one frame would otherwise read as not held, and snap back.
     const held_before = first.win_id != .zero and dvui.captured(first.win_id);
     var win_rect = rect;
-    // One window, one header and one place, whatever it is showing — the same widgets, so the
+    // One window, one header and one place, whatever it is showing - the same widgets, so the
     // float keeps its place among the others and its view keeps its state through a drag.
     var win = core.widgets.floatingWindow(@src(), .{
         .rect = &win_rect,
@@ -646,7 +646,7 @@ fn drawOne(l: *Layout, i: usize) bool {
         drawAsidePhoto(&state.floats.items.items[i].aside_photo.?, look.blur, look.alpha);
     }
 
-    // Flying shut: the glass alone, gone when it lands — or, a ghost, its photograph alone.
+    // Flying shut: the glass alone, gone when it lands - or, a ghost, its photograph alone.
     if (first.closing) {
         const flown = if (dvui.animationGet(win_id, "_close_x")) |a| a.done() else true;
         // Out of the main window, its OS window shuts with it, placed from its rect as ever
@@ -666,9 +666,9 @@ fn drawOne(l: *Layout, i: usize) bool {
         if (dvui.eventMatch(e, .{ .id = win_id, .r = bounds })) dvui.raiseSubwindow(win_id);
     };
 
-    // A ghost, its header and place are drawn as ever — the place's corner button holds the drag —
+    // A ghost, its header and place are drawn as ever - the place's corner button holds the drag -
     // but clipped to nothing, so nothing of them shows however the view draws. Fresh, the header
-    // too — laid out, for the next frame to draw it where it goes — and the place not at all.
+    // too - laid out, for the next frame to draw it where it goes - and the place not at all.
     const prev_clip_live = dvui.clipGet();
     if (hide_live or fresh) dvui.clipSet(.{});
     var open = true;
@@ -696,8 +696,8 @@ fn drawOne(l: *Layout, i: usize) bool {
             open = false;
         }
     }
-    // Moved by its header only: the rest is the view's. Not while it lands — it is going where
-    // the drop put it — nor while it is out of the way. Not over its OS window's own buttons
+    // Moved by its header only: the rest is the view's. Not while it lands - it is going where
+    // the drop put it - nor while it is out of the way. Not over its OS window's own buttons
     // either, which are theirs: the move cursor showed over the traffic lights.
     const buttons_w = if (first.viewport) |vp| (if (vp.os_buttons) vp.buttons_w * scale else 0) else 0;
     const drag_area: dvui.Rect.Physical = .{ .x = header.x + buttons_w, .y = header.y, .w = @max(0, header.w - buttons_w), .h = header.h };
@@ -707,7 +707,7 @@ fn drawOne(l: *Layout, i: usize) bool {
         // The view fades with the window round it: in over the photograph it grew out of as it
         // lands; in when the float comes back from a drag without the view that landed
         // elsewhere; out when it fades to its ghost with no photograph to fade as. It fades
-        // whole — drawn into a picture of itself, laid down at the fade (`Whole`) — since a view
+        // whole - drawn into a picture of itself, laid down at the fade (`Whole`) - since a view
         // may draw where no alpha reaches (the workbench's home page sets its own; a view drawing
         // its own triangles is handed alpha to apply itself), and under an alpha alone that much
         // of it was there at once, ahead of its window. With nothing to draw into (no targets, a
@@ -720,7 +720,7 @@ fn drawOne(l: *Layout, i: usize) bool {
         const prev_alpha = if (whole != null) dvui.alpha(1) else dvui.alpha(view_fade);
         if (whole != null) dvui.alphaSet(1);
         // Inset from the glass's sides and foot by its corner radius: a view that draws to its
-        // edges — a document's canvas and rulers — would otherwise run flush to the glass and
+        // edges - a document's canvas and rulers - would otherwise run flush to the glass and
         // under its rounded corners. The header is its top. In the shape's card where it has one
         // (`Layout.card`), as the window's places are: the glass then frames the card as the
         // window's fill frames its own, and the places a split makes, and the panes a workbench
@@ -765,7 +765,7 @@ fn drawOne(l: *Layout, i: usize) bool {
         if (held and !f.closing and !win_rect.equals(vp.rect)) vp.rect = fromRules(rules.resized(toRules(win_rect)));
         return true;
     }
-    // Moved or resized by the user: remember where, no smaller than a float may be. Only theirs —
+    // Moved or resized by the user: remember where, no smaller than a float may be. Only theirs -
     // the window holds a float on screen when it shrinks (`FloatingWindowWidget`), and that is
     // shown, not kept, so the float is back where they left it when the window grows again.
     if (held and !landing and !f.closing and !win_rect.equals(f.rect)) {
@@ -799,7 +799,7 @@ const Whole = struct {
 };
 
 /// The photograph the float grew out of, over its body (below `header`), cropped to fill it, at
-/// `fade` of its carried opacity — in its window, or the carried glass its OS window grows out of
+/// `fade` of its carried opacity - in its window, or the carried glass its OS window grows out of
 /// (`Popout`). `radius` is physical.
 pub fn drawPhoto(tex: dvui.Texture, size: dvui.Size.Physical, bounds: dvui.Rect.Physical, header: dvui.Rect.Physical, radius: f32, fade: f32) void {
     if (fade <= 0.01) return;

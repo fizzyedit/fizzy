@@ -1,12 +1,12 @@
 //! The screen as changes on a base: what a snapshot (`replay.Snapshot`) says, each node given a key
-//! that stays the same from one frame to the next, and what changed between two of them — the
+//! that stays the same from one frame to the next, and what changed between two of them - the
 //! nodes added, removed, and changed in name, place or focus. An agent reads what its action did
 //! instead of finding it in two near-identical screens; a stream sends a frame's changes instead of
 //! the whole screen (plans/CONTROL_SERVER_PLAN.md).
 //!
 //! **Keys.** A node with a tag is its tag: tags are what widgets publish to be found by. One without
 //! is the path to it from the nearest node with a tag, a `role:name` per step, numbered among its
-//! like siblings (`fizzy.window:main/tab:notes.md`, `…/button:#2`). A snapshot's `parent` is an
+//! like siblings (`fizzy.window:main/tab:notes.md`, `.../button:#2`). A snapshot's `parent` is an
 //! index, which shifts whenever anything above changes; a key does not. Keys are unique within a
 //! screen: one already given out is never given again.
 //!

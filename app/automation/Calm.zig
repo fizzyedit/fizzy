@@ -1,11 +1,11 @@
 //! Where a callout is, frame to frame: a guide's calm rather than a label stuck to the pointer.
 //!
-//! A callout keeps its spot while the spot is still good — on the window, clear of everything the
-//! viewer is watching, near enough to what it is about — and moves only on the tape's beats: when
+//! A callout keeps its spot while the spot is still good - on the window, clear of everything the
+//! viewer is watching, near enough to what it is about - and moves only on the tape's beats: when
 //! what it is about changes (a new subject), or when its spot stops being good (a bar grew over it,
 //! the subject moved away). A pointer's wiggle is neither, so it stays put through one. When it
 //! moves, it goes once to the best spot by the new subject (`choose`), along a gentle curve eased in
-//! and out, over 300–600 ms by how far it goes; with motion off it jumps there instead, with the same
+//! and out, over 300-600 ms by how far it goes; with motion off it jumps there instead, with the same
 //! calm about when.
 //!
 //! Pure: the overlay hands it what it measured (`In`), in natural units and demo time, and draws
@@ -170,7 +170,7 @@ fn fits(self: *const Calm, in: In) bool {
     return on and apart(r, near) <= reach;
 }
 
-/// The ease of its travel: slow away, slow in, no overshoot — a guide does not swing.
+/// The ease of its travel: slow away, slow in, no overshoot - a guide does not swing.
 fn easeInOut(t: f32) f32 {
     const u = std.math.clamp(t, 0, 1);
     return if (u < 0.5) 4 * u * u * u else 1 - std.math.pow(f32, -2 * u + 2, 3) / 2;
@@ -183,8 +183,8 @@ pub const Spot = struct {
     covered: f32 = 0,
 };
 
-/// The best spot for it: beside what it is about — right, below, left or above it, then the
-/// window's corners — taking only one that covers none of it and nothing it must keep clear, and
+/// The best spot for it: beside what it is about - right, below, left or above it, then the
+/// window's corners - taking only one that covers none of it and nothing it must keep clear, and
 /// among those the nearest, the side the tape asks for (`In.side`) first, and `here` (where it is)
 /// if it is one of them. Failing every one, the one that covers least.
 ///

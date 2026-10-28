@@ -1,7 +1,7 @@
 //! A **chooser**: the views of one place, laid out as something to pick from.
 //!
 //! The tab strip above a place holding several views and the icon rail beside the sidebar are the same
-//! control — a list of a place's views, where picking one selects it there — differing only in
+//! control - a list of a place's views, where picking one selects it there - differing only in
 //! which way they run, where they sit, and what an item looks like. This is that control. What it
 //! does is the same everywhere; what it looks like is the caller's:
 //!
@@ -20,19 +20,19 @@
 //!
 //!   * a click (a tap, for a finger) selects the view in its place;
 //!   * dragging an item lifts it into the ordinary view drag, the one drag a view is ever carried
-//!     in: along a chooser — this one, or another place's — it is carried as a tab in glass, and
+//!     in: along a chooser - this one, or another place's - it is carried as a tab in glass, and
 //!     the chooser under it opens a slot where it would go in (`ViewDrag.offerChooser` with where
 //!     along it); let go there it goes in (`ViewDrag.insertInto`), which back on its own chooser
-//!     moves it along the place's list — kept as the place's order (`State.order`), or its
+//!     moves it along the place's list - kept as the place's order (`State.order`), or its
 //!     assignment's order when it has one, never as a new assignment, which would freeze a keyword
 //!     place against views installed later. Off the choosers it is the view drag over the places,
-//!     to land on another place or split one — the gesture the corner chooser starts;
+//!     to land on another place or split one - the gesture the corner chooser starts;
 //!   * a finger drag that moves on at once scrolls instead, and one held still first lifts
 //!     (`core.widgets.Tabs`).
 //!
 //! **What the caller decides:** what an item looks like (`label` and `icon` are the two stock
-//! looks), where the chooser sits — inside its place or beside it, before the place is even
-//! declared this frame — which views it lists and in what groups (the rail keeps two, a scrolling
+//! looks), where the chooser sits - inside its place or beside it, before the place is even
+//! declared this frame - which views it lists and in what groups (the rail keeps two, a scrolling
 //! list and a pinned footer: two choosers over one place), anything drawn between items, and what
 //! picking the already-selected item means (`reselected`).
 //!
@@ -55,14 +55,14 @@ pub const Options = struct {
     scroll: bool = true,
     /// Two choosers over one place in one frame (the rail's list and its footer) differ by this.
     id_extra: usize = 0,
-    /// Options for the chooser's outermost box (`expand`, `min_size_content`, …).
+    /// Options for the chooser's outermost box (`expand`, `min_size_content`, ...).
     outer: dvui.Options = .{},
     /// Shade the ends the items continue past when they scroll.
     scroll_shadows: bool = false,
 };
 
 pub const ItemOptions = struct {
-    /// Show the view's title on hover — for a chooser whose items do not say it themselves.
+    /// Show the view's title on hover - for a chooser whose items do not say it themselves.
     tooltip: bool = false,
     /// A further line under the title in that tooltip (what a badge means, say).
     tooltip_detail: ?[]const u8 = null,
@@ -97,7 +97,7 @@ const Lift = struct { id: []const u8, rect: dvui.Rect.Physical, event: u16 };
 /// What a chooser keeps between frames, in dvui's store under wherever it is drawn, so it lives
 /// as long as the chooser does and two never share one.
 const Kept = struct {
-    /// Where the slot opens: before the item drawn at this index, or past the last — read last
+    /// Where the slot opens: before the item drawn at this index, or past the last - read last
     /// frame from where the carried view was over the chooser. Null when nothing carried is.
     slot_at: ?usize = null,
     /// How long, along the chooser, the item last lifted off it was, and which it was (a hash of
@@ -109,7 +109,7 @@ const Kept = struct {
     item_len: f32 = 0,
 };
 
-/// A chooser for `place`: a declared region, or `.{ .keywords = … }` for the place with those
+/// A chooser for `place`: a declared region, or `.{ .keywords = ... }` for the place with those
 /// keywords. Draw items with `item`, then `deinit`.
 pub fn init(src: std.lang.SourceLocation, f: *Layout, place: Region, opts: Options) Chooser {
     const key = place.selectionKey();
@@ -154,7 +154,7 @@ pub fn init(src: std.lang.SourceLocation, f: *Layout, place: Region, opts: Optio
     };
 }
 
-/// The place's views, in its order — less the one the view drag is carrying, which is in the
+/// The place's views, in its order - less the one the view drag is carrying, which is in the
 /// hand. Draw an item for whichever of them this chooser lists.
 pub fn views(self: *const Chooser) []const *Layout.Surface {
     return self.all;
@@ -234,12 +234,12 @@ pub const Item = struct {
     }
 };
 
-/// The view picked this frame, if any — already selected in its place.
+/// The view picked this frame, if any - already selected in its place.
 pub fn picked(self: *const Chooser) ?[]const u8 {
     return self.picked_id;
 }
 
-/// The view picked this frame that was *already* selected — a second click on the showing tab.
+/// The view picked this frame that was *already* selected - a second click on the showing tab.
 /// Nothing is done for it; the caller says what it means (the rail closes or opens its place).
 pub fn reselected(self: *const Chooser) ?[]const u8 {
     return self.picked_again_id;
@@ -282,8 +282,8 @@ fn measureItems(self: *Chooser) void {
 }
 
 /// An item lifted this frame (`Tabs.Tab.lifted`): carry it in the view drag, from where it stood.
-/// Out of an open place it is the place's own drag, which the place drives — it carries what the
-/// place shows, so it is shown first — and out of a shut one (a rail beside a closed sidebar) a
+/// Out of an open place it is the place's own drag, which the place drives - it carries what the
+/// place shows, so it is shown first - and out of a shut one (a rail beside a closed sidebar) a
 /// view carried loose, as a card lifted out of the picker is: the place is not drawing to drive a
 /// drag. Either way the slot it leaves, if it is carried back along here, is its own length.
 fn carryLifted(self: *Chooser) void {
@@ -311,12 +311,12 @@ fn carryLifted(self: *Chooser) void {
 }
 
 /// While a view is carried, the chooser is somewhere it can go: into this chooser's place, as one
-/// of its views, where along it the pointer is — a rail beside a sidebar as much as a strip inside
+/// of its views, where along it the pointer is - a rail beside a sidebar as much as a strip inside
 /// a panel, and the chooser it was lifted off as much as any other. It says so to the drag
 /// (`ViewDrag.offerChooser`), which lands a release over it there (`ViewDrag.insertInto`); and
 /// while it is the chooser the view is over, it opens a slot there next frame (`openSlot`). It
-/// reaches half its thickness past itself toward its place's inside — below a strip, right of a
-/// rail — so a hand drifting a little off it is still among its items.
+/// reaches half its thickness past itself toward its place's inside - below a strip, right of a
+/// rail - so a hand drifting a little off it is still among its items.
 fn offerDrop(self: *Chooser) void {
     const f = self.layout;
     self.kept.slot_at = null;
@@ -327,7 +327,7 @@ fn offerDrop(self: *Chooser) void {
     const p = dvui.currentWindow().mouse_pt;
     const at = self.insertAt(p);
     ViewDrag.offerChooser(f, name, bounds, true, at.insert);
-    // The chooser the view is over, and its place could take it — the drag's own reading, which
+    // The chooser the view is over, and its place could take it - the drag's own reading, which
     // asks which window is on top there and what the place accepts. Of two choosers over one
     // place (the rail's list and footer), the one the view is over by its bounds.
     const o = ViewDrag.chooserAt(f.state, p) orelse return;
@@ -339,8 +339,8 @@ fn offerDrop(self: *Chooser) void {
 const reach: f32 = 1.5;
 
 /// Where a view let go at `p` goes in: before the first item (not the carried one) whose middle is
-/// past it along the chooser — read as if the open slot were not there, so the slot does not chase
-/// the pointer — else after this chooser's last item, which the place may follow with views this
+/// past it along the chooser - read as if the open slot were not there, so the slot does not chase
+/// the pointer - else after this chooser's last item, which the place may follow with views this
 /// chooser does not list. `index` counts the items drawn before it, the carried one left out.
 fn insertAt(self: *const Chooser, p: dvui.Point.Physical) struct { index: usize, insert: ViewDrag.Insert } {
     const a = if (self.across()) p.x else p.y;
@@ -360,7 +360,7 @@ fn insertAt(self: *const Chooser, p: dvui.Point.Physical) struct { index: usize,
     return .{ .index = index, .insert = if (last) |id| .{ .after = id } else .end };
 }
 
-/// The declared region a chooser's place is — by its own name, or the one with its keywords.
+/// The declared region a chooser's place is - by its own name, or the one with its keywords.
 fn regionOf(f: *Layout, place: *const Region) ?Region {
     if (place.name.len > 0) {
         for (f.state.regions.items) |r| if (std.mem.eql(u8, r.name, place.name)) return r;
@@ -375,7 +375,7 @@ fn placeName(f: *Layout, place: *const Region) ?[]const u8 {
     return if (r.name.len > 0) r.name else null;
 }
 
-// ── The two stock looks ────────────────────────────────────────────────────────────────────────
+// -- The two stock looks ------------------------------------------------------------------------
 
 /// A tab's look: the view's title, uppercase, in the heading font, highlighted when selected and
 /// brightened under the pointer.

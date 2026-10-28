@@ -2,7 +2,7 @@
 //!
 //! Plugins, their lifecycle and file-type ownership; the open documents and the save/close
 //! bookkeeping; settings, recents and the keymap as the user configured them; the layout
-//! state and the watchers. Fizzy's `Editor` embeds one and adds what is fizzy's own — its
+//! state and the watchers. Fizzy's `Editor` embeds one and adds what is fizzy's own - its
 //! shape, its menus, its commands and settings groups. The methods still live on `Editor`
 //! and move here section by section; the fields moved first so every caller already names
 //! the right owner.
@@ -36,7 +36,7 @@ pub const FileStamp = struct {
 };
 
 /// Three-way form of `readPluginEnabled`: `.unset` (no `.enabled` field on record at all) is
-/// what separates a freshly dropped-in plugin from one the user deliberately switched off — both
+/// what separates a freshly dropped-in plugin from one the user deliberately switched off - both
 /// are "not enabled", but only the first is an undecided offer (see `undecided_plugin_ids`).
 pub const PluginEnabledState = enum { unset, enabled, disabled };
 
@@ -59,11 +59,11 @@ gpa: std.mem.Allocator,
 layout: Layout.State = .{},
 
 /// The per-frame `Layout`, live only while the shape is drawing. A plugin declaring a region
-/// through `Host.region` needs it, and it is a local in the draw loop by design — nothing about a
+/// through `Host.region` needs it, and it is a local in the draw loop by design - nothing about a
 /// layout should outlive the frame that drew it.
 frame_layout: ?*Layout = null,
 
-/// Small per-frame allocations — path joins, null terminations, labels. Never freed one by
+/// Small per-frame allocations - path joins, null terminations, labels. Never freed one by
 /// one; reset (`retain_capacity`) every frame.
 arena: std.heap.ArenaAllocator,
 
@@ -94,7 +94,7 @@ plugin_data_refused: std.ArrayList([]u8) = .empty,
 /// Plugin registry + service locator exposed to plugins
 host: Host,
 
-/// The ids this executable links in statically, as its build listed them — see
+/// The ids this executable links in statically, as its build listed them - see
 /// `build/sdk.zig`'s `bundledPluginsModule`. Borrowed comptime strings; the runtime fills this
 /// in when it registers them.
 ///
@@ -107,7 +107,7 @@ bundled_plugin_ids: []const []const u8 = &.{},
 files_service: sdk.services.files.Api = undefined,
 
 /// The project's file set, shared with every plugin through `host.files`. The app owns it
-/// because more than one plugin reads it — see `core.FileTable`. Its `env` is wired in
+/// because more than one plugin reads it - see `core.FileTable`. Its `env` is wired in
 /// `postInit`, since the ignore rules and the watcher it asks about live on this same `Editor`
 /// and so need its final address.
 file_table: core.FileTable,
@@ -119,12 +119,12 @@ loaded_plugin_libs: std.ArrayList(PluginLoader.LoadedLib) = .empty,
 
 /// Runtime bookkeeping of user-plugin ids that are present on disk but not loaded
 /// (explicitly disabled, or freshly dropped into `plugins/` with no `.enabled = true`).
-/// Persistence lives per-plugin as `.plugins.<id>.enabled` in `settings.zon` (R12) — this
+/// Persistence lives per-plugin as `.plugins.<id>.enabled` in `settings.zon` (R12) - this
 /// list is only the UI/skip-load set for the current session. Freed in `deinit`.
 disabled_plugin_ids: std.ArrayList([]const u8) = .empty,
 
 /// Subset of `disabled_plugin_ids`: on disk with **no `.plugins.<id>.enabled` field on record at
-/// all** — i.e. a build the user dropped in (or `zig build install`ed from a plugin repo) that
+/// all** - i.e. a build the user dropped in (or `zig build install`ed from a plugin repo) that
 /// fizzy has never been told to run. Distinct from a plugin the user deliberately switched off,
 /// which carries an explicit `.enabled = false`: that one is a settled decision and must stay
 /// quiet, while this one is an undecided offer and gets the store's "Load" button plus the
@@ -135,29 +135,29 @@ undecided_plugin_ids: std.ArrayList([]const u8) = .empty,
 
 /// Runtime bookkeeping of user-plugin ids the user opted **out** of store updates for
 /// (`.plugins.<id>.auto_update = false` in `settings.zon`). Stored as the opt-out set rather than
-/// the opt-in one because auto-update defaults to *on* — an absent entry is the overwhelmingly
+/// the opt-in one because auto-update defaults to *on* - an absent entry is the overwhelmingly
 /// common case and must not need a list membership to be right. Whether an update the pass finds
 /// is applied silently or offered in the update window is `Settings.plugin_update_mode`, one
 /// app-wide choice. Seeded by `seedPluginFlags`; freed in `deinit`.
 auto_update_off_ids: std.ArrayList([]const u8) = .empty,
 
-/// Fizzy-only pending `.plugins.<id>` reserved-field writes (id → changed fields), drained by
+/// Fizzy-only pending `.plugins.<id>` reserved-field writes (id -> changed fields), drained by
 /// `writeMergedSettings` alongside `host.plugin_settings_pending`. Never touched by a
-/// plugin itself — only by `setPluginEnabled` / `setPluginAutoUpdate` / store install. Keys are
+/// plugin itself - only by `setPluginEnabled` / `setPluginAutoUpdate` / store install. Keys are
 /// app-allocator-owned.
 plugin_flags_pending: std.array_hash_map.String(PendingPluginFlags) = .empty,
 
-/// Fizzy-only pending `.plugins.<id>.extensions` writes (id → the plugin's complete new list).
+/// Fizzy-only pending `.plugins.<id>.extensions` writes (id -> the plugin's complete new list).
 /// A separate map from `plugin_flags_pending` because the value is owned, variable-length data
 /// rather than two bools: both the key and every extension string are app-allocator-owned and
 /// freed when `writeMergedSettings` drains it. Written only by `resolveExtensionConflict`.
 plugin_extensions_pending: std.array_hash_map.String([]const []const u8) = .empty,
 
-/// In-memory `ext → owning plugin id` map, rebuilt by `rebuildExtensionOwnerCache` from the
+/// In-memory `ext -> owning plugin id` map, rebuilt by `rebuildExtensionOwnerCache` from the
 /// persisted per-plugin `.extensions` lists of the *currently loaded* plugins. Backs
 /// `EditorAPI.extensionOwnerOverride`, i.e. step 1 of `Host.pluginForExtension`.
 ///
-/// **Every string here is duped and owned by the Editor** — never a slice borrowed from
+/// **Every string here is duped and owned by the Editor** - never a slice borrowed from
 /// `plugin.id`, which lives inside a dylib image that `dlclose` can unmap out from under us
 /// (see `Host.unregisterPlugin`'s ordering note).
 extension_owner: std.array_hash_map.String([]const u8) = .empty,
@@ -167,9 +167,9 @@ extension_owner: std.array_hash_map.String([]const u8) = .empty,
 /// Shortcuts. Owned duped strings, freed on the next rebuild.
 extension_conflicts: std.ArrayList(ExtensionConflict) = .empty,
 
-/// Snapshot of dvui's *built-in* keybinds (`char_left`, `copy`, `next_widget`, …), taken in
+/// Snapshot of dvui's *built-in* keybinds (`char_left`, `copy`, `next_widget`, ...), taken in
 /// `init` before fizzy adds its own. `Window.init` installs these once and never again,
-/// so `rebuildKeybinds` — which wipes the map to drop an unloaded plugin's binds — must put
+/// so `rebuildKeybinds` - which wipes the map to drop an unloaded plugin's binds - must put
 /// them back or every widget's caret/clipboard handling silently dies after the first plugin
 /// load or unload. Keys are dvui's own static literals; only the map itself is owned here.
 dvui_default_keybinds: std.StringHashMapUnmanaged(dvui.enums.Keybind) = .empty,
@@ -179,12 +179,12 @@ dvui_default_keybinds: std.StringHashMapUnmanaged(dvui.enums.Keybind) = .empty,
 /// the image their strings live in.
 keymap: Keymap = .{},
 
-/// Parsed `keybinds.zon`. Held because `keymap` borrows its command-id and owner-id strings —
+/// Parsed `keybinds.zon`. Held because `keymap` borrows its command-id and owner-id strings -
 /// it must outlive the keymap and is replaced wholesale on every rebuild.
 keybinds_overrides: ?Keymap.zon.File = null,
 
 /// `Keymap.conflicts()` for the current keymap, worked out when first asked for (fizzy's
-/// `Keybinds.conflicts`) — owned, dropped on the next rebuild. Null: not asked for since.
+/// `Keybinds.conflicts`) - owned, dropped on the next rebuild. Null: not asked for since.
 keybind_conflicts: ?[]Keymap.Conflict = null,
 
 /// User plugins that failed to load this session, so the UI can tell the author what
@@ -209,7 +209,7 @@ folder: ?[]const u8 = null,
 /// Folder strings unlinked from `folder` but possibly still borrowed by the frame in progress.
 ///
 /// `EditorAPI.folder` hands plugins the pointer itself, and a plugin can close or switch the
-/// project from *inside* its own draw — the file tree's project row does exactly that from its
+/// project from *inside* its own draw - the file tree's project row does exactly that from its
 /// context menu, then keeps drawing with the `path` it read at the top of the function. Freeing
 /// there is a use-after-free in every caller still holding the slice, so the old string is
 /// parked here and released at the top of the next frame instead (the same shape as the
@@ -236,14 +236,14 @@ pending_save_as_path: ?[]u8 = null,
 /// After Save As from "Save and Close", close this file id once save completes.
 pending_close_file_id: ?u64 = null,
 
-/// Files whose async save was kicked off by "Save and Close" (single-doc) — once
+/// Files whose async save was kicked off by "Save and Close" (single-doc) - once
 /// `File.isSaving()` clears, `tickPendingSaveCloses` closes the file. Set is fine
 /// because at most one entry per file (saveAsync no-ops while already saving).
 pending_close_after_save: std.AutoArrayHashMapUnmanaged(u64, void) = .empty,
 
 /// "Save all and quit" queue. Walked by `advanceSaveAllQuit`: items move from this
 /// queue into `quit_saves_in_flight` when their save kicks off, then drop out when
-/// their save completes and the file closes. Non-empty (or in-flight non-empty) ⇒
+/// their save completes and the file closes. Non-empty (or in-flight non-empty) =>
 /// save-all quit in progress.
 quit_save_all_ids: std.ArrayList(u64) = .empty,
 
@@ -263,7 +263,7 @@ pending_app_close: bool = false,
 /// Hash of the last serialized settings.zon text written or captured at startup; avoids
 /// redundant writes without keeping a full duplicate copy of the text around. Doubles as the
 /// "was that change ours" filter for `settings_watcher` (see R11 in
-/// plans/PLUGIN_MANIFEST_PLAN.md) — a change to disk whose hash matches this is our own last
+/// plans/PLUGIN_MANIFEST_PLAN.md) - a change to disk whose hash matches this is our own last
 /// write, not an external edit worth reconciling.
 settings_last_saved_hash: ?u64 = null,
 
@@ -273,11 +273,11 @@ settings_dirty: bool = false,
 /// Monotonic deadline (`perf.nanoTimestamp()`): autosave runs when dirty and `now >= deadline`.
 settings_save_deadline_ns: i128 = 0,
 
-/// Watches `<config>/` recursively (via nightwatch — see R12) for external `settings.zon`
+/// Watches `<config>/` recursively (via nightwatch - see R12) for external `settings.zon`
 /// changes and newly-created plugin directories, reconciling them live via `tick`. Null on wasm,
-/// on an unsupported OS, or if starting the watch failed — all best-effort: fizzy must never
+/// on an unsupported OS, or if starting the watch failed - all best-effort: fizzy must never
 /// fail to launch because the watcher couldn't start, it just silently doesn't get live
-/// reconciliation. Set up in `postInit` (needs `editor` at its final heap address — see
+/// reconciliation. Set up in `postInit` (needs `editor` at its final heap address - see
 /// `SettingsWatcher.start`'s doc comment), torn down first in `deinit`.
 settings_watcher: ?SettingsWatcher = null,
 
@@ -294,15 +294,15 @@ control_state: if (builtin.target.cpu.arch == .wasm32) void else ControlState = 
 executable_watcher: ?ExecutableWatcher = null,
 
 /// Recursive watch on the open root folder, announced to plugins as `fizzy.files.changed`.
-/// Same final-address constraint as the two above — started in `postInit`, retargeted whenever
+/// Same final-address constraint as the two above - started in `postInit`, retargeted whenever
 /// the root folder changes.
 folder_watcher: ?FolderWatcher = null,
 
 /// One id's pending fizzy-reserved `.plugins.<id>` field writes. A null field means "not
-/// touched this cycle" — `writeMergedSettings` reads that half back off disk instead, so
+/// touched this cycle" - `writeMergedSettings` reads that half back off disk instead, so
 /// toggling auto-update can never clobber a concurrent enable/disable or vice versa.
 /// One persisted `.extensions` entry fizzy declined to honor, surfaced to the user rather than
-/// silently ignored — the same treatment `Keymap.Conflict` gets in the Keyboard Shortcuts pane.
+/// silently ignored - the same treatment `Keymap.Conflict` gets in the Keyboard Shortcuts pane.
 ///
 /// **Fizzy never produces one of these itself.** `resolveExtensionConflict` is the app's single
 /// writer and always strips an extension from every other plugin's list before adding it, so a
@@ -322,7 +322,7 @@ pub const ExtensionConflict = struct {
     pub const Kind = enum {
         /// Two or more loaded plugins persist the same extension. Alphabetically-first id wins.
         duplicate,
-        /// The plugin no longer offers `ext` via `fileTypes` — an update dropped support — and
+        /// The plugin no longer offers `ext` via `fileTypes` - an update dropped support - and
         /// it is not the fallback editor, so the entry no longer means anything.
         stale,
     };
@@ -333,7 +333,7 @@ pub const PendingPluginFlags = struct {
     /// (see `SettingsPluginsZon.Reserved.enabled`); use `erase` to get back to "no decision".
     enabled: ?bool = null,
     auto_update: ?bool = null,
-    /// Wipe fizzy's decision record for this id — `.enabled` removed entirely and `.extensions`
+    /// Wipe fizzy's decision record for this id - `.enabled` removed entirely and `.extensions`
     /// emptied, leaving the plugin's own `.settings` block untouched. Uninstall's flag, and the
     /// one thing that makes a later reinstall ask about file types again. Applied before the
     /// other fields, so an `.{ .erase = true, .enabled = true }` would still end up enabled.
@@ -343,7 +343,7 @@ pub const PendingPluginFlags = struct {
 /// Scan `<config_folder>/plugins/` for user-installed plugin dylibs and load each one.
 ///
 /// Each sub-directory that contains `plugin.<ext>` is attempted in iteration order.
-/// Failures are logged and skipped — a bad plugin never prevents the others from loading.
+/// Failures are logged and skipped - a bad plugin never prevents the others from loading.
 /// Built-in plugin IDs ("workbench", "text") are never overridden; any
 /// user directory whose name collides with an already-registered plugin is skipped.
 ///
@@ -359,12 +359,12 @@ pub const FailedPlugin = struct {
     /// Optional version / SDK detail when the dylib could be opened for probing.
     detail: ?[]const u8 = null,
     /// The plugin's own declared version, probed straight from the dylib without registering
-    /// it. Lets the store show "current version" for a build that is on disk but rejected —
+    /// it. Lets the store show "current version" for a build that is on disk but rejected -
     /// null only when the dylib couldn't even be opened for probing.
     plugin_version: ?std.SemanticVersion = null,
     /// The rejected build's mtime + size when it was recorded, so
     /// `reconcileFailedPluginBinaries` can tell "still the same broken file" from "the author
-    /// rebuilt it". Both zero when the stat failed, which reads as "never matches" — the safe
+    /// rebuilt it". Both zero when the stat failed, which reads as "never matches" - the safe
     /// direction, same as `PluginLoader.LoadedLib`'s stamp.
     source_mtime_ns: i128 = 0,
     source_size: u64 = 0,
@@ -378,7 +378,7 @@ pub const PendingReveal = struct {
     character: u32,
 };
 
-/// True when `id` takes store updates — the default for every plugin, so this answers "not on the
+/// True when `id` takes store updates - the default for every plugin, so this answers "not on the
 /// opt-out list". Says nothing about *how* an update is applied: that is
 /// `Settings.plugin_update_mode`, which `PluginStore`'s pass reads once for all plugins.
 pub fn isPluginAutoUpdate(app: *const App, id: []const u8) bool {
@@ -396,7 +396,7 @@ pub fn isPluginDisabled(app: *App, id: []const u8) bool {
 }
 
 /// True when `id` is on disk but fizzy has never been told whether to run it (no
-/// `.plugins.<id>.enabled` on record) — see `undecided_plugin_ids`. The store draws these with a
+/// `.plugins.<id>.enabled` on record) - see `undecided_plugin_ids`. The store draws these with a
 /// "Load" button rather than the settled Enabled checkbox a deliberately-disabled plugin gets.
 pub fn isPluginUndecided(app: *const App, id: []const u8) bool {
     for (app.undecided_plugin_ids.items) |d| {
@@ -415,7 +415,7 @@ pub fn isValidPluginId(id: []const u8) bool {
     return true;
 }
 
-/// Mirror `id`'s auto-update flag into the runtime opt-out list. Runtime bookkeeping only —
+/// Mirror `id`'s auto-update flag into the runtime opt-out list. Runtime bookkeeping only -
 /// persistence goes through `setPluginAutoUpdate`.
 pub fn trackAutoUpdate(app: *App, id: []const u8, on: bool) !void {
     if (on) {
@@ -435,7 +435,7 @@ pub fn trackAutoUpdate(app: *App, id: []const u8, on: bool) !void {
 }
 
 /// Add `id` to the runtime disabled bookkeeping list if not already present. Does **not**
-/// write settings — a freshly dropped-in plugin stays off-disk-silent until the user enables it.
+/// write settings - a freshly dropped-in plugin stays off-disk-silent until the user enables it.
 pub fn trackDisabledPlugin(app: *App, id: []const u8) !void {
     if (app.isPluginDisabled(id)) return;
     if (!isValidPluginId(id)) return error.InvalidPluginId;
@@ -464,7 +464,7 @@ pub fn untrackDisabledPlugin(app: *App, id: []const u8) void {
     }
 }
 
-/// Drop `id`'s undecided status — called from every path that records an explicit decision
+/// Drop `id`'s undecided status - called from every path that records an explicit decision
 /// (`setPluginEnabledPersisted`, either direction) or removes the plugin entirely
 /// (`uninstallPlugin`).
 pub fn untrackUndecidedPlugin(app: *App, id: []const u8) void {
@@ -476,7 +476,7 @@ pub fn untrackUndecidedPlugin(app: *App, id: []const u8) void {
     }
 }
 
-/// How many on-disk plugins are waiting for a load decision — what the sidebar's Plugins badge
+/// How many on-disk plugins are waiting for a load decision - what the sidebar's Plugins badge
 /// counts (see `Sidebar.drawOption`). Kept honest by `pruneMissingUndecidedPlugins`.
 pub fn undecidedPluginCount(app: *const App) usize {
     return app.undecided_plugin_ids.items.len;
@@ -650,7 +650,7 @@ pub fn clearFailedUserPlugin(app: *App, id: []const u8) void {
     }
 }
 
-/// `Host.pluginForExtension`, but pretending `skip` is not loaded — what would open `ext` if this
+/// `Host.pluginForExtension`, but pretending `skip` is not loaded - what would open `ext` if this
 /// plugin had never arrived. Mirrors that function's resolution order exactly, including its
 /// alphabetical tie-break, so the "prior owner" shown in the dialog is the one the user would
 /// actually have gotten.
@@ -763,7 +763,7 @@ pub fn abortSaveAllQuit(app: *App) void {
     app.pending_quit_continue = false;
 }
 
-/// Move the current folder string out of `folder` without freeing it — see `folder_retired`.
+/// Move the current folder string out of `folder` without freeing it - see `folder_retired`.
 pub fn retireFolder(app: *App) void {
     const folder = app.folder orelse return;
     app.folder = null;
@@ -1018,7 +1018,7 @@ pub fn recordCaseClash(app: *App, id: []const u8, other: []const u8, path: ?[]co
     app.recordPluginFailure(id, why, null, if (probe) |info| info.plugin_version else null, if (path) |p| .of(p) else .{});
 }
 
-/// `<config>/plugins/<id>/<id>.<ext>` — where a user plugin's build lives. Caller frees.
+/// `<config>/plugins/<id>/<id>.<ext>` - where a user plugin's build lives. Caller frees.
 pub fn userPluginPath(gpa: std.mem.Allocator, app: *App, id: []const u8) ![]u8 {
     const file_name = try PluginLoader.pluginFilename(id, gpa);
     defer gpa.free(file_name);
@@ -1047,7 +1047,7 @@ pub fn pluginHasDirtyDocs(app: *App, plugin: *sdk.Plugin) bool {
 }
 
 /// Open documents of extension `ext` whose owner is no longer the plugin that would open `ext`
-/// today — i.e. documents left behind by a reassignment. Reassigning never closes anything, so
+/// today - i.e. documents left behind by a reassignment. Reassigning never closes anything, so
 /// these keep working under their original owner; this is what lets the File Types table offer
 /// to reopen them. Returned ids are stable across the call; the slice is caller-owned.
 pub fn staleOpenDocsForExtension(app: *App, gpa: std.mem.Allocator, ext: []const u8) ![]u64 {
@@ -1063,7 +1063,7 @@ pub fn staleOpenDocsForExtension(app: *App, gpa: std.mem.Allocator, ext: []const
     return out.toOwnedSlice(gpa);
 }
 
-/// Reads `.plugins.<id>.auto_update` from already-loaded `settings_data`. **Defaults to true** —
+/// Reads `.plugins.<id>.auto_update` from already-loaded `settings_data`. **Defaults to true** -
 /// a missing `.plugins`, a missing id, or an omitted field all mean "keep this plugin current";
 /// only an explicit `false` opts out. Deliberately the inverse of `readPluginEnabled`'s default:
 /// a plugin has to be turned on by hand, but once it is on it tracks the store unless told
@@ -1074,7 +1074,7 @@ pub fn readPluginAutoUpdate(gpa: std.mem.Allocator, settings_data: ?[:0]const u8
     return !std.mem.eql(u8, std.mem.trim(u8, text, " \t\r\n"), "false");
 }
 
-/// Reads `.plugins.<id>.enabled` from already-loaded `settings_data` (null source → false).
+/// Reads `.plugins.<id>.enabled` from already-loaded `settings_data` (null source -> false).
 /// Missing `.plugins` / missing id / missing or non-`true` `.enabled` all mean disabled.
 pub fn readPluginEnabled(gpa: std.mem.Allocator, settings_data: ?[:0]const u8, id: []const u8) bool {
     return readPluginEnabledState(gpa, settings_data, id) == .enabled;
@@ -1087,7 +1087,7 @@ pub fn readPluginEnabledState(gpa: std.mem.Allocator, settings_data: ?[:0]const 
 }
 
 /// Reads `.plugins.<id>.extensions` from already-loaded `settings_data`. Empty (never null) when
-/// absent or unparseable — a hand-edited file must degrade to "no explicit choice", not an error.
+/// absent or unparseable - a hand-edited file must degrade to "no explicit choice", not an error.
 /// Caller frees with `SettingsPluginsZon.freeExtensions`.
 pub fn readPluginExtensions(gpa: std.mem.Allocator, settings_data: ?[:0]const u8, id: []const u8) []const []const u8 {
     const text = readPluginReservedField(gpa, settings_data, id, "extensions") orelse return &.{};
@@ -1128,7 +1128,7 @@ pub fn readPluginSettingsText(gpa: std.mem.Allocator, settings_data: ?[:0]const 
 /// Wake a frame once `remaining_ns` has elapsed so a debounced save actually fires while the app
 /// is otherwise idle. Without this, the very event that dirtied the state (a settings-pane click,
 /// a splitter drag release) is typically the *last* one before the app goes back to sleep, so no
-/// frame ever runs to observe the deadline — the write, and everything that hangs off it (the
+/// frame ever runs to observe the deadline - the write, and everything that hangs off it (the
 /// open settings.zon tab's reload via `writeMergedSettings`' `notifyPathChanged`), would wait on
 /// some unrelated input instead. Same pattern/rationale as `drawSaveToasts`' threshold wakeup.
 /// In-frame only; both callers run inside `tick`. `id_extra` keeps the two debounces from
@@ -1219,7 +1219,7 @@ pub fn closeDocumentResources(app: *App, doc: sdk.DocHandle) void {
 /// Queue the project close; the teardown runs at the top of the next frame
 /// (`applyPendingFolderClose`).
 ///
-/// Deferred because this is reachable from inside a plugin's draw — the file tree's
+/// Deferred because this is reachable from inside a plugin's draw - the file tree's
 /// project-row context menu calls it through `Host.closeProjectFolder` and then goes on to
 /// draw the project row, its rows, and its ignore-screened listings using the folder it read
 /// before the menu ran. Tearing all of that down underneath the draw that is still using it
@@ -1273,7 +1273,7 @@ pub fn migrateFlatPluginLayout(allocator: std.mem.Allocator, plugins_dir: []cons
     }
 }
 
-/// Drop undecided entries whose `plugins/<id>/` directory is gone — the author deleted or moved
+/// Drop undecided entries whose `plugins/<id>/` directory is gone - the author deleted or moved
 /// the build instead of answering the offer. Without this the rail badge would advertise a
 /// decision the user can no longer make. Called from `reconcileDiscoveredPlugins`, which the
 /// watcher already runs for any change under `<config>/` (a deleted directory very much included).
@@ -1295,14 +1295,14 @@ pub fn pruneMissingUndecidedPlugins(app: *App, plugins_dir: []const u8) void {
 
 /// For every currently-loaded plugin with a registered settings schema, re-reads its
 /// `.plugins.<id>.settings` blob and applies it if (and only if) it actually changed since the
-/// last time we applied one — `SettingsSchema.last_applied_hash` is what stops a change to *one*
+/// last time we applied one - `SettingsSchema.last_applied_hash` is what stops a change to *one*
 /// plugin's settings from spuriously renotifying *every other* loaded plugin just because the
 /// whole file's hash moved (see `reconcileExternalSettingsChange`'s hash-gate, which only tells
 /// us the file changed, not which plugin's part of it did).
 pub fn reconcilePluginSettings(app: *App) void {
     for (app.host.settings_schemas.items) |*schema| {
         const blob = app.host.loadPluginSettings(schema.owner.id) orelse {
-            // Settings section removed (all-defaults) — apply an empty blob so the live value
+            // Settings section removed (all-defaults) - apply an empty blob so the live value
             // resets to T's own declared defaults, but only when we previously had something.
             if (schema.last_applied_hash == 0) continue;
             schema.access.applyBlob(schema.value, schema.owner, ".{}");
@@ -1322,7 +1322,7 @@ pub fn reconcilePluginSettings(app: *App) void {
 /// Record a load failure for `id` (probing the on-disk build at `path` for its version/detail),
 /// replacing any earlier record for the same id.
 ///
-/// Every path that loads a user plugin routes its failures here — the startup scan *and* the live
+/// Every path that loads a user plugin routes its failures here - the startup scan *and* the live
 /// ones (`loadUserPluginById`, reached from enable, store install, and update), so a failed
 /// plugin is always in one of the three lists the store's installed pane is built from
 /// (loaded / disabled / failed) rather than vanishing from the UI.
@@ -1335,7 +1335,7 @@ pub fn recordLoadFailure(app: *App, id: []const u8, path: []const u8, err: Plugi
         null;
     defer if (detail) |d| app.gpa.free(d);
     // `recordPluginFailure` appends unconditionally; drop any prior record so repeated attempts
-    // (enable → fail → enable → fail) leave one row, not a growing pile of duplicate cards.
+    // (enable -> fail -> enable -> fail) leave one row, not a growing pile of duplicate cards.
     app.clearFailedUserPlugin(id);
     app.recordPluginFailure(id, reason, detail, if (probe) |info| info.plugin_version else null, .of(path));
 }
@@ -1379,7 +1379,7 @@ pub fn recordPluginFailure(
 
 /// `id`'s `.extensions` as they stand: a decision still waiting in `plugin_extensions_pending`
 /// over what `settings_data` has on disk. The pending list is the newer answer, and it can wait a
-/// while — on the web a flush only marks settings dirty for the next autosave — so anything that
+/// while - on the web a flush only marks settings dirty for the next autosave - so anything that
 /// reads ownership back must read it here, not from the file alone. Caller frees with
 /// `SettingsPluginsZon.freeExtensions`.
 pub fn pluginExtensions(app: *App, settings_data: ?[:0]const u8, id: []const u8) []const []const u8 {
@@ -1440,7 +1440,7 @@ pub const loads_plugins = if (@hasDecl(build_opts, "dynamic_plugins")) build_opt
 
 /// Whether a bundled plugin should be loaded from `{exe_dir}/plugins/<id>/` rather than the
 /// copy linked in: never on wasm or in a link-only build, not when the build pinned it static
-/// (`build_opts.static_<id>`), and not when `FIZZY_STATIC_<ID>=1` is set — the bisection
+/// (`build_opts.static_<id>`), and not when `FIZZY_STATIC_<ID>=1` is set - the bisection
 /// switch for dylib loading trouble.
 pub fn bundledDylibEnabled(gpa: std.mem.Allocator, comptime id: []const u8) bool {
     if (comptime builtin.target.cpu.arch == .wasm32 or !loads_plugins) return false;
@@ -1460,7 +1460,7 @@ pub fn bundledDylibEnabled(gpa: std.mem.Allocator, comptime id: []const u8) bool
 }
 
 /// Load `{exe_dir}/plugins/<id>/<id>.{ext}` and register it through its dylib entry. `extra`
-/// is the entry's third argument — what a plugin's dylib convention asks the application for,
+/// is the entry's third argument - what a plugin's dylib convention asks the application for,
 /// null for most.
 pub fn loadBundledDylib(app: *App, exe_dir: []const u8, id: []const u8, extra: ?*anyopaque) !void {
     if (comptime builtin.target.cpu.arch == .wasm32) return;
