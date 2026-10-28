@@ -6213,9 +6213,83 @@ test "liquid field: groups are the shapes that touch, each drawn as its own quad
     try std.testing.expectEqual(@as(u8, 2), g.size[0]);
     try std.testing.expectEqual(@as(u8, 1), g.size[1]);
     // The uniforms are the shader's `uData`: its header, then three vec4s a shape.
-    try std.testing.expectEqual(@as(usize, (7 + 3 * LF.max_shapes) * 16), @sizeOf(LF.Uniforms));
+    try std.testing.expectEqual(@as(usize, (9 + 3 * LF.max_shapes) * 16), @sizeOf(LF.Uniforms));
     const u = f.pack(.{ .x = 0, .y = 0, .w = 400, .h = 100 }, false, g.order[0..f.len]);
     try std.testing.expectEqual(@as(f32, 22), u.shapes[1][0][0]);
+}
+
+test "liquid field: fizzy's default look packs to today's uniforms for every role" {
+    const LF = fizzy.core.LiquidField;
+    const gl = fizzy.core.glass_look;
+    var i: usize = 0;
+    while (i <= 10) : (i += 1) {
+        const opacity: f32 = @as(f32, @floatFromInt(i)) / 10;
+        const looks = fizzy.core.material.Looks.fromOpacity(opacity);
+        // Today's looks, as `forDrops`, `forText` and `forLens` made them of `inApp`.
+        const base = gl.inApp(opacity);
+        const today = [_]struct { role: gl.Role, look: gl.Look }{
+            .{ .role = .drop, .look = gl.forDrops(base) },
+            .{ .role = .card, .look = gl.forDrops(base) },
+            .{ .role = .bar, .look = gl.forDrops(base) },
+            .{ .role = .text, .look = gl.forText(base) },
+            .{ .role = .lens, .look = gl.forLens(base) },
+        };
+        for (today) |t| {
+            var f: LF = .{ .tint = .{ .r = 10, .g = 20, .b = 30, .a = 200 }, .mix = 0.5, .lift = 0.2, .role = t.role };
+            f.add(LF.Shape.circle(.{ .x = 50, .y = 50 }, 40));
+            const order = [_]u8{0};
+            var u = f.pack(.{ .x = 0, .y = 0, .w = 100, .h = 100 }, false, &order);
+            f.applyLook(&u, looks.get(t.role));
+            const l = t.look;
+            try std.testing.expectEqual(std.math.clamp(l.mix, 0, 1), u.face[0]);
+            // The flat lift of before is the wash, equal top and bottom, and nothing else.
+            try std.testing.expectEqual(std.math.clamp(l.wash_top, 0, 1), u.face[1] + u.curves[0]);
+            try std.testing.expectEqual(u.curves[0], u.curves[1]);
+            // The new curves are the identity: no sweep, no cap, the hairline as dark as it was.
+            try std.testing.expectEqual(@as(f32, 0), u.curves[2]);
+            try std.testing.expectEqual(@as(f32, 1), u.curves[3]);
+            try std.testing.expectEqual(@as(f32, 0.85), u.widths[0]);
+            const old_lift: f32 = if (t.role == .lens) 0 else 0.03 * gl.way(opacity).shine;
+            try std.testing.expectEqual(old_lift, u.curves[0]);
+            try std.testing.expectEqual(@max(l.bevel, 0.0001), u.dither[1]);
+            try std.testing.expectEqual(l.bend * 0.5, u.dither[2]);
+            try std.testing.expectEqual(l.shade, u.dither[3]);
+            try std.testing.expectEqual(l.dispersion, u.backdrop[1]);
+            try std.testing.expectEqual(l.diagonal, u.backdrop[2]);
+            try std.testing.expectEqual(l.rim, u.rim[3]);
+            try std.testing.expectEqual(l.frost * f.shapes[0].blur, u.shapes[0][2][0]);
+        }
+    }
+}
+
+test "liquid field: an app look's curves reach the uniforms, a surface keeps its own lift" {
+    const LF = fizzy.core.LiquidField;
+    var look = fizzy.core.material.Looks.fromOpacity(0.6).card;
+    look.sweep = 0.11;
+    look.ceiling = 0.6;
+    look.wash_top = 0.107;
+    look.wash_bottom = 0.04;
+    look.edge_dark = 0.3;
+    var f: LF = .{ .tint = .{ .r = 0, .g = 0, .b = 0, .a = 255 }, .lift = 0.2, .role = .card };
+    f.add(LF.Shape.circle(.{ .x = 50, .y = 50 }, 40));
+    const order = [_]u8{0};
+    var u = f.pack(.{ .x = 0, .y = 0, .w = 100, .h = 100 }, false, &order);
+    f.applyLook(&u, look);
+    try std.testing.expectEqual([4]f32{ 0.107, 0.04, 0.11, 0.6 }, u.curves);
+    try std.testing.expectEqual(@as(f32, 0.3), u.widths[0]);
+    // A surface's colour is its own: its lift stays, and the look's wash does not reach it.
+    var surface = f;
+    surface.surface = true;
+    var us = surface.pack(.{ .x = 0, .y = 0, .w = 100, .h = 100 }, false, &order);
+    surface.applyLook(&us, look);
+    try std.testing.expectEqual(@as(f32, 0.2), us.face[1]);
+    try std.testing.expectEqual(@as(f32, 0), us.curves[0]);
+    try std.testing.expectEqual(@as(f32, 0), us.curves[2]);
+    surface.surface = false;
+    surface.window = true;
+    var uw = surface.pack(.{ .x = 0, .y = 0, .w = 100, .h = 100 }, false, &order);
+    surface.applyLook(&uw, look);
+    try std.testing.expectEqual(@as(f32, 0), uw.curves[2]);
 }
 
 test "liquid field: a lens's picture reaches as far past its shapes as the earlier glass's rim pulls from" {

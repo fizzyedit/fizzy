@@ -1371,7 +1371,7 @@ pub fn floatingWindowBackground(self: *SDLBackend, id: dvui.Id, rect: dvui.Rect.
             glass.programs.publishHost();
             glass.LiquidField.publishEnabled(liquid);
             const lens = builtin.target.os.tag == .macos and liquid and glass.LiquidField.ready();
-            glass.LiquidField.publishLook(if (lens) glass_look.inApp(opacity) else null);
+            if (lens) glass.LiquidField.publishLook(glass_look.Looks.fromOpacity(opacity));
             const s = dvui.windowNaturalScale();
             glass.BlurBackdrop.frostPane(id, rect, corners.scale(1 / s, dvui.CornerRect), s, .{
                 .radius = if (lens) glass_look.text_blur else if (m.kind == .blur) pane.blur / 2 else pane.blur,

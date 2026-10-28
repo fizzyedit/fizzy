@@ -4425,9 +4425,9 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             .chrome = .{ chrome.r, chrome.g, chrome.b, chrome.a },
             .has_chrome = true,
         });
-        // The lens's bend fades with its own frost (`InApp.bend`): the whole of it here.
+        // The lens's bend fades with its own frost (`Look.bend`): the whole of it here.
         fizzy.core.dialogs.publishRefraction(if (lens) 1 else if (liquid) pane.refraction else 0);
-        fizzy.core.LiquidField.publishLook(if (lens) glass_look.inApp(opacity) else null);
+        fizzy.core.material.publishLook(if (lens) glass_look.Looks.fromOpacity(opacity) else null);
         fizzy.core.corners.publish(editor.app.settings.corner_roundness);
     }
     // How things move this frame, for every animation here and in every plugin (`core.motion`).
