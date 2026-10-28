@@ -296,6 +296,12 @@ pub fn pack(self: *const LiquidField, covered: dvui.Rect.Physical, has_sharp: bo
 /// `liquid_glass`'s rim line width, in points.
 const rim_line_width: f32 = 0.8;
 
+/// How many pixels the glass's edge coverage ramps over at `scale`: wider at 1x, where a one-pixel
+/// ramp shows as stairs. The program's `aa`.
+fn edgeRamp(scale: f32) f32 {
+    return if (scale <= 1.25) 1.4 else 1.0;
+}
+
 // ── Drawing ─────────────────────────────────────────────────────────────────────────────────────
 
 /// The program, written once in `shaders/liquid_glass.fragment.hlsl` and compiled from it for every
@@ -619,7 +625,7 @@ pub fn sample(self: *const LiquidField, p: dvui.Point.Physical) Sample {
     const soft = @max(0, -f);
     return .{
         .d = @max(d, in_place),
-        .coverage = std.math.clamp(0.5 - @max(d, in_place), 0, 1),
+        .coverage = std.math.clamp(0.5 - @max(d, in_place) / edgeRamp(self.scale), 0, 1),
         .out = .{ .x = out[0], .y = out[1] },
         .steep = @exp(-soft / liquid_glass.depthPx(self.look(), rim)),
         .blur = std.math.lerp(m1[0], m2[0], wm),
@@ -673,4 +679,18 @@ pub fn smin(a: f32, b: f32, k: f32, m: *f32) f32 {
     m.* = h * h * 0.5;
     if (b < a) m.* = 1 - m.*;
     return @min(a, b) - h * h * k * 0.25;
+}
+
+test "the edge coverage ramps over 1.4 px at 1x and 1 px from 1.5x" {
+    var f: LiquidField = .{};
+    f.add(.{ .rect = .{ .x = 0, .y = 0, .w = 100, .h = 100 }, .radii = @splat(10) });
+    // Half a pixel outside the top edge, and half a pixel inside it.
+    const out: dvui.Point.Physical = .{ .x = 50, .y = -0.5 };
+    const in: dvui.Point.Physical = .{ .x = 50, .y = 0.5 };
+    f.scale = 1;
+    try std.testing.expectApproxEqAbs(0.5 - 0.5 / 1.4, f.sample(out).coverage, 1e-4);
+    try std.testing.expectApproxEqAbs(0.5 + 0.5 / 1.4, f.sample(in).coverage, 1e-4);
+    f.scale = 2;
+    try std.testing.expectEqual(@as(f32, 0), f.sample(out).coverage);
+    try std.testing.expectEqual(@as(f32, 1), f.sample(in).coverage);
 }
