@@ -468,7 +468,7 @@ pub fn init(
             .file_table = .init(app.allocator, dvui.io),
             .secrets = try .init(app.allocator, dvui.io, config_folder),
         },
-        .person_dir = try std.fs.path.join(app.allocator, &.{ config_root, "fizzyedit" }),
+        .person_dir = try personDir(app.allocator, profile_root, config_root),
         .explorer = try app.allocator.create(Explorer),
         .infobar = try .init(),
         .last_titlebar_color = dvui.themeGet().color(.control, .fill),
@@ -4386,6 +4386,14 @@ pub fn windowBase(opacity: f32) dvui.Color {
 /// the settings pane and the info bar offer a restart (`app.restart`).
 pub fn restartPending(_: *const Editor) bool {
     return Popout.restartPending();
+}
+
+/// Where `person.zon` lives, owned by the caller. A profile keeps its own, so a sandbox instance
+/// never writes the person's real shared preferences; otherwise it is `fizzyedit/` beside every
+/// fizzy app's config folder.
+pub fn personDir(gpa: std.mem.Allocator, profile_root: ?[]const u8, config_root: []const u8) std.mem.Allocator.Error![]const u8 {
+    if (profile_root) |root| return gpa.dupe(u8, root);
+    return std.fs.path.join(gpa, &.{ config_root, "fizzyedit" });
 }
 
 /// Loads shared preferences after a best-effort migration; disk errors never prevent startup.

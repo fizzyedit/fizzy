@@ -6612,6 +6612,25 @@ test "motion: failed migration leaves startup preferences usable and legacy data
     try std.testing.expectEqual(@as(?f32, 0.6), ctx.editor.person.motion);
 }
 
+test "motion: a profiled instance keeps person.zon under its profile root" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(io, ".", gpa);
+    defer gpa.free(root);
+
+    const profiled = try fizzy.Editor.personDir(gpa, root, "/the/persons/config");
+    defer gpa.free(profiled);
+    try std.testing.expectEqualStrings(root, profiled);
+    try fizzy.core.person.save(io, profiled, .{ .motion = 0.2 });
+    try tmp.dir.access(io, "person.zon", .{});
+
+    const shared = try fizzy.Editor.personDir(gpa, null, "/the/persons/config");
+    defer gpa.free(shared);
+    try std.testing.expectEqualStrings("/the/persons/config/fizzyedit", shared);
+}
+
 test "motion: migration and focus share the person's choice across app configs" {
     var ctx = try shim.init(std.testing.allocator);
     defer ctx.deinit(std.testing.allocator);
