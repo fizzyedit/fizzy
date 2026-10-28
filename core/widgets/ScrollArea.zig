@@ -246,8 +246,8 @@ pub fn deinit(self: *ScrollArea) void {
         _ = t.y.releaseWindowedAt(tuning, window_s, release_ns);
         t.pull = .{};
         const now = dvui.frameTimeNS();
-        release(&t.x, &t.seg_x, self.si.viewport.x, &t.over.x, now);
-        release(&t.y, &t.seg_y, self.si.viewport.y, &t.over.y, now);
+        release(&t.x, &t.seg_x, self.si.viewport.x, &t.over.x, self.si.viewport.w, now);
+        release(&t.y, &t.seg_y, self.si.viewport.y, &t.over.y, self.si.viewport.h, now);
         if (t.over.y == 0) self.aimOrSeat();
         // The release may contain no motion, so it must schedule the first coast, settle or seat frame itself.
         if (t.anyMoving()) dvui.refresh(null, @src(), self.data().id);
@@ -331,7 +331,7 @@ fn drag(pos: *f32, pull: *f32, over: *f32, max: f32, extent: f32, by: f32, bands
 
 /// A finger let go of one axis at `viewport`: past an end it settles back from the speed it
 /// had, and inside the range it coasts if it was fast enough.
-fn release(fling: *Fling, seg: *Segment, viewport: f32, over: *f32, now: i128) void {
+fn release(fling: *Fling, seg: *Segment, viewport: f32, over: *f32, extent: f32, now: i128) void {
     const vel: f32 = if (fling.coasting) fling.vel else 0;
     if (over.* != 0) {
         fling.cancel();
@@ -339,7 +339,7 @@ fn release(fling: *Fling, seg: *Segment, viewport: f32, over: *f32, now: i128) v
             over.* = 0;
             seg.* = .{};
         } else {
-            seg.* = .{ .kind = .settle, .start_ns = now, .origin = over.*, .vel = vel, .end = over.* > 0 };
+            seg.* = .{ .kind = .settle, .start_ns = now, .origin = over.*, .vel = settleVelocity(over.*, vel, extent), .end = over.* > 0 };
         }
         return;
     }
@@ -393,8 +393,8 @@ fn coast(self: *ScrollArea) void {
     const si = self.si;
     const in_range = si.viewport.topLeft();
     const before = in_range.plus(t.over);
-    self.advance(&t.x, &t.seg_x, &si.viewport.x, &t.over.x, si.scrollMax(.horizontal));
-    self.advance(&t.y, &t.seg_y, &si.viewport.y, &t.over.y, si.scrollMax(.vertical));
+    self.advance(&t.x, &t.seg_x, &si.viewport.x, &t.over.x, si.scrollMax(.horizontal), si.viewport.w);
+    self.advance(&t.y, &t.seg_y, &si.viewport.y, &t.over.y, si.scrollMax(.vertical), si.viewport.h);
     const moved = si.viewport.topLeft().plus(t.over).diff(before);
 
     if (t.last_coast.x != 0) profile.scrollJump(moved.x, @abs(t.last_coast.x) * 3);
@@ -408,13 +408,15 @@ fn coast(self: *ScrollArea) void {
 /// hands over to a settle from the speed it had there, and a settle flicked back toward the
 /// content hands over to a coast from the edge, so the content goes out and returns once,
 /// whichever way it was moving. Each is a function of its start, never of the frames between.
-fn advance(self: *ScrollArea, fling: *Fling, seg: *Segment, pos: *f32, over: *f32, max: f32) void {
+fn advance(self: *ScrollArea, fling: *Fling, seg: *Segment, pos: *f32, over: *f32, max: f32, extent: f32) void {
     const now = dvui.frameTimeNS();
-    // A coast can hand over to a settle that hands back, within one long frame.
-    for (0..4) |_| switch (seg.kind) {
+    // A return can cross into a coast, then reach the other edge and return from zero.
+    // That final return cannot cross zero: at most two hand-offs, hence three evaluations.
+    const max_segment_evaluations = 3;
+    for (0..max_segment_evaluations) |_| switch (seg.kind) {
         .none => return,
         .coast => {
-            const elapsed = nsToSeconds(now - seg.start_ns);
+            const elapsed = @as(f64, @floatFromInt(now - seg.start_ns)) / std.time.ns_per_s;
             const edge: f32 = if (seg.vel > 0) max else 0;
             if (Fling.edgeTime(seg.origin, seg.vel, edge, seg.decay, tuning.stop)) |hit| {
                 if (hit <= elapsed) {
@@ -426,8 +428,8 @@ fn advance(self: *ScrollArea, fling: *Fling, seg: *Segment, pos: *f32, over: *f3
                     }
                     seg.* = .{
                         .kind = .settle,
-                        .start_ns = seg.start_ns + secondsToNs(hit),
-                        .vel = seg.vel * @as(f32, @floatCast(@exp(-@as(f64, seg.decay) * hit))),
+                        .start_ns = seg.start_ns + @as(i128, @intFromFloat(hit * std.time.ns_per_s)),
+                        .vel = settleVelocity(0, seg.vel * @as(f32, @floatCast(@exp(-@as(f64, seg.decay) * hit))), extent),
                         .end = seg.vel > 0,
                     };
                     continue;
@@ -451,7 +453,7 @@ fn advance(self: *ScrollArea, fling: *Fling, seg: *Segment, pos: *f32, over: *f3
                 seg.* = .{};
                 return;
             }
-            const elapsed = nsToSeconds(now - seg.start_ns);
+            const elapsed = @as(f64, @floatFromInt(now - seg.start_ns)) / std.time.ns_per_s;
             if (seg.origin * seg.vel < 0 and @abs(seg.vel) > w * @abs(seg.origin)) {
                 // Flicked back toward the content: it crosses the edge when x0 + (v0 + w·x0)·t = 0.
                 const cross = -@as(f64, seg.origin) / (seg.vel + w * seg.origin);
@@ -462,7 +464,7 @@ fn advance(self: *ScrollArea, fling: *Fling, seg: *Segment, pos: *f32, over: *f3
                         seg.* = .{};
                         return;
                     }
-                    seg.* = .{ .kind = .coast, .start_ns = seg.start_ns + secondsToNs(cross), .origin = pos.*, .vel = at.vel };
+                    seg.* = .{ .kind = .coast, .start_ns = seg.start_ns + @as(i128, @intFromFloat(cross * std.time.ns_per_s)), .origin = pos.*, .vel = at.vel };
                     fling.coasting = true;
                     fling.vel = at.vel;
                     continue;
@@ -480,12 +482,13 @@ fn advance(self: *ScrollArea, fling: *Fling, seg: *Segment, pos: *f32, over: *f3
     };
 }
 
-fn nsToSeconds(ns: i128) f64 {
-    return @as(f64, @floatFromInt(ns)) / std.time.ns_per_s;
-}
-
-fn secondsToNs(s: f64) i128 {
-    return @intFromFloat(s * std.time.ns_per_s);
+/// Keep an outward return inside the inverse band's catchable range without moving its origin.
+fn settleVelocity(offset: f32, vel: f32, extent: f32) f32 {
+    if (offset * vel < 0) return vel;
+    const w = 2 * std.math.pi * tuning.edge.hz * glass.motion.rate();
+    // (1 + w·t)·exp(-w·t) <= 1, and t·exp(-w·t) peaks at 1/(w·e).
+    const limit = @max(0, extent * 0.999 - @abs(offset)) * w * std.math.e;
+    return std.math.clamp(vel, -limit, limit);
 }
 
 /// On the axes whose coast ended this frame (run out, or stopped by a press), move the content
@@ -1134,7 +1137,7 @@ test "a press during the return catches it where it is drawn" {
 }
 
 test "a finger catching the hardest bounce keeps it where it is" {
-    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 100 } });
     defer t.deinit();
     t_use_dvui = false;
     try dvui.testing.settle(testFrame);
@@ -1149,7 +1152,7 @@ test "a finger catching the hardest bounce keeps it where it is" {
         try frameAfter(16);
         deepest = @min(deepest, t_over_y);
     }
-    try std.testing.expect(deepest > -400);
+    try std.testing.expect(deepest > -100 * 0.999);
 
     // Catch it while it is still going out.
     try dragBy(-260, 130, true, 0);
@@ -1340,4 +1343,28 @@ test "a press stops a seat where it is drawn" {
     try std.testing.expect(!t_snapping);
     _ = try dvui.currentWindow().addEventPointer(.{ .button = .touch0, .action = .press, .xynorm = .{ .x = 0.5, .y = 0.5 } });
     try std.testing.expectApproxEqAbs(@as(f32, 0), try restJump(16), 0.001);
+}
+
+test "fast returns stay catchable in short panes at every motion rate" {
+    var t = try dvui.testing.init(.{});
+    defer t.deinit();
+    try dvui.testing.settle(testFrame);
+    for ([_]f32{ 0, 0.5, 1 }) |speed| {
+        glass.motion.publish(1, speed, false, false, 1);
+        const w = 2 * std.math.pi * tuning.edge.hz * glass.motion.rate();
+        for ([_]f32{ 50, 100, 150, 250 }) |extent| {
+            for ([_]f32{ -1, 1 }) |sign| {
+                for ([_]f32{ 0, 0.5, 0.99 }) |fraction| {
+                    const origin = sign * extent * fraction;
+                    const vel = settleVelocity(origin, sign * tuning.max, extent);
+                    for (0..1000) |ms| {
+                        const at = Fling.settle(origin, vel, @as(f64, @floatFromInt(ms)) / 1000, w);
+                        try std.testing.expect(@abs(at.pos) <= extent * 0.999);
+                        const caught = Fling.band(Fling.pullFor(at.pos, extent, tuning.edge), extent, tuning.edge);
+                        try std.testing.expectApproxEqAbs(at.pos, caught, 0.001);
+                    }
+                }
+            }
+        }
+    }
 }
