@@ -216,6 +216,7 @@ fn coast(self: *ScrollArea) void {
 /// snapped; at a fractional offset the snap would round every rect and texture to another
 /// pixel, so panes and cards would shift or change size by a pixel the moment the coast stops.
 fn settle(self: *ScrollArea, x: bool, y: bool) void {
+    if (!x and !y) return;
     const rs = self.area.scroll.?.data().contentRectScale();
     if (rs.s == 0) return;
     const si = self.si;
@@ -466,7 +467,6 @@ test "the end of a coast draws where the rest frames do" {
     defer t_top = 0;
     _ = try swipe();
     const jump = try restJump(8);
-    std.debug.print("coast end: largest row move into rest={d:.6} px\n", .{jump});
     try std.testing.expectApproxEqAbs(@as(f32, 0), jump, 0.001);
 }
 
