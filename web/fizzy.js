@@ -7,6 +7,41 @@
 // Stamped by the build (`build/web.zig`): the hash of what it loads, and the storage name
 // (`-Dweb-storage`).
 
+// Normalize wheel axes without browser side effects. The returned state retains the
+// smallest deltas; the caller resets lowestBatch after a second without wheel input.
+export function wheelTicks(ev, state) {
+  const lowest = [...state.lowest];
+  const lowestBatch = [...state.lowestBatch];
+  const events = [];
+  for (const [i, delta, shiftSizes] of [[0, ev.deltaX, [9, 40]], [1, ev.deltaY, []]]) {
+    if (delta === 0) continue;
+    lowest[i] = Math.min(Math.abs(delta), lowest[i]);
+    lowestBatch[i] = Math.min(Math.abs(delta), lowestBatch[i]);
+    let ticks = -delta;
+    let trackpad = 0;
+    const low = lowestBatch[i];
+    const touchpadAdj = 0.025;
+    if (ev.deltaMode !== 0) {
+      ticks /= low;
+    } else if (i === 1 && ev.wheelDeltaY === -3 * delta) {
+      // macOS trackpads can produce multiples of 120 during a fast flick too.
+      trackpad = 1;
+      ticks = ticks / lowest[i] * touchpadAdj;
+    } else if (i === 1 && ev.wheelDeltaY && ev.wheelDeltaY % 120 === 0) {
+      // Chromium scales deltaY with Windows display scaling, but a notch stays 120.
+      ticks = ev.wheelDeltaY / 120;
+    } else if (low >= 100 || low === 16 || shiftSizes.includes(low) || low === 4.000244140625) {
+      ticks /= low;
+      if (low === 4.000244140625) ticks *= touchpadAdj;
+    } else {
+      trackpad = 1;
+      ticks = ticks / lowest[i] * touchpadAdj;
+    }
+    events.push({ axis: i, ticks, trackpad });
+  }
+  return { events, state: { lowest, lowestBatch } };
+}
+
 // Pointer input is batched before crossing the worker boundary. Times are absolute
 // performance-clock milliseconds; subtracting the receiver's origin preserves latency.
 export function pointerInput(canvas, send, clockOrigin = performance.timeOrigin, done = () => {}) {
@@ -1273,34 +1308,16 @@ export class Fizzy {
       canvas.addEventListener("contextmenu", (ev) => ev.preventDefault());
       pointerInput(canvas, post, performance.timeOrigin, oskCheck);
 
-      const scrollLowest = [99999, 99999];
-      let scrollLowestBatch = [99999, 99999];
+      let scrollState = { lowest: [99999, 99999], lowestBatch: [99999, 99999] };
       let scrollLastMs = Date.now();
       canvas.addEventListener("wheel", (ev) => {
         ev.preventDefault();
-        if (Date.now() - scrollLastMs > 1000) scrollLowestBatch = [99999, 99999];
-        scrollLastMs = Date.now();
-        const touchpadAdj = 0.025;
-        const axis = (i, delta, shiftSizes) => {
-          if (delta === 0) return;
-          scrollLowest[i] = Math.min(Math.abs(delta), scrollLowest[i]);
-          scrollLowestBatch[i] = Math.min(Math.abs(delta), scrollLowestBatch[i]);
-          let ticks = -delta;
-          let trackpad = 0;
-          const low = scrollLowestBatch[i];
-          if (ev.deltaMode !== 0) {
-            ticks /= low;
-          } else if (low >= 100 || low === 16 || shiftSizes.includes(low) || low === 4.000244140625) {
-            ticks /= low;
-            if (low === 4.000244140625) ticks *= touchpadAdj;
-          } else {
-            trackpad = 1;
-            ticks = ticks / scrollLowest[i] * touchpadAdj;
-          }
-          event(4, i, trackpad, ticks, 0);
-        };
-        axis(0, ev.deltaX, [9, 40]);
-        axis(1, ev.deltaY, []);
+        const now = Date.now();
+        if (now - scrollLastMs > 1000) scrollState.lowestBatch = [99999, 99999];
+        scrollLastMs = now;
+        const result = wheelTicks(ev, scrollState);
+        scrollState = result.state;
+        for (const { axis, ticks, trackpad } of result.events) event(4, axis, trackpad, ticks, 0);
       }, { passive: false });
 
       canvas.addEventListener("pointerdown", () => inputFilter.clear());
