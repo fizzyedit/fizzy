@@ -88,10 +88,14 @@ fn processTouch(self: TextEntry, unhandled: SelectableText.Presses) void {
                 }
             },
             .motion => hold.move(me.p.x, me.p.y, slop),
-            .release => switch (hold.release(dvui.frameTimeNS())) {
-                .none => {},
-                .tap => self.tap(me.p, focused, slop, e.num),
-                .double_tap => SelectableText.selectWordAt(tl, entry.data().id, me.p.x, me.p.y),
+            .release => {
+                // A normal release clears capture after this event; a scroll clears it before.
+                if (e.target_widgetId != tl.data().id) hold.cancel();
+                switch (hold.release(dvui.frameTimeNS())) {
+                    .none => {},
+                    .tap => self.tap(me.p, focused, slop, e.num),
+                    .double_tap => SelectableText.selectWordAt(tl, entry.data().id, me.p.x, me.p.y),
+                }
             },
             else => {},
         }
@@ -211,6 +215,23 @@ test "a drag past the slop that starts on the field leaves it unfocused" {
     try frameAfter(16);
     try std.testing.expect(!t_focused);
     try std.testing.expect(!selectedAny());
+}
+
+test "a small drag and release in one frame leave the field unfocused" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 200 } });
+    defer t.deinit();
+    try dvui.testing.settle(testFrame);
+    try touch(.press, on_text_x, on_text_y);
+    try frameAfter(50);
+    // Past dvui's drag threshold, but inside TouchHold's slop.
+    const dy = 6.0 / 200.0;
+    _ = try dvui.currentWindow().addEventTouchMotion(.touch0, on_text_x, on_text_y + dy, 0, dy);
+    try touch(.release, on_text_x, on_text_y + dy);
+    try frameAfter(16);
+    try frameAfter(16);
+    try std.testing.expect(!t_focused);
+    try std.testing.expect(!selectedAny());
+    try std.testing.expect(!t_touch_editing);
 }
 
 test "a hold selects the word under the finger, focuses and shows the menu" {
