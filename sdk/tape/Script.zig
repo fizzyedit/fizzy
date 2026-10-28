@@ -431,8 +431,9 @@ test "a lacked name is left out of the script and an offered name stays" {
     var s: Script = .init(testing.allocator, "t", "T");
     try s.keyframe(.{ .root = "demo://t" });
     try testing.expect(!s.lacksName("missing"));
-    s.lacks = &.{"missing"};
-    for ([_][]const u8{ "missing", "offered" }) |name| {
+    s.lacks = &.{ "missing", "also_missing" };
+    try testing.expect(!s.lacksName("miss"));
+    for ([_][]const u8{ "missing", "offered", "also_missing" }) |name| {
         if (s.lacksName(name)) continue;
         try s.command(name);
     }

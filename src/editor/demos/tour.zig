@@ -219,5 +219,8 @@ test "a frost-first tour names the frosted glass it shows" {
     const caption = for (tape.captions) |c| {
         if (c.at >= chapter.at) break c;
     } else return error.TestUnexpectedResult;
-    try std.testing.expect(std.mem.find(u8, caption.text, "one material, frosted glass here…") != null);
+    try std.testing.expectEqualStrings(
+        "Over the code you can see what it is made of. The window, its floats, menus and dialogs are one material, frosted glass here…",
+        caption.text,
+    );
 }
