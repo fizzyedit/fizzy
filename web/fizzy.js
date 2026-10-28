@@ -1060,6 +1060,15 @@ export class Fizzy {
         window.matchMedia(q).addEventListener("change", () => post({ type: "prefs", prefs: prefs() }));
       }
 
+      // What the keyboard does to the fragment before the caret reaches the worker as typing.
+      const inputFilter = new TextInput(hidden, {
+        text: (text) => post({ type: "text", text }),
+        backspace: () => {
+          post({ type: "key", kind: 5, key: "Backspace", repeat: 0, mods: 0 });
+          post({ type: "key", kind: 6, key: "Backspace", repeat: 0, mods: 0 });
+        },
+      });
+
       worker.onerror = (err) => {
         console.error(err);
         onError(`Failed to load the editor (${err.message || "worker error"}).`);
@@ -1081,7 +1090,7 @@ export class Fizzy {
             canvas.style.cursor = m.name;
             break;
           case "textInput":
-            if ((textInputRect.length === 0) !== (m.rect.length === 0)) textInput.clear();
+            if ((textInputRect.length === 0) !== (m.rect.length === 0)) inputFilter.clear();
             textInputRect = m.rect;
             oskCheck();
             break;
@@ -1218,17 +1227,9 @@ export class Fizzy {
         axis(1, ev.deltaY, []);
       }, { passive: false });
 
-      // What the keyboard does to the fragment before the caret reaches the worker as typing.
-      const textInput = new TextInput(hidden, {
-        text: (text) => post({ type: "text", text }),
-        backspace: () => {
-          post({ type: "key", kind: 5, key: "Backspace", repeat: 0, mods: 0 });
-          post({ type: "key", kind: 6, key: "Backspace", repeat: 0, mods: 0 });
-        },
-      });
-      canvas.addEventListener("pointerdown", () => textInput.clear());
+      canvas.addEventListener("pointerdown", () => inputFilter.clear());
       const keydown = (ev) => {
-        textInput.keydown(ev);
+        inputFilter.keydown(ev);
         if (ev.key === "Tab") {
           if (ev.ctrlKey) return;
           ev.preventDefault();
