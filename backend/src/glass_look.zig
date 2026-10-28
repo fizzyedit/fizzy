@@ -437,7 +437,8 @@ pub const Material = struct {
     /// How much of the theme's window colour covers what is behind, 0 (clear) to 1. Ignored by
     /// `none`; `transparent` at 1 looks as `none` does.
     opacity: f32 = 1,
-    /// The person's ask for the OS body under a window (`resolve`), over the app's.
+    /// The ask for the OS body under a window (`resolve`), over the app's.
+    // TODO(seam): the person's `os_material` setting fills this (M-B); nothing sets it yet.
     body: Body = .best,
 
     /// `kind` where `offered` has it, else the richest glass below it that `offered` has, else
@@ -535,7 +536,6 @@ pub const NativeBody = union(enum) {
     pub const window_background: c_long = 12;
     pub const mica: u32 = 2;
     pub const acrylic: u32 = 3;
-    pub const mica_alt: u32 = 4;
 
     /// The `NSVisualEffectMaterial` this body is or stands on; null for another OS's.
     pub fn appkitMaterial(self: NativeBody) ?c_long {
@@ -633,21 +633,22 @@ pub const Resolved = struct {
 /// body beats the app's, which beats the target's nicest. The kind falls back as
 /// `Material.effective` does.
 pub fn resolve(asked: Material, role: WindowRole, thickness: Thickness, offer: Offer, looks: ?*const Looks) Resolved {
+    // TODO(seam): the person's `tinted_strong` (Mica Alt) is chosen by thickness here.
+    _ = thickness;
     if (offer.reduce_transparency) return .{ .kind = .none, .body = null, .draws = .solid };
     const kind = asked.effective(offer.kinds).kind;
     const app: Body = if (looks) |l| l.body.get(role) else .best;
     const want: Body = if (asked.body != .best) asked.body else app;
     return .{
         .kind = kind,
-        .body = bodyFor(offer.native, role, thickness, want, kind),
+        .body = bodyFor(offer.native, role, want, kind),
         .draws = if (kind == .none) .solid else if (offer.program) .program else .face,
     };
 }
 
 /// The body the role's window wears for `want`. macOS and Windows put theirs under every window,
 /// whatever the kind (an opaque window covers it); the compositor's blur is asked only for `blur`.
-fn bodyFor(has: Natives, role: WindowRole, thickness: Thickness, want: Body, kind: Kind) ?NativeBody {
-    const thick = thickness == .thick or thickness == .chrome;
+fn bodyFor(has: Natives, role: WindowRole, want: Body, kind: Kind) ?NativeBody {
     if (has.contains(.appkit)) {
         const material = if (want == .tinted) NativeBody.window_background else NativeBody.full_screen_ui;
         if (kind == .liquid and has.contains(.appkit_glass)) return .{ .appkit_glass = .{ .under = material } };
@@ -657,7 +658,7 @@ fn bodyFor(has: Natives, role: WindowRole, thickness: Thickness, want: Body, kin
     // window, a region or not, and a drop is round.
     if (has.contains(.dwm) and role != .carry) return .{ .dwm = switch (want) {
         .best, .see_through => NativeBody.acrylic,
-        .tinted => if (thick) NativeBody.mica_alt else NativeBody.mica,
+        .tinted => NativeBody.mica,
     } };
     if (has.contains(.compositor_blur) and kind == .blur) return .compositor_blur;
     return null;
@@ -942,8 +943,8 @@ test "the person's body beats the app's, which beats the target's nicest" {
     // The app asks Mica for its main window; floats keep the nicest.
     try std.testing.expectEqual(NativeBody{ .dwm = NativeBody.mica }, resolve(frost, .main, .regular, win11, &looks).body.?);
     try std.testing.expectEqual(NativeBody{ .dwm = NativeBody.acrylic }, resolve(frost, .float, .regular, win11, &looks).body.?);
-    // Mica Alt is a thick tint, not a body of its own.
-    try std.testing.expectEqual(NativeBody{ .dwm = NativeBody.mica_alt }, resolve(frost, .main, .thick, win11, &looks).body.?);
+    // A tint is Mica at every thickness.
+    try std.testing.expectEqual(NativeBody{ .dwm = NativeBody.mica }, resolve(frost, .main, .thick, win11, &looks).body.?);
     // The person's ask wins over the app's.
     const see_through: Material = .{ .kind = .frost, .body = .see_through };
     try std.testing.expectEqual(NativeBody{ .dwm = NativeBody.acrylic }, resolve(see_through, .main, .regular, win11, &looks).body.?);

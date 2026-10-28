@@ -92,12 +92,6 @@ motion_speed: f32 = core.motion.default_speed,
 /// can. Opaque until a person turns glass on. Applied at once; `FIZZY_GLASS` overrides it.
 window_material: core.material.Kind = .none,
 
-/// What the OS puts under the app's windows where it offers more than one body
-/// (`core.material.Body`): the nicest it has (`best`), the windows behind blurred (`see_through`:
-/// Acrylic on Windows), or a tint of the wallpaper (`tinted`: Mica). Over the app's own ask; the OS's
-/// reduce transparency over both (`core.material.resolve`).
-window_body: core.material.Body = .best,
-
 /// What the glass the app draws itself is made of (`core.material.inApp`): dialogs, menus, toasts
 /// and floats drawn in the window. Null, the window's (`window_material`), as drawn; a kind, that one wherever the
 /// app's renderer can draw it, whatever the windows are made of, else the richest glass below it.

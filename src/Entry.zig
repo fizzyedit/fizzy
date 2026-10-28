@@ -623,8 +623,8 @@ fn frameOnce() !dvui.App.Result {
     // body the app asks, so no looks.
     const editor = fizzy.editor();
     const offer = materialOffered();
-    const asked: fizzy.core.material.Material = .{ .kind = materialAsked(), .body = editor.app.settings.window_body };
-    const window_material: fizzy.core.material.Material = .{ .kind = fizzy.core.material.resolve(asked, .main, .regular, offer, null).kind, .body = asked.body };
+    const asked: fizzy.core.material.Material = .{ .kind = materialAsked() };
+    const window_material: fizzy.core.material.Material = .{ .kind = fizzy.core.material.resolve(asked, .main, .regular, offer, null).kind };
     fizzy.core.material.publish(window_material);
     // The glass the app draws itself: the window's, or the person's own choice as the app's
     // renderer can draw it, whatever the windows are made of. The window's under `FIZZY_GLASS`,
