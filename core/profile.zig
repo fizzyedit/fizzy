@@ -40,7 +40,7 @@ pub const Gpu = @import("profile/Gpu.zig");
 /// Bumped whenever `Profiler`'s layout changes. Part of the key the host publishes it under
 /// (`publish_key`), so a plugin built against another layout finds none and records nothing: the
 /// `abi` field it would check sits wherever its own layout put it, which a reordered struct moves.
-pub const abi: u32 = 6;
+pub const abi: u32 = 7;
 
 pub const max_entries = 1024;
 const max_depth = 48;
