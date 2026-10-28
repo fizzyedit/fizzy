@@ -23,6 +23,10 @@ export function wheelTicks(ev, state) {
     const touchpadAdj = 0.025;
     if (ev.deltaMode !== 0) {
       ticks /= low;
+    } else if (i === 1 && ev.wheelDeltaY === -3 * delta) {
+      // macOS trackpads can produce multiples of 120 during a fast flick too.
+      trackpad = 1;
+      ticks = ticks / lowest[i] * touchpadAdj;
     } else if (i === 1 && ev.wheelDeltaY && ev.wheelDeltaY % 120 === 0) {
       // Chromium scales deltaY with Windows display scaling, but a notch stays 120.
       ticks = ev.wheelDeltaY / 120;
