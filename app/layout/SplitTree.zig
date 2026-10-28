@@ -60,6 +60,10 @@ pub const Branch = struct {
     /// the half's pixel extent is along the axis it was last chosen on, which a box of another
     /// shape (a restart in portrait) no longer has. Null until the person has sized it.
     share: ?f32 = null,
+    /// Transient: what a turn left in the frame's data for this split is to go on its next draw
+    /// (`Region.settleTurn`). Set when it stops being adaptive, and when it is rebuilt under the
+    /// name of one that was. Never saved.
+    settle: bool = false,
     a: *Node,
     b: *Node,
 };
@@ -222,6 +226,25 @@ pub const Forest = struct {
         var it = self.roots.valueIterator();
         while (it.next()) |n| if (markIn(n.*, created)) return true;
         return false;
+    }
+
+    /// The split `name` is one half of, as a single place; null when it is no split's half.
+    pub fn halfOf(self: *const Forest, name: []const u8) ?*Branch {
+        var it = self.roots.valueIterator();
+        while (it.next()) |n| if (halfIn(n.*, name)) |b| return b;
+        return null;
+    }
+
+    fn halfIn(node: *Node, name: []const u8) ?*Branch {
+        switch (node.kind) {
+            .leaf => return null,
+            .branch => |*b| {
+                for ([_]*Node{ b.a, b.b }) |half| {
+                    if (leafName(half.*)) |n| if (std.mem.eql(u8, n, name)) return b;
+                }
+                return halfIn(b.a, name) orelse halfIn(b.b, name);
+            },
+        }
     }
 
     /// Record the share of the adaptive split that minted `created`. True when it changed.
@@ -736,4 +759,29 @@ test "an adaptive split turns a quarter, keeps its half and its name, and is sav
     try std.testing.expectEqualStrings("Main/r1", b.created);
     turn(b);
     try std.testing.expectEqual(Side.right, b.side);
+}
+
+test "a place's own split is found from either half, and is saved as the toggle leaves it" {
+    const gpa = std.testing.allocator;
+    var f: Forest = .{};
+    defer f.deinit(gpa);
+    _ = f.split(gpa, internLiteral, "Main", .right, 80, "Main/r1").?;
+    _ = f.split(gpa, internLiteral, "Main/r1", .bottom, 40, "Main/r1/b1").?;
+    try std.testing.expect(f.halfOf("Nowhere") == null);
+
+    const outer = f.halfOf("Main").?;
+    try std.testing.expectEqualStrings("Main/r1", outer.created);
+    // The half split again is a half of its own split, not of the one that made it.
+    try std.testing.expectEqualStrings("Main/r1/b1", f.halfOf("Main/r1").?.created);
+    try std.testing.expectEqual(f.halfOf("Main/r1"), f.halfOf("Main/r1/b1"));
+
+    outer.adaptive = true;
+    turn(outer);
+    outer.adaptive = false;
+    const links = f.collectLinks(gpa);
+    defer gpa.free(links);
+    for (links) |l| {
+        try std.testing.expect(!l.adaptive);
+        if (std.mem.eql(u8, l.name, "Main/r1")) try std.testing.expectEqual(Side.bottom, l.side);
+    }
 }

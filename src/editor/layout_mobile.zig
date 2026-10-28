@@ -138,6 +138,14 @@ fn topStrip(editor: *fizzy.Editor) void {
     });
 
     _ = dvui.spacer(@src(), .{ .expand = .horizontal });
+    // Two groups, the way the room asks: the command, so a tape, an agent or the palette does
+    // the same thing, and the button can move with the strip.
+    // TODO(seam): plans#60's swipe on the group's strip and plans#109 D11's split header call
+    // `layout.place.split` as this does, and this button goes when they land.
+    if (iconButton(@src(), icons.tvg.lucide.@"square-split-horizontal", "fizzy.mobile.split")) {
+        const out = editor.app.host.callCommand("layout.place.split", ".{ .place = \"Main\" }", dvui.currentWindow().arena());
+        if (out != .ok) dvui.log.warn("layout.place.split: {s}", .{@tagName(out)});
+    }
     if (iconButton(@src(), icons.tvg.lucide.search, "fizzy.mobile.commands")) editor.command_palette.show(.commands);
 }
 
