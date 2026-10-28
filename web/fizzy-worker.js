@@ -20,7 +20,7 @@ const utf8encode = (s) => new TextEncoder().encode(s);
 const env = {
     canvas: null,
     size: { w: 1, h: 1, dpr: 1 },
-    prefs: { dark: false, light: false, reduce: false },
+    prefs: { dark: false, light: false, reduce: false, transparency: false },
     storage: {},
     // The page's `storageName`: what this copy of the app files its storage under — the build's
     // name, or that and an embed's own (`storage`).
@@ -218,6 +218,9 @@ const fizzyImports = (target) => ({
     },
     fizzy_web_fullscreen_supported() {
         return env.fullscreenSupported ? 1 : 0;
+    },
+    fizzy_web_reduced_transparency() {
+        return env.prefs.transparency ? 1 : 0;
     },
     fizzy_web_now_real_ms() {
         return Date.now();

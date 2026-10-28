@@ -354,7 +354,9 @@ pub fn publishLook(looks: ?glass_look.Looks) void {
     if (looks) |l| dvui.dataSet(null, enabled_id, glass_look.data_key, l) else dvui.dataRemove(null, enabled_id, glass_look.data_key);
 }
 
-fn publishedLooks() ?glass_look.Looks {
+/// The looks published this frame (`publishLook`): null where none were.
+pub fn publishedLooks() ?glass_look.Looks {
+    if (dvui.current_window == null) return null;
     return dvui.dataGet(null, enabled_id, glass_look.data_key, glass_look.Looks);
 }
 

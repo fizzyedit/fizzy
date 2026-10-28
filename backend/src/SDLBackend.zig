@@ -102,8 +102,8 @@ sdl_quit: bool = true,
 clear_window_on_begin: bool = false,
 /// See `mainPicture`.
 main_picture: ?viewport_map.Rect = null,
-/// What this platform can draw (`materialPlatform`), probed once a frame: cleared in `begin`.
-material_platform: ?materials.Platform = null,
+/// What this platform can show (`materialOffer`), probed once a frame: cleared in `begin`.
+material_offer: ?glass_look.Offer = null,
 /// The main window's frame goes down where its picture is (`mainPicture`): a plain dvui app's,
 /// whose picture is also below the title bar (`platform.macos_monitor.titlebarStrip`). Its frame
 /// target lays it there (`plain_frame`, `pictureInWindow`); the backend moves what is drawn
@@ -1133,14 +1133,16 @@ var plain_dressed: ?[2]dvui.Color = null;
 var plain_material: ?WindowMaterial = null;
 var plain_base: dvui.Color = .{};
 
-/// The kinds of window material, field for field with fizzy's `core.material.Kind`: from the
-/// plainest to the richest, what `effectiveMaterial` falls back through (`materials.effective`).
-pub const MaterialKind = materials.Kind;
+/// The kinds of window material, fizzy's `core.material.Kind`: from the plainest to the richest,
+/// what `effectiveMaterial` falls back through (`glass_look.Material.effective`).
+pub const MaterialKind = glass_look.Kind;
 
 pub const WindowMaterial = struct {
     kind: MaterialKind = .none,
     /// How much of the window's colour covers what is behind, 0 (clear) to 1. Ignored by `none`.
     opacity: f32 = 1,
+    /// The OS body the person asked for (`setWindowBody`), over the app's (`glass_look.resolve`).
+    body: glass_look.Body = .best,
     /// The window's colour, where the app gives its own (`setWindowLook`: fizzy's content fill);
     /// null, the theme's window colour.
     color: ?dvui.Color = null,
@@ -1159,6 +1161,11 @@ pub fn setWindowMaterial(material: MaterialKind, opacity: f32) void {
     window_material.opacity = opacity;
 }
 
+/// The OS body the person asked for under the windows (`glass_look.Body`), from now on.
+pub fn setWindowBody(body: glass_look.Body) void {
+    window_material.body = body;
+}
+
 /// The windows' colour and its opacity as the app draws them this frame (`WindowMaterial.color`):
 /// an app with a colour of its own, fizzy's, whose opacity is already the one it chose for the
 /// theme and eased through full screen.
@@ -1167,7 +1174,7 @@ pub fn setWindowLook(color: dvui.Color, opacity: f32) void {
     window_material.opacity = opacity;
 }
 
-/// `window_material` as this backend can show it (`materials.effective`: the richest glass at or
+/// `window_material` as this backend can show it (`glass_look.resolve`: the richest glass at or
 /// below it, else opaque; clear only when asked), its colour less opaque in a light theme (`light_tint`) where the app gave none of its own.
 pub fn effectiveMaterial(self: *SDLBackend) WindowMaterial {
     return self.materialAt(window_material.opacity);
@@ -1182,7 +1189,7 @@ pub fn materialAt(self: *SDLBackend, window_opacity: f32) WindowMaterial {
     // 0.7 dark, 0.3 light), which fizzy's people set apart, and fizzy hands its own over with its
     // colour; a plain app has the one value.
     const opacity = if (window_material.color != null or dvui.themeGet().dark) window_opacity else window_opacity * light_tint;
-    const drawn = materials.effective(self.materialPlatform(), window_material.kind);
+    const drawn = self.resolveWindow(.main).kind;
     // Glass keeps a little of the window's colour (`material_min_opacity`); a clear or opaque
     // window may have none.
     const is_glass = drawn != .none and drawn != .transparent;
@@ -1231,7 +1238,8 @@ fn dressWindows(self: *SDLBackend) void {
     const material = self.effectiveMaterial();
     const fill = material.color orelse theme.color(.window, .fill);
     if (platform.window.app_dresses_windows) {
-        if (plain_material == null or plain_material.?.kind != material.kind) platform.window.appMaterial(self.window, @backingInt(material.kind));
+        if (plain_material == null or plain_material.?.kind != material.kind or plain_material.?.body != material.body)
+            platform.window.appMaterial(self.window, @backingInt(material.kind), self.appkitMaterial(.main));
         plain_material = material;
         if (material.kind == .liquid) plainGlass(self.window, material.opacity, fill);
         // Its floats' windows of the same kind; their look and colour at each float's own opacity
@@ -1246,10 +1254,10 @@ fn dressWindows(self: *SDLBackend) void {
         plain_material = material;
         plain_base = materialBase(material, fill);
         platform.window.nativeTitleBar(self.window, colors[0], colors[1], theme.dark);
-        platform.window.plainMaterial(self.window, @backingInt(material.kind), plain_base);
+        platform.window.plainMaterial(self.window, @backingInt(material.kind), plain_base, self.appkitMaterial(.main));
         for (&self.viewport_slots) |*slot| if (slot.*) |*v| if (v.native) {
             platform.window.nativeTitleBar(v.window, colors[0], colors[1], theme.dark);
-            platform.window.plainMaterial(v.window, @backingInt(material.kind), plain_base);
+            platform.window.plainMaterial(v.window, @backingInt(material.kind), plain_base, self.appkitMaterial(.float));
         };
     }
     if (material.kind != .liquid) return;
@@ -1457,29 +1465,67 @@ pub fn pointerHeld(_: *SDLBackend) bool {
 }
 
 pub fn materialKinds(self: *SDLBackend) MaterialKinds {
-    const p = self.materialPlatform();
+    const offered = self.materialOffer().kinds;
     var kinds: MaterialKinds = .{};
-    inline for (comptime std.enums.values(MaterialKind)) |k| @field(kinds, @tagName(k)) = materials.missing(p, k) == null;
+    inline for (comptime std.enums.values(MaterialKind)) |k| @field(kinds, @tagName(k)) = offered.has(k);
     return kinds;
 }
 
 /// Why `material` cannot be drawn here, one static line for a tooltip; null when it can
 /// (`materials.missing`).
 pub fn materialMissing(self: *SDLBackend, material: MaterialKind) ?[]const u8 {
-    return materials.missing(self.materialPlatform(), material);
+    return materials.missing(self.materialOffer(), material);
 }
 
-/// What this platform can draw this frame: the OS's Liquid Glass, the compositor's blur.
-fn materialPlatform(self: *SDLBackend) materials.Platform {
-    if (self.material_platform) |p| return p;
-    const p: materials.Platform = .{
-        .os = builtin.target.os.tag,
-        .liquid_glass = liquidGlassAvailable(),
+/// What this platform can show this frame (`glass_look.Offer`): the OS bodies it found — AppKit's
+/// vibrancy, its Liquid Glass, DWM's backdrops, the compositor's blur — and whether the person
+/// asked the OS to reduce transparency. The kinds are the catalogue's.
+pub fn materialOffer(self: *SDLBackend) glass_look.Offer {
+    if (self.material_offer) |o| return o;
+    const found: glass_look.Natives = .init(.{
+        .appkit = true,
+        .appkit_glass = liquidGlassAvailable(),
+        .dwm = platform.win32_titlebar.backdropOffered(self.window),
         .compositor_blur = platform.linux_titlebar.blurOffered(self.window),
-        .dwm_backdrop = platform.win32_titlebar.backdropOffered(self.window),
+    });
+    const o: glass_look.Offer = .init(.fromOs(builtin.target.os.tag), found, true, reduceTransparency());
+    self.material_offer = o;
+    return o;
+}
+
+/// Whether the person asked the OS to reduce transparency: macOS's Accessibility setting, Windows'
+/// Transparency effects turned off. No source on Linux.
+fn reduceTransparency() bool {
+    return switch (comptime builtin.target.os.tag) {
+        .macos => fizzy_native_reduce_transparency() != 0,
+        .windows => platform.win32_titlebar.transparencyOff(),
+        else => false,
     };
-    self.material_platform = p;
-    return p;
+}
+extern fn fizzy_native_reduce_transparency() c_int;
+
+/// What `role`'s windows are made of this frame (`glass_look.resolve`): the window material and the
+/// person's body over the app's asks (its published looks), on this platform's offer.
+fn resolveWindow(self: *SDLBackend, role: glass_look.WindowRole) glass_look.Resolved {
+    const asked: glass_look.Material = .{ .kind = window_material.kind, .body = window_material.body };
+    const looks = glass.LiquidField.publishedLooks();
+    return glass_look.resolve(asked, role, .regular, self.materialOffer(), if (looks) |*l| l else null);
+}
+
+/// The `NSVisualEffectMaterial` the resolver puts under `role`'s windows; 0 where it puts none, a
+/// window the OS's setting made opaque, which reads no material.
+fn appkitMaterial(self: *SDLBackend, role: glass_look.WindowRole) c_long {
+    const body = self.resolveWindow(role).body orelse return 0;
+    return body.appkitMaterial() orelse 0;
+}
+
+/// The `DWM_SYSTEMBACKDROP_TYPE` the resolver puts under `role`'s windows; none where it puts none.
+fn dwmBackdrop(self: *SDLBackend, role: glass_look.WindowRole) u32 {
+    const body = self.resolveWindow(role).body orelse return platform.win32_titlebar.no_backdrop;
+    return switch (body) {
+        .dwm => |t| t,
+        else => platform.win32_titlebar.no_backdrop,
+    };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1529,7 +1575,7 @@ pub fn viewportOpenMenu(self: *SDLBackend, at: viewport_map.Rect, radius: f32, r
     const vp = self.openViewport(at, "", .menu, .os) orelse return null;
     switch (comptime builtin.target.os.tag) {
         .macos => {
-            _ = fizzy_macos_viewport_menu(cocoaWindow(vp.window), cocoaWindow(self.window), platform.window.ns_visual_effect_material, radius, @intFromBool(dialog));
+            _ = fizzy_macos_viewport_menu(cocoaWindow(vp.window), cocoaWindow(self.window), self.appkitMaterial(.menu), radius, @intFromBool(dialog));
             // Gone while the app is left (a quiet run is never active: its menus stay).
             if (platform.window_layout.hidesWhenAppLeft(if (dialog) .dialog else .menu, quiet)) fizzy_macos_viewport_menu_hides(cocoaWindow(vp.window));
             vp.ride = switch (ride) {
@@ -1794,7 +1840,7 @@ fn openViewport(self: *SDLBackend, at: viewport_map.Rect, title_text: [:0]const 
     if (carry) {
         switch (comptime builtin.target.os.tag) {
             .macos => {
-                fizzy_macos_viewport_carry(cocoaWindow(window), cocoaWindow(self.window), platform.window.ns_visual_effect_material);
+                fizzy_macos_viewport_carry(cocoaWindow(window), cocoaWindow(self.window), self.appkitMaterial(.carry));
                 if (platform.window_layout.hidesWhenAppLeft(.carry, quiet)) fizzy_macos_viewport_menu_hides(cocoaWindow(window));
             },
             .windows => if (c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(window), c.SDL_PROP_WINDOW_WIN32_HWND_POINTER, null)) |hwnd| {
@@ -1812,7 +1858,7 @@ fn openViewport(self: *SDLBackend, at: viewport_map.Rect, title_text: [:0]const 
         const theme = dvui.themeGet();
         platform.window.nativeTitleBar(window, theme.color(.window, .fill), theme.color(.window, .text), theme.dark);
         // Made of what the main window is (`dressWindows`).
-        if (plain_material) |m| platform.window.plainMaterial(window, @backingInt(m.kind), plain_base);
+        if (plain_material) |m| platform.window.plainMaterial(window, @backingInt(m.kind), plain_base, self.appkitMaterial(.float));
         // Through Spaces, zooms and live resizes as the main window goes.
         if (comptime builtin.target.os.tag == .macos) platform.macos_monitor.watch(window);
         // Its part of the frame below the title bar's band (`platform.macos_monitor.titlebarStrip`):
@@ -2256,7 +2302,7 @@ pub fn viewportGlass(self: *SDLBackend, vp: *Viewport, radius: f32, dark: bool) 
 /// toolbar added once its content ran under the title bar grew the window by the difference.
 fn viewportMaterial(self: *SDLBackend, vp: *Viewport, made_of: MaterialKind) void {
     if (comptime builtin.target.os.tag != .macos) return;
-    platform.window.appMaterial(vp.window, @backingInt(made_of));
+    platform.window.appMaterial(vp.window, @backingInt(made_of), self.appkitMaterial(.float));
     vp.material = made_of;
     fizzy_macos_viewport_dress(cocoaWindow(vp.window), cocoaWindow(self.window));
 }
@@ -3002,7 +3048,13 @@ pub fn prefersReducedMotion(_: *@This()) bool {
 
 pub fn begin(self: *SDLBackend, arena: std.mem.Allocator) !void {
     self.arena = arena;
-    self.material_platform = null;
+    self.material_offer = null;
+    // The bodies DWM puts under the windows, as resolved this frame: before anything dresses one.
+    if (comptime builtin.target.os.tag == .windows) platform.win32_titlebar.backdrops = .{
+        .main = self.dwmBackdrop(.main),
+        .float = self.dwmBackdrop(.float),
+        .menu = self.dwmBackdrop(.menu),
+    };
     if (self.begin_hook) |hook| hook(self);
     // Its step for this frame taken (`begin_hook`): where the main window's picture is now.
     self.main_picture = if (platform.window.windowSpacePicture(self.window)) |p| .{ .x = p.x, .y = p.y, .w = p.w, .h = p.h } else null;
