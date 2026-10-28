@@ -5287,6 +5287,9 @@ fn loadRuntimeSplits(state: *Layout.State, gpa: std.mem.Allocator, saved: []cons
         const parent = r.parent orelse continue;
         const side = Layout.State.SplitTree.parseSide(r.from orelse continue) orelse continue;
         const made = state.splits.split(gpa, intern.go, parent, side, r.extent orelse 0, r.name);
+        // Rebuilt under the name of a split that may have been turning (a demo putting the
+        // person's arrangement back): that turn is not this one's (`Region.settleTurn`).
+        if (made != null) state.splits.halfOf(r.name).?.settle = true;
         if (made != null and (r.adaptive orelse false)) {
             _ = state.splits.markAdaptive(r.name);
             if (r.share) |share| _ = state.splits.setShare(r.name, share);

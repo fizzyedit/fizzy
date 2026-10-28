@@ -4128,6 +4128,256 @@ test "a drag while an adaptive split is turned is not kept when it turns back" {
     try std.testing.expect(!editor.app.layout.dirty);
 }
 
+// -- the place commands that follow the room --------------------------------------------------------
+// `layout.place.split` and `layout.place.adaptive` (design note "layout placement", Who asks it,
+// item 2), on the forest of a carded Main as a phone or a tablet has it. The picker is drawn after
+// the shape, as fizzy's frame does: what a place command asks is carried out there.
+
+const PlaceCase = struct {
+    ctx: shim.Ctx,
+
+    fn init(w: f32, h: f32) !PlaceCase {
+        var ctx = try shim.init(std.testing.allocator);
+        errdefer ctx.deinit(std.testing.allocator);
+        const editor = ctx.editor;
+        editor.app.gpa = std.testing.allocator;
+        ColumnCardFrame.editor = editor;
+        try fizzy.Editor.Layout.place_commands.register(&editor.app.host, &editor.app.layout);
+        resize(&ctx, w, h);
+        _ = try dvui.testing.step(frame);
+        try dvui.testing.settle(frame);
+        return .{ .ctx = ctx };
+    }
+
+    fn deinit(self: *PlaceCase) void {
+        const editor = self.ctx.editor;
+        editor.app.layout.picker.close(editor.app.gpa);
+        editor.app.layout.regions.deinit(editor.app.gpa);
+        editor.app.layout.regions_building.deinit(editor.app.gpa);
+        editor.app.layout.deinitExtents(editor.app.gpa);
+        editor.app.layout.deinitAssignments(editor.app.gpa);
+        editor.app.layout.deinitQualified(editor.app.gpa);
+        ColumnCardFrame.editor = null;
+        self.ctx.deinit(std.testing.allocator);
+    }
+
+    fn frame() anyerror!dvui.App.Result {
+        fizzy.core.anchor.want();
+        const result = try ColumnCardFrame.frame();
+        const e = ColumnCardFrame.editor.?;
+        var layout = fizzy.Editor.Layout.init(&e.app.host, &e.app.layout, e.app.gpa, dvui.currentWindow().arena());
+        e.app.layout.picker.draw(&layout);
+        return result;
+    }
+
+    fn palette() anyerror!dvui.App.Result {
+        fizzy.core.anchor.want();
+        const e = ColumnCardFrame.editor.?;
+        e.command_palette.draw(e);
+        return .ok;
+    }
+
+    fn resize(ctx: *shim.Ctx, w: f32, h: f32) void {
+        ctx.t.backend.size = .{ .w = w, .h = h };
+        ctx.t.backend.size_pixels = .{ .w = w, .h = h };
+    }
+
+    /// Run place command `id` on `place`, as the palette, a tape or an agent does, and draw what
+    /// it asked.
+    fn run(self: *PlaceCase, id: []const u8, place: []const u8) !void {
+        var results: std.heap.ArenaAllocator = .init(std.testing.allocator);
+        defer results.deinit();
+        var buf: [96]u8 = undefined;
+        const args = try std.mem.print(&buf, ".{{ .place = \"{s}\" }}", .{place});
+        const out = self.ctx.editor.app.host.callCommand(id, args, results.allocator());
+        if (out != .ok) return error.TestUnexpectedResult;
+        try dvui.testing.settle(frame);
+    }
+
+    fn link(self: *PlaceCase) !fizzy.Editor.Layout.State.SplitTree.Forest.SavedLink {
+        const links = self.ctx.editor.app.layout.splits.collectLinks(std.testing.allocator);
+        defer std.testing.allocator.free(links);
+        try std.testing.expectEqual(@as(usize, 1), links.len);
+        return links[0];
+    }
+
+    fn leafId(self: *PlaceCase, name: []const u8) !dvui.Id {
+        for (self.ctx.editor.app.layout.regions.items) |r| {
+            if (std.mem.eql(u8, r.name, name)) return r.id;
+        }
+        return error.TestExpectedEqual;
+    }
+};
+
+fn splitsByRoom(w: f32, h: f32, made: []const u8, side: fizzy.Editor.Layout.SplitTree.Side) !void {
+    var case = try PlaceCase.init(w, h);
+    defer case.deinit();
+    try case.run("layout.place.split", "Main");
+    const l = try case.link();
+    try std.testing.expectEqualStrings(made, l.name);
+    try std.testing.expectEqual(side, l.side);
+    try std.testing.expect(l.adaptive);
+    const old = try ColumnCardFrame.sizeOf(case.ctx.editor, "Main");
+    const new = try ColumnCardFrame.sizeOf(case.ctx.editor, made);
+    try std.testing.expect(new.w > 40 and new.h > 40);
+    switch (side) {
+        .bottom => try std.testing.expectApproxEqAbs(old.w, new.w, 1),
+        else => try std.testing.expectApproxEqAbs(old.h, new.h, 1),
+    }
+}
+
+test "layout.place.split stacks a tall place, as the room asks, and the split follows its room" {
+    try splitsByRoom(820, 1180, "Main/b1", .bottom);
+}
+
+test "layout.place.split puts a wide place's halves side by side, as the room asks" {
+    try splitsByRoom(1180, 820, "Main/r1", .right);
+}
+
+// A person's split is a point extent. Marked adaptive it keeps the size it is drawn at as its
+// share; unmarked while turned it keeps the turn, and is the person's again: a drag is saved.
+test "layout.place.adaptive turns a person's split to follow its room and back, nothing moving" {
+    var case = try PlaceCase.init(1180, 820);
+    defer case.deinit();
+    const editor = case.ctx.editor;
+    {
+        var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+        try std.testing.expectEqualStrings("Main/r1", layout.splitOn("Main", .right) orelse return error.TestExpectedEqual);
+    }
+    try dvui.testing.settle(PlaceCase.frame);
+    try std.testing.expect(!(try case.link()).adaptive);
+    // Sized by the person, not halved.
+    const leaf = try case.leafId("Main/r1");
+    dvui.dataSet(null, leaf, "_size", @as(f32, 300));
+    dvui.dataSet(null, leaf, "_shown", @as(f32, 300));
+    try dvui.testing.settle(PlaceCase.frame);
+    const fixed = try ColumnCardFrame.sizeOf(editor, "Main/r1");
+
+    try case.run("layout.place.adaptive", "Main/r1");
+    for (0..4) |_| _ = try dvui.testing.step(PlaceCase.frame);
+    try std.testing.expect((try case.link()).adaptive);
+    try std.testing.expect((try case.link()).share != null);
+    try std.testing.expectApproxEqAbs(fixed.w, (try ColumnCardFrame.sizeOf(editor, "Main/r1")).w, 1);
+
+    // Upright: it turns, with the share it had.
+    PlaceCase.resize(&case.ctx, 820, 1180);
+    for (0..40) |_| _ = try dvui.testing.step(PlaceCase.frame);
+    const top = try ColumnCardFrame.sizeOf(editor, "Main");
+    const bottom = try ColumnCardFrame.sizeOf(editor, "Main/r1");
+    try std.testing.expectApproxEqAbs(top.w, bottom.w, 1);
+
+    // Off while turned: it stays as it is drawn, and that is saved.
+    try case.run("layout.place.adaptive", "Main/r1");
+    const l = try case.link();
+    try std.testing.expect(!l.adaptive);
+    try std.testing.expectEqual(fizzy.Editor.Layout.SplitTree.Side.bottom, l.side);
+    const still = try ColumnCardFrame.sizeOf(editor, "Main/r1");
+    try std.testing.expectApproxEqAbs(bottom.w, still.w, 1);
+    try std.testing.expectApproxEqAbs(bottom.h, still.h, 1);
+
+    // The person's again: a drag of it is kept.
+    const room = top.h + bottom.h;
+    dvui.dataSet(null, leaf, "_size", room / 3);
+    dvui.dataSet(null, leaf, "_shown", room / 3);
+    for (0..4) |_| _ = try dvui.testing.step(PlaceCase.frame);
+    try std.testing.expectApproxEqAbs(room / 3, editor.app.layout.extent("Main/r1", 0), 1);
+}
+
+test "layout.place.adaptive off while the split slides shut to turn opens it back where it was" {
+    var case = try PlaceCase.init(1180, 820);
+    defer case.deinit();
+    const editor = case.ctx.editor;
+    try case.run("layout.place.split", "Main");
+    try std.testing.expectEqualStrings("Main/r1", (try case.link()).name);
+    const before = try ColumnCardFrame.sizeOf(editor, "Main/r1");
+
+    PlaceCase.resize(&case.ctx, 820, 1180);
+    const leaf = try case.leafId("Main/r1");
+    for (0..10) |_| {
+        _ = try dvui.testing.step(PlaceCase.frame);
+        if (dvui.dataGet(null, leaf, "_fold", bool) orelse false) break;
+    } else return error.TestExpectedEqual;
+
+    try case.run("layout.place.adaptive", "Main/r1");
+    const l = try case.link();
+    try std.testing.expect(!l.adaptive);
+    try std.testing.expectEqual(fizzy.Editor.Layout.SplitTree.Side.right, l.side);
+    const main = try ColumnCardFrame.sizeOf(editor, "Main");
+    const after = try ColumnCardFrame.sizeOf(editor, "Main/r1");
+    try std.testing.expectApproxEqAbs(before.w, after.w, 2);
+    try std.testing.expectApproxEqAbs(main.h, after.h, 1);
+}
+
+test "layout.place.adaptive is refused where the shape declared the split, and offered on a split made since" {
+    var case = try PlaceCase.init(1180, 820);
+    defer case.deinit();
+    const editor = case.ctx.editor;
+    var results: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer results.deinit();
+    try std.testing.expect(editor.app.host.callCommand("layout.place.adaptive", ".{ .place = \"Main\" }", results.allocator()) == .failed);
+
+    // The menu: Split offered, the toggle not until there is a split of the person's to turn.
+    editor.app.layout.picker.open(editor.app.gpa, "Main", null);
+    try dvui.testing.settle(PlaceCase.frame);
+    try std.testing.expect(dvui.tagGet("region.menu.split:Main") != null);
+    try std.testing.expect(dvui.tagGet("region.menu.adaptive:Main") == null);
+    editor.app.layout.picker.close(editor.app.gpa);
+
+    try case.run("layout.place.splitRight", "Main");
+    editor.app.layout.picker.open(editor.app.gpa, "Main", null);
+    try dvui.testing.settle(PlaceCase.frame);
+    try dvui.testing.moveTo("region.menu.adaptive:Main");
+    try dvui.testing.click(.left);
+    try dvui.testing.settle(PlaceCase.frame);
+    try std.testing.expect((try case.link()).adaptive);
+    // A toggle: the menu stays open on the place it changed.
+    try std.testing.expect(editor.app.layout.picker.is_open);
+}
+
+test "the palette lists the place commands that follow the room" {
+    var case = try PlaceCase.init(1180, 820);
+    defer case.deinit();
+    const editor = case.ctx.editor;
+    editor.command_palette.show(.commands);
+    try dvui.testing.settle(PlaceCase.palette);
+    try dvui.testing.writeText("Place: Split");
+    try dvui.testing.settle(PlaceCase.palette);
+    try std.testing.expect(dvui.tagGet("fizzy.palette.row:layout.place.split") != null);
+    try std.testing.expect(dvui.tagGet("fizzy.palette.row:layout.place.adaptive") != null);
+}
+
+fn mobilePlaceFrame() !dvui.App.Result {
+    const result = try MobileFrame.frame();
+    const e = MobileFrame.editor.?;
+    var layout = fizzy.Editor.Layout.init(&e.app.host, &e.app.layout, e.app.gpa, dvui.currentWindow().arena());
+    e.app.layout.picker.draw(&layout);
+    return result;
+}
+
+test "the phone's split button makes two groups, stacked in portrait" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+    const editor = ctx.editor;
+    try mobileCase(&ctx);
+    defer fizzy.core.platform.cached_form_factor = .desktop;
+    defer MobileFrame.editor = null;
+    defer editor.app.layout.regions.deinit(editor.app.gpa);
+    defer editor.app.layout.regions_building.deinit(editor.app.gpa);
+    defer editor.app.layout.deinitExtents(editor.app.gpa);
+    defer editor.app.layout.deinitQualified(editor.app.gpa);
+    defer editor.app.layout.deinitAssignments(editor.app.gpa);
+    try fizzy.Editor.Layout.place_commands.register(&editor.app.host, &editor.app.layout);
+    PlaceCase.resize(&ctx, 390, 844);
+    try dvui.testing.settle(mobilePlaceFrame);
+
+    try tapAt((dvui.tagGet("fizzy.mobile.split") orelse return error.TestExpectedEqual).rect, mobilePlaceFrame);
+    const links = editor.app.layout.splits.collectLinks(std.testing.allocator);
+    defer std.testing.allocator.free(links);
+    try std.testing.expectEqual(@as(usize, 1), links.len);
+    try std.testing.expectEqualStrings("Main/b1", links[0].name);
+    try std.testing.expect(links[0].adaptive);
+}
+
 test "an adaptive split saved without a share loads with the ratio absent" {
     var ctx = try shim.init(std.testing.allocator);
     defer ctx.deinit(std.testing.allocator);
