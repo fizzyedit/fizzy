@@ -30,7 +30,8 @@ const dvui = @import("dvui");
 const input_time = @import("../input_time.zig");
 const profile = @import("../profile.zig");
 const Fling = @import("../Fling.zig");
-const FrameClock = @import("glass").FrameClock;
+const glass = @import("glass");
+const FrameClock = glass.FrameClock;
 const Spring = @import("../Spring.zig");
 
 const ScrollArea = @This();
@@ -306,12 +307,22 @@ fn coast(self: *ScrollArea) void {
     if (t.x.coasting or t.y.coasting) dvui.refresh(null, @src(), self.data().id);
 }
 
-/// End one axis's coast at the end it went `past`, handing its speed to the spring back.
+/// End one axis's coast at the end it went `past`, handing its speed to the spring back. A fast
+/// coast reaches an end with a long last step and a high speed, and the spring would swing out
+/// past the band's limit, where a finger could not catch it where it is (`Fling.unrubber` stops
+/// at the limit): both are scaled down, which scales the spring's whole path, until its peak
+/// fits.
 fn bounce(fling: *Fling, pos: *f32, over: *f32, spring_pos: *f32, spring_vel: *f32, past: f32) void {
+    // A critically damped spring from `a` going out at `v` peaks at (a + v/w)·e^(-v/(v + w·a)).
+    const w = 2 * std.math.pi * spring_back.hz * glass.motion.rate();
+    const a = @abs(past);
+    const v = @abs(fling.vel);
+    const peak = (a + v / w) * @exp(-v / (v + w * a));
+    const fit = @min(1, Fling.rubber_band.limit * 0.99 / peak);
     pos.* -= past;
-    over.* = past;
-    spring_pos.* = past;
-    spring_vel.* = fling.vel;
+    over.* = past * fit;
+    spring_pos.* = past * fit;
+    spring_vel.* = fling.vel * fit;
     fling.cancel();
 }
 
