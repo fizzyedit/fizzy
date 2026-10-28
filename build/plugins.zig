@@ -15,6 +15,7 @@ pub const image = @import("../plugins/image/static/integration.zig");
 pub const archive = @import("../plugins/archive/static/integration.zig");
 pub const devtools = @import("../plugins/devtools/static/integration.zig");
 pub const guides = @import("../plugins/guides/static/integration.zig");
+pub const dashboard = @import("../plugins/dashboard/static/integration.zig");
 
 /// Fizzy's own plugins, as entries in the list an application links (`fizzy.plugins`). An entry
 /// with no module is built by fizzy for each executable, wired to that executable's framework.
@@ -26,6 +27,7 @@ pub const entries = struct {
     pub const markdown: BundledPlugin = .{ .name = "markdown" };
     pub const devtools: BundledPlugin = .{ .name = "devtools" };
     pub const guides: BundledPlugin = .{ .name = "guides" };
+    pub const dashboard: BundledPlugin = .{ .name = "dashboard" };
 
     /// What fizzy itself links, in its sidebar order.
     pub const all = [_]BundledPlugin{
@@ -36,6 +38,7 @@ pub const entries = struct {
         @This().markdown,
         @This().devtools,
         @This().guides,
+        @This().dashboard,
     };
 };
 
@@ -142,6 +145,14 @@ pub fn link(b: *std.Build, w: Wiring, plugins: []const BundledPlugin) Linked {
             )
         else if (std.mem.eql(u8, p.name, "guides"))
             guides.addStaticModule(
+                b,
+                w.target,
+                w.optimize,
+                .{ .dvui = w.dvui, .core = w.core, .sdk = w.sdk },
+                w.consumer,
+            )
+        else if (std.mem.eql(u8, p.name, "dashboard"))
+            dashboard.addStaticModule(
                 b,
                 w.target,
                 w.optimize,

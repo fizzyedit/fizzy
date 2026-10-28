@@ -44,6 +44,9 @@ pub const Modules = struct {
     sdk: *std.Build.Module,
     dvui: *std.Build.Module,
     proxy_bridge: *std.Build.Module,
+    /// `core`'s own `tape` and `replay`, the instances a statically linked plugin imports.
+    tape: *std.Build.Module,
+    replay: *std.Build.Module,
 };
 
 pub const ModulesOptions = struct {
@@ -184,6 +187,8 @@ fn modulesFromDep(fizzy_dep: *std.Build.Dependency) Modules {
         .sdk = fizzy_dep.module("fizzy_sdk"),
         .dvui = fizzy_dep.module("dvui"),
         .proxy_bridge = fizzy_dep.module("proxy_bridge"),
+        .tape = fizzy_dep.module("tape"),
+        .replay = fizzy_dep.module("replay"),
     };
 }
 
@@ -196,6 +201,8 @@ pub fn addImports(mod: *std.Build.Module, plugin_modules: Modules) void {
     mod.addImport("fizzy_sdk", plugin_modules.sdk);
     mod.addImport("dvui", plugin_modules.dvui);
     mod.addImport("proxy_bridge", plugin_modules.proxy_bridge);
+    mod.addImport("tape", plugin_modules.tape);
+    mod.addImport("replay", plugin_modules.replay);
 }
 
 fn module(
@@ -704,6 +711,9 @@ pub fn exportModules(
     sdk_mod.addImport("dvui", dvui_proxy_mod);
     sdk_mod.addImport("proxy_bridge", proxy_bridge_mod);
     sdk_mod.addImport("core", core_mod);
+    // The fingerprint hashes `tape`'s and `replay`'s data types (`dylib.zig`).
+    sdk_mod.addImport("tape", core_mod.import_table.get("tape").?);
+    sdk_mod.addImport("replay", core_mod.import_table.get("replay").?);
     // See the matching comment in `build/sdk.zig`. `sdk_version.zig` needs no `repoPath` hop:
     // unlike `src/…`, it lives at this package's root in *both* layouts (in-repo `fizzy/sdk/`
     // and the release tarball, whose root is that same directory).

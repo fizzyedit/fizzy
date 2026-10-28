@@ -127,6 +127,11 @@ if [[ -n $builds ]]; then
   printf '%s\n' $builds | xargs -P "${EXAMPLES_JOBS:-3}" -n 1 bash -c 'build_one "$1"' _
 fi
 
+# A plugin that imports `tape` and `replay` builds and plays a tape as a dylib too
+# (tests/fixtures/tape-plugin; the same file is tested linked into the app by `test-integration`).
+echo "== tape-plugin fixture, as a dylib"
+(cd "$root/tests/fixtures/tape-plugin" && zig build test --cache-dir "$work/tape-plugin-cache" --prefix "$work/tape-plugin-out")
+
 # An app's list is exact: one naming none of fizzy's, workbench included, fails while build.zig
 # configures, which compiles nothing. The build must fail and say which plugin is missing.
 echo "== app-only fixture, expected to fail naming fizzy.plugins.workbench"
@@ -151,7 +156,10 @@ echo "ok    app-only (failed as expected)"
 fixtures="scripts/fixtures/build-api"
 for id in fixture_both fixture_native; do
   mkdir -p "$work/$id"
-  cp "$fixtures"/plugin/{build.zig,build.zig.zon,plugin.zig,lib.zig,lib.c} "$work/$id/"
+  cp "$fixtures"/plugin/{build.zig,build.zig.zon,plugin.zig} "$work/$id/"
+  # The C dependency's symbol carries the id, so dropping either package's C source fails the link.
+  sed "s/@ID@/$id/g" "$fixtures/plugin/lib.zig.tmpl" > "$work/$id/lib.zig"
+  sed "s/@ID@/$id/g" "$fixtures/plugin/lib.c.tmpl" > "$work/$id/lib.c"
   sed "s/@ID@/$id/g" "$fixtures/plugin/plugin.zig.zon.tmpl" > "$work/$id/plugin.zig.zon"
   (cd "$work/$id" && zig fetch --save=fizzy "$sdk_tarball" >/dev/null)
 done

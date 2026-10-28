@@ -15,6 +15,34 @@ import { Dvui, TextInput } from "./web.js?cache-buster=TEMPLATE_HASH_WITH_PADDIN
 // /app/) is built with a name of its own (`zig build web -Dweb-storage=...`) and never reads or
 // overwrites the real one's settings, layout or plugins. Stamped by the build.
 const buildStorageName = "__FIZZY_WEB_STORAGE__";
+// iPhone Safari has no Fullscreen API for pages (iPad does); there, "Add to Home Screen"
+// is the way to lose the address bar (manifest.webmanifest).
+const fullscreenSupported = !!(document.fullscreenEnabled && document.documentElement.requestFullscreen);
+
+/** The editor's compiled wasm by URL, shared by every copy on the page: one download, one compile. */
+const compiledEditors = new Map();
+
+/**
+ * The compiled editor at `url`, started on the first ask and shared after. Null when it could not
+ * be fetched or compiled (a later copy tries again); the caller then fetches it itself.
+ * @param {string} url
+ * @returns {Promise<WebAssembly.Module | null>}
+ */
+function compiledEditor(url) {
+  let compiled = compiledEditors.get(url);
+  if (!compiled) {
+    compiled = WebAssembly.compileStreaming(fetch(url)).catch((err) => {
+      console.warn("fizzy: compiling the editor early failed; the copy fetches it", err);
+      compiledEditors.delete(url);
+      return null;
+    });
+    compiledEditors.set(url, compiled);
+  }
+  return compiled;
+}
+
+/** The copy whose canvas or input was last used, which gets keys that land on the page itself. */
+let activeCopy = null;
 
 /**
  * @typedef {object} FizzyOptions
@@ -31,6 +59,8 @@ const buildStorageName = "__FIZZY_WEB_STORAGE__";
  *   Default: in a worker on Chromium only. Never in a worker with `imports`.
  * @property {"desktop" | "tablet" | "mobile"} [form] - The form factor to take, in place of the
  *   device's (`core.platform.formFactor()`). Anything else is ignored.
+ * @property {HTMLElement} [fullscreenElement] - What View › Toggle Full Screen shows full screen.
+ *   Default: the canvas's parent, so an embed fills the screen and the page around it does not.
  * @property {string[]} [plugins] - Ids of plugins to load from `plugins/<id>/<id>.wasm` beside the
  *   app once it is up, each in place of an installed one of the same id: how a developer tries a
  *   build.
@@ -268,11 +298,11 @@ export class Fizzy {
         // View › Toggle Full Screen. The request runs a frame after the key press or click
         // that asked for it, which is still inside the browser's user-activation window.
         fizzy_web_toggle_fullscreen() {
-          if (document.fullscreenElement) {
-            document.exitFullscreen().catch(() => {});
-          } else if (document.documentElement.requestFullscreen) {
-            document.documentElement.requestFullscreen().catch((err) => console.warn("fizzy: full screen refused:", err));
-          }
+          toggleFullscreen();
+        },
+        // False where a page cannot go full screen (Safari on iPhone), so the command is disabled.
+        fizzy_web_fullscreen_supported() {
+          return fullscreenSupported ? 1 : 0;
         },
         // `Clock.real` for the app's `Io` (src/backend/web_io.zig).
         fizzy_web_now_real_ms() {
@@ -785,13 +815,40 @@ export class Fizzy {
     // "pinch fingers together = zoom out".
     let dvuiApp = null;
     const dvuiCanvas = opts.canvas;
+    // The element dvui's text input lives in (set once the editor is up): where text arrives.
+    let textInput = null;
+    for (const type of ["pointerdown", "focus"]) dvuiCanvas.addEventListener(type, () => { activeCopy = this; }, { capture: true });
+
+    // View › Toggle Full Screen shows this copy's element, not the whole page, and switches to it
+    // when another element (another copy) is already full screen.
+    function fullscreenTarget() {
+      return opts.fullscreenElement ?? dvuiCanvas.parentElement ?? dvuiCanvas;
+    }
+    function toggleFullscreen() {
+      const target = fullscreenTarget();
+      if (document.fullscreenElement === target) {
+        document.exitFullscreen().catch(() => {});
+      } else if (target.requestFullscreen) {
+        target.requestFullscreen().catch((err) => console.warn("fizzy: full screen refused:", err));
+      }
+    }
 
     // Shortcuts the app binds are the app's, not the browser's: ⌘S must not also save the
     // page. Capture phase, so this runs before dvui's own listener (which still receives the
     // key — preventDefault stops the browser, not the event). The app answers synchronously
     // from its keymap (`Keybinds.webKeyBound`), which also keeps typing, copy/cut/paste and
     // unbound chords with the browser.
+    //
+    // Only the keys meant for this copy: typed into the page's own field, or a chord aimed at
+    // another copy, they stay the page's. A key lands on this copy when its canvas or its text
+    // input has the focus, or when nothing has and this copy was the last one used.
+    const ownsKey = (ev) => {
+      const target = ev.target;
+      if (target === dvuiCanvas || (textInput && target === textInput)) return true;
+      return (target === document.body || target === document.documentElement) && activeCopy === this;
+    };
     window.addEventListener("keydown", (ev) => {
+      if (!ownsKey(ev)) return;
       const ex = wasmInstance && wasmInstance.exports;
       if (!ex || !ex.FizzyWebKeyBound) return;
       const bytes = utf8encode(ev.key);
@@ -806,9 +863,13 @@ export class Fizzy {
     // and those chords stay the browser's.
     document.addEventListener("fullscreenchange", () => {
       const kb = navigator.keyboard;
+      const full = document.fullscreenElement === fullscreenTarget();
+      // The text input is the page's, outside the element shown full screen, where it cannot
+      // take focus; it goes in with the editor and comes out again.
+      if (textInput) (full ? fullscreenTarget() : document.body).prepend(textInput);
       if (!kb || !kb.lock) return;
-      if (document.fullscreenElement) kb.lock().catch(() => {});
-      else kb.unlock();
+      if (full) kb.lock().catch(() => {});
+      else if (!document.fullscreenElement) kb.unlock();
     });
     dvuiCanvas.addEventListener("wheel", (ev) => {
       if (ev.ctrlKey && ev.deltaMode === 0) {
@@ -898,6 +959,7 @@ export class Fizzy {
       hidden.setAttribute("autocapitalize", "none");
       Object.assign(hidden.style, { position: "absolute", left: 0, top: 0, padding: 0, border: 0, margin: 0, opacity: 0, zIndex: -1 });
       document.body.prepend(hidden);
+      textInput = hidden;
       let textInputRect = [];
       // Focus never scrolls the page; and a copy embedded in another page (fizzyed.it's
       // examples, in an iframe) takes none until it is clicked, tapped or tabbed into.
@@ -939,6 +1001,7 @@ export class Fizzy {
         storage,
         storageName,
         buildStorageName,
+        fullscreenSupported,
         startup,
         baseURI: document.baseURI,
       }, [offscreen]));
@@ -1019,8 +1082,7 @@ export class Fizzy {
             }
             break;
           case "fullscreen":
-            if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
-            else if (document.documentElement.requestFullscreen) document.documentElement.requestFullscreen().catch((err) => console.warn("fizzy: full screen refused:", err));
+            toggleFullscreen();
             break;
           case "oauth": {
             let blobUrl = null;
@@ -1191,10 +1253,7 @@ export class Fizzy {
       // editor's download used to wait with it, tens of seconds on a slow link. The worker is
       // handed the compiled module and fetches nothing itself, so a page shown at once never
       // downloads it twice. Null on failure: the worker then fetches it as before.
-      const wasmModule = WebAssembly.compileStreaming(fetch(wasmUrl)).catch((err) => {
-        console.warn("fizzy: compiling the editor early failed; the worker fetches it", err);
-        return null;
-      });
+      const wasmModule = compiledEditor(wasmUrl);
       waitForLayout().then(() => startWorker(wasmUrl, wasmModule)).catch((err) => {
         console.error(err);
         onError(`Failed to load the editor (${err instanceof Error ? err.message : String(err)}).`);
@@ -1204,17 +1263,22 @@ export class Fizzy {
       waitForLayout()
         .then(() => {
           const app = new Dvui();
-          return WebAssembly.instantiateStreaming(fetch(wasmUrl), {
+          const imports = {
             ...opts.imports,
             dvui: app.imports,
             fizzy: fizzyImports(() => wasmInstance),
             env: { __indirect_function_table: functionTable },
-          }).then((result) => {
+          };
+          return compiledEditor(wasmUrl).then((module) => module
+            ? WebAssembly.instantiate(module, imports).then((instance) => ({ instance }))
+            : WebAssembly.instantiateStreaming(fetch(wasmUrl), imports)
+          ).then((result) => {
             wasmInstance = result.instance;
             if (opts.onInstance) opts.onInstance(result.instance);
             app.setInstance(result.instance);
             app.setCanvas(dvuiCanvas);
             app.run();
+            textInput = app.hidden_input ?? null;
             return app;
           });
         })

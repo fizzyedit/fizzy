@@ -4060,6 +4060,74 @@ test "an adaptive split saved beside comes back as the same share stacked" {
     try std.testing.expectApproxEqAbs(0.5, bottom.h / (top.h + bottom.h), 0.03);
 }
 
+// A sash dragged while an adaptive split is turned is shown and nothing more: the share the saved
+// extent gave comes back with the turn back, and the next turn uses it, not the drag's.
+test "a drag while an adaptive split is turned is not kept when it turns back" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const editor = ctx.editor;
+    editor.app.gpa = std.testing.allocator;
+    defer editor.app.layout.regions.deinit(editor.app.gpa);
+    defer editor.app.layout.regions_building.deinit(editor.app.gpa);
+    defer editor.app.layout.deinitExtents(editor.app.gpa);
+    defer editor.app.layout.deinitAssignments(editor.app.gpa);
+    defer editor.app.layout.deinitQualified(editor.app.gpa);
+
+    ColumnCardFrame.editor = editor;
+    defer ColumnCardFrame.editor = null;
+
+    ctx.t.backend.size = .{ .w = 1180, .h = 820 };
+    ctx.t.backend.size_pixels = .{ .w = 1180, .h = 820 };
+    _ = try dvui.testing.step(ColumnCardFrame.frame);
+    try dvui.testing.settle(ColumnCardFrame.frame);
+    {
+        var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+        try std.testing.expectEqualStrings("Main/r1", layout.splitOn("Main", .right) orelse return error.TestExpectedEqual);
+        layout.markAdaptive("Main/r1");
+    }
+    try dvui.testing.settle(ColumnCardFrame.frame);
+    const old = try ColumnCardFrame.sizeOf(editor, "Main");
+    const new = try ColumnCardFrame.sizeOf(editor, "Main/r1");
+    const share = new.w / (old.w + new.w);
+    const saved_extent = editor.app.layout.extent("Main/r1", 0);
+    editor.app.layout.dirty = false;
+
+    ctx.t.backend.size = .{ .w = 820, .h = 1180 };
+    ctx.t.backend.size_pixels = .{ .w = 820, .h = 1180 };
+    for (0..40) |_| _ = try dvui.testing.step(ColumnCardFrame.frame);
+
+    // The sash dragged to a third of the room, as `Split` writes a drag.
+    const room = (try ColumnCardFrame.sizeOf(editor, "Main")).h + (try ColumnCardFrame.sizeOf(editor, "Main/r1")).h;
+    const leaf = for (editor.app.layout.regions.items) |r| {
+        if (std.mem.eql(u8, r.name, "Main/r1")) break r.id;
+    } else return error.TestExpectedEqual;
+    dvui.dataSet(null, leaf, "_size", room / 3);
+    dvui.dataSet(null, leaf, "_shown", room / 3);
+    for (0..4) |_| _ = try dvui.testing.step(ColumnCardFrame.frame);
+    const dragged = try ColumnCardFrame.sizeOf(editor, "Main/r1");
+    try std.testing.expectApproxEqAbs(room / 3, dragged.h, room * 0.05);
+    try std.testing.expect(!editor.app.layout.dirty);
+    try std.testing.expectEqual(saved_extent, editor.app.layout.extent("Main/r1", 0));
+
+    // Back across: the saved share, not the drag's.
+    ctx.t.backend.size = .{ .w = 1180, .h = 820 };
+    ctx.t.backend.size_pixels = .{ .w = 1180, .h = 820 };
+    for (0..40) |_| _ = try dvui.testing.step(ColumnCardFrame.frame);
+    const left = try ColumnCardFrame.sizeOf(editor, "Main");
+    const right = try ColumnCardFrame.sizeOf(editor, "Main/r1");
+    try std.testing.expectApproxEqAbs(share, right.w / (left.w + right.w), 0.03);
+
+    // And upright again: the share is still the saved one.
+    ctx.t.backend.size = .{ .w = 820, .h = 1180 };
+    ctx.t.backend.size_pixels = .{ .w = 820, .h = 1180 };
+    for (0..40) |_| _ = try dvui.testing.step(ColumnCardFrame.frame);
+    const top = try ColumnCardFrame.sizeOf(editor, "Main");
+    const bottom = try ColumnCardFrame.sizeOf(editor, "Main/r1");
+    try std.testing.expectApproxEqAbs(share, bottom.h / (top.h + bottom.h), 0.03);
+    try std.testing.expect(!editor.app.layout.dirty);
+}
+
 test "an adaptive split saved without a share loads with the ratio absent" {
     var ctx = try shim.init(std.testing.allocator);
     defer ctx.deinit(std.testing.allocator);
@@ -11350,6 +11418,16 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         // With another pane there, it takes the view; without, the person's own does.
         const taken = wb.besideGrouping();
         if (others > 0) try std.testing.expect(taken != here) else try std.testing.expectEqual(here, taken);
+        // A pane that has not drawn is no place to send the view: it joins the person's pane.
+        if (others > 0) {
+            const other = for (wb.workspaces.values()) |*o| {
+                if (o.grouping != here) break o;
+            } else return error.TestUnexpectedResult;
+            const other_rect = other.pane_rect_physical;
+            defer other.pane_rect_physical = other_rect;
+            other.pane_rect_physical = null;
+            try std.testing.expectEqual(here, wb.besideGrouping());
+        }
         // A demo's `drop:beside` is the answer for the place it is aimed at, not the person's pane's
         // for every place: Main's is the pane's edge in its own room, which turns with the room,
         // and a place that holds no documents has none.
@@ -12611,6 +12689,42 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         _ = host.revealSurface("fizzy.output");
         try dvui.testing.settle(headlessFrame);
         try std.testing.expect(!(fizzy.core.profile.current() orelse return error.TestUnexpectedResult).enabled);
+    }
+
+    // The dashboard plugin's Needs-you carousel, over the demo provider of three cards: it draws one
+    // card at a time, and a card the person answers leaves the count.
+    {
+        const host = &editor.app.host;
+        const Status = struct { count: usize, index: usize, drawn: usize };
+        const Reader = struct {
+            fn read(h: *sdk.Host) !Status {
+                const zon = switch (h.callCommand("dashboard.status", "", h.arena())) {
+                    .ok => |r| r orelse return error.TestUnexpectedResult,
+                    else => return error.TestUnexpectedResult,
+                };
+                var diag: std.zon.parse.Diagnostics = undefined;
+                return std.zon.parse.fromSlice(Status, .{ .gpa = h.arena(), .arena = h.arena(), .source = try h.arena().dupeSentinel(u8, zon, 0), .diagnostics = &diag });
+            }
+        };
+        try std.testing.expect(host.callCommand("dashboard.show", "", host.arena()) == .ok);
+        for (0..4) |_| _ = try dvui.testing.step(headlessFrame);
+        try std.testing.expectEqualStrings("dashboard.view", host.selectionFor(sdk.keywords.ide.sidebar) orelse "");
+        const cards = host.getServiceTyped(sdk.services.dashboard_cards.Api) orelse return error.TestUnexpectedResult;
+        const before = try Reader.read(host);
+        try std.testing.expectEqual(@as(usize, 3), before.count);
+        try std.testing.expectEqual(@as(usize, 1), before.drawn);
+        try std.testing.expectEqual(@as(usize, 0), before.index);
+
+        cards.act(cards.list()[0].id, cards.list()[0].actions[0].id);
+        for (0..4) |_| _ = try dvui.testing.step(headlessFrame);
+        const after = try Reader.read(host);
+        try std.testing.expectEqual(@as(usize, 2), after.count);
+        try std.testing.expectEqual(@as(usize, 0), after.index);
+        // Settled again: the card that was answered is not drawn, and only one is.
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expectEqual(@as(usize, 1), (try Reader.read(host)).drawn);
+        _ = host.revealSurface("fizzy.output");
+        try dvui.testing.settle(headlessFrame);
     }
 
     // The black box (`fizzy.capture`): the last frames' input written out exactly, and read back.

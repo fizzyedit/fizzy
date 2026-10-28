@@ -13,7 +13,7 @@ diff --git a/src/backends/web.js b/src/backends/web.js
 index cecf29a..cc084e5 100644
 --- a/src/backends/web.js
 +++ b/src/backends/web.js
-@@ -162,16 +162,147 @@ const StylusAction = Object.freeze({
+@@ -162,16 +162,153 @@ const StylusAction = Object.freeze({
      /** motion only */
      move: 1,
      /** motion, then the left button pressed */
@@ -125,6 +125,12 @@ index cecf29a..cc084e5 100644
 +                this.replace(start, end, text);
 +                return;
 +            }
++            if (type === "insertReplacementText") {
++                // No range and a collapsed caret: the keyboard means the word before it.
++                const word = this.word.match(/\S*$/)[0];
++                this.replace(this.word.length - word.length, this.word.length, text);
++                return;
++            }
 +        }
 +        this.sink.text(text);
 +        this.typed(text);
@@ -161,7 +167,7 @@ index cecf29a..cc084e5 100644
      /** @type {WebGLBuffer} */
      vertexBuffer;
      /** @type {WebGLProgram} */
-@@ -1164,21 +1286,24 @@ export class Dvui {
+@@ -1164,21 +1292,24 @@ export class Dvui {
                  }
                  if (this.cur !== this.stock) this.useProgram(0, null, 0, 0);
              },
@@ -186,7 +192,7 @@ index cecf29a..cc084e5 100644
                      window.open(url);
                  } else {
                      window.location.href = url;
-@@ -1725,16 +1850,17 @@ export class Dvui {
+@@ -1725,16 +1856,17 @@ export class Dvui {
                      0,
                  );
              }
@@ -204,7 +210,7 @@ index cecf29a..cc084e5 100644
                  // switches tabs and we don't do anything.
                  if (ev.ctrlKey) return;
  
-@@ -1771,49 +1897,32 @@ export class Dvui {
+@@ -1771,49 +1903,32 @@ export class Dvui {
                  (ev.metaKey << 3) + (ev.altKey << 2) + (ev.ctrlKey << 1) +
                  (ev.shiftKey << 0),
              );

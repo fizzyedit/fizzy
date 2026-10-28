@@ -21,6 +21,7 @@ pub const LiveDriver = @import("LiveDriver.zig");
 pub const Input = @import("Input.zig");
 pub const Stage = @import("Stage.zig");
 pub const anchor = @import("anchor.zig");
+pub const wall = @import("wall.zig");
 pub const Snapshot = @import("Snapshot.zig");
 pub const Capture = @import("Capture.zig");
 pub const overlay = @import("overlay.zig");
@@ -33,6 +34,7 @@ test {
     _ = Input;
     _ = Stage;
     _ = anchor;
+    _ = wall;
     _ = Snapshot;
     _ = Capture;
     _ = overlay;
