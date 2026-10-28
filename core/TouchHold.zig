@@ -2,8 +2,8 @@
 //! selects; a tap clears; two taps within `tap_ns` and the slop are a double tap; a finger that
 //! moves more than `slop` is a scroll and selects nothing.
 //!
-//! std-only so the rules are tested by feeding it times and points. `widgets/SelectableText.zig`
-//! is the dvui half: it feeds this the frame's touch events and applies what it answers.
+//! std-only so the rules are tested by feeding it times and points. The SelectableText and
+//! TextEntry widgets feed it touch events and apply its answers.
 
 const std = @import("std");
 

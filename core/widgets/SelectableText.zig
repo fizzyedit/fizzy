@@ -22,6 +22,7 @@
 //! or one on a window holding a handle's `_offset`.
 const std = @import("std");
 const dvui = @import("dvui");
+const touch_press = @import("touch.zig");
 const TouchHold = @import("../TouchHold.zig");
 
 const SelectableText = @This();
@@ -33,7 +34,7 @@ hold: *TouchHold,
 pub fn init(src: std.builtin.SourceLocation, init_opts: dvui.TextLayoutWidget.InitOptions, opts: dvui.Options) SelectableText {
     var tl_opts = init_opts;
     tl_opts.touch_edit_just_focused = false;
-    const unhandled = unhandledPresses();
+    const unhandled = touch_press.unhandledPresses();
     const tl = dvui.textLayout(src, tl_opts, opts);
     const self: SelectableText = .{
         .tl = tl,
@@ -53,28 +54,8 @@ pub fn deinit(self: *SelectableText) void {
     self.* = undefined;
 }
 
-/// The touch presses among the frame's first `max_presses` events that nothing has handled yet.
-pub const Presses = std.bit_set.IntegerBitSet(max_presses);
-const max_presses = 32;
-
-pub fn unhandledPresses() Presses {
-    var set: Presses = .empty;
-    for (dvui.events(), 0..) |*e, i| {
-        if (i == max_presses) break;
-        if (e.evt == .mouse and e.evt.mouse.action == .press and e.evt.mouse.button.touch() and !e.handled) set.set(i);
-    }
-    return set;
-}
-
-/// Whether `dvui.textLayout` took the press `e`, the `i`th event, in a window other than its own:
-/// its menu handles the press, and its selection handles keep an `_offset` under their window's id.
-pub fn tookPress(unhandled: Presses, i: usize, e: *const dvui.Event) bool {
-    if (i < max_presses and unhandled.isSet(i) and e.handled) return true;
-    return dvui.dataGet(null, e.evt.mouse.floating_win, "_offset", dvui.Point.Physical) != null;
-}
-
 /// `unhandled` is `unhandledPresses` as it was before `dvui.textLayout` ran.
-fn processTouch(self: SelectableText, unhandled: Presses) void {
+fn processTouch(self: SelectableText, unhandled: touch_press.Presses) void {
     const tl = self.tl;
     const hold = self.hold;
     const rs = tl.data().borderRectScale();
@@ -86,7 +67,7 @@ fn processTouch(self: SelectableText, unhandled: Presses) void {
         switch (me.action) {
             .press => {
                 if (me.floating_win != dvui.subwindowCurrentId()) {
-                    if (!tookPress(unhandled, i, e)) {
+                    if (!touch_press.tookPress(unhandled, i, e)) {
                         hold.cancel();
                         clear(tl);
                     }

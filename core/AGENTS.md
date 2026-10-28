@@ -42,7 +42,9 @@ paths, fuzzy matching, the LSP client, the profiler.
   `TextEntry` marks that event handled for a touch and focuses on the release of a tap; a hold or
   double tap selects the word (`SelectableText.selectWordAt`), a tap on the caret toggles the
   Cut / Copy / Paste / Select all menu, a drag is left to the enclosing scroll. Mouse and pen are
-  dvui's. `te.entry` is dvui's widget (`getText`, `textSet`, `core.widgets.textEntryMenu`). The
+  dvui's. `te.entry` is dvui's widget (`getText`, `textSet`, `core.widgets.textEntryMenu`).
+  Existing callers in `plugins/workbench/src/files.zig`, `src/editor/CommandPalette.zig` and
+  `src/editor/dialogs/WebSaveAs.zig` are follow-ups at their field-construction sites. The
   rule is text only for now: no lint yet (the PM's call). The text plugin's vendored
   `TextEntryWidget` is the editor, not a field, and is its own.
 - **Touch or mouse: ask dvui, never infer it.** `dvui.pointerKind()` is the window's answer,

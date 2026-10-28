@@ -16,6 +16,7 @@
 const std = @import("std");
 const dvui = @import("dvui");
 const TouchHold = @import("../TouchHold.zig");
+const touch_press = @import("touch.zig");
 const SelectableText = @import("SelectableText.zig");
 
 const TextEntry = @This();
@@ -27,7 +28,7 @@ hold: *TouchHold,
 /// as for `dvui.textEntry`.
 pub fn init(src: std.lang.SourceLocation, init_opts: dvui.TextEntryWidget.InitOptions, opts: dvui.Options) TextEntry {
     // Taken before dvui draws the entry's menu and handles, which take their presses there.
-    const unhandled = SelectableText.unhandledPresses();
+    const unhandled = touch_press.unhandledPresses();
     const entry = dvui.widgetAlloc(dvui.TextEntryWidget);
     entry.init(src, init_opts, opts);
     const self: TextEntry = .{
@@ -35,8 +36,9 @@ pub fn init(src: std.lang.SourceLocation, init_opts: dvui.TextEntryWidget.InitOp
         .hold = dvui.dataGetPtrDefault(null, entry.data().id, "_hold", TouchHold, .{}),
     };
     self.keepFocusOnTouchdown();
+    const touch_editing = entry.textLayout.state.touch_editing;
     entry.processEvents();
-    self.processTouch(unhandled);
+    self.processTouch(unhandled, touch_editing);
     entry.draw();
     return self;
 }
@@ -61,8 +63,8 @@ fn keepFocusOnTouchdown(self: TextEntry) void {
     }
 }
 
-/// `unhandled` is `SelectableText.unhandledPresses` as it was before the entry was drawn.
-fn processTouch(self: TextEntry, unhandled: SelectableText.Presses) void {
+/// `unhandled` is `touch_press.unhandledPresses` as it was before the entry was drawn.
+fn processTouch(self: TextEntry, unhandled: touch_press.Presses, touch_editing: bool) void {
     const entry = self.entry;
     const tl = &entry.textLayout;
     const hold = self.hold;
@@ -76,7 +78,7 @@ fn processTouch(self: TextEntry, unhandled: SelectableText.Presses) void {
         switch (me.action) {
             .press => {
                 if (me.floating_win != dvui.subwindowCurrentId()) {
-                    if (!SelectableText.tookPress(unhandled, i, e)) {
+                    if (!touch_press.tookPress(unhandled, i, e)) {
                         hold.cancel();
                         tl.state.touch_editing = false;
                     }
@@ -93,7 +95,7 @@ fn processTouch(self: TextEntry, unhandled: SelectableText.Presses) void {
                 if (e.target_widgetId != tl.data().id) hold.cancel();
                 switch (hold.release(dvui.frameTimeNS())) {
                     .none => {},
-                    .tap => self.tap(me.p, focused, slop, e.num),
+                    .tap => self.tap(me.p, focused, slop, e.num, touch_editing),
                     .double_tap => SelectableText.selectWordAt(tl, entry.data().id, me.p.x, me.p.y),
                 }
             },
@@ -114,7 +116,7 @@ fn processTouch(self: TextEntry, unhandled: SelectableText.Presses) void {
 }
 
 /// A tap: focus, caret under the finger, and the menu toggled only by a tap on the caret.
-fn tap(self: TextEntry, p: dvui.Point.Physical, was_focused: bool, slop: f32, event_num: u16) void {
+fn tap(self: TextEntry, p: dvui.Point.Physical, was_focused: bool, slop: f32, event_num: u16, touch_editing: bool) void {
     const entry = self.entry;
     const tl = &entry.textLayout;
     const caret = tl.screenRectScale(tl.state.sel_end_r).r.outset(.all(slop));
@@ -122,7 +124,8 @@ fn tap(self: TextEntry, p: dvui.Point.Physical, was_focused: bool, slop: f32, ev
 
     dvui.focusWidget(entry.data().id, null, event_num);
     if (on_caret) {
-        tl.state.touch_editing = !tl.state.touch_editing;
+        // dvui may toggle on this release before our tap policy runs.
+        tl.state.touch_editing = !touch_editing;
         tl.state.te_show_draggables = true;
         tl.state.te_show_context_menu = true;
     } else {
@@ -133,10 +136,17 @@ fn tap(self: TextEntry, p: dvui.Point.Physical, was_focused: bool, slop: f32, ev
     dvui.refresh(null, @src(), tl.data().id);
 }
 
+// Written by testFrame and the field on the serial test runner thread.
 var t_buf: [64]u8 = undefined;
+// Written by testFrame on the serial test runner thread.
 var t_selection: dvui.TextLayoutWidget.Selection = .{};
+// Written by testFrame on the serial test runner thread.
 var t_touch_editing = false;
+// Written by testFrame on the serial test runner thread.
 var t_focused = false;
+
+// Written by testFrame on the serial test runner thread.
+var t_caret: dvui.Point.Physical = .{};
 
 fn testFrame() !dvui.App.Result {
     var box = dvui.box(@src(), .{}, .{ .expand = .both });
@@ -144,6 +154,7 @@ fn testFrame() !dvui.App.Result {
     var te = TextEntry.init(@src(), .{ .text = .{ .buffer = &t_buf } }, .{ .expand = .horizontal });
     defer te.deinit();
     if (dvui.firstFrame(te.entry.data().id)) te.entry.textSet("alpha beta gamma", false);
+    t_caret = te.entry.textLayout.screenRectScale(te.entry.textLayout.state.sel_end_r).r.center();
     t_selection = te.entry.textLayout.selection.*;
     t_touch_editing = te.entry.textLayout.state.touch_editing;
     t_focused = dvui.focusedWidgetId() == te.entry.data().id;
@@ -168,6 +179,10 @@ const on_text_y = 0.05;
 
 fn selectedWord() []const u8 {
     return t_buf[t_selection.start..t_selection.end];
+}
+
+fn selectedAny() bool {
+    return t_selection.start != t_selection.end;
 }
 
 test "a touch press does not focus the field; the release of a tap does" {
@@ -195,10 +210,6 @@ test "a press and release in one frame focus the field" {
     try frameAfter(16);
     try std.testing.expect(t_focused);
     try std.testing.expect(!selectedAny());
-}
-
-fn selectedAny() bool {
-    return t_selection.start != t_selection.end;
 }
 
 test "a drag past the slop that starts on the field leaves it unfocused" {
@@ -285,5 +296,28 @@ test "two taps more than 300 ms apart do not select" {
     try frameAfter(16);
     try frameAfter(16);
     try std.testing.expect(!selectedAny());
+    try std.testing.expect(!t_touch_editing);
+}
+
+test "a tap on the focused caret opens the menu and another closes it" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 200 } });
+    defer t.deinit();
+    try dvui.testing.settle(testFrame);
+    try touch(.press, on_text_x, on_text_y);
+    try touch(.release, on_text_x, on_text_y);
+    // Beyond the double-tap interval: each release must toggle, rather than select a word.
+    try frameAfter(400);
+    try frameAfter(16);
+    try std.testing.expect(t_focused);
+    try std.testing.expect(!t_touch_editing);
+    try touch(.press, t_caret.x / dvui.currentWindow().rect_pixels.w, t_caret.y / dvui.currentWindow().rect_pixels.h);
+    try touch(.release, t_caret.x / dvui.currentWindow().rect_pixels.w, t_caret.y / dvui.currentWindow().rect_pixels.h);
+    try frameAfter(400);
+    try frameAfter(16);
+    try std.testing.expect(t_touch_editing);
+    try touch(.press, t_caret.x / dvui.currentWindow().rect_pixels.w, t_caret.y / dvui.currentWindow().rect_pixels.h);
+    try touch(.release, t_caret.x / dvui.currentWindow().rect_pixels.w, t_caret.y / dvui.currentWindow().rect_pixels.h);
+    try frameAfter(400);
+    try frameAfter(16);
     try std.testing.expect(!t_touch_editing);
 }
