@@ -26,10 +26,9 @@ const is_wasm = builtin.target.cpu.arch == .wasm32;
 pub const fetch_supported = true;
 
 /// The browser rasterizes SVG for us (the page reads its pixels, through the image proxy when
-/// the host sends no CORS header). Native cannot — dvui's `svgToTvg` mangles every real badge — so
-/// SVG
-/// URLs are skipped there instead of fetched. The preview uses this to decide
-/// *before* a fetch, so a `.svg` badge never becomes the "open" fallback link.
+/// the host sends no CORS header). Native cannot — dvui's `svgToTvg` mangles every real badge —
+/// so SVG URLs are skipped there instead of fetched. The preview uses this to decide *before* a
+/// fetch, so a `.svg` badge never becomes the "open" fallback link.
 pub const rasterizes_svg = is_wasm;
 
 pub const Status = enum(u8) { fetching, ready, failed };

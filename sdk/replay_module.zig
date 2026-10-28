@@ -7,7 +7,9 @@
 //!
 //! ```zig
 //! const sdk = b.dependency("fizzy_sdk", .{});
-//! const automation = @import("fizzy_sdk").replay.modules(b, sdk.builder, my_dvui_module, target, optimize);
+//! const automation = @import("fizzy_sdk").replay.modules(
+//!     b, sdk.builder, my_dvui_module, target, optimize,
+//! );
 //! exe.root_module.addImport("tape", automation.tape);
 //! exe.root_module.addImport("replay", automation.replay);
 //! ```
