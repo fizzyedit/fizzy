@@ -470,14 +470,15 @@ pub fn surfaceShadow() dvui.Options.BoxShadow {
 /// the frost; an opaque surface keeps the ordinary box shadow under its fill.
 pub fn glassShadow(r: dvui.Rect.Physical, corners: dvui.CornerRect, scale: f32, bs: dvui.Options.BoxShadow, alpha_mult: f32) void {
     const spread = (bs.fade + @max(@abs(bs.offset.x), @abs(bs.offset.y))) * scale;
-    if (!glass.reaches(r.insetAll(scale * bs.shrink).insetAll(-spread))) return;
+    const ring = r.insetAll(scale * bs.shrink);
+    if (!glass.reaches(ring.insetAll(-spread))) return;
     // The glass's own outline, always: the ring hugs the pane, whatever corners the shadow was
     // described with (resolved through the theme's corner kind, they could come out square
     // beside glass that is explicitly round).
     const theme = dvui.themeGet();
     const c = corners.finalize(&theme);
     const radii: liquid_glass.Radii = .{ c.tl.radius() * scale, c.bl.radius() * scale, c.br.radius() * scale, c.tr.radius() * scale };
-    liquid_glass.drawShadow(r.insetAll(scale * bs.shrink), radii, bs.fade * scale, bs.offset.scale(scale, dvui.Point.Physical), bs.color, bs.alpha * alpha_mult);
+    liquid_glass.drawShadow(ring, radii, bs.fade * scale, bs.offset.scale(scale, dvui.Point.Physical), bs.color, bs.alpha * alpha_mult);
 }
 
 // ---- tooltips: the same surface, small ------------------------------------------------------

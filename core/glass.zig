@@ -17,6 +17,7 @@ pub fn reaches(ink: dvui.Rect.Physical) bool {
 }
 
 test "ink must reach both axes, with the same margins in core and the backend" {
+    try std.testing.expectEqual(fringe_px, @import("glass").BlurBackdrop.fringe_px);
     const clip: dvui.Rect.Physical = .{ .x = 20, .y = 30, .w = 40, .h = 50 };
     for ([_]f32{ 1, 11 }) |margin| {
         for ([_]dvui.Rect.Physical{

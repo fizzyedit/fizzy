@@ -1005,6 +1005,10 @@ pub fn fieldPane(id: dvui.Id, field: LiquidField, scale: f32, pane: Pane) void {
     queuePane(id, field.bounds(), .{}, scale, pane, field);
 }
 
+/// The antialiasing fringe, in physical pixels, that a pane's ink may reach past the clip and
+/// still show. Copy of `core.glass.fringe_px`, pinned to it by core's window tests.
+pub const fringe_px: f32 = 1;
+
 /// Physical ink against the clip, including its antialiasing fringe.
 /// Kept in sync with core.glass.within by core's window tests; glass cannot import core.
 pub fn inkWithin(ink: Rect.Physical, clip: Rect.Physical, margin_px: f32) bool {
@@ -1020,9 +1024,10 @@ fn queuePane(id: dvui.Id, rect: Rect.Physical, corners: dvui.CornerRect, scale: 
     // How formed it is: the caller's, or its own from when it first came up. Per id, so it
     // lives exactly as long as the pane is drawn and a pane that comes back forms anew.
     const form = std.math.clamp(pane.form orelse selfForm(id, now), 0, 1);
-    // Touch the per-id state even while clipped, so scrolling back does not re-form the pane.
+    // Cull only after the per-id state is touched above: a pane scrolled out and back must not
+    // re-form or restart its frost.
     const clip = dvui.clipGet();
-    if (clip.empty() or !inkWithin(rect, clip, 1)) return;
+    if (clip.empty() or !inkWithin(rect, clip, fringe_px)) return;
     // The blur comes in from sharp (`form`, at the full radius — see `BlurBackdrop.form`); the
     // edge squeezes in on the arrival curve, past its final shape and back when motion is playful.
     const radius = pane.radius;
