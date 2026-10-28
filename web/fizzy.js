@@ -49,6 +49,12 @@ export function pointerInput(canvas, send, clockOrigin = performance.timeOrigin,
   for (const [name, kind] of [["pointerdown", 8], ["pointermove", 10], ["pointerup", 9], ["pointercancel", 9]]) {
     canvas.addEventListener(name, (ev) => handle(kind, ev), { capture: true });
   }
+  // A touch tap ends with compatibility mouse events whose `mousedown` focuses the tabindex'd
+  // canvas after `pointerup` has focused the hidden input, closing the keyboard again.
+  // Cancelling `touchstart` and `touchend` suppresses them; pointer events are unaffected.
+  for (const name of ["touchstart", "touchend"]) {
+    canvas.addEventListener(name, (ev) => ev.preventDefault(), { capture: true, passive: false });
+  }
 }
 
 import { Dvui, TextInput } from "./web.js?cache-buster=TEMPLATE_HASH_WITH_PADDING__ITS_64_BYTES_LONG_THE_SAME_AS_SHA256";
@@ -1299,9 +1305,8 @@ export class Fizzy {
           // Late-bind the app reference so the capture-phase wheel listener above can
           // forward pinch deltas into the trackpad accumulator and kick a render.
           dvuiApp = app;
-          for (const name of ["touchstart", "touchmove", "touchend", "touchcancel", "mousedown", "mousemove", "mouseup"]) {
-            dvuiCanvas.addEventListener(name, (ev) => ev.stopImmediatePropagation(), { capture: true });
-          }
+          // Registered before the stoppers below: a stopper on the same element and phase would
+          // end propagation to pointerInput's touch listeners, which cancel the touch's default.
           pointerInput(dvuiCanvas, (m) => {
             for (const e of m.events) {
               const a = e.mouse ? [1, e.mods, 0, e.x * app.gl.drawingBufferWidth, e.y * app.gl.drawingBufferHeight] : e.a;
@@ -1309,6 +1314,9 @@ export class Fizzy {
             }
             app.requestRender();
           }, performance.timeOrigin, () => app.oskCheck());
+          for (const name of ["touchstart", "touchmove", "touchend", "touchcancel", "mousedown", "mousemove", "mouseup"]) {
+            dvuiCanvas.addEventListener(name, (ev) => ev.stopImmediatePropagation(), { capture: true });
+          }
           // The main-thread loop never sent the device to the editor, so Firefox and Safari
           // (which take this path) were always `.desktop`: send it now and on change.
           applyFormMain();
