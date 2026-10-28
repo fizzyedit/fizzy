@@ -284,13 +284,14 @@ fn scrollBy(self: *ScrollArea, by: dvui.Point) void {
 
 var t_viewport_y: f32 = 0;
 var t_release_velocity: f32 = 0;
-// Written by swipe on the test thread before it draws the release frame.
+/// Written by swipe on the test thread before it draws the release frame.
 var t_release_time: i128 = 0;
 var t_use_dvui: bool = false;
 /// Where a child of the area is drawn this frame (physical y, as the renderer would place it),
 /// and whether the renderer snaps there.
 var t_drawn_y: f32 = 0;
 var t_raw_y: f32 = 0;
+/// Written by testFrame on the test thread from the child's physical draw scale.
 var t_draw_scale: f32 = 1;
 var t_snapping: bool = false;
 /// Lay the area out as a column of `t_rows` rows, `t_top` points below the window's top, and
@@ -415,7 +416,6 @@ test "coast displacement follows each frame gap" {
     // Alternating long and short gaps exposes a displacement applied one frame late.
     for ([_]u64{ 8, 25, 8, 25, 8, 25, 8, 25 }) |next_gap| {
         const time = dvui.currentWindow().frame_time_ns;
-        const gap_ms: f32 = @as(f32, @floatFromInt(time - previous_time)) / std.time.ns_per_ms;
         try frameAfter(next_gap);
         const displacement = previous_y - t_drawn_y;
         const from_s = @as(f64, @floatFromInt(previous_time - release_time)) / std.time.ns_per_s;
@@ -424,7 +424,6 @@ test "coast displacement follows each frame gap" {
             (@exp(-tuning.decay * from_s) - @exp(-tuning.decay * to_s)));
         // Check what reaches the renderer against the release integral, including its decay.
         try std.testing.expectApproxEqAbs(expected, displacement, 0.0001);
-        std.debug.print("coast: gap={d:.0} ms, displacement={d:.6} pixels\n", .{ gap_ms, displacement });
         previous_time = time;
         previous_y = t_drawn_y;
     }
