@@ -19,6 +19,7 @@ const dvui = @import("dvui");
 const builtin = @import("builtin");
 const icons = @import("icons");
 const platform = @import("platform.zig");
+const keyboard = @import("keyboard.zig");
 const dialogs = @import("dialogs.zig");
 const draw = @import("draw.zig");
 const anchor = @import("replay").anchor;
@@ -228,7 +229,7 @@ pub fn textEntryDeinit(te: *dvui.TextEntryWidget) void {
     const focused = wd.id == dvui.focusedWidgetId();
     te.deinit();
     // The entry's own scroll area must be closed before scrolling the enclosing area.
-    @import("keyboard.zig").scrollIntoView(&wd, focused);
+    keyboard.scrollIntoView(&wd, focused);
 }
 
 /// A context menu's surface, opened at the point the pointer was pressed. Every right-click
@@ -479,6 +480,10 @@ pub fn tabCloseButtonOptions(over: dvui.Options) dvui.Options {
     }));
 }
 
+// Keep these button helpers in step with dvui's helpers when updating the dvui pin.
+/// Draw a labelled button and return whether it was clicked this frame.
+/// Uses a centred minimum 44 pt touch target; mouse, drawing and layout follow dvui.
+/// The label, interaction options and styling have the same contract as `dvui.button`.
 pub fn button(src: std.builtin.SourceLocation, label_str: []const u8, init_opts: Button.InitOptions, opts: dvui.Options) bool {
     var bw: Button = undefined;
     bw.init(src, init_opts, opts);
@@ -492,6 +497,9 @@ pub fn button(src: std.builtin.SourceLocation, label_str: []const u8, init_opts:
     return click;
 }
 
+/// Draw the TinyVG icon in `tvg_bytes`, identified by `name`, and return a click this frame.
+/// Uses a centred minimum 44 pt touch target and the cached icon renderer.
+/// Interaction, icon and styling options follow `dvui.buttonIcon`.
 pub fn buttonIcon(src: std.builtin.SourceLocation, name: []const u8, tvg_bytes: []const u8, init_opts: Button.InitOptions, icon_opts: dvui.IconRenderOptions, opts: dvui.Options) bool {
     const defaults = dvui.Options{ .padding = dvui.Rect.all(4), .label = .{ .text = name } };
     var bw: Button = undefined;
@@ -514,6 +522,9 @@ pub fn buttonIcon(src: std.builtin.SourceLocation, name: []const u8, tvg_bytes: 
 
 pub const ButtonLabelAndIconOptions = dvui.ButtonLabelAndIconOptions;
 
+/// Draw the label and icon described by `combined_opts` and return a click this frame.
+/// Uses a centred minimum 44 pt touch target and the cached icon renderer.
+/// Combined and styling options follow `dvui.buttonLabelAndIcon`.
 pub fn buttonLabelAndIcon(src: std.builtin.SourceLocation, combined_opts: ButtonLabelAndIconOptions, opts: dvui.Options) bool {
     var bw: Button = undefined;
     bw.init(src, combined_opts.button_opts, opts);
