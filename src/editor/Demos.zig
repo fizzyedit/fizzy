@@ -91,10 +91,13 @@ fn build(self: *Demos) void {
     self.built_for = self.editor.app.host.demos_generation;
     self.built_phone = fizzy.core.platform.formFactor() == .mobile;
     const gpa = self.editor.app.gpa;
+    var lacking: [std.enums.values(fizzy.core.material.Kind).len][]const u8 = undefined;
+    const lacks = Demo.materialsLacking(&lacking);
     for (&Demo.catalog.entries) |*e| {
         var script: automation.Script = .init(gpa, e.name, e.title);
         script.check = automation.Input.check;
         script.compact = self.built_phone;
+        script.lacks = lacks;
         e.build(&script) catch |err| {
             script.deinit();
             dvui.log.warn("demos: '{s}' did not build: {t}", .{ e.name, err });
