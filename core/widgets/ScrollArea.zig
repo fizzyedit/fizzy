@@ -289,6 +289,7 @@ var t_use_dvui: bool = false;
 /// and whether the renderer snaps there.
 var t_drawn_y: f32 = 0;
 var t_raw_y: f32 = 0;
+var t_draw_scale: f32 = 1;
 var t_snapping: bool = false;
 /// Lay the area out as a column of `t_rows` rows, `t_top` points below the window's top, and
 /// record where each row is drawn.
@@ -324,6 +325,7 @@ fn testFrame() !dvui.App.Result {
         }
         const child = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 100, .h = 20000 } });
         t_snapping = dvui.snapToPixels();
+        t_draw_scale = child.rectScale().s;
         const y = child.rectScale().r.y;
         t_raw_y = y;
         t_drawn_y = if (t_snapping) @round(y) else y;
@@ -401,9 +403,12 @@ test "coast displacement follows each frame gap" {
     defer t.deinit();
     t_use_dvui = false;
     _ = try swipe();
+    // swipe ends the release frame and begins the next one 16 ms later.
+    const release_time = dvui.currentWindow().frame_time_ns - 16 * std.time.ns_per_ms;
+    const release_speed: f64 = t_release_velocity * t_draw_scale;
     var previous_time = dvui.currentWindow().frame_time_ns;
     try frameAfter(25);
-    var previous_y = t_raw_y;
+    var previous_y = t_drawn_y;
     var previous_speed: f32 = std.math.inf(f32);
     var follows_gaps = true;
     // frameAfter draws at the current timestamp, then begins the next frame with this gap.
@@ -412,12 +417,18 @@ test "coast displacement follows each frame gap" {
         const time = dvui.currentWindow().frame_time_ns;
         const gap_ms: f32 = @as(f32, @floatFromInt(time - previous_time)) / std.time.ns_per_ms;
         try frameAfter(next_gap);
-        const displacement = previous_y - t_raw_y;
+        const displacement = previous_y - t_drawn_y;
+        const from_s = @as(f64, @floatFromInt(previous_time - release_time)) / std.time.ns_per_s;
+        const to_s = @as(f64, @floatFromInt(time - release_time)) / std.time.ns_per_s;
+        const expected: f32 = @floatCast(release_speed / tuning.decay *
+            (@exp(-tuning.decay * from_s) - @exp(-tuning.decay * to_s)));
+        // Check what reaches the renderer against the release integral, including its decay.
+        try std.testing.expectApproxEqAbs(expected, displacement, 0.0001);
         const speed = displacement / gap_ms;
-        std.debug.print("coast: gap={d:.0} ms, displacement={d:.6} points\n", .{ gap_ms, displacement });
+        std.debug.print("coast: gap={d:.0} ms, displacement={d:.6} pixels\n", .{ gap_ms, displacement });
         follows_gaps = follows_gaps and displacement > 0 and speed < previous_speed;
         previous_time = time;
-        previous_y = t_raw_y;
+        previous_y = t_drawn_y;
         previous_speed = speed;
     }
     try std.testing.expect(follows_gaps);
