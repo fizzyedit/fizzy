@@ -43,7 +43,11 @@ pub const Popover = @import("widgets/Popover.zig");
 pub const ContextWidget = @import("widgets/ContextWidget.zig");
 /// `dvui.scrollArea` with a phone's touch drag and fling (see the file for what differs).
 pub const ScrollArea = @import("widgets/ScrollArea.zig");
-/// A `dvui.textLayout` whose touch selection is a hold, not a tap (`core/TouchHold.zig`).
+/// Read-only text with hold-to-select touch input and dvui's mouse selection.
+/// Use `var st = SelectableText.init(@src(), .{}, opts); defer st.deinit();`, then
+/// draw spans through `st.tl.addText`, `addLink` or `addTextClick`, as with `dvui.textLayout`.
+/// Enclose it in `ScrollArea` for touch scrolling; drift up to 14 pt stays with the hold.
+/// A 0.45 s hold selects a word and shows handles and Copy / Select all; a tap clears.
 pub const SelectableText = @import("widgets/SelectableText.zig");
 
 /// The menu chain, copied from dvui so a menu can be frosted and so its rows are the same rows
