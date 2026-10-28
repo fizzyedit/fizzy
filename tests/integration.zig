@@ -6628,7 +6628,9 @@ test "motion: a profiled instance keeps person.zon under its profile root" {
 
     const shared = try fizzy.Editor.personDir(gpa, null, "/the/persons/config");
     defer gpa.free(shared);
-    try std.testing.expectEqualStrings("/the/persons/config/fizzyedit", shared);
+    const want_shared = try std.fs.path.join(gpa, &.{ "/the/persons/config", "fizzyedit" });
+    defer gpa.free(want_shared);
+    try std.testing.expectEqualStrings(want_shared, shared);
 }
 
 test "motion: migration and focus share the person's choice across app configs" {
@@ -10931,6 +10933,8 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
     try editor.postInit();
     try dvui.testing.settle(headlessFrame);
     try std.testing.expectEqualStrings(root, editor.app.config_folder);
+    // The person's choices stay in the profile too, not in the shared config folder.
+    try std.testing.expectEqualStrings(root, editor.person_dir);
     // A plugin's data folder (`Host.pluginDataFolder`): under the profile, made on the first ask,
     // the same borrowed path after, one per plugin.
     {
