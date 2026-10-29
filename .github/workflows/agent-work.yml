@@ -222,7 +222,7 @@ jobs:
         with:
           script: |
             const { owner, repo } = context.repo;
-            const app = github.getOctokit(process.env.APP_TOKEN);
+            const app = getOctokit(process.env.APP_TOKEN);
             const send = (event_type, client_payload) => app.rest.repos.createDispatchEvent({
               owner, repo: 'work', event_type, client_payload });
             let pr;
