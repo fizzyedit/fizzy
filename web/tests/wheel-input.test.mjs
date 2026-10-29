@@ -1,10 +1,13 @@
 import { readFileSync } from 'node:fs';
-import { runInNewContext } from 'node:vm';
 import assert from 'node:assert/strict';
 
 const source = readFileSync(new URL('../fizzy.js', import.meta.url), 'utf8');
-const helper = source.slice(source.indexOf('export function wheelTicks'), source.indexOf('// Pointer input'));
-const { wheelTicks } = runInNewContext(helper.replaceAll('export function', 'function') + '\n({ wheelTicks })');
+// Import the whole module with only its browser dependencies replaced.
+const moduleSource = source.replace(/import \{ Dvui, TextInput \} from "[^"\n]+";/,
+  'class Dvui {} class TextInput {}');
+globalThis.document = { fullscreenEnabled: false };
+const { wheelTicks, wheelInput } = await import(`data:text/javascript;base64,${Buffer.from(moduleSource).toString('base64')}`);
+delete globalThis.document;
 const initial = () => ({ lowest: [99999, 99999], lowestBatch: [99999, 99999] });
 const event = (deltaY, extra = {}) => ({ deltaX: 0, deltaY, deltaMode: 0, ...extra });
 const vertical = (result) => Array.from(result.events, ({ axis, ticks, trackpad }) => ({ axis, ticks, trackpad }));
@@ -26,6 +29,19 @@ for (const wheelDeltaY of [undefined, 0, -30]) {
     const result = wheelTicks(event(deltaY, { wheelDeltaY }), state);
     assert.deepEqual(vertical(result), [{ axis: 1, ticks: -deltaY / 3.5 * 0.025, trackpad: 1 }]);
     state = result.state;
+  }
+}
+// macOS trackpad flicks can also have legacy deltas that are multiples of 120.
+for (const direction of [1, -1]) {
+  for (const deltas of [[40, 80, 120], [3.5, 40, 80, 120]]) {
+    let state = initial();
+    for (const magnitude of deltas) {
+      const deltaY = magnitude * direction;
+      const result = wheelTicks(event(deltaY, { wheelDeltaY: -3 * deltaY }), state);
+      assert.deepEqual(vertical(result),
+        [{ axis: 1, ticks: -deltaY / deltas[0] * 0.025, trackpad: 1 }]);
+      state = result.state;
+    }
   }
 }
 for (const deltaMode of [1, 2]) {
@@ -53,7 +69,6 @@ assert.deepEqual(vertical(wheelTicks(event(96, { wheelDeltaY: -120 }), trackpadS
   [{ axis: 1, ticks: -1, trackpad: 0 }]);
 console.log('wheel input: scaled Windows notches, trackpads, line/page modes and fallback axes passed');
 
-const { wheelInput } = runInNewContext(helper.replaceAll('export function', 'function') + '\n({ wheelInput })');
 function reader() {
   let ms = 0;
   let listener;
