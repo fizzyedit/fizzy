@@ -1,4 +1,4 @@
-//! Shared helpers for fetching static assets (README.md, ICON.png, …) from a plugin's
+//! Shared helpers for fetching static assets (README.md, ICON.png, ...) from a plugin's
 //! GitHub repository over HTTPS, with a dev-tree fallback that walks up from the executable.
 const std = @import("std");
 const PluginManager = @import("PluginManager.zig");
@@ -46,7 +46,7 @@ pub const LocalAsset = struct {
 };
 
 /// Walk up from the executable directory looking for `{subpath}/{filename}` on disk. Covers dev
-/// trees (`zig-out/bin` → repo root) and sideloaded checkouts; packaged installs fall through to
+/// trees (`zig-out/bin` -> repo root) and sideloaded checkouts; packaged installs fall through to
 /// the GitHub fetch below.
 pub fn readLocalAsset(io: std.Io, subpath: []const u8, filename: []const u8, limit: std.Io.Limit) ?LocalAsset {
     if (comptime @import("builtin").target.cpu.arch == .wasm32) return null;
@@ -90,7 +90,7 @@ pub const UrlList = struct {
 
 /// Derive candidate raw asset URLs from a GitHub repository link, optionally scoped to
 /// `subpath` within that repo. Returns null for hosts we can't map. `url_storage` must be
-/// owned by the caller (e.g. a stack buffer local to the calling worker thread) — README and
+/// owned by the caller (e.g. a stack buffer local to the calling worker thread) - README and
 /// icon workers run concurrently on separate threads, so a shared/global buffer here would race.
 pub fn rawGithubUrls(url_storage: *[3][256]u8, repo: []const u8, subpath: []const u8, filename: []const u8) ?UrlList {
     var r = repo;

@@ -36,6 +36,35 @@ Fizzy offers a SDK for developing plugins and several plugins already exist that
 - [agent](https://github.com/fizzyedit/agent) - have an agent drive fizzy over MCP
 - [atlas](https://github.com/fizzyedit/atlas) - Obsidian-styled markdown links and backlinks, and an interactive map for document links
 
+## Minimal app measurements
+
+The [measurement job](https://github.com/fizzyedit/fizzy/actions/workflows/hello-numbers.yml)
+records example-app's minimal shape on macOS and Linux in ReleaseFast and ReleaseSmall.
+Download `hello-numbers-<OS>-<arch>` from a run for the exact JSON lines and source revisions.
+
+| Linux x86_64, example-app minimal | ReleaseFast | ReleaseSmall |
+| --- | --- | --- |
+| Stripped executable | 21,168,760 B | 14,607,864 B |
+| Installer (`.AppImage`) | 23,091,704 B | 13,548,024 B |
+| First frame (`core.profile`) | 731 ms | 79 ms |
+| Idle RSS after 30 s | 144,408,576 B | 133,521,408 B |
+| Gzipped wasm | 3,952,577 B | 3,243,050 B |
+
+| macOS arm64, example-app minimal | ReleaseFast | ReleaseSmall |
+| --- | --- | --- |
+| Stripped executable | 18,929,968 B | 13,134,240 B |
+| Installer (`.pkg`) | 13,753,818 B | 11,041,560 B |
+| First frame (`core.profile`) | 742 ms | 401 ms |
+| Idle RSS after 30 s | 77,217,792 B | 75,186,176 B |
+| Gzipped wasm | 3,952,577 B | 3,243,050 B |
+
+Sources: both from [run 40362195739](https://github.com/fizzyedit/fizzy/actions/runs/40362195739)
+at `e572d74a` (ubuntu-24.04 and macos-14 runners).
+One sample each; Linux uses Xvfb with Mesa software rendering on a GitHub runner.
+
+See the [method and manual Electron/Tauri comparison](docs/HELLO_NUMBERS.md) before comparing
+samples: runner hardware, OS caches, packaged resources and startup clocks affect the results.
+
 ## User Interface
 - The user interface is driven by [DVUI](https://github.com/david-vanderson/dvui).
 - The general layout takes many ideas from VSCode or IDE's, as well as general project setup using folders.

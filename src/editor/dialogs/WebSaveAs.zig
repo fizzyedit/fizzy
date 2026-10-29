@@ -47,7 +47,7 @@ pub fn requestExport(
     default_filename: []const u8,
 ) void {
     const gpa = fizzy.entry().allocator;
-    var patterns: std.ArrayListUnmanaged(u8) = .empty;
+    var patterns: std.ArrayList(u8) = .empty;
     for (filters) |f| {
         if (patterns.items.len > 0) patterns.append(gpa, ';') catch break;
         patterns.appendSlice(gpa, std.mem.span(f.pattern)) catch break;
@@ -101,7 +101,7 @@ pub fn active(win: *dvui.Window) bool {
     return false;
 }
 
-pub fn dialog(id: dvui.Id) anyerror!bool {
+pub fn dialog(id: dvui.Id) fizzy.core.dialogs.Error!bool {
     var outer = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .padding = .all(12) });
     defer outer.deinit();
 
@@ -114,7 +114,7 @@ pub fn dialog(id: dvui.Id) anyerror!bool {
 
     const placeholder = if (current_kind == .export_to) "filename" else "filename.fiz";
     const te = dvui.textEntry(@src(), .{ .placeholder = placeholder }, .{ .expand = .horizontal });
-    defer te.deinit();
+    defer fizzy.core.widgets.textEntryDeinit(te);
     _ = fizzy.core.widgets.textEntryMenu(te);
 
     if (dvui.firstFrame(te.data().id)) {
@@ -126,7 +126,7 @@ pub fn dialog(id: dvui.Id) anyerror!bool {
     return name.len > 0;
 }
 
-pub fn callAfter(id: dvui.Id, response: dvui.enums.DialogResponse) anyerror!void {
+pub fn callAfter(id: dvui.Id, response: dvui.enums.DialogResponse) fizzy.core.dialogs.Error!void {
     const name = dvui.dataGetSlice(null, id, "_save_as_name", []const u8) orelse "";
     defer {
         if (default_name_storage) |old| {

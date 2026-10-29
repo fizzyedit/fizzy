@@ -1,12 +1,12 @@
-//! Credentials a plugin holds on the user's behalf — a refresh token, an API key — kept out of
+//! Credentials a plugin holds on the user's behalf - a refresh token, an API key - kept out of
 //! `settings.zon`, which is exported, diffed, watched and shown in a pane.
 //!
 //! The seam is the point: `get`/`set`/`remove` by key, with the backend chosen by the app.
-//! Today that is one backend, `secrets` in the config folder — one `key=base64` line per
+//! Today that is one backend, `secrets` in the config folder - one `key=base64` line per
 //! entry, created `0600`, read whole; the OS stores (Keychain, libsecret, DPAPI) slot in
 //! behind the same three calls without a plugin noticing. On the web the same file goes where
 //! `core.fs` puts the app's other files, the page's storage: private to this origin but not to
-//! the page's scripts, so what a web plugin keeps here should be short-lived — Drive keeps its
+//! the page's scripts, so what a web plugin keeps here should be short-lived - Drive keeps its
 //! hour's access token, never a refresh token.
 //!
 //! Keys are plugin-namespaced by convention (`drive.refresh_token`); values are opaque bytes.
@@ -20,7 +20,7 @@ const Secrets = @This();
 
 gpa: std.mem.Allocator,
 io: std.Io,
-/// `<config>/secrets` — on the web, the page-storage key `core.fs` files it under.
+/// `<config>/secrets` - on the web, the page-storage key `core.fs` files it under.
 path: []const u8,
 values: std.array_hash_map.String([]u8) = .empty,
 loaded: bool = false,
@@ -55,7 +55,7 @@ pub fn get(self: *Secrets, key: []const u8) ?[]const u8 {
 ///
 /// Once the map holds `v` it owns it, so nothing here may free it on a later failure: an
 /// `errdefer` that outlived the `put` left the map pointing at freed memory, and the next `get`
-/// handed that out — on the web, where `save` used to always fail, every single time.
+/// handed that out - on the web, where `save` used to always fail, every single time.
 pub fn set(self: *Secrets, key: []const u8, value: []const u8) !void {
     if (value.len == 0) return self.remove(key);
     self.load();
@@ -84,7 +84,7 @@ pub fn remove(self: *Secrets, key: []const u8) !void {
     try self.save();
 }
 
-/// One `key=base64(value)` per line — nothing a settings parser or a shell glob would ever
+/// One `key=base64(value)` per line - nothing a settings parser or a shell glob would ever
 /// pick up by accident, and any bytes survive. Loaded once, lazily.
 fn load(self: *Secrets) void {
     if (self.loaded) return;

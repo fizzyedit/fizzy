@@ -91,17 +91,25 @@ pub fn noteRefresh(self: *FrameCauses, file: []const u8, line: u32, from_thread:
     self.places_len += 1;
 }
 
-/// A frame begins, with `events` events to handle. On the UI thread.
-pub fn frameBegin(self: *FrameCauses, events: usize) void {
+pub const Verdict = enum { events, refresh, other };
+
+/// Count a frame and return its cause. On the UI thread.
+pub fn frameBegin(self: *FrameCauses, has_events: bool) Verdict {
     self.acquire();
     defer self.release();
     self.frames +|= 1;
-    if (events > 0) {
+    const verdict: Verdict = if (has_events) blk: {
         self.by_events +|= 1;
-    } else if (self.pending > 0) {
+        break :blk .events;
+    } else if (self.pending > 0) blk: {
         self.by_refresh +|= 1;
-    } else self.by_other +|= 1;
+        break :blk .refresh;
+    } else blk: {
+        self.by_other +|= 1;
+        break :blk .other;
+    };
     self.pending = 0;
+    return verdict;
 }
 
 /// As ZON: what the frames since the last `reset` were put down to, and the places that asked
@@ -131,12 +139,12 @@ pub fn write(self: *FrameCauses, w: *std.Io.Writer, indent: []const u8, top: usi
 
 test "a frame is put down to its events, else the refreshes before it, else something else" {
     var c: FrameCauses = .{};
-    c.frameBegin(2);
+    _ = c.frameBegin(true);
     c.noteRefresh("src/editor/Editor.zig", 120, false);
     c.noteRefresh("src/editor/Editor.zig", 120, false);
     c.noteRefresh("plugins/text/src/Doc.zig", 9, true);
-    c.frameBegin(0);
-    c.frameBegin(0);
+    _ = c.frameBegin(false);
+    _ = c.frameBegin(false);
     try std.testing.expectEqual(@as(u32, 3), c.frames);
     try std.testing.expectEqual(@as(u32, 1), c.by_events);
     try std.testing.expectEqual(@as(u32, 1), c.by_refresh);

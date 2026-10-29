@@ -365,6 +365,7 @@ pub fn Schema(comptime T: type) type {
             inline for (info.field_names) |f_name| @field(out.*, f_name).v = @field(p, f_name);
         }
 
+        // anytype: Hosts and test doubles provide settings storage without a Host dependency.
         pub fn load(host: anytype, id: []const u8, out: *T) void {
             const blob = host.loadPluginSettings(id) orelse return;
             defer host.allocator.free(blob);
@@ -422,6 +423,7 @@ pub fn Schema(comptime T: type) type {
             return try aw.toOwnedSlice();
         }
 
+        // anytype: Hosts and test doubles provide settings storage without a Host dependency.
         pub fn store(host: anytype, id: []const u8, value: T) void {
             const gpa = host.allocator;
             const blob = diffSerialize(gpa, value) catch |err| {
@@ -516,7 +518,8 @@ pub fn Schema(comptime T: type) type {
             if (!all_copied) {
                 inline for (info.field_names, info.field_types, 0..) |f_name, Cell, i| {
                     if (comptime typeTagFor(Cell.Payload) == .string) {
-                        if (i < copied and @field(parsed, f_name).ptr != @field(default_payloads, f_name).ptr) gpa.free(@field(parsed, f_name));
+                        if (i < copied and @field(parsed, f_name).ptr != @field(default_payloads, f_name).ptr)
+                            gpa.free(@field(parsed, f_name));
                     }
                 }
                 dvui.log.warn("sdk.settings: out of memory keeping settings", .{});
@@ -692,7 +695,12 @@ pub fn Schema(comptime T: type) type {
                     var arena: std.heap.ArenaAllocator = .init(gpa);
                     defer arena.deinit();
                     var diag: std.zon.parse.Diagnostics = undefined;
-                    var parsed = std.zon.parse.fromSlice(P, .{ .gpa = gpa, .arena = arena.allocator(), .source = text_z, .diagnostics = &diag }) catch return false;
+                    var parsed = std.zon.parse.fromSlice(P, .{
+                        .gpa = gpa,
+                        .arena = arena.allocator(),
+                        .source = text_z,
+                        .diagnostics = &diag,
+                    }) catch return false;
                     // Strings follow the same ownership rule as `setString`: copied out of the
                     // parse's arena, the schema's to free. Other payloads are plain values.
                     if (comptime typeTagFor(P) == .string) {
@@ -766,7 +774,10 @@ pub fn Schema(comptime T: type) type {
 
             const gpa = runtime.host().allocator;
             const notify_blob = fullSerialize(gpa, value) catch |err| {
-                dvui.log.warn("sdk.settings: failed to serialize '{s}' for notification: {s}", .{ owner.id, @errorName(err) });
+                dvui.log.warn("sdk.settings: failed to serialize '{s}' for notification: {s}", .{
+                    owner.id,
+                    @errorName(err),
+                });
                 return;
             };
             defer gpa.free(notify_blob);
@@ -792,6 +803,7 @@ pub fn Schema(comptime T: type) type {
         }
 
         /// Register schema + value pointer. Fizzy draws controls from `fields` via `access`.
+        // anytype: Hosts and test doubles provide settings storage without a Host dependency.
         pub fn register(host: anytype, plugin: *Plugin, opts: struct {
             title: []const u8,
             value: *T,

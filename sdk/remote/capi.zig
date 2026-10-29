@@ -92,7 +92,8 @@ export fn fizzy_remote_open(options: ?*const Options, out: ?*?*Handle) callconv(
     const o = options orelse return @backingInt(Status.invalid_argument);
     const result = out orelse return @backingInt(Status.invalid_argument);
     result.* = null;
-    if (o.size < @offsetOf(Options, "socket_path") + @sizeOf(?[*:0]const u8)) return @backingInt(Status.invalid_argument);
+    if (o.size < @offsetOf(Options, "socket_path") + @sizeOf(?[*:0]const u8))
+        return @backingInt(Status.invalid_argument);
 
     const handle = gpa.create(Handle) catch return @backingInt(Status.out_of_memory);
     handle.* = .{ .arena = .init(gpa), .threaded = .init(gpa, .{ .environ = processEnviron() }), .client = undefined };
@@ -156,8 +157,10 @@ export fn fizzy_remote_send(handle: ?*Handle, frame: ?[*]const u8, len: usize) c
     reader.push(bytes) catch return @backingInt(Status.out_of_memory);
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
-    const frame_in = (reader.next() catch return @backingInt(Status.protocol)) orelse return @backingInt(Status.protocol);
-    const msg = (codec.decode(arena.allocator(), frame_in) catch return @backingInt(Status.protocol)) orelse return @backingInt(Status.protocol);
+    const frame_in = (reader.next() catch return @backingInt(Status.protocol)) orelse
+        return @backingInt(Status.protocol);
+    const msg = (codec.decode(arena.allocator(), frame_in) catch return @backingInt(Status.protocol)) orelse
+        return @backingInt(Status.protocol);
     h.client.send(msg) catch |err| return status(err);
     return 0;
 }
@@ -165,7 +168,13 @@ export fn fizzy_remote_send(handle: ?*Handle, frame: ?[*]const u8, len: usize) c
 /// The next frame from fizzy into `buf`, waiting up to `timeout_ms` (negative: forever).
 /// `*len` is its length; 0 with `ok` means the wait passed. A frame larger than `cap` is kept:
 /// `buffer_too_small` with `*len` the size needed, then call again with room.
-export fn fizzy_remote_recv(handle: ?*Handle, buf: ?[*]u8, cap: usize, len: ?*usize, timeout_ms: i32) callconv(.c) c_int {
+export fn fizzy_remote_recv(
+    handle: ?*Handle,
+    buf: ?[*]u8,
+    cap: usize,
+    len: ?*usize,
+    timeout_ms: i32,
+) callconv(.c) c_int {
     const h = handle orelse return @backingInt(Status.invalid_argument);
     const out_len = len orelse return @backingInt(Status.invalid_argument);
     out_len.* = 0;
@@ -248,7 +257,12 @@ test "the C ABI opens, round trips a frame and closes" {
 
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(t.allocator);
-    try codec.encode(t.allocator, &out, .{ .create_view = .{ .view = 3, .width = 64, .height = 48 } }, codec.default_max_frame);
+    try codec.encode(
+        t.allocator,
+        &out,
+        .{ .create_view = .{ .view = 3, .width = 64, .height = 48 } },
+        codec.default_max_frame,
+    );
     try t.expectEqual(@as(c_int, 0), fizzy_remote_send(handle, out.items.ptr, out.items.len));
 
     var small: [4]u8 = undefined;

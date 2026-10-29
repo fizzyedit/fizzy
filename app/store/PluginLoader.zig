@@ -108,7 +108,7 @@ pub fn pluginExtension() []const u8 {
     };
 }
 
-/// Bare `{name}.{ext}` filename (no directory) — the basename inside a plugin's own
+/// Bare `{name}.{ext}` filename (no directory) - the basename inside a plugin's own
 /// `{plugins_dir}/{name}/` directory (see plans/PLUGIN_MANIFEST_PLAN.md R10; every plugin, built-in
 /// or third-party, gets its own directory rather than sitting flat in `plugins/`).
 pub fn pluginFilename(name: []const u8, allocator: std.mem.Allocator) ![]const u8 {
@@ -158,7 +158,7 @@ var load_tmp_seq: std.atomic.Value(u64) = .init(0);
 /// Every path this process has handed to `dlopen`/`LoadLibrary` (loads *and* probes), so
 /// `loadAndRegister` can tell a first open of a path from a re-open. See `markPathOpened`.
 var opened_paths: std.StringHashMapUnmanaged(void) = .empty;
-/// Spinlock (`std.atomic.Mutex` has no blocking `lock()`) — the critical section is one hashmap
+/// Spinlock (`std.atomic.Mutex` has no blocking `lock()`) - the critical section is one hashmap
 /// probe plus at most one insert, never I/O.
 var opened_paths_lock: std.atomic.Mutex = .unlocked;
 
@@ -173,19 +173,19 @@ fn lockOpenedPaths() void {
 /// stale-image problem only exists for a path this process has *already* opened; the first open
 /// of a path in a fresh process cannot hit it. That distinction is worth a lot on macOS: the
 /// first `dlopen` of a newly-created file costs ~110-140ms of one-time system security
-/// validation (size-independent — a 20-line stub dylib pays the same), and the result is cached
+/// validation (size-independent - a 20-line stub dylib pays the same), and the result is cached
 /// against the file itself, so a *second* open of an untouched file is ~0.5ms. Copying every
 /// plugin to a brand-new file each launch therefore re-bought that penalty every single launch,
 /// once per plugin (~480ms for three plugins); loading the stable installed file in place pays
 /// it once, on the launch right after an install.
 ///
-/// Entries (and their duped keys) are intentionally kept for the process lifetime — the set is
+/// Entries (and their duped keys) are kept until the app quits (`deinitOpenedPaths`) - the set is
 /// bounded by the number of distinct plugin paths, and its whole purpose is to outlive
 /// individual load attempts.
-fn markPathOpened(path: []const u8) bool {
-    // Its own allocator, not a caller's: the set outlives every individual load attempt (and
-    // the probe helpers that also mark paths have no allocator to hand in).
-    const gpa = std.heap.page_allocator;
+///
+/// `gpa` owns the set's keys for that lifetime, so it is the application's long-lived allocator,
+/// never an arena or a per-call one.
+fn markPathOpened(gpa: std.mem.Allocator, path: []const u8) bool {
     lockOpenedPaths();
     defer opened_paths_lock.unlock();
     if (opened_paths.contains(path)) return true;
@@ -197,7 +197,18 @@ fn markPathOpened(path: []const u8) bool {
     return false;
 }
 
-/// `{dirname(path)}/.load-tmp` — where fresh-copy load attempts land, beside the plugin itself.
+/// Frees the opened-path set. At shutdown, with the allocator every caller of `markPathOpened`
+/// passed.
+pub fn deinitOpenedPaths(gpa: std.mem.Allocator) void {
+    lockOpenedPaths();
+    defer opened_paths_lock.unlock();
+    var keys = opened_paths.keyIterator();
+    while (keys.next()) |key| gpa.free(key.*);
+    opened_paths.deinit(gpa);
+    opened_paths = .empty;
+}
+
+/// `{dirname(path)}/.load-tmp` - where fresh-copy load attempts land, beside the plugin itself.
 fn loadTempDir(allocator: std.mem.Allocator, path: []const u8) ![]const u8 {
     const dir = std.fs.path.dirname(path) orelse ".";
     return std.fs.path.join(allocator, &.{ dir, ".load-tmp" });
@@ -206,13 +217,13 @@ fn loadTempDir(allocator: std.mem.Allocator, path: []const u8) ![]const u8 {
 /// Copies `path` to a freshly, uniquely-named sibling file and returns that path (caller frees).
 ///
 /// Works around `dlopen`/`LoadLibrary` caching an image by path: once a given path has been
-/// opened in this process — even briefly, even if the load was then rejected and `close()`d —
+/// opened in this process - even briefly, even if the load was then rejected and `close()`d -
 /// `dyld` on macOS in particular can hand back the *same stale image* on a later `dlopen` of that
 /// path, even after the file underneath was replaced on disk (e.g. the plugin store installing a
 /// fixed build over one that failed an ABI check). Loading from a path this process has never
 /// opened before sidesteps the cache entirely, regardless of the OS loader's exact behavior.
 ///
-/// Only reached for a *re-open* of a path — `markPathOpened` explains why paying this on a first
+/// Only reached for a *re-open* of a path - `markPathOpened` explains why paying this on a first
 /// open (i.e. all of startup) is pure loss.
 fn copyToFreshLoadPath(allocator: std.mem.Allocator, path: []const u8) ![]const u8 {
     const tmp_dir = try loadTempDir(allocator, path);
@@ -227,7 +238,7 @@ fn copyToFreshLoadPath(allocator: std.mem.Allocator, path: []const u8) ![]const 
     return dest;
 }
 
-/// `{dirname(path)}/.load-copy` — the *stable* mapped-copy directory. Deliberately separate from
+/// `{dirname(path)}/.load-copy` - the *stable* mapped-copy directory. Deliberately separate from
 /// `.load-tmp`, whose whole contents `sweepLoadTempDir` wipes at startup.
 fn loadCopyDir(allocator: std.mem.Allocator, path: []const u8) ![]const u8 {
     const dir = std.fs.path.dirname(path) orelse ".";
@@ -240,10 +251,10 @@ fn loadCopyDir(allocator: std.mem.Allocator, path: []const u8) ![]const u8 {
 /// correctness requirement rather than a preference:
 ///
 ///   * Windows: `LoadLibrary` holds a section object on the file it maps for the library's
-///     lifetime, so mapping the installed file would lock it — the store's
+///     lifetime, so mapping the installed file would lock it - the store's
 ///     temp-file-plus-rename install (`plugin_store/download.zig`) could no longer replace a
 ///     loaded plugin.
-///   * POSIX: replacing a *mapped* file in place is worse than a failed rename — the plugin
+///   * POSIX: replacing a *mapped* file in place is worse than a failed rename - the plugin
 ///     SDK's dev install (`plugin_sdk.zig`'s `DevInstall`) writes the dylib with a truncating
 ///     `writeFile`, so a plugin author running `zig build install` while fizzy has that plugin
 ///     loaded would rewrite the bytes under a live mapping. That is a `SIGBUS`/garbage-code
@@ -252,7 +263,7 @@ fn loadCopyDir(allocator: std.mem.Allocator, path: []const u8) ![]const u8 {
 /// Unlike `copyToFreshLoadPath` the copy is *reused across launches*: its name carries the source's
 /// mtime and size, so an unchanged plugin maps a file that already exists (and that the OS has
 /// already validated/scanned) instead of a brand-new one. That is what keeps this off the
-/// per-launch first-open cost — see `markPathOpened`. A changed plugin lands on a new name, and the
+/// per-launch first-open cost - see `markPathOpened`. A changed plugin lands on a new name, and the
 /// copies of superseded builds are swept.
 fn stableLoadCopyPath(allocator: std.mem.Allocator, path: []const u8, st: std.Io.File.Stat) ![]const u8 {
     const copy_dir = try loadCopyDir(allocator, path);
@@ -280,7 +291,7 @@ fn stableLoadCopyPath(allocator: std.mem.Allocator, path: []const u8, st: std.Io
 /// Best-effort delete of a fresh-load temp copy, safe to call right after a successful
 /// `dlopen`/`LoadLibrary`. On POSIX the already-mapped pages keep the inode alive after unlink,
 /// so the loaded plugin is unaffected; on Windows the file is still open for the library's
-/// lifetime, so this silently no-ops — `sweepLoadTempDir` catches it on the next launch instead.
+/// lifetime, so this silently no-ops - `sweepLoadTempDir` catches it on the next launch instead.
 fn cleanupFreshLoadPath(path: []const u8) void {
     std.Io.Dir.deleteFileAbsolute(dvui.io, path) catch {};
 }
@@ -292,7 +303,7 @@ fn sweepOneTempDir(dir_path: []const u8) void {
 }
 
 /// As `sweepOneTempDir`, but keeps the entry named `keep` (used for the stable Windows load copy
-/// that was just written — everything *else* in that directory is a superseded build).
+/// that was just written - everything *else* in that directory is a superseded build).
 fn sweepOneTempDirExcept(dir_path: []const u8, keep: ?[]const u8) void {
     var dir = std.Io.Dir.cwd().openDir(dvui.io, dir_path, .{ .iterate = true }) catch return;
     defer dir.close(dvui.io);
@@ -305,13 +316,13 @@ fn sweepOneTempDirExcept(dir_path: []const u8, keep: ?[]const u8) void {
 }
 
 /// Clears out leftover fresh-load temp copies from a previous run. Call once at startup, before
-/// any plugin is loaded this session — nothing can be mapped from this directory yet, so every
+/// any plugin is loaded this session - nothing can be mapped from this directory yet, so every
 /// file in it is safe to remove outright (this is exactly what `cleanupFreshLoadPath` couldn't
 /// do on Windows while the plugin was still loaded, or after a crash on any platform).
 ///
 /// Since R10, each plugin gets its own `{plugins_dir}/{id}/` directory, so `copyToFreshLoadPath`'s
 /// temp dir is now per-plugin (`{plugins_dir}/{id}/.load-tmp`) rather than one shared
-/// `{plugins_dir}/.load-tmp` — sweep every plugin subdirectory's, plus the old flat location in
+/// `{plugins_dir}/.load-tmp` - sweep every plugin subdirectory's, plus the old flat location in
 /// case a leftover from before the R10 upgrade is still sitting there.
 pub fn sweepLoadTempDir(allocator: std.mem.Allocator, plugins_dir: []const u8) void {
     {
@@ -331,7 +342,7 @@ pub fn sweepLoadTempDir(allocator: std.mem.Allocator, plugins_dir: []const u8) v
     }
 }
 
-/// A plugin binary opened and checked, not yet registered — everything `loadAndRegister` does
+/// A plugin binary opened and checked, not yet registered - everything `loadAndRegister` does
 /// that touches no host state, so `open` runs on any thread. The `dlopen` in it is what a load
 /// costs (on macOS ~180 ms for a file the system has not seen, a rebuilt plugin every time);
 /// `register` finishes it on the UI thread in microseconds. Dropped unregistered with `close`.
@@ -369,14 +380,14 @@ pub fn loadAndRegister(
 pub fn open(allocator: std.mem.Allocator, path: []const u8, expected_id: []const u8) LoadError!Opened {
     // First open of this path in this process: no stale-image risk, so load the installed file
     // directly and skip the copy (and, on macOS, the ~110ms first-open validation a brand-new
-    // file would cost). Any later open of the same path — a reload after the store wrote a new
-    // build over it, or after a probe already opened it — goes through the fresh copy.
-    // Never map the installed file itself — see `stableLoadCopyPath`. Two kinds of copy:
-    //   * first open of this path → the per-build *stable* copy, which an unchanged plugin
+    // file would cost). Any later open of the same path - a reload after the store wrote a new
+    // build over it, or after a probe already opened it - goes through the fresh copy.
+    // Never map the installed file itself - see `stableLoadCopyPath`. Two kinds of copy:
+    //   * first open of this path -> the per-build *stable* copy, which an unchanged plugin
     //     re-uses across launches (so this costs nothing on a normal launch).
-    //   * re-open of a path this process already opened → a unique throwaway copy, the only
+    //   * re-open of a path this process already opened -> a unique throwaway copy, the only
     //     case where the loader's stale-image behavior is actually in play.
-    const reopen = markPathOpened(path);
+    const reopen = markPathOpened(allocator, path);
     const src_stat: ?std.Io.File.Stat = std.Io.Dir.cwd().statFile(dvui.io, path, .{}) catch null;
     const load_path: []const u8 = if (reopen)
         copyToFreshLoadPath(allocator, path) catch return error.DylibOpenFailed
@@ -387,7 +398,7 @@ pub fn open(allocator: std.mem.Allocator, path: []const u8, expected_id: []const
 
     var lib = DynLib.open(load_path) catch return error.DylibOpenFailed;
     errdefer lib.close();
-    // Only the throwaway copy gets deleted — the stable copy is what the next launch wants to
+    // Only the throwaway copy gets deleted - the stable copy is what the next launch wants to
     // find still sitting there.
     if (reopen) cleanupFreshLoadPath(load_path);
 
@@ -524,10 +535,11 @@ fn allowAbiWarn() bool {
 /// Best-effort read of a plugin's user-facing display name straight from the dylib, **without
 /// registering it**. Prefers the embedded `plugin.zig.zon` (`fizzy_plugin_manifest_zon`); falls
 /// back to the `fizzy_plugin_name` export. Caller owns the returned slice.
+/// `allocator` also keeps the opened-path set (`markPathOpened`), so it is the long-lived one.
 pub fn probeName(allocator: std.mem.Allocator, path: []const u8) ?[]u8 {
     // Counts as an open for stale-image purposes: after this, a load of the same path must go
     // through `copyToFreshLoadPath` even if it is the first *load*.
-    _ = markPathOpened(path);
+    _ = markPathOpened(allocator, path);
     var lib = DynLib.open(path) catch return null;
     defer lib.close();
     if (lib.lookup(dylib_api.GetManifestZonFn, dylib_api.symbol_manifest_zon)) |get_zon| {
@@ -547,12 +559,12 @@ pub fn probeName(allocator: std.mem.Allocator, path: []const u8) ?[]u8 {
 }
 
 /// The store-facing half of a plugin's embedded manifest, read straight off the dylib. Every
-/// field is owned by the caller — free with `freeProbedManifest`.
+/// field is owned by the caller - free with `freeProbedManifest`.
 ///
 /// One struct (and one `dlopen` + zon parse) rather than a `probeX` per field: these all come out
 /// of the *same* embedded `fizzy_plugin_manifest_zon` blob, and the store needs several of them
 /// for the same card. Per-field probes meant re-opening the dylib once per field and a parallel
-/// cache per field in `PluginStore` — see `manifest_cache` there, which is now the only one.
+/// cache per field in `PluginStore` - see `manifest_cache` there, which is now the only one.
 pub const ProbedManifest = struct {
     description: []u8 = &.{},
     tags: [][]u8 = &.{},
@@ -560,13 +572,13 @@ pub const ProbedManifest = struct {
     author_url: []u8 = &.{},
 };
 
-/// Best-effort read of `ProbedManifest` straight from the dylib, **without registering it** —
+/// Best-effort read of `ProbedManifest` straight from the dylib, **without registering it** -
 /// same shape as `probeName`, but there's no legacy C export to fall back to (these postdate the
 /// fixed C-ABI export list; they only ever lived in the embedded manifest zon). Null when the
 /// dylib or its manifest couldn't be read at all, which callers can distinguish from a
 /// successfully-read manifest whose fields happen to be empty.
 pub fn probeManifestInfo(allocator: std.mem.Allocator, path: []const u8) ?ProbedManifest {
-    _ = markPathOpened(path); // see `probeName`
+    _ = markPathOpened(allocator, path); // see `probeName`
     var lib = DynLib.open(path) catch return null;
     defer lib.close();
     const get_zon = lib.lookup(dylib_api.GetManifestZonFn, dylib_api.symbol_manifest_zon) orelse return null;
@@ -609,18 +621,18 @@ fn dupeTags(allocator: std.mem.Allocator, tags: []const []const u8) ![][]u8 {
 
 /// Best-effort read of version exports from a dylib (for failure diagnostics).
 /// Prefers semver from the embedded manifest zon when present.
-pub fn probeVersionInfo(path: []const u8) ?PluginVersionInfo {
-    _ = markPathOpened(path); // see `probeName`
+pub fn probeVersionInfo(gpa: std.mem.Allocator, path: []const u8) ?PluginVersionInfo {
+    _ = markPathOpened(gpa, path); // see `probeName`
     var lib = DynLib.open(path) catch return null;
     defer lib.close();
     var plugin_version = readVersionTriplet(lookupVersionFn(&lib, dylib_api.symbol_plugin_version));
     if (lib.lookup(dylib_api.GetManifestZonFn, dylib_api.symbol_manifest_zon)) |get_zon| {
         const zon = std.mem.span(get_zon());
         if (zon.len > 0) {
-            // A short-lived Manifest, in an arena over the page allocator.
-            var arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
+            // A short-lived Manifest, in an arena over `gpa`.
+            var arena: std.heap.ArenaAllocator = .init(gpa);
             defer arena.deinit();
-            if (sdk.Manifest.parse(std.heap.page_allocator, arena.allocator(), zon)) |parsed| {
+            if (sdk.Manifest.parse(gpa, arena.allocator(), zon)) |parsed| {
                 if (std.SemanticVersion.parse(parsed.version)) |sv| {
                     plugin_version = .{ .major = @intCast(sv.major), .minor = @intCast(sv.minor), .patch = @intCast(sv.patch) };
                 } else |_| {}
@@ -635,8 +647,12 @@ pub fn probeVersionInfo(path: []const u8) ?PluginVersionInfo {
 }
 
 test "builtin plugin path joins exe_dir/plugins/<name>/<name>.<ext>" {
-    const path = try builtinPluginPath(std.testing.allocator, "/app", "pixi");
+    const joined = try builtinPluginPath(std.testing.allocator, "/app", "pixi");
+    defer std.testing.allocator.free(joined);
+    // `join` keeps `exe_dir` as given and separates the rest with the native separator.
+    const path = try std.testing.allocator.dupe(u8, joined);
     defer std.testing.allocator.free(path);
+    std.mem.replaceScalar(u8, path, std.fs.path.sep, '/');
     switch (builtin.target.os.tag) {
         .windows => try std.testing.expectEqualStrings("/app/plugins/pixi/pixi.dll", path),
         .macos => try std.testing.expectEqualStrings("/app/plugins/pixi/pixi.dylib", path),

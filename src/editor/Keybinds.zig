@@ -163,9 +163,9 @@ const fizzy_commands = [_]FizzyCommand{
     .{ .id = "fizzy.redo", .title = "Redo", .bind = "redo", .run = cmdRedo, .isEnabled = anyDocOpen, .params = HistoryStep.params, .runWith = HistoryStep.bind(cmdRedoWith), .icon = icons.tvg.lucide.redo },
     .{ .id = "fizzy.copy", .title = "Copy", .bind = "copy", .run = cmdCopy, .isEnabled = cmdCopyEnabled, .icon = icons.tvg.lucide.copy },
     .{ .id = "fizzy.paste", .title = "Paste", .bind = "paste", .run = cmdPaste, .isEnabled = cmdPasteEnabled, .icon = icons.tvg.lucide.@"clipboard-paste" },
-    .{ .id = "fizzy.toggleExplorer", .title = "Toggle Explorer", .bind = "explorer", .run = cmdToggleExplorer, .icon = icons.tvg.lucide.@"panel-left" },
+    .{ .id = "fizzy.toggleExplorer", .title = "Toggle Explorer", .bind = "explorer", .run = cmdToggleExplorer, .icon = if (Editor.Chrome.configured.sidebar_edge == .right) icons.tvg.lucide.@"panel-right" else icons.tvg.lucide.@"panel-left" },
     .{ .id = "fizzy.resetLayout", .title = "Reset Layout", .bind = null, .run = cmdResetLayout, .icon = icons.tvg.lucide.@"rotate-ccw" },
-    .{ .id = "fizzy.toggleFullScreen", .title = "Toggle Full Screen", .bind = null, .run = cmdToggleFullScreen, .icon = icons.tvg.lucide.maximize },
+    .{ .id = "fizzy.toggleFullScreen", .title = "Toggle Full Screen", .bind = null, .run = cmdToggleFullScreen, .isEnabled = cmdToggleFullScreenEnabled, .icon = icons.tvg.lucide.maximize },
     .{ .id = "fizzy.fitView", .title = "Fit to View", .bind = null, .run = cmdFitView, .isEnabled = cmdFitViewEnabled, .icon = icons.tvg.lucide.scan },
     .{ .id = "fizzy.deleteSelection", .title = "Delete Selection", .bind = "delete_selection_contents", .run = cmdDeleteSelection, .isEnabled = cmdDeleteSelectionEnabled, .icon = icons.tvg.lucide.@"trash-2" },
     .{ .id = "fizzy.accept", .title = "Accept", .bind = "activate", .run = cmdAccept, .isEnabled = cmdAcceptEnabled, .icon = icons.tvg.lucide.check },
@@ -694,6 +694,10 @@ fn cmdResetLayout(state: *anyopaque) anyerror!void {
 
 fn cmdToggleFullScreen(_: *anyopaque) anyerror!void {
     fizzy.backend.toggleFullscreen();
+}
+
+fn cmdToggleFullScreenEnabled(_: *anyopaque) bool {
+    return fizzy.backend.fullscreenSupported();
 }
 
 fn cmdShowDvuiDemo(_: *anyopaque) anyerror!void {
@@ -1532,7 +1536,7 @@ pub var web_key_buf: [16]u8 = undefined;
 /// editor exists.
 var web_keys_ready = false;
 
-/// Asked by `web/index.html` from inside a `keydown` listener, before the browser acts on the key:
+/// Asked by `web/fizzy.js` from inside a `keydown` listener, before the browser acts on the key:
 /// true means "this key is the app's", and the page cancels the browser's default (⌘S saving the
 /// page, ⌘P printing it, ⌘O opening a file of the browser's own). It has to be answered here and
 /// synchronously — by the time dvui sees the event on the next frame the browser has already

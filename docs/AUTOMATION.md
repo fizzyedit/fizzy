@@ -195,12 +195,12 @@ user's motion settings, timed in demo time.
 | `history.export:<abs path>`, `history.collapse:<abs path>` | the transport's export button, and the chevron that sends it back into the grip |
 | `fizzy.window:main` | the main window |
 | `fizzy.window:dialog:<title>`, `fizzy.window:float:<title>`, `fizzy.window:menu` | an OS window of the app's own: a dialog's, a popped-out view's, a menu's (a second of the same name gets `:2`) |
-| `region:<name>` | a layout region (`Main`, `Panel`, …) |
+| `region:<name>` | a layout region (`Main`, `Panel`, …). The name may be a role (`region:role:documents`, `role:explorer`, `role:panel`): the place this app's shape keeps for that kind, resolved at each step through `Stage.resolveRole`. Any anchor named for a place takes one (`region.arrange:role:explorer`) |
 | `region.arrange:<name>` | a region's arrange button, where it grows in the region's corner (move to the corner first to bring it up) |
 | `drop:center`, `drop:left`, `:right`, `:top`, `:bottom`, `:remove` | a bubble of the drop a carried view would land in, while it is carried over a place: only once the drag is under way, so `drag` carries it there `via` the place first |
 | `float-header:<place>`, `float-close:<place>` | a float's header, to carry it by, and its close button: `float-close:Float 1` |
 | `picker:<view id>` | a view's card in a place's picker |
-| `region.menu.split-right:<name>`, `.split-down:`, `.clear:`, `.reset:`, `.delete:` | the controls in the header of a place's menu, each only while it can be pressed (a dimmed Clear has no name); each runs its command (`layout.place.splitRight`, `splitDown`, `clear`, `reset`, `delete`), which a tape can call instead |
+| `region.menu.split-right:<name>`, `.split-down:`, `.split:`, `.adaptive:`, `.clear:`, `.reset:`, `.delete:` | the controls in the header of a place's menu, each only while it can be pressed (a dimmed Clear has no name); each runs its command (`layout.place.splitRight`, `splitDown`, `split`, `adaptive`, `clear`, `reset`, `delete`), which a tape can call instead |
 | `tabs:<name>` | a place's tab strip, drawn while it holds more than one view |
 | `picker.empty` | the header of a place with nothing in it |
 
@@ -284,7 +284,7 @@ there, by a callout in the main window. This is the rule, not an option.
 It moves like a guide, not a label (`app/automation/Calm.zig`): it keeps its spot while the spot is
 still on the window, clear and near enough, and moves only when the pointer's aim moves on to
 something else (a quarter second ahead of the pointer, so it arrives with it) or its spot stops
-being good; then it travels once, on a gentle eased curve, 300–600 ms by distance (a jump with
+being good (never the pointer itself: it is not dodged); then it travels once, on a gentle eased curve, 300–600 ms by distance (a jump with
 motion off). A pointer's wiggle over the same thing moves nothing. It anchors as
 `automation.callout`, for a test to check what it covers. So write one caption per action rather
 than one over several. For typing, `catalog.aboutWriting(s, "README.md")` puts the callout beside where
@@ -299,9 +299,16 @@ title card in the middle of the home view instead, for a demo's opening and clos
 Captions at home stack with one another; any other caption begins alone — a callout or a title
 card ends the captions still showing, so they close as it opens rather than competing with it.
 
-A keyframe starts with the explorer put away (`.layout = .focused`), so the editor has the room;
-a demo opens it from the rail when it is about to use it and puts it away after —
-`catalog.openFile(s, "README.md")` does all three.
+A keyframe never arranges the window: the person's places, panes and floats stay as they have
+them, and their documents stay open and showing beside the demo's. A demo that needs the explorer
+presses the rail for it only if it is not showing already (`s.skipIfShown(tag)` … `s.endSkip(mark)`
+leave out the ops between when `tag` is drawn, `s.skipIfGone(tag)` when it is not; aim it at the
+place (`region:role:explorer`), after a `waitIdle`, not at a row inside it); `catalog.openFile(s,
+"README.md")` does that and opens the file, and on a phone puts away the sheet it brought up.
+
+A demo owns only what it opened: its `demo://` documents. A file the person opens while it plays is
+theirs, and the workbench does not write the panes the demo arranges to `panes.zon`
+(`Workbench.panes_held`); they go back as they were when the tape plays to its end.
 
 **One keyframe, then carry on.** A keyframe is a cut, and a cut mid-demo snaps the window back to
 a fresh layout in front of the viewer. Chapters continue in the window the last one left; one that
@@ -343,7 +350,6 @@ one.
         .root = "demo://hello",
         .files = .{ .{ .path = "hello.md", .text = "# Hello\n" } },
         .open = .{"hello.md"},       // the last one is active
-        .layout = .focused,          // .keep | .reset | .focused (default; fizzy: no panel, explorer away)
         .settings = .{ .{ .owner = "markdown", .key = "default_md_view", .value = ".split" } },
     } },
     .chapters = .{ .{ .at = 0, .title = "Hello" } },
@@ -374,6 +380,7 @@ one.
 | `key: "chord"` | Press and release a chord (`enter`, `escape`, `mod+s`, `mod+k mod+c`). |
 | `type: "text"` | Type over `ms`; `\n` is Enter, `\t` is Tab. |
 | `command: .{ .id, .args }` | Run a command: with no `args`, as its menu row or shortcut would (one that needs arguments asks for them); with `args`, ZON keyed by its parameters (`".{ .line = 1 }"`), as the palette does once they are given. A script writes `s.command(id)` or `s.commandWith(id, .{ .line = 1 })`. |
+| `skip: .{ .when, .count }` | Leave out the next `count` ops when `.when` (a wait's `.idle`, `.shown` or `.gone`) holds as the op is reached: a gesture for a state the app is in already. A seek makes the same choice. |
 | `wait: .{ .until, .timeout }` | Hold demo time until `.idle`, `.shown = "tag"` or `.gone = "tag"`; give up after `timeout` ms of wall time. |
 | `step: .{ .file, .effect, .motion }` | Apply one step of a document's history to `file` of the keyframe before it, shown being made over `ms`: `effect` is what the step did and `motion` how it was made (optional), both in the file's `owner`'s encoding. Steps land together, with no frame between them, so a seek across an hour of drawing is one call. |
 
@@ -555,8 +562,9 @@ to keyframes. `src/editor/Demo.zig` and `src/Entry.zig` are the worked example.
   rewinds to exactly the live state, a seek lands in the frame that asked for it with the app's
   clock following the demo, a seek back restores the nearest snapshot instead of the keyframe and
   the moments after it match the first pass, the scrubber follows as it is dragged, a replay that
-  differs is caught, a person's click pauses it and is undone on resume, real motion cannot move
-  the tape's pointer), every bundled demo builds, and `docs/demos/hello.zon` parses and
+  differs is caught, a real release does not end the tape's drag, a seek or pause mid-drag lets go of
+  the held button, a person's click pauses it and is undone on resume, real motion cannot move the
+  tape's pointer), every bundled demo builds, and `docs/demos/hello.zon` parses and
   round-trips.
 - `zig build test-integration` — `fizzy-demo-tests` (`tests/demos.zig`): every bundled demo, in
   the whole editor through fizzy's own stage. It plays to the end with no wait giving up and no

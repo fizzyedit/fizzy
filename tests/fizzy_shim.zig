@@ -24,7 +24,7 @@ pub const Ctx = struct {
     pub fn deinit(self: *Ctx, gpa: std.mem.Allocator) void {
         // A test that registers a surface (`registerSurface`) puts it in a
         // host-owned list, so the host has to come down with the rest. Safe on the zeroed host
-        // below: every registry in it is an empty `ArrayListUnmanaged`/`HashMapUnmanaged`.
+        // below: every registry in it is an empty `ArrayList`/`HashMapUnmanaged`.
         self.editor.app.host.deinit();
         // A place writes its order down as it shows views (`Layout.ordered`), so any test that
         // asked a place what it shows holds an order. Safe after a test freed them itself.
@@ -37,7 +37,15 @@ pub const Ctx = struct {
 };
 
 pub fn init(gpa: std.mem.Allocator) !Ctx {
-    var t = try dvui.testing.init(.{ .allocator = gpa });
+    return initSized(gpa, null);
+}
+
+/// `init` with a window of `size` points, or dvui's default when null.
+pub fn initSized(gpa: std.mem.Allocator, size: ?dvui.Size) !Ctx {
+    var t = if (size) |sz|
+        try dvui.testing.init(.{ .allocator = gpa, .window_size = sz })
+    else
+        try dvui.testing.init(.{ .allocator = gpa });
     errdefer t.deinit();
 
     const app_ptr = try gpa.create(fizzy.Entry);

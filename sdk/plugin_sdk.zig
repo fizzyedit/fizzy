@@ -3,7 +3,8 @@
 //! Required in your project (see `docs/PLUGINS.md` §2):
 //! - `plugin.zig` — `register(host)` + `Plugin` vtable; read `sdk.allocator()` / `sdk.host()`.
 //!   This is the module root: everything under `src/` imports it via relative paths, and the
-//!   shared deps (`fizzy_sdk`/`core`/`dvui`/`proxy_bridge`) are named imports (`@import("fizzy_sdk")`, …).
+//!   shared deps (`fizzy_sdk`/`core`/`dvui`/`proxy_bridge`) are named imports
+//!   (`@import("fizzy_sdk")`, …).
 //! - `plugin.zig.zon` — identity only (`id`/`name`/`version`/`min_sdk_version`). Read
 //!   at configure time by `create` below; also embedded verbatim into the dylib (`fizzy_plugin_
 //!   manifest_zon`) so a disabled/unloaded plugin's identity can still be probed. There is no
@@ -43,6 +44,9 @@ pub const Modules = struct {
     sdk: *std.Build.Module,
     dvui: *std.Build.Module,
     proxy_bridge: *std.Build.Module,
+    /// `core`'s own `tape` and `replay`, the instances a statically linked plugin imports.
+    tape: *std.Build.Module,
+    replay: *std.Build.Module,
 };
 
 pub const ModulesOptions = struct {
@@ -86,9 +90,16 @@ pub fn readManifest(b: *std.Build) IdentityManifest {
 
 fn readManifestAt(b: *std.Build, rel_path: []const u8) IdentityManifest {
     b.dependOnFileContents(b.path(rel_path));
-    const raw = std.Io.Dir.cwd().readFileAlloc(b.graph.io, b.root.joinString(b.allocator, rel_path) catch @panic("OOM"), b.allocator, std.Io.Limit.limited(256 * 1024)) catch |e|
+    const raw = std.Io.Dir.cwd().readFileAlloc(
+        b.graph.io,
+        b.root.joinString(b.allocator, rel_path) catch @panic("OOM"),
+        b.allocator,
+        std.Io.Limit.limited(256 * 1024),
+    ) catch |e|
         std.debug.panic(
-            "fizzy: could not read {s}: {}\nEvery plugin needs a `plugin.zig.zon` manifest at its root (id/name/version) — see docs/PLUGINS.md.",
+            "fizzy: could not read {s}: {}\n" ++
+                "Every plugin needs a `plugin.zig.zon` manifest at its root (id/name/version) — " ++
+                "see docs/PLUGINS.md.",
             .{ rel_path, e },
         );
     const src = b.allocator.dupeSentinel(u8, raw, 0) catch @panic("OOM");
@@ -100,13 +111,25 @@ fn readManifestAt(b: *std.Build, rel_path: []const u8) IdentityManifest {
     };
     // The build's allocator is freed only when the build ends: the manifest is read into it.
     var diag: std.zon.parse.Diagnostics = undefined;
-    const parsed = std.zon.parse.fromSlice(Target, .{ .gpa = b.allocator, .arena = b.allocator, .source = src, .diagnostics = &diag, .ignore_unknown_fields = true }) catch |e|
+    const parsed = std.zon.parse.fromSlice(Target, .{
+        .gpa = b.allocator,
+        .arena = b.allocator,
+        .source = src,
+        .diagnostics = &diag,
+        .ignore_unknown_fields = true,
+    }) catch |e|
         std.debug.panic("fizzy: failed to parse {s}: {}", .{ rel_path, e });
     _ = std.SemanticVersion.parse(parsed.version) catch
-        std.debug.panic("fizzy: {s} .version \"{s}\" is not valid semver (expected e.g. 1.2.3)", .{ rel_path, parsed.version });
+        std.debug.panic(
+            "fizzy: {s} .version \"{s}\" is not valid semver (expected e.g. 1.2.3)",
+            .{ rel_path, parsed.version },
+        );
     if (parsed.min_sdk_version.len > 0) {
         _ = std.SemanticVersion.parse(parsed.min_sdk_version) catch
-            std.debug.panic("fizzy: {s} .min_sdk_version \"{s}\" is not valid semver", .{ rel_path, parsed.min_sdk_version });
+            std.debug.panic(
+                "fizzy: {s} .min_sdk_version \"{s}\" is not valid semver",
+                .{ rel_path, parsed.min_sdk_version },
+            );
     }
     return .{
         .id = parsed.id,
@@ -164,6 +187,8 @@ fn modulesFromDep(fizzy_dep: *std.Build.Dependency) Modules {
         .sdk = fizzy_dep.module("fizzy_sdk"),
         .dvui = fizzy_dep.module("dvui"),
         .proxy_bridge = fizzy_dep.module("proxy_bridge"),
+        .tape = fizzy_dep.module("tape"),
+        .replay = fizzy_dep.module("replay"),
     };
 }
 
@@ -176,6 +201,8 @@ pub fn addImports(mod: *std.Build.Module, plugin_modules: Modules) void {
     mod.addImport("fizzy_sdk", plugin_modules.sdk);
     mod.addImport("dvui", plugin_modules.dvui);
     mod.addImport("proxy_bridge", plugin_modules.proxy_bridge);
+    mod.addImport("tape", plugin_modules.tape);
+    mod.addImport("replay", plugin_modules.replay);
 }
 
 fn module(
@@ -257,7 +284,13 @@ pub const InstallBesideOptions = struct {
 ///     fizzy.plugin.installBeside(b, helper_exe, .{ .plugin = "agent" });
 pub fn installBeside(b: *std.Build, artifact: *std.Build.Step.Compile, opts: InstallBesideOptions) void {
     if (artifact.rootModuleTarget().cpu.arch == .wasm32) return;
-    addDevInstall(b, artifact, opts.plugin, artifact.out_filename, b.fmt("install '{s}' beside plugin '{s}'", .{ artifact.out_filename, opts.plugin }));
+    addDevInstall(
+        b,
+        artifact,
+        opts.plugin,
+        artifact.out_filename,
+        b.fmt("install '{s}' beside plugin '{s}'", .{ artifact.out_filename, opts.plugin }),
+    );
 }
 
 /// The helper `addDevInstall` runs, one per builder however many artifacts it installs. Debug:
@@ -281,7 +314,13 @@ var dev_install_exes: std.AutoHashMapUnmanaged(*std.Build, *std.Build.Step.Compi
 
 /// Copy `artifact` to `{plugins}/{dir_name}/{file_name}` on every `zig build install`, through
 /// `plugin_sdk_install.zig`: Zig 0.17's build has no custom steps.
-fn addDevInstall(b: *std.Build, artifact: *std.Build.Step.Compile, dir_name: []const u8, file_name: []const u8, step_name: []const u8) void {
+fn addDevInstall(
+    b: *std.Build,
+    artifact: *std.Build.Step.Compile,
+    dir_name: []const u8,
+    file_name: []const u8,
+    step_name: []const u8,
+) void {
     const dev = b.addRunArtifact(devInstallExe(b));
     dev.setName(step_name);
     dev.addArtifactArg(artifact);
@@ -338,7 +377,10 @@ fn addSdkMeta(b: *std.Build, lib: *std.Build.Step.Compile) *std.Build.Step {
 fn addSdkCheck(b: *std.Build) *std.Build.Step {
     if (b.top_level_steps.get("check")) |existing| return &existing.step;
 
-    const step = b.step("check", "Print pinned fizzy SDK version + abi fingerprint (and catch legacy release.yml drift)");
+    const step = b.step(
+        "check",
+        "Print pinned fizzy SDK version + abi fingerprint (and catch legacy release.yml drift)",
+    );
 
     const release_yml = ".github/workflows/release.yml";
     dependOnPathExistence(b, release_yml);
@@ -364,7 +406,11 @@ fn addSdkCheck(b: *std.Build) *std.Build.Step {
 /// without regard to the environment, so a variable read here would be seen once and then ignored.
 fn pluginUseLlvm(b: *std.Build) ?bool {
     const gop = plugin_use_llvm.getOrPut(b.allocator, b) catch @panic("OOM");
-    if (!gop.found_existing) gop.value_ptr.* = b.option(bool, "plugin-use-llvm", "Force (true) or forbid (false) LLVM for plugin builds; unset, Zig chooses");
+    if (!gop.found_existing) gop.value_ptr.* = b.option(
+        bool,
+        "plugin-use-llvm",
+        "Force (true) or forbid (false) LLVM for plugin builds; unset, Zig chooses",
+    );
     return gop.value_ptr.*;
 }
 var plugin_use_llvm: std.AutoHashMapUnmanaged(*std.Build, ?bool) = .empty;
@@ -532,7 +578,7 @@ pub fn create(b: *std.Build, opts: CreateOptions) PluginArtifact {
         // A wasm *side module* (Emscripten's term): position-independent, no entry, no
         // threads, loaded into the web host's memory and function table at runtime — the
         // dylib model with table indices for function pointers. See `plans/REVIEW_2026-09.md`
-        // §2 and `web/index.html`'s loader.
+        // §2 and `web/fizzy.js`'s loader.
         lib.root_module.pic = true;
         lib.root_module.single_threaded = true;
         lib.entry = .disabled;
@@ -554,9 +600,73 @@ pub fn create(b: *std.Build, opts: CreateOptions) PluginArtifact {
         .link_libc = opts.link_libc and opts.target.result.cpu.arch != .wasm32,
     });
     static_module.addAnonymousImport("plugin_zon", .{ .root_source_file = b.path("plugin.zig.zon") });
-    static_module.addOptions(plugin_options_import, pluginOptions(b, m.id, m.name, m.version, m.min_sdk_version, m.raw));
+    static_module.addOptions(
+        plugin_options_import,
+        pluginOptions(b, m.id, m.name, m.version, m.min_sdk_version, m.raw),
+    );
 
     return .{ .lib = lib, .module = plugin_module, .static = static_module };
+}
+
+/// One of an application's executables, as a plugin it links statically sees it: the target and
+/// the framework modules (`fizzy.framework` in the application's build). A plugin package whose
+/// build has dependencies of its own builds them against these, so the application links the
+/// module it is given as it is, without copying anything for each executable.
+///
+/// A plugin package that pins its own SDK has its own copy of this type, so its build takes the
+/// application's by field: `anytype`, as `staticModule` does.
+pub const Framework = struct {
+    target: std.Build.ResolvedTarget,
+    optimize: std.lang.OptimizeMode,
+    dvui: *std.Build.Module,
+    core: *std.Build.Module,
+    /// Imported as `fizzy_sdk`.
+    sdk: *std.Build.Module,
+    icons: ?*std.Build.Module,
+};
+
+pub const StaticModuleOptions = struct {
+    /// Defaults to `b.path("plugin.zig")`, as in `create`.
+    root_source_file: ?std.Build.LazyPath = null,
+    link_libc: bool = true,
+};
+
+/// The plugin's static module for one executable (`framework`, a `Framework` by field): its
+/// `plugin.zig` with its manifest, importing that executable's `dvui`, `core`, `fizzy_sdk`,
+/// `icons`, and `core`'s `tape` and `replay`. The plugin's own dependencies are the caller's to
+/// add, built for `framework.target` and against `framework.dvui` where they draw. One that
+/// `core` imports as well (zf) is `core`'s module, `framework.core.import_table.get("zf")`: a
+/// file belongs to one module of a compilation.
+///
+///     pub fn staticModule(b: *std.Build, framework: anytype) *std.Build.Module {
+///         const m = fizzy.plugin.staticModule(b, framework, .{});
+///         m.addImport("my_lib", myLib(b, framework.target, framework.optimize, framework.dvui));
+///         return m;
+///     }
+///
+/// The application calls it with the plugin's builder (`dep.builder`) for each kind of
+/// executable it builds, and lists the result in `fizzy.buildApp`.
+// anytype: the Framework of fizzy's build, a build-time duck type
+pub fn staticModule(b: *std.Build, framework: anytype, opts: StaticModuleOptions) *std.Build.Module {
+    const wasm = framework.target.result.cpu.arch == .wasm32;
+    const m = readManifest(b);
+    const mod = b.createModule(.{
+        .target = framework.target,
+        .optimize = framework.optimize,
+        .root_source_file = opts.root_source_file orelse b.path("plugin.zig"),
+        .link_libc = opts.link_libc and !wasm,
+        .single_threaded = if (wasm) true else null,
+    });
+    mod.addAnonymousImport("plugin_zon", .{ .root_source_file = b.path("plugin.zig.zon") });
+    mod.addOptions(plugin_options_import, pluginOptions(b, m.id, m.name, m.version, m.min_sdk_version, m.raw));
+    mod.addImport("dvui", framework.dvui);
+    mod.addImport("core", framework.core);
+    mod.addImport("fizzy_sdk", framework.sdk);
+    if (framework.icons) |icons| mod.addImport("icons", icons);
+    for ([_][]const u8{ "tape", "replay" }) |name| {
+        if (framework.core.import_table.get(name)) |dep| mod.addImport(name, dep);
+    }
+    return mod;
 }
 
 pub fn exportModules(
@@ -601,6 +711,9 @@ pub fn exportModules(
     sdk_mod.addImport("dvui", dvui_proxy_mod);
     sdk_mod.addImport("proxy_bridge", proxy_bridge_mod);
     sdk_mod.addImport("core", core_mod);
+    // The fingerprint hashes `tape`'s and `replay`'s data types (`dylib.zig`).
+    sdk_mod.addImport("tape", core_mod.import_table.get("tape").?);
+    sdk_mod.addImport("replay", core_mod.import_table.get("replay").?);
     // See the matching comment in `build/sdk.zig`. `sdk_version.zig` needs no `repoPath` hop:
     // unlike `src/…`, it lives at this package's root in *both* layouts (in-repo `fizzy/sdk/`
     // and the release tarball, whose root is that same directory).

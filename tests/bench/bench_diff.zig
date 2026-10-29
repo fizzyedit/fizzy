@@ -13,6 +13,7 @@ fn ms(ns: i96) f64 {
     return @as(f64, @floatFromInt(ns)) / 1e6;
 }
 
+// anytype: Benchmark callbacks and their contexts vary with the operation measured.
 fn bestOf(comptime n: usize, ctx: anytype, comptime f: anytype) !i96 {
     var best: i96 = std.math.maxInt(i96);
     for (0..n) |_| {

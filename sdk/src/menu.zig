@@ -63,6 +63,7 @@ pub fn submenu(
         var anim = dvui.animate(src, .{ .kind = .alpha, .duration = 250_000 }, .{ .expand = .both });
         defer anim.deinit();
 
+        // lint-allow(raw-transient-surface): TODO(seam): SDK cannot use core's frosted floatingMenu
         var fw = dvui.floatingMenu(src, .{ .from = r }, .{});
         defer fw.deinit();
 

@@ -1,4 +1,4 @@
-//! Buffering and filtering for `FolderWatcher` — the half that runs on nightwatch's thread —
+//! Buffering and filtering for `FolderWatcher` - the half that runs on nightwatch's thread -
 //! and the walk that decides which folders it watches.
 //!
 //! Split out and std-only on purpose. `FolderWatcher.zig` reaches `fizzy.zig` and `dvui`, so it
@@ -17,7 +17,7 @@ const builtin = @import("builtin");
 /// a watch leaves alone.
 ///
 /// Pure string work: no allocation, no filesystem, no host call, so it is safe to run on the
-/// watcher's own thread. With `dotName` it is not the authoritative ignore check — fizzy's
+/// watcher's own thread. With `dotName` it is not the authoritative ignore check - fizzy's
 /// `IgnoreRules` is, and that runs later on the UI thread. It exists so a `git checkout` or a
 /// build churning a cache directory can't fill the ring before anyone gets to apply the real
 /// rules.
@@ -56,7 +56,7 @@ pub const max_dir_watches: u32 = 16384;
 /// Folders a watch never descends into, by name: hidden ones (`.git`, `.zig-cache`, `.venv`,
 /// `.bun`) and the dependency trees a tool writes, `node_modules` and `zig-pkg`. They hold most
 /// of a project's directories and none of what a person edits. Anything else a project chooses
-/// to ignore (`target`, `zig-out`, …) is still watched, and `IgnoreRules` drops its events.
+/// to ignore (`target`, `zig-out`, ...) is still watched, and `IgnoreRules` drops its events.
 pub fn skipWatchDir(name: []const u8) bool {
     if (name.len == 0 or name[0] == '.') return true;
     return std.mem.eql(u8, name, "node_modules") or std.mem.eql(u8, name, "zig-pkg");
@@ -205,13 +205,15 @@ pub const Watches = struct {
     }
 
     /// Watch the root and every folder under it not skipped, when it is opened.
+    // anytype: Native watch backends and test contexts supply add/remove/created/say callbacks.
     pub fn walk(self: *Watches, io: std.Io, ctx: anytype) void {
         self.walkFrom(io, self.root, .{}, ctx);
     }
 
     /// `dir` was created, and is watched only now: whatever was made in it before then had
-    /// no event, so it is announced — unless `announced`, when the backend already did (a
+    /// no event, so it is announced - unless `announced`, when the backend already did (a
     /// folder moved in from outside the tree, which inotify reports with all it holds).
+    // anytype: Native watch backends and test contexts supply add/remove/created/say callbacks.
     pub fn appeared(self: *Watches, io: std.Io, dir: []const u8, announced: bool, ctx: anytype) void {
         if (!inside(dir, self.root) or underSegment(self.root, dir, skipWatchDir)) return;
         if (self.contains(dir)) {
@@ -223,6 +225,7 @@ pub const Watches = struct {
     }
 
     /// Go on from where walks stopped. Call after a batch of folder events, not per event.
+    // anytype: Native watch backends and test contexts supply add/remove/created/say callbacks.
     pub fn catchUp(self: *Watches, io: std.Io, ctx: anytype) void {
         // Each entry once per call: one refused again goes back on the frontier, not round
         // this loop for ever.
@@ -244,6 +247,7 @@ pub const Watches = struct {
         }
     }
 
+    // anytype: Native watch backends and test contexts supply add/remove/created/say callbacks.
     fn walkFrom(self: *Watches, io: std.Io, dir: []const u8, pass: Pass, ctx: anytype) void {
         var buf: [std.fs.max_path_bytes]u8 = undefined;
         if (dir.len > buf.len) {
@@ -304,6 +308,7 @@ pub const Watches = struct {
     }
 
     /// False when the walk stopped before the tree ran out.
+    // anytype: Native watch backends and test contexts supply add/remove/created/say callbacks.
     fn walkDir(self: *Watches, io: std.Io, buf: *[std.fs.max_path_bytes]u8, len: usize, pass: Pass, top: bool, ctx: anytype) bool {
         if (self.cancel.load(.acquire)) return false;
         const path = buf[0..len];
@@ -381,6 +386,7 @@ pub const Watches = struct {
     }
 
     /// A folder that couldn't be opened to walk.
+    // anytype: Native watch backends and test contexts supply add/remove/created/say callbacks.
     fn unreadable(self: *Watches, path: []const u8, err: std.Io.Dir.OpenError, owed: Owed, ctx: anytype) void {
         switch (err) {
             // Gone already: nothing to watch.
@@ -394,6 +400,7 @@ pub const Watches = struct {
         }
     }
 
+    // anytype: Native watch backends and test contexts supply add/remove/created/say callbacks.
     fn watch(self: *Watches, path: []const u8, ctx: anytype) Watched {
         if (self.paths.items.len + self.fresh.items.len >= self.limit) return self.block(.cap, ctx);
         return self.add(path, 2, ctx);
@@ -401,6 +408,7 @@ pub const Watches = struct {
 
     /// Add a watch on `path`, asking why when refused; `tries` bounds the retries a refusal
     /// that has since cleared up gets.
+    // anytype: Native watch backends and test contexts supply add/remove/created/say callbacks.
     fn add(self: *Watches, path: []const u8, tries: u8, ctx: anytype) Watched {
         ctx.add(path) catch |err| switch (err) {
             error.OutOfMemory => {
@@ -429,6 +437,7 @@ pub const Watches = struct {
         return .added;
     }
 
+    // anytype: Native watch backends and test contexts supply add/remove/created/say callbacks.
     fn degrade(self: *Watches, ctx: anytype) void {
         if (self.degraded) return;
         self.degraded = true;
@@ -436,6 +445,7 @@ pub const Watches = struct {
     }
 
     /// `path` is left out for good, said once.
+    // anytype: Native watch backends and test contexts supply add/remove/created/say callbacks.
     fn lose(self: *Watches, path: []const u8, reason: []const u8, ctx: anytype) Watched {
         const gop = self.lost.getOrPut(self.gpa, path) catch {
             self.degrade(ctx);
@@ -452,6 +462,7 @@ pub const Watches = struct {
     }
 
     /// An entry of `dir` whose path is too long to walk.
+    // anytype: Native watch backends and test contexts supply add/remove/created/say callbacks.
     fn loseLong(self: *Watches, dir: []const u8, name: []const u8, ctx: anytype) void {
         const p = self.gpa.print("{s}{c}{s}", .{ dir, std.fs.path.sep, name }) catch return self.degrade(ctx);
         defer self.gpa.free(p);
@@ -470,6 +481,7 @@ pub const Watches = struct {
         }
     }
 
+    // anytype: Native watch backends and test contexts supply add/remove/created/say callbacks.
     fn block(self: *Watches, why: Blocked, ctx: anytype) Watched {
         if (self.said != why) ctx.say(.{ .blocked = .{ .why = why, .watched = self.paths.items.len + self.fresh.items.len } });
         self.said = why;
@@ -477,6 +489,7 @@ pub const Watches = struct {
         return .blocked;
     }
 
+    // anytype: Native watch backends and test contexts supply add/remove/created/say callbacks.
     fn leftOut(self: *Watches, path: []const u8, owed: Owed, ctx: anytype) void {
         const gop = self.frontier.getOrPut(self.gpa, path) catch return self.degrade(ctx);
         if (gop.found_existing) {
@@ -491,6 +504,7 @@ pub const Watches = struct {
     }
 
     /// Frontier entries at or under `src` follow it to `dst`, or go, with no `dst`.
+    // anytype: Native watch backends and test contexts supply add/remove/created/say callbacks.
     fn reframe(self: *Watches, src: []const u8, dst: ?[]const u8, ctx: anytype) void {
         var f: usize = 0;
         while (f < self.frontier.count()) {
@@ -545,6 +559,7 @@ pub const Watches = struct {
     /// Take `dir` and what is below it out of `paths` without allocating. With `remove`, each
     /// watch goes too, named as the backend knows it now: under `as` when it has been moved
     /// there. Returns how many keys went.
+    // anytype: Native watch backends and test contexts supply add/remove/created/say callbacks.
     fn drop(self: *Watches, dir: []const u8, remove: bool, as: ?[]const u8, ctx: anytype) usize {
         const start, const end = self.below(dir);
         const at = self.indexOf(dir);
@@ -557,6 +572,7 @@ pub const Watches = struct {
         return n;
     }
 
+    // anytype: Native watch backends and test contexts supply add/remove/created/say callbacks.
     fn dropKey(self: *Watches, k: []u8, dir: []const u8, remove: bool, as: ?[]const u8, buf: *[std.fs.max_path_bytes]u8, ctx: anytype) void {
         defer self.gpa.free(k);
         if (!remove) return;
@@ -569,6 +585,7 @@ pub const Watches = struct {
     /// `dir` left the tree: deleted (the OS dropped its watches with it) or moved out (it
     /// kept them). Either way they are removed, which also clears the backend's own record,
     /// and nothing below it is waited for or lost any longer.
+    // anytype: Native watch backends and test contexts supply add/remove/created/say callbacks.
     pub fn gone(self: *Watches, dir: []const u8, ctx: anytype) void {
         if (self.drop(dir, true, null, ctx) > 0) self.blocked = null;
         self.forgetLost(dir);
@@ -580,6 +597,7 @@ pub const Watches = struct {
     /// of the tree, where they are removed. A folder moved in from a skipped name is walked,
     /// its contents announced: the backend reports the rename alone, and nothing was said
     /// about them while it was out of view.
+    // anytype: Native watch backends and test contexts supply add/remove/created/say callbacks.
     pub fn moved(self: *Watches, io: std.Io, src: []const u8, dst: []const u8, ctx: anytype) void {
         if (!inside(dst, self.root)) return self.gone(src, ctx);
         // Renamed over an empty folder: that folder's key goes. Not its watch: the OS dropped
@@ -683,7 +701,7 @@ pub const Doorbell = struct {
 /// Nothing here allocates, and that is the whole point: the producer runs on a thread nightwatch
 /// owns, where reaching for a shared allocator is exactly what the other watcher adapters in
 /// this directory are careful never to do. When the buffer fills, the overflow is *reported*
-/// (`truncated`) rather than absorbed — a branch switch emits events by the tens of thousands,
+/// (`truncated`) rather than absorbed - a branch switch emits events by the tens of thousands,
 /// and the useful answer for a consumer at that point is "rescan", not a longer list it still
 /// has to walk.
 pub fn Ring(comptime Kind: type, comptime Object: type) type {
@@ -699,7 +717,7 @@ pub fn Ring(comptime Kind: type, comptime Object: type) type {
             object: Object,
         };
 
-        /// Flat backing store for paths — one arena rather than a fixed slot per event, so a
+        /// Flat backing store for paths - one arena rather than a fixed slot per event, so a
         /// handful of deep paths can't crowd out everything else and no path length is a
         /// special case.
         paths: []u8,
@@ -720,7 +738,7 @@ pub fn Ring(comptime Kind: type, comptime Object: type) type {
         }
 
         /// Nothing to report. Distinct from `count == 0`, which is also true for a batch whose
-        /// every event was dropped — and that batch still has to go out.
+        /// every event was dropped - and that batch still has to go out.
         pub fn empty(self: *const Self) bool {
             return self.count == 0 and !self.truncated;
         }
@@ -1253,7 +1271,7 @@ test "a folder leaving the tree gives back its watches and what was waiting belo
     w.walk(testing.io, &b);
     w.settled = true;
 
-    // `src-x` sorts between `src` and `src/…`; it must survive `src` going.
+    // `src-x` sorts between `src` and `src/...`; it must survive `src` going.
     try t.tmp.dir.createDirPath(testing.io, "src-x");
     w.appeared(testing.io, t.path("src-x"), false, &b);
     const src = t.own("src");
@@ -1409,7 +1427,7 @@ test "inside and the segment check need a separator after the folder" {
 
 test "a walk that stops partway owes the folder only what it hadn't said" {
     // P holds files and D and E; the walk says P's entries, walks D whole, then runs out at
-    // E. Resumed, it must say what is in E — and nothing in P or D again.
+    // E. Resumed, it must say what is in E - and nothing in P or D again.
     var t: TestTree = .{ .tmp = undefined };
     try t.init();
     defer t.tmp.cleanup();
@@ -1433,7 +1451,7 @@ test "a walk that stops partway owes the folder only what it hadn't said" {
     w.retry();
     w.catchUp(testing.io, &b);
     try testing.expect(w.whole());
-    // P: f.txt, D, E; D: d1, g.txt; E: e1, h.txt — seven, each once.
+    // P: f.txt, D, E; D: d1, g.txt; E: e1, h.txt - seven, each once.
     try testing.expectEqual(@as(usize, 7), b.created_files + b.created_dirs);
     try testing.expect(said_first < 7);
     // Only what wasn't watched was tried: the refused folder and what is below it.
@@ -1529,7 +1547,7 @@ test "running out of memory anywhere leaves no watch untracked" {
     defer t.tmp.cleanup();
     try t.tmp.dir.createDirPath(testing.io, "new/sub");
     try t.tmp.dir.writeFile(testing.io, .{ .sub_path = "new/f.txt", .data = "" });
-    // Fail the first, then the second, … allocation of a whole session: walk, a folder that
+    // Fail the first, then the second, ... allocation of a whole session: walk, a folder that
     // appears, a rename, a folder going. Whatever fails, every live watch is one `paths`
     // holds (so it can be removed), and nothing leaks.
     var fail_at: usize = 0;

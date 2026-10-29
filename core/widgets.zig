@@ -41,6 +41,13 @@ pub const BlurBackdrop = @import("glass").BlurBackdrop;
 pub const LiquidField = @import("glass").LiquidField;
 pub const Popover = @import("widgets/Popover.zig");
 pub const ContextWidget = @import("widgets/ContextWidget.zig");
+/// `dvui.scrollArea` with a phone's touch drag and fling (see the file for what differs).
+pub const ScrollArea = @import("widgets/ScrollArea.zig");
+/// A scrolling list of rows of different heights that draws only the rows in view, anchored to a
+/// row so rows added or measured above the reader never move it (see `HeightIndex`).
+pub const VirtualList = @import("widgets/VirtualList.zig");
+/// A `dvui.textLayout` whose touch selection is a hold, not a tap (`core/TouchHold.zig`).
+pub const SelectableText = @import("widgets/SelectableText.zig");
 
 /// The menu chain, copied from dvui so a menu can be frosted and so its rows are the same rows
 /// the command palette and the flyouts draw — see `widgets/menu/FloatingMenu.zig`'s header for
@@ -207,9 +214,19 @@ pub fn filterRow(src: std.lang.SourceLocation, placeholder: []const u8, opts: dv
         .expand = .horizontal,
         .background = false,
     });
-    defer entry.deinit();
+    defer textEntryDeinit(entry);
     _ = textEntryMenu(entry);
     return entry.getText();
+}
+
+/// Finish a text field and scroll its enclosing area on focus, growth or keyboard movement.
+/// Replaces the entry's `deinit`; the pointer is invalid afterwards.
+pub fn textEntryDeinit(te: *dvui.TextEntryWidget) void {
+    var wd = te.data().*;
+    const focused = wd.id == dvui.focusedWidgetId();
+    te.deinit();
+    // The entry's own scroll area must be closed before scrolling the enclosing area.
+    @import("keyboard.zig").scrollIntoView(&wd, focused);
 }
 
 /// A context menu's surface, opened at the point the pointer was pressed. Every right-click

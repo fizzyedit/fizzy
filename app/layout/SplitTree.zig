@@ -6,8 +6,10 @@
 //! picker fills them. Closing an empty leaf collapses the branch.
 const std = @import("std");
 const dvui = @import("dvui");
+const core = @import("core");
 
-pub const Side = enum { left, right, top, bottom };
+/// The docking widget's side: a pane tree and a place tree name an edge the same way.
+pub const Side = core.widgets.DockLayout.Side;
 
 pub fn axisOf(side: Side) dvui.enums.Direction {
     return switch (side) {
@@ -46,14 +48,37 @@ pub const Node = struct {
 pub const Branch = struct {
     dir: dvui.enums.Direction,
     side: Side,
-    /// The leaf that was split — keeps keywords and assignment.
+    /// The leaf that was split - keeps keywords and assignment.
     origin: []const u8,
     /// The leaf minted on this split. Kept even after that side is split again,
     /// so a nested tree still writes every link to disk.
     created: []const u8,
+    /// Fizzy made this split, not the person: it runs the way its space's shape asks and turns
+    /// with it (`turn`). `dir` and `side` are how it runs now.
+    adaptive: bool = false,
+    /// An adaptive split's new half as a share of its box along the axis, 0 to 1. Saved because
+    /// the half's pixel extent is along the axis it was last chosen on, which a box of another
+    /// shape (a restart in portrait) no longer has. Null until the person has sized it.
+    share: ?f32 = null,
+    /// Transient: what a turn left in the frame's data for this split is to go on its next draw
+    /// (`Region.settleTurn`). Set when it stops being adaptive, and when it is rebuilt under the
+    /// name of one that was. Never saved.
+    settle: bool = false,
     a: *Node,
     b: *Node,
 };
+
+/// Turn an adaptive `branch` a quarter: right becomes bottom, left top, and the other way. The
+/// new half stays the trailing (or leading) one, and `created` keeps the name its letter gave.
+pub fn turn(branch: *Branch) void {
+    branch.side = switch (branch.side) {
+        .right => .bottom,
+        .bottom => .right,
+        .left => .top,
+        .top => .left,
+    };
+    branch.dir = axisOf(branch.side);
+}
 
 pub fn newNameOf(branch: Branch) []const u8 {
     return branch.created;
@@ -192,7 +217,69 @@ pub const Forest = struct {
         name: []const u8,
         parent: []const u8,
         side: Side,
+        adaptive: bool = false,
+        share: ?f32 = null,
     };
+
+    /// The split that minted `created` is fizzy's own (`Branch.adaptive`). False when no split did.
+    pub fn markAdaptive(self: *Forest, created: []const u8) bool {
+        var it = self.roots.valueIterator();
+        while (it.next()) |n| if (markIn(n.*, created)) return true;
+        return false;
+    }
+
+    /// The split `name` is one half of, as a single place; null when it is no split's half.
+    pub fn halfOf(self: *const Forest, name: []const u8) ?*Branch {
+        var it = self.roots.valueIterator();
+        while (it.next()) |n| if (halfIn(n.*, name)) |b| return b;
+        return null;
+    }
+
+    fn halfIn(node: *Node, name: []const u8) ?*Branch {
+        switch (node.kind) {
+            .leaf => return null,
+            .branch => |*b| {
+                for ([_]*Node{ b.a, b.b }) |half| {
+                    if (leafName(half.*)) |n| if (std.mem.eql(u8, n, name)) return b;
+                }
+                return halfIn(b.a, name) orelse halfIn(b.b, name);
+            },
+        }
+    }
+
+    /// Record the share of the adaptive split that minted `created`. True when it changed.
+    pub fn setShare(self: *Forest, created: []const u8, share: f32) bool {
+        var it = self.roots.valueIterator();
+        while (it.next()) |n| if (shareIn(n.*, created, share)) |changed| return changed;
+        return false;
+    }
+
+    fn shareIn(node: *Node, created: []const u8, share: f32) ?bool {
+        switch (node.kind) {
+            .leaf => return null,
+            .branch => |*b| {
+                if (std.mem.eql(u8, b.created, created)) {
+                    if (b.share == share) return false;
+                    b.share = share;
+                    return true;
+                }
+                return shareIn(b.a, created, share) orelse shareIn(b.b, created, share);
+            },
+        }
+    }
+
+    fn markIn(node: *Node, created: []const u8) bool {
+        switch (node.kind) {
+            .leaf => return false,
+            .branch => |*b| {
+                if (std.mem.eql(u8, b.created, created)) {
+                    b.adaptive = true;
+                    return true;
+                }
+                return markIn(b.a, created) or markIn(b.b, created);
+            },
+        }
+    }
 
     pub fn collectLinks(self: *const Forest, gpa: std.mem.Allocator) []const SavedLink {
         var out: std.ArrayList(SavedLink) = .empty;
@@ -208,7 +295,7 @@ pub const Forest = struct {
         switch (node.kind) {
             .leaf => {},
             .branch => |b| {
-                out.append(gpa, .{ .name = b.created, .parent = b.origin, .side = b.side }) catch {};
+                out.append(gpa, .{ .name = b.created, .parent = b.origin, .side = b.side, .adaptive = b.adaptive, .share = b.share }) catch {};
                 collectFrom(b.a, gpa, out);
                 collectFrom(b.b, gpa, out);
             },
@@ -237,7 +324,7 @@ pub const Forest = struct {
         return null;
     }
 
-    /// Two places one split made — the two leaves of one branch — as the place a join keeps and
+    /// Two places one split made - the two leaves of one branch - as the place a join keeps and
     /// the one it closes. Null for any other pair: only a split's own two halves are one place
     /// again when joined, so that is the only pair the middle of a place joins.
     ///
@@ -296,7 +383,7 @@ pub const Forest = struct {
         }
     }
 
-    /// The place whose split `name` is a part of — the root its tree is keyed by — or `name`
+    /// The place whose split `name` is a part of - the root its tree is keyed by - or `name`
     /// itself when it was never split or is a root. Null when the forest has never heard of it.
     pub fn rootOf(self: *const Forest, name: []const u8) ?[]const u8 {
         var it = self.roots.iterator();
@@ -329,7 +416,7 @@ pub const Forest = struct {
         }
     }
 
-    /// Drop `root`'s whole tree: the place is gone, and every split of it with it — a float
+    /// Drop `root`'s whole tree: the place is gone, and every split of it with it - a float
     /// closing. Nothing to do for a place never split.
     pub fn forget(self: *Forest, gpa: std.mem.Allocator, root_name: []const u8) void {
         const kv = self.roots.fetchRemove(root_name) orelse return;
@@ -650,4 +737,51 @@ test "collapsing the minted half of a nested split leaves its origin in the oute
     defer gpa.free(links);
     try std.testing.expectEqual(@as(usize, 1), links.len);
     try std.testing.expectEqualStrings("Center/r1", links[0].name);
+}
+
+test "an adaptive split turns a quarter, keeps its half and its name, and is saved so" {
+    const gpa = std.testing.allocator;
+    var f: Forest = .{};
+    defer f.deinit(gpa);
+    _ = f.split(gpa, internLiteral, "Main", .right, 80, "Main/r1").?;
+    try std.testing.expect(!f.markAdaptive("Nowhere/r1"));
+    try std.testing.expect(f.markAdaptive("Main/r1"));
+
+    const links = f.collectLinks(gpa);
+    defer gpa.free(links);
+    for (links) |l| try std.testing.expectEqual(std.mem.eql(u8, l.name, "Main/r1"), l.adaptive);
+
+    const b = &f.root("Main").?.kind.branch;
+    try std.testing.expectEqual(dvui.enums.Direction.horizontal, b.dir);
+    turn(b);
+    try std.testing.expectEqual(Side.bottom, b.side);
+    try std.testing.expectEqual(dvui.enums.Direction.vertical, b.dir);
+    try std.testing.expectEqualStrings("Main/r1", b.created);
+    turn(b);
+    try std.testing.expectEqual(Side.right, b.side);
+}
+
+test "a place's own split is found from either half, and is saved as the toggle leaves it" {
+    const gpa = std.testing.allocator;
+    var f: Forest = .{};
+    defer f.deinit(gpa);
+    _ = f.split(gpa, internLiteral, "Main", .right, 80, "Main/r1").?;
+    _ = f.split(gpa, internLiteral, "Main/r1", .bottom, 40, "Main/r1/b1").?;
+    try std.testing.expect(f.halfOf("Nowhere") == null);
+
+    const outer = f.halfOf("Main").?;
+    try std.testing.expectEqualStrings("Main/r1", outer.created);
+    // The half split again is a half of its own split, not of the one that made it.
+    try std.testing.expectEqualStrings("Main/r1/b1", f.halfOf("Main/r1").?.created);
+    try std.testing.expectEqual(f.halfOf("Main/r1"), f.halfOf("Main/r1/b1"));
+
+    outer.adaptive = true;
+    turn(outer);
+    outer.adaptive = false;
+    const links = f.collectLinks(gpa);
+    defer gpa.free(links);
+    for (links) |l| {
+        try std.testing.expect(!l.adaptive);
+        if (std.mem.eql(u8, l.name, "Main/r1")) try std.testing.expectEqual(Side.bottom, l.side);
+    }
 }

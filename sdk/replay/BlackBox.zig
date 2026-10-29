@@ -6,9 +6,9 @@
 //! person's input and any tape's. Each dvui event becomes a fixed record in `tape.events`' rings:
 //! pointer motion and buttons where they were, in the window's pixels, wheel ticks, keys down,
 //! repeated and up with their modifiers, text as it arrived. Focus and position events are left
-//! out: dvui makes them from the others, and a replay's dvui will again. A frame costs a copy of its
-//! events (ReleaseFast, measured: 0.5 ns a frame with none, 5 ns with four); the rings are 1.3 MB,
-//! made the first time it records.
+//! out: dvui makes them from the others, and a replay's dvui will again. A frame costs a copy of
+//! its events (ReleaseFast, measured: 0.5 ns a frame with none, 5 ns with four); the rings are 1.3
+//! MB, made the first time it records.
 //!
 //! Any dvui app can keep one: dvui and `tape` only. Fizzy writes its stretches as captures
 //! (`fizzy.capture`) and replays them (plans/RECORDER_PLAN.md, step 3). A stream that is not dvui's
@@ -68,9 +68,27 @@ pub fn record(self: *BlackBox, gpa: std.mem.Allocator) void {
 fn toRecord(e: *const dvui.Event) ?events.Event {
     return switch (e.evt) {
         .mouse => |me| switch (me.action) {
-            .motion => .{ .kind = .motion, .button = @backingInt(me.button), .mod = @backingInt(me.mod), .x = me.p.x, .y = me.p.y },
-            .press => .{ .kind = .press, .button = @backingInt(me.button), .mod = @backingInt(me.mod), .x = me.p.x, .y = me.p.y },
-            .release => .{ .kind = .release, .button = @backingInt(me.button), .mod = @backingInt(me.mod), .x = me.p.x, .y = me.p.y },
+            .motion => .{
+                .kind = .motion,
+                .button = @backingInt(me.button),
+                .mod = @backingInt(me.mod),
+                .x = me.p.x,
+                .y = me.p.y,
+            },
+            .press => .{
+                .kind = .press,
+                .button = @backingInt(me.button),
+                .mod = @backingInt(me.mod),
+                .x = me.p.x,
+                .y = me.p.y,
+            },
+            .release => .{
+                .kind = .release,
+                .button = @backingInt(me.button),
+                .mod = @backingInt(me.mod),
+                .x = me.p.x,
+                .y = me.p.y,
+            },
             .wheel_x => |ticks| .{ .kind = .wheel_x, .mod = @backingInt(me.mod), .x = ticks },
             .wheel_y => |ticks| .{ .kind = .wheel_y, .mod = @backingInt(me.mod), .x = ticks },
             .focus, .position => null,

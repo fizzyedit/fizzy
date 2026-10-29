@@ -1,11 +1,11 @@
 //! What a viewer sees of a demo, over the app: the pointer the tape moves and a ripple where it
 //! clicks, the keys it presses, its captions, and the bar to drive it with.
 //!
-//! Everything here is a function of the player's state and demo time — the caption showing is
-//! whichever the tape has at `now`, the keystroke pill the last key op within a second of it —
+//! Everything here is a function of the player's state and demo time - the caption showing is
+//! whichever the tape has at `now`, the keystroke pill the last key op within a second of it -
 //! so a seek shows exactly what live play showed at that moment, and there is nothing to rewind.
 //!
-//! The cards are the app's floating surface — a menu's, a tooltip's: in the window's material
+//! The cards are the app's floating surface - a menu's, a tooltip's: in the window's material
 //! (`core.material`), Liquid Glass where the window is made of it, as the key pills and the bar
 //! are, else frosted at the dialog style (blur, opacity, refraction); cut with its corners,
 //! shadowed with its ring, and opening and closing on its curves (`Reveal`). With the blur off,
@@ -13,7 +13,7 @@
 //!
 //! Each part is a subwindow that takes no input (events fall through to the app; the bar is
 //! hit-tested by `Player.frame` from the rects recorded here), raised above every other subwindow
-//! each frame in drawing order, the pointer last — it has to be drawn over the menu it opened and
+//! each frame in drawing order, the pointer last - it has to be drawn over the menu it opened and
 //! over the caption explaining it.
 const std = @import("std");
 const dvui = @import("dvui");
@@ -22,6 +22,7 @@ const Player = @import("replay").Player;
 /// The pointer, and the layer every part of this overlay is drawn in (`layer`).
 const plain = @import("replay").overlay;
 const LiveDriver = @import("replay").LiveDriver;
+const Stage = @import("replay").Stage;
 const Input = @import("replay").Input;
 const Tape = @import("tape").Tape;
 const Sequencer = @import("tape").Sequencer;
@@ -57,7 +58,7 @@ pub fn draw(player: *Player) void {
 
 /// Draw the pointer of the live tape `driver` is playing, if any, and the ripple where it last
 /// clicked (`replay.overlay`), its fade scaled for reduced motion. A live tape has no captions,
-/// keys or bar — it is not something to watch, only to see. Call once a frame, after everything
+/// keys or bar - it is not something to watch, only to see. Call once a frame, after everything
 /// else in the frame has drawn.
 pub fn drawLive(driver: *LiveDriver) void {
     plain.drawLive(driver, .{ .fade_ms = motion.durationMs(plain_fade_ms) });
@@ -83,13 +84,13 @@ fn theme() dvui.Theme {
 // ---- the glass -----------------------------------------------------------------------------
 
 /// A card's corners: a floating surface's (`dialogs.surfaceCorners`), resolved against the theme
-/// up front — the frost is handed them directly, and unresolved it would draw them square.
+/// up front - the frost is handed them directly, and unresolved it would draw them square.
 fn corners() dvui.CornerRect {
     const t = theme();
     return core.dialogs.surfaceCorners().finalize(&t);
 }
 
-/// A card's own options: the space it takes and nothing it paints — `glass` lays the surface
+/// A card's own options: the space it takes and nothing it paints - `glass` lays the surface
 /// down under what it holds, kept clear of its corners however round they are.
 fn cardOptions(pad: dvui.Rect) dvui.Options {
     const inset = core.dialogs.cornerInset(corners().tl.radius());
@@ -102,7 +103,7 @@ fn cardOptions(pad: dvui.Rect) dvui.Options {
 }
 
 /// How long a card takes to open: a little quicker than a menu (`motion.open_us`), since a demo's
-/// cards come and go all the while — in ms at the user's speed.
+/// cards come and go all the while - in ms at the user's speed.
 fn openMs() f64 {
     return motion.durationMs(@as(f32, @floatFromInt(motion.open_us)) / 1000 * 0.7);
 }
@@ -111,7 +112,7 @@ fn closeMs() f64 {
     return motion.durationMs(260);
 }
 
-/// How far open a card is: its glass formed (`form`, 0…1) and grown out of its origin (`grow`,
+/// How far open a card is: its glass formed (`form`, 0...1) and grown out of its origin (`grow`,
 /// past 1 while it overshoots), and the alpha of what it holds.
 const Reveal = struct {
     form: f32 = 1,
@@ -120,19 +121,19 @@ const Reveal = struct {
 
     const shut: Reveal = .{ .form = 0, .grow = 0, .alpha = 0 };
 
-    /// How much of its place a card this open takes up, 0…1, for what is stacked on it.
+    /// How much of its place a card this open takes up, 0...1, for what is stacked on it.
     fn room(self: Reveal) f32 {
         return std.math.clamp(self.grow, 0, 1);
     }
 
-    /// `u` (0…1) of the way through opening, as a tooltip or a menu opens: the glass forming and
+    /// `u` (0...1) of the way through opening, as a tooltip or a menu opens: the glass forming and
     /// what it holds fading in together (`motion.fade`) while it grows into place (`motion.enter`).
     fn opening(u: f32) Reveal {
         const f = motion.fade(u);
         return .{ .form = f, .grow = motion.enter(u), .alpha = f };
     }
 
-    /// `w` (0…1) of the way through closing, as a window closes: drawn back into its origin on
+    /// `w` (0...1) of the way through closing, as a window closes: drawn back into its origin on
     /// the leaving curve (`motion.exit`), the glass unforming with it, what it holds opaque for
     /// the first half of the way and gone as it arrives.
     fn closing(w: f32) Reveal {
@@ -154,25 +155,21 @@ const Reveal = struct {
     }
 };
 
-/// The surface under a card — `wd` a box that paints nothing of its own (`cardOptions`) — `r` of
-/// the way open, grown out of `origin` (a point in it, as fractions), in the window's material
-/// (`core.material`): Liquid Glass where the window is made of it, the same lens as the key pills
-/// and the transport's bubbles (`core.dialogs.glassBubbles`), a card's corners rather than a
-/// capsule's; else the frost at the dialog style and the shadow ring round it, or with the blur
-/// off the dialog fill over its shadow. What the card draws after this is cut to the glass as it
-/// grows.
+/// The surface under a card - `wd` a box that paints nothing of its own (`cardOptions`) - `r` of
+/// the way open, grown out of `origin` (a point in it, as fractions), in the material every
+/// floating surface wears (`core.dialogs.dialogFrost`): the frost at the dialog style, clear
+/// glass where the blur is off and the glass program draws, with the shadow ring round it; with
+/// neither, the dialog fill over its shadow. What the card draws after this is cut to the glass
+/// as it grows.
 ///
-/// Before the alpha for its contents is set: glass forms rather than fades (`r.form`) — a frost
-/// replaces what it covers, and at partial alpha would punch a hole. Liquid Glass grows with the
-/// card instead, whole from its first frame, as the pills' does.
+/// Before the alpha for its contents is set: glass forms rather than fades (`r.form`) - a frost
+/// replaces what it covers, and at partial alpha would punch a hole.
 fn glass(wd: *dvui.WidgetData, origin: dvui.Point, r: Reveal) void {
     const s = wd.borderRectScale().s;
     const rect = grown(wd, origin, r);
     const c = corners();
     const bs = core.dialogs.surfaceShadow();
-    if (core.widgets.LiquidField.ready() and core.widgets.liquidFrost() != null) {
-        if (rect.w >= 1 and rect.h >= 1) core.dialogs.glassBubbles(wd.id, &.{.{ .rect = rect, .radius = c.tl.radius() * s }}, s, .{ .shadow = r.alpha });
-    } else if (core.dialogs.dialogFrost()) |f| {
+    if (core.dialogs.dialogFrost()) |f| {
         // The ring after the frost, so the glass does not blur it in (`dialogs.glassShadow`).
         defer core.dialogs.glassShadow(rect, c, s, bs, r.alpha);
         // Under a couple of pixels of blur there is nothing to see yet.
@@ -195,7 +192,7 @@ fn glass(wd: *dvui.WidgetData, origin: dvui.Point, r: Reveal) void {
     dvui.clipSet(dvui.clipGet().intersect(rect));
 }
 
-/// The glass under a pill — a key just pressed, the seek's progress — `r` of the way open, grown
+/// The glass under a pill - a key just pressed, the seek's progress - `r` of the way open, grown
 /// out of `origin` as `glass` grows a card: a capsule of the same glass as the transport bar's
 /// bubbles (`core.dialogs.glassBubbles`), so the player's controls and what it shows are one
 /// material. What the pill draws after this is cut to the glass as it grows.
@@ -229,8 +226,8 @@ const stack_gap: f32 = 14;
 
 /// The demo's words and keys at the current moment, each where it belongs: a title card in the
 /// middle of the home view (`Caption.Place.middle`); a callout beside the action for a caption
-/// that narrates the pointer (`Tape.besideAction`); and everything else — captions about no one
-/// thing, and the keys just pressed — stacked together at home (`drawStack`). All kept whole on
+/// that narrates the pointer (`Tape.besideAction`); and everything else - captions about no one
+/// thing, and the keys just pressed - stacked together at home (`drawStack`). All kept whole on
 /// the window, above `floor`.
 fn drawCaptions(player: *Player, tape: *const Tape, win: dvui.Rect, floor: f32) void {
     const now = player.now();
@@ -241,7 +238,7 @@ fn drawCaptions(player: *Player, tape: *const Tape, win: dvui.Rect, floor: f32) 
         if (!c.shownAt(now)) continue;
         const shown = Reveal.between(now, @floatFromInt(c.at), @floatFromInt(c.at + c.ms));
         if (c.place == .middle) {
-            drawTitle(tape, c, i, shown, win);
+            drawTitle(player.stage, tape, c, i, shown, win);
         } else if (tape.besideAction(c)) {
             drawCallout(player, tape, c, i, shown, win, floor, callouts == 0);
             callouts += 1;
@@ -294,11 +291,11 @@ const Stacked = struct {
 };
 
 /// The popups at home, stacked up from its foot: the newest lowest, each older one above those
-/// after it — as far above as they are open, so the stack pushes up as one opens below and
+/// after it - as far above as they are open, so the stack pushes up as one opens below and
 /// settles back as one below it closes.
 fn drawStack(player: *Player, tape: *const Tape, items: []Stacked, win: dvui.Rect, floor: f32) void {
     std.sort.insertion(Stacked, items, {}, Stacked.before);
-    const home = (if (tape.home.len > 0) tagRect(tape.home) else null) orelse win;
+    const home = (if (tape.home.len > 0) tagRect(player.stage, tape.home) else null) orelse win;
     const base = @min(home.y + home.h * home_down, floor);
     const w = @min(520, win.w - 32);
     const cx = std.math.clamp(home.x + home.w / 2, win.x + 16 + w / 2, @max(win.x + 16 + w / 2, win.x + win.w - 16 - w / 2));
@@ -316,6 +313,7 @@ fn drawStack(player: *Player, tape: *const Tape, items: []Stacked, win: dvui.Rec
             .from_gravity_y = 0,
         });
         defer fw.deinit();
+        if (item.what == .caption) core.anchor.mark(fw.data(), "automation.caption:{d}", .{item.what.caption});
         // Each opens up out of its foot, where it joins the stack.
         switch (item.what) {
             .caption => |ci| captionCard(tape.captions[ci], item.shown, .{ .x = 0.5, .y = 1 }, w),
@@ -327,8 +325,8 @@ fn drawStack(player: *Player, tape: *const Tape, items: []Stacked, win: dvui.Rec
 
 /// A title card: in the middle of the home view, opening about its middle as a dialog does. Each
 /// caption (`index`) its own widget, so none is placed by the size of the one before it.
-fn drawTitle(tape: *const Tape, c: Tape.Caption, index: usize, shown: Reveal, win: dvui.Rect) void {
-    const home = (if (tape.home.len > 0) tagRect(tape.home) else null) orelse win;
+fn drawTitle(stage: Stage, tape: *const Tape, c: Tape.Caption, index: usize, shown: Reveal, win: dvui.Rect) void {
+    const home = (if (tape.home.len > 0) tagRect(stage, tape.home) else null) orelse win;
     const w = @min(620, win.w - 32);
     const fw = layer(@src(), .{ .id_extra = index + 1, .max_size_content = .{ .w = w, .h = win.h } }, .{
         .from = dvui.windowRectScale().pointToPhysical(.{ .x = home.x + home.w / 2, .y = home.y + home.h / 2 }),
@@ -340,7 +338,7 @@ fn drawTitle(tape: *const Tape, c: Tape.Caption, index: usize, shown: Reveal, wi
 }
 
 /// A caption that narrates what the pointer does: a callout beside what it is about, where the
-/// viewer is looking — or, while there is nothing drawn yet to sit beside, at the foot of the home
+/// viewer is looking - or, while there is nothing drawn yet to sit beside, at the foot of the home
 /// view. It keeps its spot until the tape's focus moves on or the spot stops being good, then
 /// travels there once, calmly (`Calm`). Each caption (`index`) its own widget, so none is placed by
 /// the size of the one before it.
@@ -360,7 +358,7 @@ fn drawCallout(player: *Player, tape: *const Tape, c: Tape.Caption, index: usize
     const floor_in = if (in_main) floor else frame.y + frame.h;
     var keep_buf: [40]dvui.Rect = undefined;
     const keep = keepClear(player, tape, c, win, !in_main, &keep_buf);
-    const home = (if (in_main and tape.home.len > 0) tagRect(tape.home) else null) orelse frame;
+    const home = (if (in_main and tape.home.len > 0) tagRect(player.stage, tape.home) else null) orelse frame;
     const now = player.now();
 
     // Its own, so two showing at once each keep theirs.
@@ -459,42 +457,38 @@ const Subject = struct { rect: dvui.Rect, key: u64 };
 
 /// What a caption sits beside: what it names (`Caption.near`), else what the pointer is aimed at in
 /// its time (`Tape.aimedAt`), looking `lead_ms` ahead so it sets off with the pointer rather than
-/// after it — the point the pointer goes to, when that is a whole pane, and the pointer itself
+/// after it - the point the pointer goes to, when that is a whole pane, and the pointer itself
 /// while what it goes to is still to be drawn (a row in a pane that is opening). Null when there is
 /// nothing to sit beside.
 fn subjectOf(player: *Player, tape: *const Tape, c: Tape.Caption, win: dvui.Rect) ?Subject {
     if (c.near.len > 0) {
-        if (tagRect(c.near)) |r| return .{ .rect = r, .key = std.hash.Wyhash.hash(0, c.near) };
+        if (tagRect(player.stage, c.near)) |r| return .{ .rect = r, .key = std.hash.Wyhash.hash(0, c.near) };
     }
     var ahead = player.seq.cursor;
     const until = player.now() + lead_ms;
     while (ahead < tape.ops.len and @as(f64, @floatFromInt(tape.ops[ahead].at)) <= until) ahead += 1;
     const aim = tape.aimedAt(c, ahead) orelse return null;
-    // One subject wherever on it the pointer goes — on a pane, how far the point moves is left to
-    // the callout's reach (`Calm.reach`) — and another while it is still to be drawn, so the
+    // One subject wherever on it the pointer goes - on a pane, how far the point moves is left to
+    // the callout's reach (`Calm.reach`) - and another while it is still to be drawn, so the
     // callout goes to it once it is rather than staying by the pointer.
     var h = std.hash.Wyhash.init(1);
     h.update(aim.tag);
-    const r = (if (aim.tag.len > 0) tagRect(aim.tag) else null) orelse {
+    const r = (if (aim.tag.len > 0) tagRect(player.stage, aim.tag) else null) orelse {
         h.update("?");
         return .{ .rect = pointRect(player.seq.pointer), .key = h.final() };
     };
     if (small(r, win)) return .{ .rect = r, .key = h.final() };
-    return .{ .rect = pointRect(Input.targetPoint(aim) orelse player.seq.pointer), .key = h.final() };
+    return .{ .rect = pointRect(Input.targetPoint(player.stage, aim) orelse player.seq.pointer), .key = h.final() };
 }
 
 /// What a callout must not cover, besides what it is beside: what the caption says to keep clear
-/// (`Caption.clear`); what the pointer goes to in the caption's time — the thing, or the point on
+/// (`Caption.clear`); what the pointer goes to in the caption's time - the thing, or the point on
 /// a pane, since covering an editor is unavoidable but covering where in it the pointer goes is
 /// not; every bar out under the overlay (`dome.barsOut`: a document's history bar, a corner
-/// vial), which is what a step brings out; and the pointer while it rests. Not while it moves: it
-/// passes under the callout on its way, and would push it about.
+/// vial), which is what a step brings out. Never the pointer itself: a callout holds its place
+/// rather than dodging it.
 fn keepClear(player: *Player, tape: *const Tape, c: Tape.Caption, win: dvui.Rect, in_window: bool, buf: []dvui.Rect) []const dvui.Rect {
     var keep: std.ArrayList(dvui.Rect) = .initBuffer(buf);
-    if (player.pointerShown(0) > 0 and !pointerMoving(tape, player.now())) {
-        const p = dvui.windowRectScale().pointFromPhysical(.{ .x = player.seq.pointer.x, .y = player.seq.pointer.y });
-        keep.appendAssumeCapacity(.{ .x = p.x - 4, .y = p.y - 4, .w = 22, .h = 28 });
-    }
     // Every OS window shown over the main one, where it lies there: a callout in the main window is
     // under it, and is not placed where it would be hidden. Not the subject's own, which the
     // callout is drawn in (`in_window`).
@@ -508,16 +502,16 @@ fn keepClear(player: *Player, tape: *const Tape, c: Tape.Caption, win: dvui.Rect
     }
     for (c.clear) |tag| {
         if (keep.items.len == keep.capacity) break;
-        if (tagRect(tag)) |r| keep.appendAssumeCapacity(r);
+        if (tagRect(player.stage, tag)) |r| keep.appendAssumeCapacity(r);
     }
     for (tape.ops) |op| {
         if (op.at < c.at) continue;
         if (op.at >= c.at + c.ms or keep.items.len == keep.capacity) break;
         const target = op.do.target() orelse continue;
-        const r = (if (target.tag.len > 0) tagRect(target.tag) else null) orelse continue;
+        const r = (if (target.tag.len > 0) tagRect(player.stage, target.tag) else null) orelse continue;
         if (small(r, win)) {
             keep.appendAssumeCapacity(r);
-        } else if (Input.targetPoint(target)) |p| keep.appendAssumeCapacity(pointRect(p));
+        } else if (Input.targetPoint(player.stage, target)) |p| keep.appendAssumeCapacity(pointRect(p));
     }
     for (dome.barsOut()) |b| {
         if (keep.items.len == keep.capacity) break;
@@ -546,17 +540,6 @@ fn windowAround(player: *Player, r: dvui.Rect) ?dvui.Rect {
     return null;
 }
 
-/// Whether a move or a trace is carrying the tape's pointer at `now` (demo ms).
-fn pointerMoving(tape: *const Tape, now: f64) bool {
-    for (tape.ops) |op| {
-        const at: f64 = @floatFromInt(op.at);
-        if (at > now) break;
-        if (op.do != .move and op.do != .trace) continue;
-        if (now < at + @as(f64, @floatFromInt(op.ms))) return true;
-    }
-    return false;
-}
-
 /// A point (physical) as a small rect around it, natural.
 fn pointRect(p: Sequencer.Point) dvui.Rect {
     const n = dvui.windowRectScale().pointFromPhysical(.{ .x = p.x, .y = p.y });
@@ -564,8 +547,8 @@ fn pointRect(p: Sequencer.Point) dvui.Rect {
 }
 
 /// A tag's rect, natural, when it is drawn and visible.
-fn tagRect(tag: []const u8) ?dvui.Rect {
-    const td = dvui.tagGet(tag) orelse return null;
+fn tagRect(stage: Stage, tag: []const u8) ?dvui.Rect {
+    const td = Input.tagData(stage, tag) orelse return null;
     if (!td.visible) return null;
     return dvui.windowRectScale().rectFromPhysical(td.rect);
 }
@@ -633,7 +616,7 @@ fn keysCard(player: *Player, op: Tape.Op, shown: Reveal) void {
 // ---- the transport bar ---------------------------------------------------------------------
 
 /// The bar's pieces, left to right: round buttons for chapter back, play/pause and chapter
-/// forward, the scrubber's capsule, and a round close — separate bubbles of one liquid glass.
+/// forward, the scrubber's capsule, and a round close - separate bubbles of one liquid glass.
 const Piece = enum { prev, play, next, track, close };
 /// Each piece's diameter, points; the track's width is what the bar leaves it.
 const piece_d = [_]f32{ 36, 44, 36, 44, 32 };
@@ -1072,8 +1055,8 @@ fn barTrack(player: *Player, tape: *const Tape, bounds: dvui.Rect, r: dvui.Rect,
     return line;
 }
 
-/// The bar opening when `want` turns true and closing when it turns false — 0 shut to 1 open,
-/// linear in time over `bar_grow_us` at the user's speed, the curves being `dome.pullFrom`'s —
+/// The bar opening when `want` turns true and closing when it turns false - 0 shut to 1 open,
+/// linear in time over `bar_grow_us` at the user's speed, the curves being `dome.pullFrom`'s -
 /// kept on `tr` from frame to frame. Wall time (`now_ns`, `Player.wallNs`): it answers the
 /// viewer's pointer, not the demo. Turned round part way, it carries on from as open as it is.
 fn barProgress(tr: *Player.Transport, now_ns: i128, want: bool) f32 {
@@ -1160,4 +1143,98 @@ fn drawSeeking(player: *Player, win: dvui.Rect) void {
     var done = r;
     done.w *= f;
     done.fill(.all(r.h / 2), .{ .color = .{ .color = theme().color(.highlight, .fill) }, .fade = 1 });
+}
+
+test "a caption's card is made of the material tooltips, menus and popovers wear" {
+    const fns = struct {
+        var blur: f32 = 0;
+        var glass_ready = false;
+        var tooltip: ?f32 = null;
+        var caption: ?f32 = null;
+        var popover: ?f32 = null;
+        var tooltip_field: ?bool = null;
+        var caption_field: ?bool = null;
+        var popover_field: ?bool = null;
+        var menu: ?core.widgets.BlurBackdrop.Pane = null;
+        var dialog: ?core.widgets.FloatingWindowWidget.Frost = null;
+        var popover_rect: dvui.Rect = .{};
+        fn frame() !dvui.App.Result {
+            core.widgets.LiquidField.readyInTest(glass_ready);
+            core.dialogs.publishStyle(.{ .blur = blur, .opacity = 0.5 });
+            menu = core.widgets.menuFrost();
+            dialog = core.dialogs.dialogFrost();
+            {
+                var box = dvui.box(@src(), .{}, core.dialogs.tooltipOptions(0));
+                defer box.deinit();
+                core.dialogs.tooltipSurface(box.data());
+                tooltip = radiusOf(box.data().id);
+                tooltip_field = fieldOf(box.data().id);
+                dvui.labelNoFmt(@src(), "tooltip", .{}, .{});
+            }
+            {
+                var box = dvui.box(@src(), .{}, cardOptions(.{}));
+                defer box.deinit();
+                glass(box.data(), .{ .x = 0.5, .y = 0.5 }, .{});
+                caption = radiusOf(box.data().id);
+                caption_field = fieldOf(box.data().id);
+                dvui.labelNoFmt(@src(), "caption", .{}, .{});
+            }
+            {
+                var p = core.widgets.Popover.init(@src(), .{ .rect = &popover_rect, .anchor = .{ .x = 20, .y = 20 } });
+                defer p.deinit();
+                popover = radiusOf(p.win.data().id);
+                popover_field = fieldOf(p.win.data().id);
+                dvui.labelNoFmt(@src(), "popover", .{}, .{});
+            }
+            return .ok;
+        }
+        fn radiusOf(id: dvui.Id) ?f32 {
+            const f = dvui.dataGetPtr(null, id, "_frost", core.widgets.BlurBackdrop) orelse return null;
+            return f.radius_px;
+        }
+        /// Whether the pane queued under `id` is the glass program's (a field) rather than the
+        /// rounded rect's; null when none was queued.
+        fn fieldOf(id: dvui.Id) ?bool {
+            const job = dvui.dataGetPtr(null, id, "_frost_job", core.widgets.BlurBackdrop.FrostJob) orelse return null;
+            if (job.rect.w <= 0) return null;
+            return job.field != null;
+        }
+        /// A window of its own each, so no frost is left over from the other's frame.
+        fn drawnAt(b: f32, ready: bool) !void {
+            var t = try dvui.testing.init(.{ .window_size = .{ .w = 400, .h = 300 } });
+            defer t.deinit();
+            blur = b;
+            glass_ready = ready;
+            popover_rect = .{};
+            // Frames, for the popover to open out of nothing.
+            for (0..4) |_| _ = try dvui.testing.step(frame);
+        }
+    };
+    // Blur on: all three are the dialog frost, at the style's radius.
+    try fns.drawnAt(20, false);
+    try std.testing.expectEqual(@as(?f32, 20), fns.tooltip);
+    try std.testing.expectEqual(fns.tooltip, fns.caption);
+    // A popover wears the same frost (its window forms the radius its own way).
+    try std.testing.expect(fns.popover != null);
+    // The menus ask for the same frost from the same place.
+    try std.testing.expectEqual(fns.dialog.?.radius, fns.menu.?.radius);
+    try std.testing.expectEqual(fns.dialog.?.mix, fns.menu.?.mix);
+    try std.testing.expectEqual(fns.dialog.?.tint, fns.menu.?.tint);
+    // Blur off and no glass program: a plain fill for all, no frost.
+    try fns.drawnAt(0, false);
+    try std.testing.expectEqual(@as(?f32, null), fns.tooltip);
+    try std.testing.expectEqual(@as(?f32, null), fns.caption);
+    try std.testing.expectEqual(@as(?f32, null), fns.popover);
+    try std.testing.expect(fns.menu == null);
+    // The glass program ready (blur on or off): every one is the rounded rect's frost the dialog
+    // style asks for. A caption that took its own Liquid Glass path (as it did before) queues
+    // the program's field here while the rest do not.
+    for ([_]f32{ 20, 0 }) |b| {
+        try fns.drawnAt(b, true);
+        try std.testing.expect(fns.menu != null);
+        try std.testing.expectEqual(@as(?bool, false), fns.tooltip_field);
+        try std.testing.expectEqual(@as(?bool, false), fns.caption_field);
+        try std.testing.expectEqual(@as(?bool, false), fns.popover_field);
+    }
+    try std.testing.expect(fns.menu.?.clear);
 }

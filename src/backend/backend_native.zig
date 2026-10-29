@@ -1,5 +1,6 @@
-//! Fizzy's own use of its window: the platform pieces any app gets (the backend package's `platform`
-//! — dialogs, files from the OS, gestures, chrome, geometry, the window monitor, the menu bar) with
+//! Fizzy's own use of its window: the platform pieces any app gets (the backend package's
+//! `platform` — dialogs, files from the OS, gestures, chrome, geometry, the window monitor,
+//! the menu bar) with
 //! fizzy's policy over them — where dialogs start, where geometry is kept (`layout.zon`), how high
 //! the titlebar strip is, what its menus hold and when their items are enabled. The web build has
 //! the same surface in `backend_web.zig`.
@@ -16,8 +17,9 @@ const KeybindSettings = @import("../editor/KeybindSettings.zig");
 const menu_model = @import("../editor/menu_model.zig");
 const AppInfo = @import("app").AppInfo;
 
-/// The window and platform pieces any app on these backends gets (the backend package's `platform`):
-/// dialogs, files from the OS, gestures, the window's chrome and state, Windows' title bar. What
+/// The window and platform pieces any app on these backends gets (the backend package's
+/// `platform`): dialogs, files from the OS, gestures, the window's chrome and state,
+/// Windows' title bar. What
 /// follows them here is fizzy's own use of them.
 const platform = @import("platform");
 
@@ -46,6 +48,11 @@ pub const setWindowStyle = platform.window.setStyle;
 pub const setTitlebarColor = platform.window.setBackground;
 pub const raiseWindow = platform.window.raise;
 pub const toggleFullscreen = platform.window.toggleFullscreen;
+
+/// Every desktop window can; only a browser page may not (`backend_web.zig`).
+pub fn fullscreenSupported() bool {
+    return true;
+}
 
 /// Whether fizzy draws its own title bar here (Windows, Linux): widgets in its strip register
 /// as interactive so the strip's drag does not take their clicks.
@@ -150,7 +157,10 @@ pub const WindowGlassLook = platform.window.WindowGlassLook;
 pub fn windowMaterialBase(win: *dvui.Window, fill: dvui.Color, opacity: f32, look: WindowGlassLook) ?dvui.Color {
     if (comptime builtin.target.os.tag != .macos) return null;
     if (comptime !@hasDecl(dvui.backend, "setWindowLook")) {
-        return if (platform.window.liquidGlassLook(win.backend.impl.window, look.native())) dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 } else null;
+        if (platform.window.liquidGlassLook(win.backend.impl.window, look.native())) {
+            return dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 };
+        }
+        return null;
     }
     dvui.backend.setWindowLook(fill, opacity);
     return dvui.backend.materialBase(win.backend.impl.effectiveMaterial(), fill);
@@ -195,7 +205,11 @@ fn layoutStoreSave(_: ?*anyopaque, g: platform.geometry.Geometry) void {
 /// pane mid-transition; a zoom without a Space keeps the full strip. Fizzy's titlebar heights
 /// over the window's state (`platform.macos_monitor.titlebarState`).
 pub fn titlebarStripHeight(win: *dvui.Window) f32 {
-    return platform.macos_monitor.titlebarStrip(win.backend.impl.window, Constants.titlebar_height, Constants.titlebar_top_buffer);
+    return platform.macos_monitor.titlebarStrip(
+        win.backend.impl.window,
+        Constants.titlebar_height,
+        Constants.titlebar_top_buffer,
+    );
 }
 
 // ---- The native menu bar: fizzy's menus (`menu_model`) on the platform's (`platform.menu`) ----
@@ -231,7 +245,9 @@ const native_menus: []const platform.menu.Menu = blk: {
                 n += 1;
             },
             .command => |cmd| {
-                entries[n] = .{ .command = .{ .title = cmd.title.resolveStatic(), .tag = tag, .symbol = cmd.sf_symbol } };
+                entries[n] = .{
+                    .command = .{ .title = cmd.title.resolveStatic(), .tag = tag, .symbol = cmd.sf_symbol },
+                };
                 n += 1;
                 tag += 1;
             },
@@ -324,9 +340,9 @@ fn menuTitle(_: ?*anyopaque, ref: platform.menu.Ref) ?[*:0]const u8 {
 pub fn rebuildDynamicNativeMenus() void {
     if (builtin.target.os.tag != .macos) return;
     const host = &fizzy.editor().app.host;
-    var menus: std.ArrayListUnmanaged(platform.menu.ExtraMenu) = .empty;
+    var menus: std.ArrayList(platform.menu.ExtraMenu) = .empty;
     defer menus.deinit(alloc());
-    var items: std.ArrayListUnmanaged(platform.menu.ExtraItem) = .empty;
+    var items: std.ArrayList(platform.menu.ExtraItem) = .empty;
     defer items.deinit(alloc());
     for (host.menus.items) |mc| {
         if (mc.hidden) continue;
@@ -334,7 +350,12 @@ pub fn rebuildDynamicNativeMenus() void {
     }
     for (host.native_menu_items.items, 0..) |ni, i| {
         if (ni.hidden) continue;
-        items.append(alloc(), .{ .menu_id = ni.parent_menu_id, .title = ni.title, .symbol = ni.sf_symbol, .tag = @intCast(i) }) catch {};
+        items.append(alloc(), .{
+            .menu_id = ni.parent_menu_id,
+            .title = ni.title,
+            .symbol = ni.sf_symbol,
+            .tag = @intCast(i),
+        }) catch {};
     }
     platform.menu.setExtras(menus.items, items.items);
     // The items are built with no key equivalent; this is what puts the keymap's chords on them.

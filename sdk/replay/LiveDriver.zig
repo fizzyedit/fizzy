@@ -2,12 +2,12 @@
 //! landed. The other way to play a tape besides a demo, and a driver of its own rather than a
 //! mode of the `Player` (`plans/AGENTS_PLAN.md`, "Driving a live tape"):
 //!
-//! |                       | a demo (`Player`)                   | a live tape (this)                |
-//! |-----------------------|-------------------------------------|-----------------------------------|
-//! | starts from           | a keyframe; the session set aside   | the app as it is (`Check.live`)   |
-//! | pacing                | the tape's authored times           | each op once the app has settled  |
-//! | a person steps in     | pause, and replay on resume         | stop, and say before which op     |
-//! | going back            | seek: snapshots, keyframes          | none — undo, through commands     |
+//! |  | a demo (`Player`) | a live tape (this) |
+//! | --- | --- | --- |
+//! | starts from | a keyframe; the session set aside | the app as it is (`Check.live`) |
+//! | pacing | the tape's authored times | each op once the app has settled |
+//! | a person steps in | pause, and replay on resume | stop, and say before which op |
+//! | going back | seek: snapshots, keyframes | none — undo, through commands |
 //!
 //! Consumers: a plugin's tests, a macro, a scripted tutorial, anything driving fizzy the way a
 //! person does. Plugins reach it through the `automation` service (`Service`).
@@ -18,13 +18,13 @@
 //! live tape while a demo is loaded, and fizzy's `Demo` a demo while a live tape plays).
 //!
 //! **Pacing.** Authored times are ignored: each frame the driver asks the sequencer for the next
-//! moment anything happens (`Sequencer.nextAt`) and applies it, and goes on only while the stage
-//! is idle — nothing it was asked to load still loading. Except a drag: a glide with a button
-//! held plays at its authored pace, a frame at a time, as a hand moves (`drag_step_ms`). The sequencer still yields after
-//! everything the app has to draw before the next op can land (a press, a key, the end of a
-//! glide), so a click on a menu the last click opened finds it open. A tape's own waits hold as
-//! they do in a demo, and one that gives up stops the tape: a live tape that has lost its place
-//! is better stopped and reported than carried on blind.
+//! moment anything happens (`Sequencer.nextAt`) and applies it, and goes on only while the stage is
+//! idle — nothing it was asked to load still loading. Except a drag: a glide with a button held
+//! plays at its authored pace, a frame at a time, as a hand moves (`drag_step_ms`). The sequencer
+//! still yields after everything the app has to draw before the next op can land (a press, a key,
+//! the end of a glide), so a click on a menu the last click opened finds it open. A tape's own
+//! waits hold as they do in a demo, and one that gives up stops the tape: a live tape that has lost
+//! its place is better stopped and reported than carried on blind.
 //!
 //! **Interruption.** A real click, tap, scroll, key or typed text stops it, and the person's
 //! input goes on to do what they meant. Real pointer motion is held off while it plays, as a
@@ -38,6 +38,7 @@ const std = @import("std");
 const dvui = @import("dvui");
 const Tape = @import("tape").Tape;
 const Sequencer = @import("tape").Sequencer;
+const wall = @import("wall.zig");
 const Stage = @import("Stage.zig");
 const Input = @import("Input.zig");
 const anchor = @import("anchor.zig");
@@ -46,6 +47,8 @@ stage: Stage,
 owned: ?Tape.Owned = null,
 seq: Sequencer = undefined,
 input: Input = .{},
+/// The motion clock's debt at the last frame (`wall.gapMs`).
+debt_seen_ns: ?i128 = null,
 /// How the last tape ended; null while one plays, or before any has.
 outcome: ?Outcome = null,
 /// A wait gave up during this frame's advance: the op index it gave up at.
@@ -150,7 +153,7 @@ pub fn frame(self: *LiveDriver) void {
     dvui.refresh(null, @src(), null);
     if (!self.seq.holding and !self.stage.idle()) return;
 
-    const wall_ms = @min(dvui.secondsSinceLastFrame() * 1000, 1000);
+    const wall_ms = @min(wall.gapMs(&self.debt_seen_ns), 1000);
     // A glide with a button held is a drag: played at its own pace, a frame's worth at a time, as
     // a hand moves, never in one jump. Jumped to its end it reached the app as one motion event,
     // and a drag needs the pointer past its threshold first and then moving — a floating window
@@ -209,15 +212,15 @@ const sink_vtable: Sequencer.Sink.VTable = .{
     .command = command,
     .keyframe = keyframe,
     .holds = holds,
-    .timedOut = timedOut,
+    .failed = failed,
 };
 
 fn from(ctx: *anyopaque) *LiveDriver {
     return @ptrCast(@alignCast(ctx));
 }
 
-fn locate(_: *anyopaque, target: Tape.Target) ?Sequencer.Point {
-    return Input.targetPoint(target);
+fn locate(ctx: *anyopaque, target: Tape.Target) ?Sequencer.Point {
+    return Input.targetPoint(from(ctx).stage, target);
 }
 
 fn moveTo(ctx: *anyopaque, pt: Sequencer.Point) void {
@@ -257,18 +260,20 @@ fn command(ctx: *anyopaque, cmd: Tape.Command) void {
 fn keyframe(_: *anyopaque, _: *const Tape.Keyframe) void {}
 
 fn holds(ctx: *anyopaque, until: Tape.Until) bool {
-    return Input.tagHolds(until) orelse from(ctx).stage.idle();
+    return Input.tagHolds(from(ctx).stage, until) orelse from(ctx).stage.idle();
 }
 
-fn timedOut(ctx: *anyopaque, until: Tape.Until) void {
+fn failed(ctx: *anyopaque, failure: Sequencer.Failure) void {
     const self = from(ctx);
-    // The sequencer has not moved past the wait yet: its cursor is the wait.
-    self.gave_up_at = self.seq.cursor;
+    self.gave_up_at = failure.op;
     // Reported in `outcome`, so only noted here.
     const name = if (self.owned) |o| o.tape.name else "?";
-    switch (until) {
-        .idle => dvui.log.info("live tape '{s}': gave up waiting for the app to settle", .{name}),
-        .shown => |tag| dvui.log.info("live tape '{s}': gave up waiting for '{s}' to be drawn", .{ name, tag }),
-        .gone => |tag| dvui.log.info("live tape '{s}': gave up waiting for '{s}' to go", .{ name, tag }),
+    switch (failure.what) {
+        .wait => |until| switch (until) {
+            .idle => dvui.log.info("live tape '{s}': gave up waiting for the app to settle", .{name}),
+            .shown => |tag| dvui.log.info("live tape '{s}': gave up waiting for '{s}' to be drawn", .{ name, tag }),
+            .gone => |tag| dvui.log.info("live tape '{s}': gave up waiting for '{s}' to go", .{ name, tag }),
+        },
+        .target => |t| dvui.log.info("live tape '{s}': '{s}' was never drawn to move to", .{ name, t.tag }),
     }
 }

@@ -19,6 +19,7 @@ const backend = @import("backend");
 const c = backend.c;
 const titlebar = @import("titlebar.zig");
 const wayland_blur = @import("wayland_blur.zig");
+const x11_blur = @import("x11_blur.zig");
 
 /// The margins round the frame for its shadow, in window coordinates (points).
 pub const Insets = struct { left: f32 = 0, top: f32 = 0, right: f32 = 0, bottom: f32 = 0 };
@@ -69,20 +70,34 @@ pub fn frameInsets(window: *c.SDL_Window) Insets {
 pub fn blurOffered(window: *c.SDL_Window) bool {
     if (comptime builtin.target.os.tag != .linux) return false;
     const props = c.SDL_GetWindowProperties(window);
-    const display = c.SDL_GetPointerProperty(props, c.SDL_PROP_WINDOW_WAYLAND_DISPLAY_POINTER, null) orelse return false;
-    return wayland_blur.offered(display);
+    if (c.SDL_GetPointerProperty(props, c.SDL_PROP_WINDOW_WAYLAND_DISPLAY_POINTER, null)) |display| return wayland_blur.offered(display);
+    const display = c.SDL_GetPointerProperty(props, c.SDL_PROP_WINDOW_X11_DISPLAY_POINTER, null) orelse return false;
+    return x11_blur.offered(display);
 }
 
 /// The desktop's blur behind the window's frame (`wayland_blur`), inside the margin its shadow is
 /// drawn in (`frameInsets`), its corners rounded by `radius` points — or none, null. Whether the
 /// compositor blurs behind windows at all: Wayland with `ext-background-effect-v1` (GNOME 51,
-/// Plasma 6.7, niri) or KDE's older `org_kde_kwin_blur`. Not X11, nor a compositor without either.
+/// Plasma 6.7, niri) or KDE's older `org_kde_kwin_blur`; X11 under KWin (`x11_blur`). Not GNOME's
+/// X11 session, nor a compositor without any.
 /// Cheap to call every frame; it is sent to the compositor only when it changes, and taken with
 /// the frame presented next.
 pub fn blurBehind(window: *c.SDL_Window, radius: ?f32) bool {
     if (comptime builtin.target.os.tag != .linux) return false;
     const props = c.SDL_GetWindowProperties(window);
-    const display = c.SDL_GetPointerProperty(props, c.SDL_PROP_WINDOW_WAYLAND_DISPLAY_POINTER, null) orelse return false;
+    const display = c.SDL_GetPointerProperty(props, c.SDL_PROP_WINDOW_WAYLAND_DISPLAY_POINTER, null) orelse {
+        const xd = c.SDL_GetPointerProperty(props, c.SDL_PROP_WINDOW_X11_DISPLAY_POINTER, null) orelse return false;
+        // SDL keeps no frame margin on X11: the frame is the window, in pixels.
+        const xwindow: c_ulong = @intCast(c.SDL_GetNumberProperty(props, c.SDL_PROP_WINDOW_X11_WINDOW_NUMBER, 0));
+        if (xwindow == 0) return false;
+        const want: ?x11_blur.Want = if (radius) |r| want: {
+            var w: c_int = 0;
+            var h: c_int = 0;
+            _ = c.SDL_GetWindowSizeInPixels(window, &w, &h);
+            break :want .{ .frame = .{ .w = w, .h = h }, .radius = r * c.SDL_GetWindowPixelDensity(window) };
+        } else null;
+        return x11_blur.behind(xd, xwindow, want);
+    };
     const surface = c.SDL_GetPointerProperty(props, c.SDL_PROP_WINDOW_WAYLAND_SURFACE_POINTER, null) orelse return false;
     const want: ?wayland_blur.Want = if (radius) |r| want: {
         // The surface is the window SDL reports (points), the frame and its shadow's margin.

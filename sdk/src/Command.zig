@@ -133,6 +133,7 @@ pub const Call = struct {
     }
 
     /// Return `value` (anything `std.zon.stringify` can write) as the command's result.
+    // anytype: Command return values have command-specific shapes serialized to ZON.
     pub fn returns(self: *Call, value: anytype) error{OutOfMemory}!void {
         var aw: std.Io.Writer.Allocating = .init(self.arena);
         std.zon.stringify.serialize(value, .{}, &aw.writer) catch return error.OutOfMemory;
@@ -221,7 +222,12 @@ pub fn Params(comptime T: type) type {
             const text = std.mem.trim(u8, call.args, " \t\r\n");
             const source = try call.arena.dupeSentinel(u8, if (text.len == 0) ".{}" else text, 0);
             var diag: std.zon.parse.Diagnostics = undefined;
-            return std.zon.parse.fromSlice(Args, .{ .gpa = call.arena, .arena = call.arena, .source = source, .diagnostics = &diag }) catch |err| switch (err) {
+            return std.zon.parse.fromSlice(Args, .{
+                .gpa = call.arena,
+                .arena = call.arena,
+                .source = source,
+                .diagnostics = &diag,
+            }) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 error.ParseZon => {
                     call.bad_args = true;

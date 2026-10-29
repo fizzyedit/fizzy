@@ -93,8 +93,8 @@ const Branch = struct {
     /// plugin's name floats that plugin to the top.
     score: f64 = 0,
     tie: usize = 0,
-    leaves: std.ArrayListUnmanaged(Leaf) = .empty,
-    children: std.ArrayListUnmanaged(Branch) = .empty,
+    leaves: std.ArrayList(Leaf) = .empty,
+    children: std.ArrayList(Branch) = .empty,
     /// Set for plugin branches; drives which `drawField` source the leaves index into.
     schema: ?*const settings.SettingsSchema = null,
     /// Set for fizzy's own group branches.
@@ -149,8 +149,8 @@ fn lowerLeaf(_: void, a: Leaf, b: Leaf) bool {
 
 /// Build the surviving tree for `query`. Everything is arena-allocated: this is rebuilt from
 /// scratch every frame, which is cheap (tens of leaves) and keeps zero state to invalidate.
-fn collect(arena: std.mem.Allocator, query: *const fuzzy.Query) std.ArrayListUnmanaged(Branch) {
-    var roots: std.ArrayListUnmanaged(Branch) = .empty;
+fn collect(arena: std.mem.Allocator, query: *const fuzzy.Query) std.ArrayList(Branch) {
+    var roots: std.ArrayList(Branch) = .empty;
     const editor = fizzy.editor();
 
     // --- fizzy's own settings, one child branch per category
@@ -264,12 +264,12 @@ pub fn draw() !void {
     // anywhere a region accepts it — a split of the main area as readily as the sidebar rail —
     // and only the sidebar happened to wrap what it shows in a scroll area. Everywhere else the
     // tree simply expanded past the bottom edge with no way to reach the rest of it.
-    var scroll = dvui.scrollArea(@src(), .{ .vertical_bar = .auto_overlay }, .{
+    var scroll = core.widgets.ScrollArea.init(@src(), .{ .vertical_bar = .auto_overlay }, .{
         .expand = .both,
         .background = false,
     });
     defer scroll.deinit();
-    defer core.widgets.scrollShadows(scroll);
+    defer core.widgets.scrollShadows(scroll.area);
 
     // Cap the pane at that viewport's width.
     //
@@ -396,7 +396,7 @@ fn drawBranch(
         try drawLeaves(branch, query);
     }
 
-    if (!searching) setOpen(branch.key, b.expanded);
+    if (!searching) if (b.requested) |open| setOpen(branch.key, open);
 }
 
 /// One setting row: the setting name (match-highlighted while searching), then the control body.

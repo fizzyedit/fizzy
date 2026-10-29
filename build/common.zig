@@ -25,7 +25,8 @@ pub fn installDirPath(dir: std.Build.InstallDir) std.Build.LazyPath {
     };
 }
 
-/// Installed artifacts go under `zig-out/<this>/…` so `packageall` and parallel targets never clobber each other.
+/// Installed artifacts go under `zig-out/<this>/…` so `packageall` and parallel targets never
+/// clobber each other.
 pub fn zigOutSubdirForTarget(b: *std.Build, rt: std.Build.ResolvedTarget) []const u8 {
     const arch_name: []const u8 = switch (rt.result.cpu.arch) {
         .x86_64 => "x86-64",
@@ -82,7 +83,11 @@ fn resolveMacosSdkPath(b: *std.Build, explicit: ?[]const u8) ![]const u8 {
     }
     switch (run.term) {
         .exited => |code| if (code != 0) {
-            std.log.err("SDL on macOS: explicit -Dtarget=*-macos needs an SDK path. xcrun exited with code {d}. Install Xcode Command Line Tools or pass -Dmacos-sdk=<path>.", .{code});
+            std.log.err(
+                "SDL on macOS: explicit -Dtarget=*-macos needs an SDK path. xcrun exited with " ++
+                    "code {d}. Install Xcode Command Line Tools or pass -Dmacos-sdk=<path>.",
+                .{code},
+            );
             return error.MacosSdkPath;
         },
         else => {
@@ -95,7 +100,11 @@ fn resolveMacosSdkPath(b: *std.Build, explicit: ?[]const u8) ![]const u8 {
     return b.dupePath(path);
 }
 
-pub fn macosSdlPathsForExplicitTarget(b: *std.Build, target: std.Build.ResolvedTarget, macos_sdk: ?[]const u8) !?MacosSdlPaths {
+pub fn macosSdlPathsForExplicitTarget(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    macos_sdk: ?[]const u8,
+) !?MacosSdlPaths {
     if (target.result.os.tag != .macos) return null;
     if (b.graph.host.result.os.tag != .macos) return null;
     if (target.query.isNative()) return null;

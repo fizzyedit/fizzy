@@ -135,17 +135,28 @@ pub fn deinit(self: *Client) void {
     if (self.socket_path) |p| self.gpa.free(p);
 }
 
-/// Where fizzy would be installed on `env.os`, likeliest first; not `$PATH` (`onPath`). Touches nothing.
+/// Where fizzy would be installed on `env.os`, likeliest first; not `$PATH` (`onPath`). Touches
+/// nothing.
 pub fn candidates(arena: std.mem.Allocator, identity: Identity, env: Env) error{OutOfMemory}![]const Install {
     var list: std.ArrayList(Install) = .empty;
     const sep: []const u8 = if (env.os == .windows) "\\" else "/";
     switch (env.os) {
         .macos => {
-            const roots = [_]?[]const u8{ "/Applications", if (env.home) |h| try join(arena, "/", &.{ h, "Applications" }) else null };
+            const roots = [_]?[]const u8{
+                "/Applications",
+                if (env.home) |h| try join(
+                    arena,
+                    "/",
+                    &.{ h, "Applications" },
+                ) else null,
+            };
             for (roots) |root_opt| {
                 const root = root_opt orelse continue;
                 const app = try std.fmt.allocPrint(arena, "{s}/{s}.app", .{ root, identity.display_name });
-                try list.append(arena, .{ .exe = try join(arena, "/", &.{ app, "Contents/MacOS", identity.name }), .bundle = app });
+                try list.append(
+                    arena,
+                    .{ .exe = try join(arena, "/", &.{ app, "Contents/MacOS", identity.name }), .bundle = app },
+                );
             }
         },
         .windows => if (env.local_app_data) |base| {
@@ -209,7 +220,11 @@ fn lookupSystem(io: Io, arena: std.mem.Allocator, identity: Identity, env: Env) 
     switch (env.os) {
         .macos => {
             if (std.mem.findAny(u8, identity.bundle_id, "\"\\") != null) return null;
-            const query = std.fmt.allocPrint(arena, "kMDItemCFBundleIdentifier == \"{s}\"", .{identity.bundle_id}) catch return null;
+            const query = std.fmt.allocPrint(
+                arena,
+                "kMDItemCFBundleIdentifier == \"{s}\"",
+                .{identity.bundle_id},
+            ) catch return null;
             const out = runCapture(io, arena, &.{ "/usr/bin/mdfind", query }) orelse return null;
             const bundle = std.mem.trim(u8, firstLine(out), " \t\r");
             if (bundle.len == 0) return null;
@@ -217,7 +232,11 @@ fn lookupSystem(io: Io, arena: std.mem.Allocator, identity: Identity, env: Env) 
             return if (exists(io, exe)) .{ .exe = exe, .bundle = bundle } else null;
         },
         .windows => for ([_][]const u8{ "HKCU", "HKLM" }) |hive| {
-            const key = std.fmt.allocPrint(arena, "{s}\\Software\\Microsoft\\Windows\\CurrentVersion\\App Paths\\{s}.exe", .{ hive, identity.name }) catch return null;
+            const key = std.fmt.allocPrint(
+                arena,
+                "{s}\\Software\\Microsoft\\Windows\\CurrentVersion\\App Paths\\{s}.exe",
+                .{ hive, identity.name },
+            ) catch return null;
             const out = runCapture(io, arena, &.{ "reg", "query", key, "/ve" }) orelse continue;
             const exe = parseRegValue(out) orelse continue;
             if (exists(io, exe)) return .{ .exe = exe };
@@ -241,7 +260,11 @@ fn firstLine(text: []const u8) []const u8 {
 
 /// Stdout of a run that exited 0, or null.
 fn runCapture(io: Io, arena: std.mem.Allocator, argv: []const []const u8) ?[]const u8 {
-    const result = std.process.run(arena, io, .{ .argv = argv, .timeout = .{ .duration = .{ .raw = .fromSeconds(5), .clock = .awake } } }) catch return null;
+    const result = std.process.run(
+        arena,
+        io,
+        .{ .argv = argv, .timeout = .{ .duration = .{ .raw = .fromSeconds(5), .clock = .awake } } },
+    ) catch return null;
     return switch (result.term) {
         .exited => |code| if (code == 0) result.stdout else null,
         else => null,
@@ -254,7 +277,11 @@ pub fn controlPath(io: Io, arena: std.mem.Allocator, install: Install, profile: 
         &.{ install.exe, "--control-path", "--profile", p }
     else
         &.{ install.exe, "--control-path" };
-    const result = std.process.run(arena, io, .{ .argv = argv, .timeout = .{ .duration = .{ .raw = .fromSeconds(10), .clock = .awake } } }) catch |err| return spawnError(err);
+    const result = std.process.run(
+        arena,
+        io,
+        .{ .argv = argv, .timeout = .{ .duration = .{ .raw = .fromSeconds(10), .clock = .awake } } },
+    ) catch |err| return spawnError(err);
     // A fizzy that predates `--control-path` starts as an editor instead: no path to read.
     const ok = switch (result.term) {
         .exited => |code| code == 0,
@@ -358,7 +385,10 @@ fn timeoutMs(ms: u32) Io.Timeout {
 /// `timeout` passed first.
 pub fn readSome(io: Io, stream: Io.net.Stream, buf: []u8, timeout: Io.Timeout) error{Closed}!?usize {
     var data: [1][]u8 = .{buf};
-    const result = io.operateTimeout(.{ .net_read = .{ .socket_handle = stream.socket.handle, .data = &data } }, timeout) catch |err| switch (err) {
+    const result = io.operateTimeout(
+        .{ .net_read = .{ .socket_handle = stream.socket.handle, .data = &data } },
+        timeout,
+    ) catch |err| switch (err) {
         error.Timeout => return null,
         else => return error.Closed,
     };
@@ -428,14 +458,23 @@ pub fn connect(self: *Client) Error!void {
 /// `GET /remote` on `stream`, then the hellos. Takes ownership of `stream`.
 fn upgrade(self: *Client, stream: Io.net.Stream, deadline: Deadline) Error!void {
     errdefer stream.close(self.io);
-    try writeAll(self.io, stream, "GET /remote HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\nUpgrade: " ++ upgrade_token ++ "\r\n\r\n");
+    try writeAll(
+        self.io,
+        stream,
+        "GET /remote HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\nUpgrade: " ++ upgrade_token ++ "\r\n\r\n",
+    );
 
     var head: [2048]u8 = undefined;
     var len: usize = 0;
     const body_at = while (true) {
         if (std.mem.find(u8, head[0..len], "\r\n\r\n")) |at| break at + 4;
         if (len == head.len) return error.Protocol;
-        const n = try readSome(self.io, stream, head[len..], timeoutMs(deadline.remainingMs())) orelse return error.TimedOut;
+        const n = try readSome(
+            self.io,
+            stream,
+            head[len..],
+            timeoutMs(deadline.remainingMs()),
+        ) orelse return error.TimedOut;
         if (n == 0) return error.Closed;
         len += n;
     };
@@ -509,7 +548,8 @@ pub fn connected(self: *const Client) bool {
 }
 
 /// Check `msg` against the conversation's rules and send it. A message the rules refuse is the
-/// caller's mistake: it is not sent and the stream stays open. A write that fails closes the client.
+/// caller's mistake: it is not sent and the stream stays open. A write that fails closes the
+/// client.
 pub fn send(self: *Client, msg: message.Message) Error!void {
     const ep = &(self.endpoint orelse return error.Closed);
     if (self.stream == null) return self.closeStale();
@@ -598,7 +638,11 @@ test candidates {
     const mac_path = try onPath(arena, id, .{ .os = .macos, .path = "/usr/bin:/opt/bin" });
     try std.testing.expectEqualStrings("/opt/bin/fizzy", mac_path[1].exe);
 
-    const win = try candidates(arena, id, .{ .os = .windows, .local_app_data = "C:\\Users\\a\\AppData\\Local", .path = "C:\\bin;D:\\tools" });
+    const win = try candidates(
+        arena,
+        id,
+        .{ .os = .windows, .local_app_data = "C:\\Users\\a\\AppData\\Local", .path = "C:\\bin;D:\\tools" },
+    );
     try std.testing.expectEqualStrings("C:\\Users\\a\\AppData\\Local\\fizzy\\current\\fizzy.exe", win[0].exe);
     const win_path = try onPath(arena, id, .{ .os = .windows, .path = "C:\\bin;D:\\tools" });
     try std.testing.expectEqualStrings("D:\\tools\\fizzy.exe", win_path[1].exe);
@@ -607,11 +651,16 @@ test candidates {
     try std.testing.expectEqualStrings("/home/a/.local/share/paint/current/paint", linux[0].exe);
     try std.testing.expectEqualStrings("/home/a/Applications/paint.AppImage", linux[2].exe);
     try std.testing.expectEqual(@as(usize, 3), linux.len);
-    try std.testing.expectEqualStrings("/usr/bin/paint", (try onPath(arena, .{ .name = "paint" }, .{ .os = .linux, .path = "/usr/bin" }))[0].exe);
+    try std.testing.expectEqualStrings(
+        "/usr/bin/paint",
+        (try onPath(arena, .{ .name = "paint" }, .{ .os = .linux, .path = "/usr/bin" }))[0].exe,
+    );
 }
 
 test parseRegValue {
-    const out = "\r\nHKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\App Paths\\fizzy.exe\r\n    (Default)    REG_SZ    C:\\Users\\a\\AppData\\Local\\fizzy\\current\\fizzy.exe\r\n";
+    const out = "\r\nHKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion" ++
+        "\\App Paths\\fizzy.exe\r\n    (Default)    REG_SZ    " ++
+        "C:\\Users\\a\\AppData\\Local\\fizzy\\current\\fizzy.exe\r\n";
     try std.testing.expectEqualStrings("C:\\Users\\a\\AppData\\Local\\fizzy\\current\\fizzy.exe", parseRegValue(out).?);
     try std.testing.expect(parseRegValue("ERROR: The system was unable to find the specified registry key") == null);
 }

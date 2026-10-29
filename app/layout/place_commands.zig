@@ -1,6 +1,6 @@
 //! What a place's menu does to the place (`Picker`'s header): split it, clear it, put it back
 //! to the layout's default, delete it. Each is a command, so the palette, a keymap, a tape or an
-//! agent reaches it as the menu's button does — the button runs the command.
+//! agent reaches it as the menu's button does - the button runs the command.
 //!
 //! A command only asks: it writes `Picker.request`, and the picker carries the request out in
 //! its next draw, where the live `Layout` is. A command may run outside a frame (a control
@@ -32,6 +32,8 @@ pub const Command = struct {
 pub const all = [_]Command{
     .{ .id = "layout.place.splitRight", .title = "Place: Split Right", .action = .split_right, .icon = icons.tvg.lucide.@"columns-2" },
     .{ .id = "layout.place.splitDown", .title = "Place: Split Down", .action = .split_down, .icon = icons.tvg.lucide.@"rows-2" },
+    .{ .id = "layout.place.split", .title = "Place: Split", .action = .split, .icon = icons.tvg.lucide.@"square-split-horizontal" },
+    .{ .id = "layout.place.adaptive", .title = "Place: Split Follows the Room", .action = .adaptive, .icon = icons.tvg.lucide.@"rotate-cw-square" },
     .{ .id = "layout.place.clear", .title = "Place: Clear", .action = .clear, .icon = icons.tvg.lucide.eraser },
     .{ .id = "layout.place.reset", .title = "Place: Reset to the Layout's Default", .action = .reset, .icon = icons.tvg.lucide.@"rotate-ccw" },
     .{ .id = "layout.place.delete", .title = "Place: Delete", .action = .delete, .icon = icons.tvg.lucide.@"trash-2" },

@@ -2,10 +2,12 @@
 //! the window's materials, the plugins everything is made of, and the history kept of every change
 //! — about a minute, in chapters a viewer can jump between (the guides view lists them).
 //!
-//! One keyframe, at the start: each chapter carries on in the window the last one left, a split, a
-//! float and all, rather than cutting it back to a fresh one. A snapshot holds the window's
+//! One keyframe, at the start, which leaves the window as the person has it: each chapter carries on
+//! in the window the last one left, a split, a float and all, rather than cutting it back to a
+//! fresh one. The explorer is pressed open only if it is not showing already. A snapshot holds the window's
 //! arrangement too (`Demo.Snapshot`), so a seek back across a split or a float puts the window
 //! back as it was then, rather than replaying from the keyframe.
+const std = @import("std");
 const Tape = @import("tape").Tape;
 const Script = @import("tape").Script;
 const catalog = @import("catalog.zig");
@@ -41,7 +43,7 @@ const files = [_]Tape.File{
     .{ .path = "notes/ideas.md", .text = ideas },
 };
 
-/// The tour's folder, cut to: its three files open as tabs, README in front, nothing else showing.
+/// The tour's folder: its three files open as tabs in the person's current group, README in front.
 fn scene(s: *Script) !void {
     try s.keyframe(.{
         .root = "demo://tour",
@@ -72,8 +74,23 @@ pub fn build(s: *Script) !void {
     try s.chapter("Tabs");
     try s.caption("Tabs go where you drag them.", .{ .near = try catalog.tab(s, "README.md") });
     try s.drag(.{ .tag = try catalog.tab(s, "README.md") }, .{ .tag = try catalog.tab(s, "src/main.zig"), .x = 0.2 }, .{});
-    try s.caption("Drop one on the editor's edge, and it opens beside the others.", .{});
-    try s.drag(.{ .tag = try catalog.tab(s, "src/main.zig") }, .{ .tag = "drop:right" }, .{ .via = .{ .tag = catalog.documents } });
+    if (s.compact) {
+        // Too small for two documents side by side: each is a card, and a tap brings one forward.
+        try s.caption("Here every document is a card. Tap a tab to bring it forward.", .{ .near = try catalog.tab(s, "src/main.zig") });
+        try s.click(.{ .tag = try catalog.tab(s, "src/main.zig") }, .{});
+    } else {
+        // A person's window may be too small to split once the explorer is open: a drop there
+        // would only make a card, so the step is left out.
+        try s.waitIdle(.{});
+        const room = try s.skipIfGone("workbench.beside-room");
+        try s.caption("Drop one on the editor's edge, and it opens beside the others.", .{});
+        try s.drag(.{ .tag = try catalog.tab(s, "src/main.zig") }, .{ .tag = "drop:beside" }, .{ .via = .{ .tag = catalog.documents } });
+        s.endSkip(room);
+        const cards = try s.skipIfShown("workbench.beside-room");
+        try s.caption("Here every document is a card. Tap a tab to bring it forward.", .{ .near = try catalog.tab(s, "src/main.zig") });
+        try s.click(.{ .tag = try catalog.tab(s, "src/main.zig") }, .{});
+        s.endSkip(cards);
+    }
     try s.waitFor(try catalog.editor(s, "src/main.zig"), .{});
     s.pause(900);
 
@@ -81,52 +98,69 @@ pub fn build(s: *Script) !void {
     if (s.compact) {
         // A phone has no rail and no Sidebar place: the bar's icon opens the explorer as a sheet.
         try s.caption("The bar opens the explorer, a sheet over the documents.", .{ .near = catalog.files_tab });
+        // A sheet the person already has open is left as it is: this is theirs to show.
+        try s.waitIdle(.{});
+        const sheet = try s.skipIfShown(try catalog.place(s, "role:explorer"));
         try s.click(.{ .tag = catalog.files_tab }, .{});
         try s.waitFor(try catalog.file(s, "README.md"), .{});
         s.pause(1800);
         try s.click(.{ .tag = catalog.files_tab }, .{});
         s.pause(900);
+        s.endSkip(sheet);
     } else {
         try s.caption("The rail opens the explorer, in a place of its own beside the documents.", .{ .near = catalog.files_icon });
+        try s.waitIdle(.{});
+        const rail = try s.skipIfShown(try catalog.place(s, "role:explorer"));
         try s.click(.{ .tag = catalog.files_icon }, .{});
+        s.endSkip(rail);
         try s.waitFor(try catalog.file(s, "README.md"), .{});
         s.pause(900);
         try s.caption("Every place has a corner. Its button chooses what the place shows…", .{});
-        try catalog.cornerButton(s, "Sidebar");
-        try s.click(try catalog.corner(s, "Sidebar"), .{ .move_ms = 0 });
-        try s.waitFor("region.menu.split-down:Sidebar", .{});
+        try catalog.cornerButton(s, "role:explorer");
+        try s.click(try catalog.corner(s, "role:explorer"), .{ .move_ms = 0 });
+        try s.waitFor("region.menu.split-down:role:explorer", .{});
         s.pause(1200);
-        try s.caption("…and splits it, for two views one above the other.", .{ .near = "region.menu.split-down:Sidebar" });
-        try s.click(.{ .tag = "region.menu.split-down:Sidebar" }, .{});
+        try s.caption("…and splits it, for two views one above the other.", .{ .near = "region.menu.split-down:role:explorer" });
+        try s.click(.{ .tag = "region.menu.split-down:role:explorer" }, .{});
         s.pause(1200);
 
         try s.chapter("Floats");
         try s.caption("Carry a view from its corner and drop it on the middle of its own place: it floats.", .{});
-        try catalog.cornerButton(s, "Sidebar");
-        try s.drag(try catalog.corner(s, "Sidebar"), .{ .tag = try catalog.place(s, "Sidebar") }, .{ .ms = 900 });
+        try catalog.cornerButton(s, "role:explorer");
+        try s.drag(try catalog.corner(s, "role:explorer"), .{ .tag = try catalog.place(s, "role:explorer") }, .{ .ms = 900 });
         try s.waitFor(try catalog.place(s, "Float 1"), .{});
+        try s.waitFor("float-header:Float 1", .{});
         try s.caption("A float goes wherever you carry it by its header.", .{ .near = "float-header:Float 1" });
         try s.drag(.{ .tag = "float-header:Float 1" }, .{ .tag = catalog.documents, .x = 0.45, .y = 0.15 }, .{ .ms = 1000 });
         s.pause(600);
     }
 
     try s.chapter("Materials");
-    try s.commandWith("fizzy.windowMaterial", .{ .kind = "liquid" });
-    try s.caption("Over the code you can see what it is made of. The window, its floats, menus and dialogs are one material, Liquid Glass here…", .{ .near = floatNear(s, "float-header:Float 1") });
-    s.pause(1800);
-    try s.caption("…or frosted…", .{ .near = floatNear(s, "float-header:Float 1") });
-    try s.commandWith("fizzy.windowMaterial", .{ .kind = "frost" });
-    s.pause(1400);
-    try s.caption("…blurred…", .{ .near = floatNear(s, "float-header:Float 1") });
-    try s.commandWith("fizzy.windowMaterial", .{ .kind = "blur" });
-    s.pause(1400);
-    try s.caption("…clear, or opaque. Settings › Window keeps your choice.", .{ .near = floatNear(s, "float-header:Float 1") });
-    try s.commandWith("fizzy.windowMaterial", .{ .kind = "transparent" });
-    s.pause(1200);
-    try s.commandWith("fizzy.windowMaterial", .{ .kind = "none" });
-    s.pause(1200);
-    try s.commandWith("fizzy.windowMaterial", .{ .kind = "liquid" });
+    // Only what this OS draws: a material it lacks is left out, with its caption.
+    const materials = [_]struct { kind: []const u8, name: []const u8, caption: ?[]const u8, ms: u32 }{
+        .{ .kind = "liquid", .name = "Liquid Glass", .caption = null, .ms = 1800 },
+        .{ .kind = "frost", .name = "frosted glass", .caption = "…frosted…", .ms = 1400 },
+        .{ .kind = "blur", .name = "blur", .caption = "…blurred…", .ms = 1400 },
+        .{ .kind = "transparent", .name = "clear glass", .caption = "…clear, or opaque. Settings › Window keeps your choice.", .ms = 1200 },
+        .{ .kind = "none", .name = "opaque", .caption = null, .ms = 1200 },
+    };
+    var first: ?[]const u8 = null;
+    for (materials) |m| {
+        if (s.lacksName(m.kind)) continue;
+        if (first == null) {
+            first = m.kind;
+            try s.commandWith("fizzy.windowMaterial", .{ .kind = m.kind });
+            const text = try s.print("Over the code you can see what it is made of. The window, its floats, menus and dialogs are one material, {s} here…", .{m.name});
+            try s.caption(text, .{ .near = floatNear(s, "float-header:Float 1") });
+        } else {
+            if (m.caption) |text| try s.caption(text, .{ .near = floatNear(s, "float-header:Float 1") });
+            try s.commandWith("fizzy.windowMaterial", .{ .kind = m.kind });
+        }
+        s.pause(m.ms);
+    }
+    if (first) |kind| try s.commandWith("fizzy.windowMaterial", .{ .kind = kind });
     if (!s.compact) {
+        try s.waitFor("float-close:Float 1", .{});
         try s.caption("Close a float, and its views go back where they came from.", .{ .near = "float-close:Float 1" });
         try s.click(.{ .tag = "float-close:Float 1" }, .{});
         try s.waitGone(try catalog.place(s, "Float 1"), .{});
@@ -165,4 +199,25 @@ pub fn build(s: *Script) !void {
         .ms = 4000,
     });
     s.pause(3600);
+}
+
+test "a frost-first tour names the frosted glass it shows" {
+    var s: Script = .init(std.testing.allocator, "tour", "Tour");
+    s.lacks = &.{"liquid"};
+    try build(&s);
+    var owned = try s.finish();
+    defer owned.deinit();
+    const tape = owned.tape;
+    const chapter = for (tape.chapters) |ch| {
+        if (std.mem.eql(u8, ch.title, "Materials")) break ch;
+    } else return error.TestUnexpectedResult;
+    const command = for (tape.ops) |op| {
+        if (op.at >= chapter.at and op.do == .command) break op.do.command;
+    } else return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("fizzy.windowMaterial", command.id);
+    try std.testing.expectEqualStrings(".{ .kind = \"frost\" }", command.args);
+    const caption = for (tape.captions) |c| {
+        if (c.at >= chapter.at) break c;
+    } else return error.TestUnexpectedResult;
+    try std.testing.expect(std.mem.find(u8, caption.text, "one material, frosted glass here…") != null);
 }

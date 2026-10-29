@@ -40,8 +40,8 @@ pub const Preview = struct {
     /// The last viewport height the scroll area actually had. dvui sizes a widget from what its
     /// children reported the frame before, so a window *height* change (a vertical resize drag)
     /// can hand the scroll area a zero-height rect for a frame while the layout re-settles — and a
-    /// zero viewport reads as "no scroll area, draw the whole document", which for a long README
-    /// is every block laid out and shaped for a frame nobody sees (800 blocks: ~250ms in Debug,
+    /// zero viewport reads as "no scroll area, draw the whole document", which for a long README is
+    /// every block laid out and shaped for a frame nobody sees (800 blocks: ~250ms in Debug,
     /// repeated on every height step of the drag). Standing in with the height we last had keeps
     /// that frame to the blocks that were on screen; nothing is lost, since the real height comes
     /// back with the next layout.
@@ -122,7 +122,12 @@ pub const Preview = struct {
         // adopt-check below does not take the reader's last scroll position over it.
         if (self.follow) |f| {
             self.follow = null;
-            if (render_ast.anchorForLineAt(&self.rs, f.line, f.at * @max(self.scroll.viewport.h, self.last_viewport_h), geo.column_w)) |a| {
+            if (render_ast.anchorForLineAt(
+                &self.rs,
+                f.line,
+                f.at * @max(self.scroll.viewport.h, self.last_viewport_h),
+                geo.column_w,
+            )) |a| {
                 self.anchor = a;
                 self.anchor_applied_y = null;
             }
@@ -180,8 +185,18 @@ pub const Preview = struct {
         // can move even when every block height is stable and the height probes stay silent.
         if (render_ast.diag and @abs(y - before_y) > 20) {
             dvui.log.warn(
-                "md-diag: ANCHOR resolved {d:.1} -> {d:.1} ({d:.1}pt) line={d} off={d:.1} at_end={any} virt={d:.1} max_scroll={d:.1}",
-                .{ before_y, y, y - before_y, a.line, a.offset_px, a.at_end, self.scroll.virtual_size.h, geo.max_scroll },
+                "md-diag: ANCHOR resolved {d:.1} -> {d:.1} ({d:.1}pt) line={d} off={d:.1} " ++
+                    "at_end={any} virt={d:.1} max_scroll={d:.1}",
+                .{
+                    before_y,
+                    y,
+                    y - before_y,
+                    a.line,
+                    a.offset_px,
+                    a.at_end,
+                    self.scroll.virtual_size.h,
+                    geo.max_scroll,
+                },
             );
         }
         self.scroll.viewport.y = y;
@@ -295,7 +310,8 @@ pub const Preview = struct {
 
     fn startParseJob(self: *Preview, content: []const u8, gpa: std.mem.Allocator, hash: u64) void {
         const bytes = gpa.dupe(u8, content) catch {
-            // OOM falling back to sync keeps the preview usable; a hitch beats a blank pane forever.
+            // OOM falling back to sync keeps the preview usable; a hitch beats a blank pane
+            // forever.
             self.parseSync(content, gpa, hash);
             return;
         };
@@ -350,7 +366,8 @@ pub const Preview = struct {
         // Worker already filled `job.rs` (parse + scan). Swap it in — no UI-thread scan.
         if (render_ast.diag) {
             dvui.log.warn(
-                "md-diag: parse job landed — replacing RenderState ({d} measured blocks, layout_width {d:.1}) with the worker's fresh one",
+                "md-diag: parse job landed — replacing RenderState ({d} measured blocks, " ++
+                    "layout_width {d:.1}) with the worker's fresh one",
                 .{ self.rs.blocks.len(), self.rs.blocks.layout_width },
             );
         }
@@ -399,7 +416,8 @@ const ParseJob = struct {
 
     fn destroy(self: *ParseJob) void {
         const gpa = self.gpa;
-        // Await the worker before freeing `bytes` / `rs` — it reads/writes them for the whole parse.
+        // Await the worker before freeing `bytes` / `rs` — it reads/writes them for the whole
+        // parse.
         if (self.future) |*f| f.await(dvui.io);
         gpa.free(self.bytes);
         // Stale/abandoned jobs still own their AST + scan maps.
@@ -575,8 +593,8 @@ pub fn drawPreview(
             // viewport is all zeros, which would read as "no viewport, draw everything" — and that
             // frame is exactly the one that must not lay out a whole 60KB document, because it is
             // the frame the preview pane opens on. The scroll area's own rect is already known by
-            // then, so it stands in — and when even that is zero (a frame mid vertical resize,
-            // see `last_viewport_h`), the height the area had last frame does.
+            // then, so it stands in — and when even that is zero (a frame mid vertical resize, see
+            // `last_viewport_h`), the height the area had last frame does.
             .viewport = viewport: {
                 if (state.scroll.viewport.h > 0) {
                     state.last_viewport_h = state.scroll.viewport.h;
@@ -647,7 +665,10 @@ pub fn drawInline(state: *Preview, bytes: []const u8, gpa: std.mem.Allocator, op
     state.ensureParsedNow(bytes, gpa);
     const rp = state.ast_root orelse return;
     const root = treeOf(rp).node();
-    render_ast.preloadImages(root, .{ .image_base_dir = opts.image_base_dir, .io = opts.io, .gpa = gpa, .rs = &state.rs });
+    render_ast.preloadImages(
+        root,
+        .{ .image_base_dir = opts.image_base_dir, .io = opts.io, .gpa = gpa, .rs = &state.rs },
+    );
     var v = dvui.box(@src(), .{ .dir = .vertical }, .{
         .min_size_content = .{ .w = opts.width },
         .max_size_content = .width(opts.width),

@@ -13,6 +13,8 @@ const builtin = @import("builtin");
 const dvui = @import("dvui");
 const proxy_bridge = @import("proxy_bridge");
 const core = @import("core");
+const tape = @import("tape");
+const replay = @import("replay");
 const fingerprint = @import("fingerprint.zig");
 const dvui_context = @import("dvui_context.zig");
 const runtime = @import("runtime.zig");
@@ -37,7 +39,8 @@ const wikilink_service = @import("services/wikilink.zig");
 /// `gpa` is always the app allocator. `arg_b`/`arg_c` are two generic injection slots whose
 /// meaning is defined by the receiving plugin's `set_globals` (they are *not* fixed roles).
 /// The conventions in this tree:
-///   - third-party (`exportEntry`): `arg_b` = the `*Host`, `arg_c` = unused (a plugin owns its state)
+///   - third-party (`exportEntry`): `arg_b` = the `*Host`, `arg_c` = unused (a plugin owns its
+///   state)
 ///   - workbench / code: `arg_b` = `*Host`, `arg_c` = the plugin's own state
 ///   - pixi: `arg_b` = the plugin's `*State`, `arg_c` = `*Packer` (historical; takes no host here)
 pub const SetGlobalsFn = *const fn (
@@ -189,6 +192,36 @@ const sdk_boundary_types = .{
     VersionTriplet,
 };
 
+/// A plugin's demo crosses the boundary as bytes (`Demo.tape`), so these are shared by what they
+/// spell, not by pointer: `tape.binary.version` is folded in `sdk_shape_fingerprint`, and the
+/// data types a tape is made of are hashed here. `Stage` is the seam a plugin's app fills in.
+const tape_boundary_types = .{
+    tape.Tape,
+    tape.Tape.Op,
+    tape.Tape.Action,
+    tape.Tape.Button,
+    tape.Tape.Command,
+    tape.Tape.Step,
+    tape.Tape.Scroll,
+    tape.Tape.Target,
+    tape.Tape.Wait,
+    tape.Tape.Skip,
+    tape.Tape.Until,
+    tape.Tape.Caption,
+    tape.Tape.Chapter,
+    tape.Tape.Keyframe,
+    tape.Tape.Setting,
+    tape.Tape.File,
+    tape.Tape.Check,
+    tape.Sequencer.Point,
+    tape.Sequencer.Failure,
+    tape.Sequencer.Sink,
+    tape.Sequencer.Sink.VTable,
+    replay.Player,
+    replay.Stage,
+    replay.Stage.VTable,
+};
+
 const entry_symbol_types = .{
     RegisterFn,
     SetGlobalsFn,
@@ -280,6 +313,8 @@ pub const sdk_shape_fingerprint: u64 = blk: {
     h = fingerprint.hashAllShape(h, sdk_boundary_types, 6);
     h = fingerprint.hashAllShape(h, entry_symbol_types, 3);
     h = fingerprint.hashAllShape(h, dvui_shared_state_types, 6);
+    h = fingerprint.hashAllShape(h, tape_boundary_types, 6);
+    h = fingerprint.foldString(h, std.mem.asBytes(&tape.binary.version));
     break :blk h;
 };
 
@@ -360,7 +395,12 @@ pub fn semverFromTriplet(t: VersionTriplet) std.SemanticVersion {
 ///   pub const std_options: std.Options = sdk.dylib.stdOptions(opts.id);
 pub fn stdOptions(comptime id: []const u8) std.Options {
     const Impl = struct {
-        fn logFn(comptime level: std.log.Level, comptime scope: @EnumLiteral(), comptime format: []const u8, args: anytype) void {
+        fn logFn(
+            comptime level: std.log.Level,
+            comptime scope: @EnumLiteral(),
+            comptime format: []const u8,
+            args: anytype,
+        ) void {
             // A wasm side module has no stderr of its own (std's default sink wants a
             // threaded Io); the host's panel is the only sink there.
             if (comptime @import("builtin").target.cpu.arch != .wasm32) dvui.App.logFn(level, scope, format, args);

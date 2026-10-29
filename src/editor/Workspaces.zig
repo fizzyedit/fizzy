@@ -119,13 +119,18 @@ pub fn sync(self: *Workspaces) void {
         self.settle();
     }
     var first: ?u64 = null;
+    var l = layoutOf(editor);
     for (wb.workspaces.keys()) |g| {
         if (self.assigned(g)) continue;
         if (first == null) {
             first = g;
             continue;
         }
-        _ = beside(self, g, first.?, .right);
+        // The anchor's room asks the side, when it has one yet.
+        var abuf: [64]u8 = undefined;
+        const room = if (Layout.ViewDrag.holderOf(&l, viewId(&abuf, first.?))) |holder| Layout.ViewDrag.placeSize(l.state, holder) else null;
+        const side = if (room) |r| Workbench.sideFor(r.w, r.h) else .right;
+        _ = besideIn(&l, g, first.?, side, true);
     }
 }
 
@@ -169,7 +174,7 @@ fn settle(self: *Workspaces) void {
     const wb = &editor.workbench;
     var l = layoutOf(editor);
 
-    var gone: std.ArrayListUnmanaged([]const u8) = .empty;
+    var gone: std.ArrayList([]const u8) = .empty;
     var any_placed = false;
     var it = editor.app.layout.assignments.valueIterator();
     while (it.next()) |ids| for (ids.*) |id| {
@@ -284,21 +289,36 @@ fn layoutOf(editor: *Editor) Layout {
     return Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, editor.app.host.arena());
 }
 
-fn beside(ctx: *anyopaque, grouping: u64, anchor: u64, side: Workbench.Panes.Side) bool {
-    const self: *Workspaces = @ptrCast(@alignCast(ctx));
+/// The pane shown in place `name`: the person's own when it is there, else the first held.
+/// Null where the place holds no pane (a pane the keywords show is in no list: the caller's).
+pub fn groupingIn(self: *Workspaces, name: []const u8) ?u64 {
     const editor = self.editorOf();
     var l = layoutOf(editor);
+    var buf: [64]u8 = undefined;
+    var first: ?u64 = null;
+    for (self.views.keys()) |g| {
+        const holder = Layout.ViewDrag.holderOf(&l, viewId(&buf, g)) orelse continue;
+        if (!std.mem.eql(u8, holder, name)) continue;
+        if (g == editor.workbench.open_workspace_grouping) return g;
+        first = first orelse g;
+    }
+    return first;
+}
+
+fn beside(ctx: *anyopaque, grouping: u64, anchor: u64, side: Workbench.Panes.Side, adaptive: bool) bool {
+    const self: *Workspaces = @ptrCast(@alignCast(ctx));
+    var l = layoutOf(self.editorOf());
+    return besideIn(&l, grouping, anchor, side, adaptive);
+}
+
+fn besideIn(l: *Layout, grouping: u64, anchor: u64, side: Workbench.Panes.Side, adaptive: bool) bool {
     var abuf: [64]u8 = undefined;
-    const place = Layout.ViewDrag.holderOf(&l, viewId(&abuf, anchor)) orelse return false;
-    const new = Layout.splitOn(&l, place, switch (side) {
-        .left => .left,
-        .right => .right,
-        .top => .top,
-        .bottom => .bottom,
-    }) orelse return false;
+    const place = Layout.ViewDrag.holderOf(l, viewId(&abuf, anchor)) orelse return false;
+    const new = Layout.splitOn(l, place, side) orelse return false;
     var buf: [64]u8 = undefined;
     const id = l.arena.dupe(u8, viewId(&buf, grouping)) catch return false;
     l.state.assign(l.gpa, new, &.{id}) catch return false;
+    if (adaptive) Layout.markAdaptive(l, new);
     l.state.markDirty();
     return true;
 }
@@ -348,12 +368,7 @@ fn open(ctx: *anyopaque, grouping: u64, side: Workbench.Panes.Side) bool {
     var l = layoutOf(self.editorOf());
     var buf: [64]u8 = undefined;
     const place = Layout.ViewDrag.holderOf(&l, viewId(&buf, grouping)) orelse return false;
-    return Layout.splitOn(&l, place, switch (side) {
-        .left => .left,
-        .right => .right,
-        .top => .top,
-        .bottom => .bottom,
-    }) != null;
+    return Layout.splitOn(&l, place, side) != null;
 }
 
 /// The view of the workspace whose only tab is document `id`, if one is.
@@ -440,7 +455,7 @@ fn close(ctx: *anyopaque, grouping: u64) void {
     // A place that cannot close keeps the room, but not a list naming a view that is going.
     for (editor.app.host.assignedRegionNames()) |name| {
         const ids = editor.app.host.assignedSurfaces(name) orelse continue;
-        var kept: std.ArrayListUnmanaged([]const u8) = .empty;
+        var kept: std.ArrayList([]const u8) = .empty;
         var found = false;
         for (ids) |x| {
             if (std.mem.eql(u8, x, id)) found = true else kept.append(l.arena, x) catch return;

@@ -18,6 +18,9 @@ pub const Platform = struct {
     /// The compositor blurs behind a window: Wayland with `ext-background-effect-v1` or KDE's
     /// `org_kde_kwin_blur` (`wayland_blur`).
     compositor_blur: bool = false,
+    /// DWM draws a system backdrop (Acrylic) behind a window: Windows 11 22H2 and later, which
+    /// `win32_titlebar.backdropOffered` asks it.
+    dwm_backdrop: bool = false,
 };
 
 /// Why `kind` cannot be drawn on `platform`, one line for a tooltip; null when it can. The text
@@ -32,6 +35,7 @@ pub fn missing(platform: Platform, kind: Kind) ?[]const u8 {
         .windows => switch (kind) {
             .blur => "Not available on Windows: its blur is Acrylic, under Frost",
             .liquid => "Not available on Windows: needs Liquid Glass, which only macOS 26 draws",
+            .frost => if (platform.dwm_backdrop) null else "Not available before Windows 11 22H2: needs DWM's Acrylic backdrop",
             else => null,
         },
         .linux => switch (kind) {
@@ -61,8 +65,9 @@ pub fn effective(platform: Platform, asked: Kind) Kind {
 
 test "a kind not offered falls back to the richest glass below it, never to a clear window" {
     try std.testing.expectEqual(Kind.frost, effective(.{ .os = .macos }, .liquid));
-    try std.testing.expectEqual(Kind.frost, effective(.{ .os = .windows }, .liquid));
-    try std.testing.expectEqual(Kind.none, effective(.{ .os = .windows }, .blur));
+    try std.testing.expectEqual(Kind.frost, effective(.{ .os = .windows, .dwm_backdrop = true }, .liquid));
+    try std.testing.expectEqual(Kind.none, effective(.{ .os = .windows, .dwm_backdrop = true }, .blur));
+    try std.testing.expectEqual(Kind.none, effective(.{ .os = .windows }, .liquid));
     try std.testing.expectEqual(Kind.none, effective(.{ .os = .linux }, .liquid));
     try std.testing.expectEqual(Kind.none, effective(.{ .os = .linux }, .frost));
     try std.testing.expectEqual(Kind.blur, effective(.{ .os = .linux, .compositor_blur = true }, .liquid));
@@ -82,8 +87,11 @@ test "macOS draws every kind, Liquid Glass from macOS 26" {
     for ([_]Kind{ .transparent, .blur, .frost }) |k| try std.testing.expect(missing(.{ .os = .macos }, k) == null);
 }
 
-test "Windows draws clear and frost" {
-    const p: Platform = .{ .os = .windows, .liquid_glass = true, .compositor_blur = true };
+test "Windows draws clear, and frost where DWM has the Acrylic backdrop" {
+    const old: Platform = .{ .os = .windows };
+    try std.testing.expect(missing(old, .transparent) == null);
+    try std.testing.expect(missing(old, .frost) != null);
+    const p: Platform = .{ .os = .windows, .liquid_glass = true, .compositor_blur = true, .dwm_backdrop = true };
     try std.testing.expect(missing(p, .transparent) == null);
     try std.testing.expect(missing(p, .frost) == null);
     try std.testing.expect(missing(p, .blur) != null);

@@ -587,6 +587,7 @@ pub fn install(self: *CanvasWidget, src: std.lang.SourceLocation, init_opts: Ini
     const overflow_w = vp.w > 0 and content_w_vp > vp.w + 0.001;
     const overflow_h = vp.h > 0 and content_h_vp > vp.h + 0.001;
 
+    // lint-allow(raw-scroll-area): Canvas owns pan and zoom input; touch scrolling would compete with it.
     self.scroll = dvui.scrollArea(src, .{
         .scroll_info = &self.scroll_info,
         .horizontal_bar = if (overflow_w) .auto else .hide,
@@ -1113,8 +1114,8 @@ pub fn processEvents(self: *CanvasWidget) void {
         self.scroll_info.viewport.x += pdx;
         self.scroll_info.viewport.y += pdy;
         if (self.touch_eval_pan_active or self.scroll_pan_touch_slot != null) {
-            self.pan_fling_x.sampleTimed(pdx);
-            self.pan_fling_y.sampleTimed(pdy);
+            self.pan_fling_x.sampleTimed(pdx, dvui.frameTimeNS());
+            self.pan_fling_y.sampleTimed(pdy, dvui.frameTimeNS());
         }
         self.pending_touch_pan = .{};
     }
@@ -1325,8 +1326,8 @@ pub fn processEvents(self: *CanvasWidget) void {
     // happen in sequence here (not split across a draw pass), so a coincident
     // move+release frame samples the final move before the coast starts — no race. ----
     if (pan_motion) {
-        self.pan_fling_x.sampleTimed(pan_dx);
-        self.pan_fling_y.sampleTimed(pan_dy);
+        self.pan_fling_x.sampleTimed(pan_dx, dvui.frameTimeNS());
+        self.pan_fling_y.sampleTimed(pan_dy, dvui.frameTimeNS());
     }
     if (pan_released) {
         _ = self.pan_fling_x.releaseWindowed(pan_fling, pan_fling_window_s);

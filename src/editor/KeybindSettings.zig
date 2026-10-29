@@ -89,7 +89,7 @@ const Group = struct {
     /// Set when the query matched the owner's own name — that keeps all of its commands.
     owner_hit: ?f64,
     tie: usize,
-    rows: std.ArrayListUnmanaged(Row) = .empty,
+    rows: std.ArrayList(Row) = .empty,
 };
 
 fn ownerKey(owner: []const u8) u64 {
@@ -125,9 +125,9 @@ fn collectGroups(
     arena: std.mem.Allocator,
     query: *const fuzzy.Query,
     platform: Keymap.Platform,
-) std.ArrayListUnmanaged(Group) {
+) std.ArrayList(Group) {
     const editor = fizzy.editor();
-    var groups: std.ArrayListUnmanaged(Group) = .empty;
+    var groups: std.ArrayList(Group) = .empty;
 
     // A hit on the table's own name shows the whole list — but only as a *fallback*, applied
     // below once it's clear no individual command matched. Applied per row instead, a query that
@@ -182,7 +182,7 @@ fn collectGroups(
 
     // Drop owners whose commands all missed, then rank best-first while searching. With an empty
     // query every score is 0 and registration order is the intended reading order.
-    var kept: std.ArrayListUnmanaged(Group) = .empty;
+    var kept: std.ArrayList(Group) = .empty;
     for (groups.items) |g| {
         if (g.rows.items.len == 0) continue;
         kept.append(arena, g) catch {};
@@ -315,7 +315,7 @@ fn drawOwnerBranch(
         drawOwnerGrid(editor, group, query, id_extra, platform, theme);
     }
 
-    if (!searching) setOwnerOpen(group.key, b.expanded);
+    if (!searching) if (b.requested) |open| setOwnerOpen(group.key, open);
 }
 
 /// Solid dot, drawn rather than iconified — lucide's circles are stroked outlines, and a

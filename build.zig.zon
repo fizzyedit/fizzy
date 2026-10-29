@@ -27,6 +27,11 @@
         .fizzy_sdk = .{
             .path = "sdk/",
         },
+        // A plugin that imports `tape` and `replay`, linked into the test build as an app would.
+        .tape_fixture = .{
+            .path = "tests/fixtures/tape-plugin",
+            .lazy = true,
+        },
         // Fizzy's native backend (SDL3, its GPU renderer, the platform pieces), with SDL,
         // zig-objc and zigwin32 pinned there. App-only: plugins never link it.
         .fizzy_backend = .{
@@ -48,6 +53,12 @@
         .translate_c = .{
             .url = "git+https://codeberg.org/ziglang/translate-c?ref=zig-0.17.x#02ff0c523fb92a38939b04d0145c4a9602a74d56",
             .hash = "translate_c-2.0.0-Q_BUWltOBwBYABF84EUL208pIFeUIwbBs29FmVBaafN5",
+        },
+        // Applies `web/patches/dvui` to dvui for the web build's `web.js`: docs/DEPENDENCIES.md.
+        // The pin `backend/build.zig.zon` makes for SDL's; keep them the same.
+        .patch = .{
+            .url = "https://github.com/marler8997/zig-patch/archive/c3ad78b305ba03bcd645c0bac004d1719407c6b8.tar.gz",
+            .hash = "patch-0.0.0-WCKjsxixAADfwXQv4Vugyxo6PFbDFuuyM7ly3OiqZRYR",
         },
         .dvui_singleton_app = .{
             .path = "libs/dvui-singleton-app",

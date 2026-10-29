@@ -100,6 +100,21 @@ pub fn applyChrome(win: *dvui.Window) void {
     _ = win32.ui.windows_and_messaging.SetWindowPos(hwnd_h, null, 0, 0, 0, 0, swp_flags);
 }
 
+/// Whether DWM draws a system backdrop behind `window`: it answers `DWMWA_SYSTEMBACKDROP_TYPE`
+/// only from Windows 11 22H2 (build 22621), and refuses the attribute before it.
+pub fn backdropOffered(window: *c.SDL_Window) bool {
+    if (comptime builtin.target.os.tag != .windows) return false;
+    const hwnd = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(window), c.SDL_PROP_WINDOW_WIN32_HWND_POINTER, null) orelse return false;
+    var kind: u32 = 0;
+    const hr = win32.graphics.dwm.DwmGetWindowAttribute(
+        @as(win32.foundation.HWND, @ptrCast(hwnd)),
+        @as(win32.graphics.dwm.DWMWINDOWATTRIBUTE, @fromBackingInt(@intCast(DWMWA_SYSTEMBACKDROP_TYPE))),
+        &kind,
+        @sizeOf(u32),
+    );
+    return hr >= 0;
+}
+
 /// The backdrop's tint follows the app's theme: DWM draws Acrylic's dark or light variant by this
 /// window attribute, which otherwise follows the system's light or dark mode.
 pub fn setDarkMode(win: *dvui.Window, dark: bool) void {
@@ -574,6 +589,21 @@ pub fn viewportCarryChrome(hwnd: *anyopaque) void {
     const SWP_NOACTIVATE: u32 = 0x0010;
     const SWP_FRAMECHANGED: u32 = 0x0020;
     _ = wm.SetWindowPos(h, @ptrFromInt(@as(usize, @bitCast(HWND_TOPMOST))), 0, 0, 0, 0, @bitCast(SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE | SWP_FRAMECHANGED));
+}
+
+/// A carry window above every window while the app is active, and, once it is left, only over the
+/// window that owns it (`SDL_SetWindowParent`), which goes behind the other application's windows
+/// with the app: left topmost, the glass of a drop's zone stood over them.
+pub fn viewportCarryTopmost(hwnd: *anyopaque, on: bool) void {
+    if (builtin.target.os.tag != .windows) return;
+    const h: win32.foundation.HWND = @ptrCast(hwnd);
+    const HWND_TOPMOST: isize = -1;
+    const HWND_NOTOPMOST: isize = -2;
+    const SWP_NOSIZE: u32 = 0x0001;
+    const SWP_NOMOVE: u32 = 0x0002;
+    const SWP_NOACTIVATE: u32 = 0x0010;
+    const after: isize = if (on) HWND_TOPMOST else HWND_NOTOPMOST;
+    _ = win32.ui.windows_and_messaging.SetWindowPos(h, @ptrFromInt(@as(usize, @bitCast(after))), 0, 0, 0, 0, @bitCast(SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE));
 }
 
 /// The frame a carry window never has: caption, sizing border, system menu and its buttons.

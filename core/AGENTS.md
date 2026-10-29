@@ -32,13 +32,18 @@ paths, fuzzy matching, the LSP client, the profiler.
   selects instead of expanding, until you type. Fizzy's backends set `win.modifiers` from the OS
   before each mouse event (`backend/src/SDLBackend.zig`, `src/backend/WebBackend.zig`); a new
   backend must too.
+- **Touch selection of read-only text is `widgets.SelectableText`, not a bare `dvui.textLayout`.**
+  dvui selects a word on the first tap, so a finger landing on a message to scroll it selects it.
+  `SelectableText` selects on a 0.45 s hold within 14 pt (`TouchHold.zig`), a tap clears; the mouse
+  is dvui's. `st.tl` is the layout: draw into it with `addText` / `addLink` as before.
 - **Touch or mouse: ask dvui, never infer it.** `dvui.pointerKind()` is the window's answer,
   set as the backend adds events, the same in the app, a plugin dylib and a wasm side module.
   State kept by scanning events (a global, a per-frame key) differs per module and per frame.
   A lifted finger hovers nothing: dvui puts the frame's `.position` event off every window, so a
   hover look needs no touch check of its own. The native backend gives only fingers on the screen
   touch buttons (`backend/src/touch_slots.zig`); a trackpad's fingers move the mouse.
-  The web backend does the same: a stylus touch (an Apple Pencil) is the mouse (`web/web.js`).
+  The web backend does the same: a stylus touch (an Apple Pencil) is the mouse (dvui's `web.js`,
+  `web/patches/dvui/0003`).
 - **A cursor that must win asks with a priority.** `dvui.cursorSet` keeps the first asked in a
   frame; `dvui.cursorSetPriority` the highest. Splits and a float's corner ask at `.resize`, a
   carried view at `.drag`, so a hover cursor (a tab's hand) never takes their arrow. The cursor
@@ -50,6 +55,9 @@ paths, fuzzy matching, the LSP client, the profiler.
   min size, so a row scrolled back into view is zero-height for a frame. A virtualized list must
   overscan, size its spacers from `count × pitch` rather than from what was drawn, and measure
   pitch as the *largest* gap between drawn rows.
+  Rows of different heights use `core.widgets.VirtualList` over `core.HeightIndex`, which holds
+  the reader's place as a row key + offset and the rows' total under that 2e6 limit by being
+  given a window of the history, not all of it.
 - **dvui draws dialogs and toasts in `Window.endRendering`,** after the app's frame and after
   floats have taken their subwindows. Anything that must see a dialog's subwindow that frame
   draws it earlier itself. dvui also stops its widget capture at `drawRetained`, so snapshots
@@ -60,3 +68,8 @@ paths, fuzzy matching, the LSP client, the profiler.
   16.7 ms, so "half the fps" means the frame crossed the line. Log `CLOCK_THREAD_CPUTIME_ID` per
   frame, or `sample` the process and read the `nextDrawable` wait as headroom.
   `SDL_RENDER_VSYNC=0` stops holding once the window is frontmost.
+- **The disk answers a listing later, like a mount.** `FileTable.listDir` waits at most 2 ms for
+  `LocalFs`'s pool thread, then returns null and the answer lands on a later frame's `pump`;
+  `search` likewise indexes and ranks a slice per frame (`indexing`, `ranking`). A caller that
+  needs the whole answer pumps until they are false (`settledSearch` in `FileTable.zig`'s
+  tests); one that draws shows a loading row (`listingPending`, `listingProgress`).

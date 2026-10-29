@@ -27,7 +27,7 @@ const PluginLoader = @import("app").store.Loader;
 const Editor = @import("Editor.zig");
 const KeptDocuments = @import("KeptDocuments.zig");
 
-jobs: std.ArrayListUnmanaged(*Job) = .empty,
+jobs: std.ArrayList(*Job) = .empty,
 
 /// Native only: the web links a plugin as a wasm side module (`loadWebPlugin`), with no reload.
 const native = builtin.target.cpu.arch != .wasm32;
@@ -69,18 +69,19 @@ pub fn start(self: *PluginReloads, editor: *Editor, id: []const u8) void {
         .started_ns = std.Io.Clock.boot.now(dvui.io).nanoseconds,
     };
     self.jobs.append(gpa, job) catch return freeJob(gpa, job);
-    job.thread = std.Thread.spawn(.{}, work, .{job}) catch |err| {
+    job.thread = std.Thread.spawn(.{}, work, .{ job, gpa }) catch |err| {
         dvui.log.warn("plugin watcher: could not start reloading '{s}': {t}", .{ id, err });
         _ = self.jobs.pop();
         return freeJob(gpa, job);
     };
 }
 
-fn work(job: *Job) void {
+fn work(job: *Job, gpa: std.mem.Allocator) void {
     var name_buf: [64]u8 = undefined;
     const timed = fizzy.core.profile.span(std.mem.print(&name_buf, "plugin open {s}", .{job.id}) catch "plugin open");
-    // The worker's own allocator: `open` only needs a scratch path from it.
-    job.opened = PluginLoader.open(std.heap.smp_allocator, job.path, job.id);
+    // The app's allocator, not a worker's own: `open` also keeps the opened-path set's keys in it
+    // (`PluginLoader.deinitOpenedPaths` frees them with the app's).
+    job.opened = PluginLoader.open(gpa, job.path, job.id);
     timed.end();
     job.opened_ns = std.Io.Clock.boot.now(dvui.io).nanoseconds;
     job.done.store(true, .release);

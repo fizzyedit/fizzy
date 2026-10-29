@@ -1,0 +1,8 @@
+.{
+    .id = "dashboard",
+    .name = "Dashboard",
+    .version = "0.1.0",
+    .min_sdk_version = "",
+    .description = "What needs the person, one card at a time: a carousel over whatever the app's cards provider offers.",
+    .tags = .{ "dashboard", "cards" },
+}

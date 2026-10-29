@@ -8,7 +8,7 @@
 //! The bounds and suggested choices a number declares are the palette's hints, never checked by
 //! `Command.Params`, so they go in its description, not its schema, where a generated client would
 //! refuse values the server takes. A command's result has no declared type yet, so its 200 response
-//! is any JSON value; the seam for typing it is a result type beside `Command.Params(…)` that
+//! is any JSON value; the seam for typing it is a result type beside `Command.Params(...)` that
 //! `commandPath` would read.
 const std = @import("std");
 const sdk = @import("fizzy_sdk");
@@ -116,6 +116,7 @@ fn write(s: *Stringify, host: *sdk.Host, arena: std.mem.Allocator) Error!void {
     try s.endObject();
 }
 
+// anytype: Schema tuples have endpoint-specific fields preserved in the response type.
 fn jsonResponse(description: []const u8, schema: anytype) JsonResponse(@TypeOf(schema)) {
     return .{ .description = description, .content = .{ .@"application/json" = .{ .schema = schema } } };
 }

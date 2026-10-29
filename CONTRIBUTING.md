@@ -42,10 +42,10 @@ The open PR list is the board of who is working on what.
    touches the same files or the same plan step, coordinate on it (comment, or stack on top of
    it) instead of starting a parallel version.
 2. **Open a draft PR on your first push** (`gh pr create --draft --body-file <file>`), with the
-   template filled in as far as you know it. A draft runs CI, so claim early.
+   template filled in as far as you know it. A draft runs only the light `changes` job (the full matrix starts at `gh pr ready`), so claim early.
 3. **Take it to ready yourself; don't hand back a draft.** When the change is done and the gates
    pass, review your own diff (in Claude Code, the `code-review` skill at `high` on the PR), fix
-   what holds up, push, and wait for CI to go green. Then `gh pr ready`, and end the session
+   what holds up, push, then `gh pr ready`, which starts the full CI, and wait for it to go green. End the session
    with one question: merge it? Say what was reviewed and what was left, so the answer can be
    yes without opening the PR.
 4. **Merging is the maintainer's.** On a yes, merge with `gh pr merge --squash`. Never push to
@@ -132,6 +132,10 @@ turns.
   have taken its load past 17 and crashed it; don't poll `uptime` and start anyway. Every gate
   below runs as `scripts/zb build …` (`scripts/zb build test-integration`). Not for `zig build run`
   of the editor, which would hold the slot until it quits; `FIZZY_BUILD_SKIP=1` runs at once.
+- **Edit with `scripts/watch`.** It runs `zig build -fincremental --watch` (the app, or one
+  plugin: `scripts/watch plugins/text`), so a saved `.zig` file rebuilds in well under a second.
+  Restart it after changing a `build.zig`, which costs a slow rebuild; `docs/PERF.md` has the
+  numbers and `scripts/perf-incremental` measures them. It is not a gate.
 - **Gates:** `scripts/check-fmt.sh` (`--fix` formats), `zig build`, `zig build test`,
   `zig build test-integration`, `zig build check-web`, `zig build test-sdk-version`,
   `zig build lint` (or `zig run scripts/lint.zig`), `zig build check-tests-reached`. CI runs all of them, `test-integration` on
@@ -250,7 +254,8 @@ passed. `.github/rulesets/main.json` is the record of that ruleset; changing it 
 as well as a PR. Admins can merge a PR past a failing check in an emergency, never push to
 `main` directly.
 
-`ci-ok` passes when every other CI job passed or was skipped: a PR changing only Markdown skips
-the builds and still gets its check. `main` merges through the merge
+`ci-ok` requires success from every job selected by `changes`; a PR changing only Markdown
+deliberately skips the builds and still gets its check. Drafts run only `changes` and skip
+`ci-ok`; marking ready starts the full selected checks. `main` merges through the merge
 queue (squash, up to 4 PRs a batch, `ci-ok` rerun on the `merge_group` ref): `gh pr merge N --auto`
 queues a PR once its checks pass, and the queue lands it.

@@ -90,7 +90,7 @@ pub fn setWindowStyle(_: *dvui.Window) void {}
 /// popup already returns to the page that opened it.
 pub fn raiseWindow() void {}
 
-/// The page's `keydown` check (`web/index.html`): it writes `KeyboardEvent.key` here, then asks
+/// The page's `keydown` check (`web/fizzy.js`): it writes `KeyboardEvent.key` here, then asks
 /// `FizzyWebKeyBound` whether the app binds it — see `Keybinds.webKeyBound`.
 export fn FizzyWebKeyBuffer() [*]u8 {
     return &fizzy.Editor.Keybinds.web_key_buf;
@@ -104,17 +104,25 @@ export fn FizzyWebKeyBound(key_len: usize, mods: u32) bool {
 /// backend natively.
 const page = if (builtin.target.cpu.arch == .wasm32) struct {
     extern "fizzy" fn fizzy_web_toggle_fullscreen() void;
+    extern "fizzy" fn fizzy_web_fullscreen_supported() bool;
 } else struct {
     fn fizzy_web_toggle_fullscreen() void {}
+    fn fizzy_web_fullscreen_supported() bool {
+        return true;
+    }
 };
 
-/// The page's Fullscreen API (`web/index.html`), which also takes the keyboard lock so the
+/// The page's Fullscreen API (`web/fizzy.js`), which also takes the keyboard lock so the
 /// shortcuts a browser keeps for itself (⌘W, ⌘T, Ctrl+Tab) reach the app while full screen.
 /// Runs a frame after the key press or click that asked for it, which is inside the browser's
 /// user-activation window.
 pub fn toggleFullscreen() void {
     page.fizzy_web_toggle_fullscreen();
 }
+
+/// False where the browser has no Fullscreen API for a page (Safari on iPhone), so the command
+/// that asks for it can stand down instead of doing nothing.
+pub const fullscreenSupported = page.fizzy_web_fullscreen_supported;
 
 /// Symmetric with the native API: no window state to restore on web.
 pub fn restoreWindowState(_: *dvui.Window) void {}
@@ -161,13 +169,13 @@ pub fn setupMacOSMenuBar() void {}
 pub fn teardownMacOSMenuBar() void {}
 
 // Browser trackpad pinch arrives as a `wheel` event with `ctrlKey=true` (synthesized by every
-// modern browser). The bootstrap JS in `web/index.html` intercepts those events in the
+// modern browser). The bootstrap JS in `web/fizzy.js` intercepts those events in the
 // capture phase, prevents the browser's default page-zoom, and forwards the magnification
 // delta into the wasm export below. Same accumulator pattern as the macOS native trackpad
 // monitor — the canvas widget drains via `takeTrackpadPinchRatio` once per frame.
 var pending_pinch_ratio: f32 = 1.0;
 
-/// Called from `web/index.html` via `app.instance.exports.FizzyWebTrackpadMagnification`
+/// Called from `web/fizzy.js` via `app.instance.exports.FizzyWebTrackpadMagnification`
 /// for every pinch wheel event. `delta` is a small relative magnification (positive = zoom in)
 /// derived from `-ev.deltaY` scaled to match macOS NSEvent magnification magnitudes.
 export fn FizzyWebTrackpadMagnification(delta: f32) void {
@@ -182,9 +190,15 @@ export fn FizzyWebTrackpadMagnification(delta: f32) void {
 /// `FormFactor` number, for the page's console readout.
 export fn FizzyWebSetFormFactor(coarse: bool, w_css: f32, h_css: f32, override: i32) u8 {
     const platform = fizzy.core.platform;
-    const chosen = platform.form_factor.resolve(coarse, w_css, h_css, platform.form_factor.overrideFromCode(override));
-    platform.cached_form_factor = chosen;
-    return @backingInt(chosen);
+    platform.cached_form_factor = platform.form_factor.classify(coarse, w_css, h_css);
+    platform.cached_form_override = platform.form_factor.overrideFromCode(override);
+    return @backingInt(platform.formFactor());
+}
+
+/// Called by the page (through the worker) when the on-screen keyboard opens, moves or closes:
+/// how far it covers the bottom of the page, in points. The canvas is not resized for it.
+export fn FizzyWebSetKeyboardInset(bottom: f32) void {
+    fizzy.core.platform.keyboard_inset = bottom;
 }
 
 /// Symmetric with the native API: nothing to install on web because the JS bootstrap wires
@@ -237,7 +251,8 @@ pub const modifier_control: c_ulong = 0;
 
 /// Web's dialog callbacks run synchronously within the frame already (`WebSaveAs.callAfter`), so
 /// there's nothing to drain here. Kept symmetric with the native backend's deferred-dispatch
-/// queue (see `backend_native.pollPendingDialogResult`) so `Editor.tick` can call it unconditionally.
+/// queue (see `backend_native.pollPendingDialogResult`) so `Editor.tick` can call it
+/// unconditionally.
 pub const PendingDialogResult = struct {
     callback: *const fn (?[][:0]const u8) void,
     files: ?[][:0]const u8,

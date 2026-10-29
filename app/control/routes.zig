@@ -16,7 +16,7 @@
 //! Bodies are JSON, converted at this edge (`json.zig`). A request sent as `application/zon` is
 //! passed through as ZON and answered in ZON. Errors are HTTP's: 404 for an unknown command, 400
 //! for arguments that do not fit, 409 for a command not enabled now, 500 for one that ran and
-//! failed, each with `{"error": "…"}`.
+//! failed, each with `{"error": "..."}`.
 const std = @import("std");
 const sdk = @import("fizzy_sdk");
 const AppInfo = @import("../AppInfo.zig");
@@ -440,6 +440,7 @@ fn describe(c: *const sdk.Command, arena: std.mem.Allocator) error{OutOfMemory}!
     };
 }
 
+// anytype: Response bodies have route-specific shapes serialized to JSON.
 fn ok(arena: std.mem.Allocator, value: anytype) error{OutOfMemory}!Answer {
     return .{ .status = .ok, .body = try std.json.Stringify.valueAlloc(arena, value, .{ .emit_null_optional_fields = false }) };
 }

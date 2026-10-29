@@ -118,7 +118,7 @@ fn pointerNotAtTargetOnPress(p: *const automation.Player, before: usize) bool {
         if (op.do.target()) |t| target = t;
         if (i < before or op.do != .press) continue;
         const t = target orelse return true;
-        const point = automation.Input.targetPoint(t) orelse return true;
+        const point = automation.Input.targetPoint(p.stage, t) orelse return true;
         const press = p.last_press orelse return true;
         // A pixel tolerates rounding between natural and physical coordinates.
         if (@abs(point.x - press.pt.x) > 1 or @abs(point.y - press.pt.y) > 1) return true;
@@ -131,19 +131,32 @@ fn seekOverBudget(p: *const automation.Player, elapsed: i128) bool {
     return elapsed > p.budget_ns * 4;
 }
 
-fn timedOutWaitThenOpsRan(p: *const automation.Player, timed_out_cursor: ?usize) bool {
-    return if (timed_out_cursor) |cursor| p.seq.cursor > cursor else false;
+/// A failed op skips through the rest of its chapter: the tape must resume at the first op of the
+/// next chapter (or end), never at a keyframe inside the failed one. No record of the failure at
+/// all counts as a violation, so a skip that was never taken cannot pass.
+fn failureResumedWrongly(p: *const automation.Player) bool {
+    const tape = p.tape() orelse return true;
+    const failed = p.seq.failed_op orelse return true;
+    const at = p.seq.resumed_at orelse return true;
+    const failed_at = tape.ops[failed].at;
+    const next_chapter: u32 = for (tape.chapters) |c| {
+        if (c.at > failed_at) break c.at;
+    } else std.math.maxInt(u32);
+    var expected: usize = failed;
+    while (expected < tape.ops.len and tape.ops[expected].at < next_chapter) expected += 1;
+    return at != expected or p.seq.cursor < at;
 }
 
 const Observation = struct {
     verdict: Verdict = .empty,
-    timeout_cursor: ?usize = null,
     seek_frames: usize = 0,
     over_budget: usize = 0,
     worst_ns: i128 = 0,
     /// A missing anchor makes the tape diverge on purpose; the end-state and pointer checks
     /// say nothing about a tape that was told to point at nothing.
     corrupted: bool = false,
+    /// Frames on which an op failed; a fixture for a failure must see at least one.
+    failures: usize = 0,
 
     fn frame(self: *Observation, p: *automation.Player) !void {
         const timeouts = p.timeouts;
@@ -155,8 +168,10 @@ const Observation = struct {
         const elapsed = std.Io.Clock.awake.now(dvui.io).nanoseconds - start;
         if (heldButton(p)) self.verdict.insert(.held_button);
         if (captionNotTopLayer()) self.verdict.insert(.caption_layer);
-        if (p.timeouts > timeouts) self.timeout_cursor = p.seq.cursor;
-        if (timedOutWaitThenOpsRan(p, self.timeout_cursor)) self.verdict.insert(.timeout_then_ops);
+        if (p.timeouts > timeouts) {
+            self.failures += 1;
+            if (failureResumedWrongly(p)) self.verdict.insert(.timeout_then_ops);
+        }
         if (seeking) {
             self.seek_frames += 1;
             self.worst_ns = @max(self.worst_ns, elapsed);
@@ -344,19 +359,15 @@ test "exploratory tape interruptions report and shrink every failing seed" {
 /// The worst shrunk sequences, kept as expected failures: each is a hole today. When a fix lands
 /// the matching test stops reproducing, fails, and the fixture is deleted with the fix.
 const Fixture = struct { tape: []const u8, category: Category, steps: []const Step };
-const fixtures = [_]Fixture{
-    .{ .tape = "tour", .category = .held_button, .steps = &.{
-        .{ .action = .pause, .value = 3709114103 },
-        .{ .action = .mid_drag, .value = 3417069504 },
-    } },
-    .{ .tape = "tour", .category = .pointer_target, .steps = &.{
-        .{ .action = .edit, .value = 1179371865 },
-        .{ .action = .mid_drag, .value = 3225570326 },
-        .{ .action = .scripted_key, .value = 816815299 },
-        .{ .action = .mid_drag, .value = 3417069504 },
-    } },
+const fixtures = [_]Fixture{};
+
+/// Former holes, now closed: each must keep passing.
+const fixed_fixtures = [_]Fixture{
     .{ .tape = "markdown", .category = .timeout_then_ops, .steps = &.{
         .{ .action = .missing_anchor, .value = 1044382321 },
+    } },
+    .{ .tape = "tour", .category = .timeout_then_ops, .steps = &.{
+        .{ .action = .missing_anchor, .value = 0 },
     } },
 };
 
@@ -370,5 +381,13 @@ fn checkFixtures(app: *BundledApp) !void {
         const holds = obs.verdict.contains(f.category);
         std.debug.print("- {s}/{t}: {s}\n", .{ f.tape, f.category, if (holds) "still fails (expected)" else "FIXED, delete the fixture" });
         try std.testing.expect(holds);
+    }
+    for (fixed_fixtures) |f| {
+        _ = try run(app, f.tape, &.{}, null);
+        const clean = app.editor.demo.player.stage.fingerprint() orelse return error.NoFingerprint;
+        const obs = try run(app, f.tape, f.steps, clean);
+        std.debug.print("- {s}/{t}: {s}\n", .{ f.tape, f.category, if (obs.verdict.contains(f.category)) "REGRESSED" else "holds" });
+        try std.testing.expect(obs.failures > 0);
+        try std.testing.expect(!obs.verdict.contains(f.category));
     }
 }

@@ -168,6 +168,16 @@ fn geometry(nat: dvui.Rect.Natural, grown: f32) ?dvui.Rect {
     return .{ .x = nat.x + nat.w / 2 - w / 2, .y = bottom - h, .w = w, .h = h };
 }
 
+/// The room kept above the tab for the feed, in natural units.
+const feed_h: f32 = 40;
+
+/// How far up from a pane's bottom edge the bar can reach, in natural units, at any openness of
+/// its strip: the fully grown strip, the bar's outset, the tab over it, and the feed above that. A
+/// constant, so the part of the pane a history picture is taken from (`HistoryFrames.take`) does
+/// not change size while the strip opens or closes, which would make every kept picture another
+/// view of the pane.
+pub const cover: f32 = 14 + bar_h + strip_h + 4 + tab_d + tab_gap + feed_h;
+
 /// The strip's size over `pane` (physical) fully grown, in physical pixels, at its widest (no
 /// export button): what each step's picture is cut to (`HistoryFrames.take`), so the strip draws
 /// it one pixel for one. Null when the pane is too narrow for the bar.
@@ -296,7 +306,7 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
         if (opts.corner) |c| {
             self.liquid.step(now, c.point());
             // Into a vial, the new step splashes the surface, as a drop landing would: after the
-            // step, so a step landing after an idle spell — when the liquid starts afresh, still —
+            // step, so a step landing after an idle spell - when the liquid starts afresh, still -
             // splashes all the same. Only into a vial: a liquid nothing steps would hold its
             // splashes for when a vial came.
             if (stepped) self.liquid.splashIn();
@@ -511,7 +521,7 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
     const home: ?dvui.Rect.Physical = if (from) |f| if (opts.corner) |c| c.home(s) else dome.bud(f) else null;
     const travel: f32 = if (from) |f| dome.bud(f).h else 0;
     // Out of a corner vial, which is whole at rest, the glass is whole throughout: eased toward a
-    // dome's quiet presence, it was glass at partial alpha — a hole — and the vial at full alpha
+    // dome's quiet presence, it was glass at partial alpha - a hole - and the vial at full alpha
     // the frame it went back in, a flash.
     const prev_alpha = dvui.alpha(if (opts.corner != null and from != null) 1 else if (from != null) dome.glassAlpha(self.presence.value, p) else p);
     defer dvui.alphaSet(prev_alpha);
@@ -643,8 +653,8 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
     return pressed;
 }
 
-/// When each bubble buds out of the grip, as a share of the growing — the line first, then the
-/// nearest the grip outward: export, redo, play, undo, the tab — each on its own moment so none
+/// When each bubble buds out of the grip, as a share of the growing - the line first, then the
+/// nearest the grip outward: export, redo, play, undo, the tab - each on its own moment so none
 /// travels stacked on another; and how high each arcs, so their paths fan out. As `phys`: undo,
 /// line, redo, export, play; then the tab.
 const bud_delays = [6]f32{ 0.3, 0, 0.16, 0.08, 0.23, 0.36 };
@@ -831,4 +841,13 @@ fn paintLine(r: dvui.Rect.Physical, at: usize, n: usize, ink: dvui.Color, s: f32
     defer knob.deinit();
     knob.addArc(.{ .x = knob_x, .y = line.y + h / 2 }, 6 * s, std.math.tau, 0, true);
     knob.build().fillConvex(.{ .color = .{ .color = accent }, .fade = 1 });
+}
+
+test "the bar, its tab and the feed stay inside the cover, whatever the strip's openness" {
+    const pane: dvui.Rect.Natural = .{ .x = 0, .y = 0, .w = 800, .h = 600 };
+    var g: f32 = 0;
+    while (g <= 1.0) : (g += 0.125) {
+        const r = geometry(pane, g).?;
+        try std.testing.expect(pane.h - r.y + 4 + tab_d + tab_gap + feed_h <= cover);
+    }
 }

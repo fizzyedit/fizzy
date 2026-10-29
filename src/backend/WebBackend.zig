@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const dvui = @import("dvui");
+const glass = @import("glass");
 
 pub const kind: dvui.enums.Backend = .web;
 
@@ -169,6 +170,9 @@ cursor_last: dvui.enums.Cursor = .wait,
 /// Added to the page's clock by `nanoTime`: how far a demo's silent frames have moved the app's
 /// clock on (`app.automation.Player.frames`). Only grows.
 clock_ahead_ns: i128 = 0,
+/// What `nanoTime` takes off the page's clock, so no frame begins more than a motion's step after
+/// the one before it (`glass.MotionClock`). The vsync-stamped base is the page's, unchanged.
+motion_clock: glass.MotionClock = .{},
 /// The frame running is one nobody will see — a demo catching up (`app.automation.Player.frames`):
 /// its draws to the canvas are dropped. Draws into render targets still run, since what is
 /// drawn there may be read back into the app's model.
@@ -200,17 +204,50 @@ pub const wasm = if (!builtin.is_test) struct {
     pub extern "dvui" fn wasm_canvas_height() f32;
 
     pub extern "dvui" fn wasm_frame_buffer() u8;
-    pub extern "dvui" fn wasm_textureCreate(pixels: [*]const u8, width: u32, height: u32, interp: u8, wrap_u: u8, wrap_v: u8) u32;
+    pub extern "dvui" fn wasm_textureCreate(
+        pixels: [*]const u8,
+        width: u32,
+        height: u32,
+        interp: u8,
+        wrap_u: u8,
+        wrap_v: u8,
+    ) u32;
     pub extern "dvui" fn wasm_textureCreateTarget(width: u32, height: u32, interp: u8, wrap_u: u8, wrap_v: u8) u32;
-    pub extern "dvui" fn wasm_textureCreatePreciseTarget(width: u32, height: u32, interp: u8, wrap_u: u8, wrap_v: u8) u32;
+    pub extern "dvui" fn wasm_textureCreatePreciseTarget(
+        width: u32,
+        height: u32,
+        interp: u8,
+        wrap_u: u8,
+        wrap_v: u8,
+    ) u32;
     pub extern "dvui" fn wasm_textureBlend(texture: u32, mode: u8) u8;
     pub extern "dvui" fn wasm_textureUpdate(texture: u32, pixels: [*]const u8) u8;
-    pub extern "dvui" fn wasm_textureUpdateSubRect(texture: u32, pixels: [*]const u8, x: u32, y: u32, w: u32, h: u32) u8;
+    pub extern "dvui" fn wasm_textureUpdateSubRect(
+        texture: u32,
+        pixels: [*]const u8,
+        x: u32,
+        y: u32,
+        w: u32,
+        h: u32,
+    ) u8;
     pub extern "dvui" fn wasm_textureClearTarget(u32) void;
     pub extern "dvui" fn wasm_textureRead(texture: u32, pixels_out: [*]u8, width: u32, height: u32) void;
     pub extern "dvui" fn wasm_renderTarget(u32) void;
     pub extern "dvui" fn wasm_textureDestroy(u32) void;
-    pub extern "dvui" fn wasm_renderStream(index_ptr: [*]const u8, index_len: usize, vertex_ptr: [*]const u8, vertex_len: usize, sizeof_vertex: u8, offset_pos: u8, offset_col: u8, offset_uv: u8, cmd_ptr: [*]const u8, cmd_count: usize, uniform_ptr: [*]const u8, uniform_floats: usize) void;
+    pub extern "dvui" fn wasm_renderStream(
+        index_ptr: [*]const u8,
+        index_len: usize,
+        vertex_ptr: [*]const u8,
+        vertex_len: usize,
+        sizeof_vertex: u8,
+        offset_pos: u8,
+        offset_col: u8,
+        offset_uv: u8,
+        cmd_ptr: [*]const u8,
+        cmd_count: usize,
+        uniform_ptr: [*]const u8,
+        uniform_floats: usize,
+    ) void;
     pub extern "dvui" fn wasm_programCreate(glsl: [*]const u8, len: usize, textures: u32, uniform_vec4s: u32) u32;
     pub extern "dvui" fn wasm_programStatus(id: u32) u8;
     pub extern "dvui" fn wasm_programMaxVec4() u32;
@@ -220,11 +257,21 @@ pub const wasm = if (!builtin.is_test) struct {
     pub extern "dvui" fn wasm_open_url(ptr: [*]const u8, len: usize, new_window: bool) void;
     pub extern "dvui" fn wasm_preferred_color_scheme() u8;
     pub extern "dvui" fn wasm_prefers_reduced_motion() u8;
-    pub extern "dvui" fn wasm_download_data(name_ptr: [*]const u8, name_len: usize, data_ptr: [*]const u8, data_len: usize) void;
+    pub extern "dvui" fn wasm_download_data(
+        name_ptr: [*]const u8,
+        name_len: usize,
+        data_ptr: [*]const u8,
+        data_len: usize,
+    ) void;
     pub extern "dvui" fn wasm_clipboardTextSet(ptr: [*]const u8, len: usize) void;
 
     // NOTE: bool in extern becomes 0 and 1 in js, which is falsy and truthy respectively
-    pub extern "dvui" fn wasm_open_file_picker(id: u64, accept_ptr: [*]const u8, accept_len: usize, multiple: bool) void;
+    pub extern "dvui" fn wasm_open_file_picker(
+        id: u64,
+        accept_ptr: [*]const u8,
+        accept_len: usize,
+        multiple: bool,
+    ) void;
     pub extern "dvui" fn wasm_get_number_of_files_available(id: u64) usize;
     pub extern "dvui" fn wasm_get_file_name(id: u64, file_index: usize) [*:0]u8;
     pub extern "dvui" fn wasm_get_file_size(id: u64, file_index: usize) isize;
@@ -284,7 +331,20 @@ pub const wasm = if (!builtin.is_test) struct {
     pub fn wasm_textureRead(_: u32, _: [*]u8, _: u32, _: u32) void {}
     pub fn wasm_renderTarget(_: u32) void {}
     pub fn wasm_textureDestroy(_: u32) void {}
-    pub fn wasm_renderStream(_: [*]const u8, _: usize, _: [*]const u8, _: usize, _: u8, _: u8, _: u8, _: u8, _: [*]const u8, _: usize, _: [*]const u8, _: usize) void {}
+    pub fn wasm_renderStream(
+        _: [*]const u8,
+        _: usize,
+        _: [*]const u8,
+        _: usize,
+        _: u8,
+        _: u8,
+        _: u8,
+        _: u8,
+        _: [*]const u8,
+        _: usize,
+        _: [*]const u8,
+        _: usize,
+    ) void {}
     pub fn wasm_programCreate(_: [*]const u8, _: usize, _: u32, _: u32) u32 {
         return 1;
     }
@@ -361,7 +421,6 @@ export fn dvui_c_realloc_sized(ptr: ?*anyopaque, oldsize: usize, newsize: usize)
     dvui_c_free(ptr);
     return newptr;
 
-    //std.mem.writeInt(usize, slice[0..@sizeOf(usize)], slice.len, builtin.target.cpu.arch.endian());
     //return slice.ptr + 16;
 }
 
@@ -440,15 +499,25 @@ export fn new_font(ptr: [*c]u8, len: usize) void {
     }
 }
 
-export fn add_event(which: u8, int1: u32, int2: u32, float1: f32, float2: f32) void {
+export fn add_event(which: u8, int1: u32, int2: u32, float1: f32, float2: f32, time_ms: f64) void {
     if (win_ok) {
-        add_event_raw(&win, which, int1, int2, float1, float2) catch |err| {
+        add_event_raw(&win, which, int1, int2, float1, float2, time_ms) catch |err| {
             log.err("add_event_raw returned {any}", .{err});
         };
     }
 }
 
-fn add_event_raw(w: *dvui.Window, which: u8, int1: u32, int2: u32, float1: f32, float2: f32) !void {
+fn add_event_raw(w: *dvui.Window, which: u8, int1: u32, int2: u32, float1: f32, float2: f32, time_ms: f64) !void {
+    const first = w.events.items.len;
+    const time_ns: i128 = @as(i128, @intFromFloat((if (std.math.isFinite(time_ms)) time_ms else wasm.wasm_now()) * 1_000_000.0)) + w.backend.impl.clock_ahead_ns;
+    defer for (w.events.items[first..]) |e| {
+        var buf: [32]u8 = undefined;
+        // The prefix and a u16 event number fit in 32 bytes.
+        // Backend packages cannot import core; match core/input_time.zig key().
+        const key = std.mem.print(&buf, "_input_time_{d}", .{e.num}) catch unreachable;
+        dvui.dataSet(w, w.data().id, key, time_ns);
+    };
+
     have_event = true;
     //event_temps.append(.{
     //    .which = which,
@@ -475,7 +544,11 @@ fn add_event_raw(w: *dvui.Window, which: u8, int1: u32, int2: u32, float1: f32, 
             w.modifiers = web_mod_code_to_dvui(@intCast(int2));
             _ = try w.addEventMouseButton(buttonFromJS(int1), .release);
         },
-        4 => _ = try w.addEventMouseWheel(float1 * dvui.scroll_speed, if (int1 > 0) .vertical else .horizontal, if (int2 == 0) .mouse else .trackpad),
+        4 => _ = try w.addEventMouseWheel(
+            float1 * dvui.scroll_speed,
+            if (int1 > 0) .vertical else .horizontal,
+            if (int2 == 0) .mouse else .trackpad,
+        ),
         5 => {
             const str = @as([*]u8, @ptrFromInt(int1))[0..int2];
             _ = try w.addEventKey(.{
@@ -503,7 +576,11 @@ fn add_event_raw(w: *dvui.Window, which: u8, int1: u32, int2: u32, float1: f32, 
         },
         9 => {
             const touch: dvui.enums.Button = @fromBackingInt(@intCast(@backingInt(dvui.enums.Button.touch0) + int1));
-            _ = try w.addEventPointer(.{ .button = touch, .action = .release, .xynorm = .{ .x = float1, .y = float2 } });
+            _ = try w.addEventPointer(.{
+                .button = touch,
+                .action = .release,
+                .xynorm = .{ .x = float1, .y = float2 },
+            });
             touchPoints[int1] = null;
         },
         10 => {
@@ -673,61 +750,6 @@ fn web_mod_code_to_dvui(wmod: u8) dvui.enums.Mod {
     return @as(dvui.enums.Mod, @fromBackingInt(@intCast(m)));
 }
 
-//pub fn addAllEvents(self: *WebBackend, win: *dvui.Window) !void {
-//    for (event_temps.items) |e| {
-//        switch (e.kind) {
-//            1 => _ = try win.addEventMouseMotion(e.float1, e.float2),
-//            2 => _ = try win.addEventMouseButton(buttonFromJS(e.int1), .press),
-//            3 => _ = try win.addEventMouseButton(buttonFromJS(e.int1), .release),
-//            4 => _ = try win.addEventMouseWheel(if (e.float1 > 0) -20 else 20, .vertical),
-//            5 => {
-//                const str = @as([*]u8, @ptrFromInt(e.int1))[0..e.int2];
-//                _ = try win.addEventKey(.{
-//                    .action = if (e.float1 > 0) .repeat else .down,
-//                    .code = web_key_code_to_dvui(str),
-//                    .mod = web_mod_code_to_dvui(@trunc(e.float2)),
-//                });
-//            },
-//            6 => {
-//                const str = @as([*]u8, @ptrFromInt(e.int1))[0..e.int2];
-//                _ = try win.addEventKey(.{
-//                    .action = .up,
-//                    .code = web_key_code_to_dvui(str),
-//                    .mod = web_mod_code_to_dvui(@trunc(e.float2)),
-//                });
-//            },
-//            7 => {
-//                const str = @as([*]u8, @ptrFromInt(e.int1))[0..e.int2];
-//                _ = try win.addEventText(str);
-//            },
-//            8 => {
-//                const touch: dvui.enums.Button = @enumFromInt(@intFromEnum(dvui.enums.Button.touch0) + e.int1);
-//                _ = try win.addEventPointer(touch, .press, .{ .x = e.float1, .y = e.float2 });
-//                self.touchPoints[e.int1] = .{ .x = e.float1, .y = e.float2 };
-//            },
-//            9 => {
-//                const touch: dvui.enums.Button = @enumFromInt(@intFromEnum(dvui.enums.Button.touch0) + e.int1);
-//                _ = try win.addEventPointer(touch, .release, .{ .x = e.float1, .y = e.float2 });
-//                self.touchPoints[e.int1] = null;
-//            },
-//            10 => {
-//                const touch: dvui.enums.Button = @enumFromInt(@intFromEnum(dvui.enums.Button.touch0) + e.int1);
-//                var dx: f32 = 0;
-//                var dy: f32 = 0;
-//                if (self.touchPoints[e.int1]) |p| {
-//                    dx = e.float1 - p.x;
-//                    dy = e.float2 - p.y;
-//                }
-//                _ = try win.addEventTouchMotion(touch, e.float1, e.float2, dx, dy);
-//                self.touchPoints[e.int1] = .{ .x = e.float1, .y = e.float2 };
-//            },
-//            else => log.debug("addAllEvents unknown event kind {d}", .{e.kind}),
-//        }
-//    }
-//
-//    event_temps.clearRetainingCapacity();
-//}
-
 pub fn init() !WebBackend {
     const ret: WebBackend = .{};
     return ret;
@@ -742,7 +764,7 @@ pub fn backend(self: *WebBackend) dvui.Backend {
 }
 
 pub fn nanoTime(self: *WebBackend) i128 {
-    return @as(i128, @trunc(wasm.wasm_now())) * 1_000_000 + self.clock_ahead_ns;
+    return self.motion_clock.now(@as(i128, @trunc(wasm.wasm_now())) * 1_000_000 + self.clock_ahead_ns);
 }
 
 pub fn sleep(_: *WebBackend, ns: u64) void {
@@ -752,7 +774,13 @@ pub fn sleep(_: *WebBackend, ns: u64) void {
 /// The kinds of window material the web can show (fizzy's `core.material`, field for field):
 /// every one. Its glass is all drawn in the canvas, the one surface it puts glass on (Liquid Glass
 /// by its own shader), and the page behind a clear canvas shows through.
-pub const MaterialKinds = struct { none: bool = true, transparent: bool = true, blur: bool = true, frost: bool = true, liquid: bool = true };
+pub const MaterialKinds = struct {
+    none: bool = true,
+    transparent: bool = true,
+    blur: bool = true,
+    frost: bool = true,
+    liquid: bool = true,
+};
 
 pub fn materialKinds(_: *WebBackend) MaterialKinds {
     return .{};
@@ -785,7 +813,13 @@ pub fn contentScale(_: *WebBackend) f32 {
     return 1.0; // comes through windowSize/pixelSize
 }
 
-pub fn drawClippedTriangles(self: *WebBackend, texture: ?dvui.Texture, vtx: []const dvui.Vertex, idx: []const dvui.Vertex.Index, maybe_clipr: ?dvui.Rect.Physical) !void {
+pub fn drawClippedTriangles(
+    self: *WebBackend,
+    texture: ?dvui.Texture,
+    vtx: []const dvui.Vertex,
+    idx: []const dvui.Vertex.Index,
+    maybe_clipr: ?dvui.Rect.Physical,
+) !void {
     if (self.unseen and !target_is_fb) return;
     if (batch.vtx.items.len + vtx.len > std.math.maxInt(dvui.Vertex.Index)) flushBatch();
 
@@ -844,7 +878,16 @@ fn command(texture: ?dvui.Texture, maybe_clipr: ?dvui.Rect.Physical, index_start
 
 /// A switch or clear (`Command.clip`) of `texture` (0 the screen), in order with the draws.
 fn marker(step: i32, texture: i32) !void {
-    try batch.cmds.append(arena, .{ .texture = texture, .clip = step, .x = 0, .y = 0, .w = 0, .h = 0, .index_start = 0, .index_count = 0 });
+    try batch.cmds.append(arena, .{
+        .texture = texture,
+        .clip = step,
+        .x = 0,
+        .y = 0,
+        .w = 0,
+        .h = 0,
+        .index_start = 0,
+        .index_count = 0,
+    });
 }
 
 /// Whether anything waiting in the stream uses texture `id` — draws from it, draws into it, or
@@ -901,7 +944,16 @@ fn programMarker() !void {
     const p = &(program orelse return);
     const at: i32 = @intCast(batch.uniforms.items.len);
     try batch.uniforms.appendSlice(arena, p.uniforms[0..p.n]);
-    try batch.cmds.append(arena, .{ .texture = p.id, .clip = Command.use_program, .x = at, .y = @intCast(p.n), .w = p.tex1, .h = p.tex2, .index_start = 0, .index_count = 0 });
+    try batch.cmds.append(arena, .{
+        .texture = p.id,
+        .clip = Command.use_program,
+        .x = at,
+        .y = @intCast(p.n),
+        .w = p.tex1,
+        .h = p.tex2,
+        .index_start = 0,
+        .index_count = 0,
+    });
 }
 
 /// Custom programs (`core.gfx.programs`): compiled by `web.js`, switched to in the stream.
@@ -923,7 +975,13 @@ pub const program_api = struct {
         return wasm.wasm_programStatus(id);
     }
 
-    pub fn begin(id: u32, textures: [*]const ?*anyopaque, n_textures: u32, uniforms: [*]const [4]f32, n_uniforms: u32) callconv(.c) bool {
+    pub fn begin(
+        id: u32,
+        textures: [*]const ?*anyopaque,
+        n_textures: u32,
+        uniforms: [*]const [4]f32,
+        n_uniforms: u32,
+    ) callconv(.c) bool {
         if (n_uniforms > uniform_cap or n_textures > 2) return false;
         if (wasm.wasm_programStatus(id) != 2) return false;
         const tex = struct {
@@ -954,7 +1012,16 @@ pub const program_api = struct {
         blend_override = null;
         if (program == null) return;
         program = null;
-        batch.cmds.append(arena, .{ .texture = 0, .clip = Command.use_program, .x = 0, .y = 0, .w = 0, .h = 0, .index_start = 0, .index_count = 0 }) catch {};
+        batch.cmds.append(arena, .{
+            .texture = 0,
+            .clip = Command.use_program,
+            .x = 0,
+            .y = 0,
+            .w = 0,
+            .h = 0,
+            .index_start = 0,
+            .index_count = 0,
+        }) catch {};
     }
 };
 
@@ -994,15 +1061,27 @@ pub fn textureCreate(_: *WebBackend, pixels: [*]const u8, options: dvui.Texture.
 /// See `dvui.Backend.textureUpdate`. `texSubImage2D` over the whole texture.
 pub fn textureUpdate(_: *WebBackend, texture: dvui.Texture, pixels: [*]const u8) !void {
     if (pendingUses(@intCast(@intFromPtr(texture.ptr)))) flushBatch();
-    if (wasm.wasm_textureUpdate(@intCast(@intFromPtr(texture.ptr)), pixels) == 0) return dvui.Backend.TextureError.TextureUpdate;
+    if (wasm.wasm_textureUpdate(@intCast(@intFromPtr(texture.ptr)), pixels) == 0) {
+        return dvui.Backend.TextureError.TextureUpdate;
+    }
 }
 
 /// See `dvui.Backend.textureUpdateSubRect`. `pixels` is the full texture's buffer; only the
 /// rect is uploaded (WebGL2 reads it in place through the unpack row length and skips; WebGL1
 /// copies the rect's rows out first).
-pub fn textureUpdateSubRect(_: *WebBackend, texture: dvui.Texture, pixels: [*]const u8, x: u32, y: u32, w: u32, h: u32) !void {
+pub fn textureUpdateSubRect(
+    _: *WebBackend,
+    texture: dvui.Texture,
+    pixels: [*]const u8,
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+) !void {
     if (pendingUses(@intCast(@intFromPtr(texture.ptr)))) flushBatch();
-    if (wasm.wasm_textureUpdateSubRect(@intCast(@intFromPtr(texture.ptr)), pixels, x, y, w, h) == 0) return dvui.Backend.TextureError.TextureUpdate;
+    if (wasm.wasm_textureUpdateSubRect(@intCast(@intFromPtr(texture.ptr)), pixels, x, y, w, h) == 0) {
+        return dvui.Backend.TextureError.TextureUpdate;
+    }
 }
 
 /// See `dvui.Backend.support_precise_targets`. `precision = .high` is RGBA16F on WebGL2 with
@@ -1432,7 +1511,8 @@ fn update() !i32 {
 
     const nstime = win.beginWait(back.hasEvent());
 
-    try win.begin(nstime);
+    try win.begin(back.motion_clock.frameTime(win.frame_time_ns, nstime));
+    back.motion_clock.publish();
 
     var window_ended = false;
     defer {

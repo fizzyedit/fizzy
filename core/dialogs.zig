@@ -9,6 +9,7 @@
 //! like the app's — see `core.widgets` for the divide.
 const std = @import("std");
 const dvui = @import("dvui");
+const ink = @import("glass.zig");
 const rounding = @import("corners.zig");
 const liquid_glass = @import("glass").liquid_glass;
 const liquid_blob = @import("glass").liquid_blob;
@@ -468,13 +469,16 @@ pub fn surfaceShadow() dvui.Options.BoxShadow {
 /// drawn after the glass so the glass never blurs it in (`liquid_glass.drawShadow`). Call after
 /// the frost; an opaque surface keeps the ordinary box shadow under its fill.
 pub fn glassShadow(r: dvui.Rect.Physical, corners: dvui.CornerRect, scale: f32, bs: dvui.Options.BoxShadow, alpha_mult: f32) void {
+    const spread = (bs.fade + @max(@abs(bs.offset.x), @abs(bs.offset.y))) * scale;
+    const ring = r.insetAll(scale * bs.shrink);
+    if (!ink.reaches(ring.insetAll(-spread))) return;
     // The glass's own outline, always: the ring hugs the pane, whatever corners the shadow was
     // described with (resolved through the theme's corner kind, they could come out square
     // beside glass that is explicitly round).
     const theme = dvui.themeGet();
     const c = corners.finalize(&theme);
     const radii: liquid_glass.Radii = .{ c.tl.radius() * scale, c.bl.radius() * scale, c.br.radius() * scale, c.tr.radius() * scale };
-    liquid_glass.drawShadow(r.insetAll(scale * bs.shrink), radii, bs.fade * scale, bs.offset.scale(scale, dvui.Point.Physical), bs.color, bs.alpha * alpha_mult);
+    liquid_glass.drawShadow(ring, radii, bs.fade * scale, bs.offset.scale(scale, dvui.Point.Physical), bs.color, bs.alpha * alpha_mult);
 }
 
 // ---- tooltips: the same surface, small ------------------------------------------------------
@@ -667,6 +671,7 @@ pub fn tooltipBeginAt(wd: *dvui.WidgetData, origin: dvui.Point.Physical) f32 {
 /// menus' clock like any other tooltip, rather than riding the widget's fade, which runs over a
 /// fifth of the delay and played the whole grow in a blink. Returns the alpha to restore after
 /// the contents, as `tooltipBegin` does.
+// anytype: Both core and dvui tooltip widgets expose animation and widget data.
 pub fn tooltipBeginFor(tt: anytype, duration_us: i32) f32 {
     if (tt.animate) |fade_in| {
         // Still waiting out the delay: nothing, and no showing begun yet.
@@ -743,8 +748,20 @@ pub fn takeDialogCloseRectOverride() ?dvui.Rect.Physical {
     return rect;
 }
 
-pub const DisplayFn = *const fn (dvui.Id) anyerror!bool;
-pub const CallAfterFn = *const fn (dvui.Id, dvui.enums.DialogResponse) anyerror!void;
+/// What a dialog's `displayFn` and `callafterFn` can fail with. `dialogWindow` logs it and carries
+/// on, so the cause matters only to the log: `Failed` is whatever the dialog's own code raised.
+pub const Error = error{ OutOfMemory, Failed };
+
+/// `err`, raised by `what` in a dialog's own code, as the `Error` a `displayFn` returns; the cause
+/// is logged because `Failed` carries none.
+pub fn failed(what: []const u8, err: anyerror) Error {
+    if (err == error.OutOfMemory) return error.OutOfMemory;
+    dvui.log.err("dialog {s} failed: {s}", .{ what, @errorName(err) });
+    return error.Failed;
+}
+
+pub const DisplayFn = *const fn (dvui.Id) Error!bool;
+pub const CallAfterFn = *const fn (dvui.Id, dvui.enums.DialogResponse) Error!void;
 
 /// Header type icon for `windowHeader` (glyph only). Placement follows `dvui.currentWindow().button_order`:
 /// `.cancel_ok` (macOS): dismiss close on the leading edge, icon on the trailing edge.
@@ -788,14 +805,14 @@ pub const DialogOptions = struct {
     header_kind: DialogHeaderKind = .none,
 };
 
-pub fn defaultDialogDisplay(id: dvui.Id) anyerror!bool {
+pub fn defaultDialogDisplay(id: dvui.Id) Error!bool {
     // Placeholder body; every real dialog supplies its own `displayFn`. Kept free
     // of plugin (atlas/sprite) draws so the core dialog code stays plugin-agnostic.
     _ = id;
     return true;
 }
 
-pub fn defaultDialogCallAfter(id: dvui.Id, response: dvui.enums.DialogResponse) anyerror!void {
+pub fn defaultDialogCallAfter(id: dvui.Id, response: dvui.enums.DialogResponse) Error!void {
     switch (response) {
         .ok => {
             dvui.log.info("Dialog callafter for {d} returned {any}", .{ id, response });
@@ -886,7 +903,7 @@ pub fn closeFloatingDialogAnchored() void {
     dvui.dataSet(null, sub.id, "_close_rect", close_rect);
 }
 
-pub fn dialogWindow(id: dvui.Id) anyerror!void {
+pub fn dialogWindow(id: dvui.Id) !void {
     // Shown after dvui has stopped capturing the frame: in one an agent is taking a snapshot of,
     // the dialog captures itself (`replay.Snapshot.scopeBegin`).
     const scoped = Snapshot.scopeBegin();
@@ -1237,8 +1254,8 @@ fn windowHeaderPaintClose(openflag: ?*bool) void {
 
         if (button.hovered()) {
             icon_tex.icon(@src(), "close", icons.tvg.lucide.x, .{
-                .stroke_color = .{ .color = dvui.themeGet().color(.err, .fill).lighten(if (dvui.themeGet().dark) -10 else 10) },
-                .fill_color = .{ .color = dvui.themeGet().color(.err, .fill).lighten(if (dvui.themeGet().dark) -10 else 10) },
+                .stroke_color = .{ .color = dvui.themeGet().color(.err, .fill) },
+                .fill_color = .{ .color = dvui.themeGet().color(.err, .fill) },
             }, .{
                 .min_size_content = .{ .w = hover_side, .h = hover_side },
                 .expand = .ratio,
@@ -1405,6 +1422,7 @@ pub fn spinner(src: std.lang.SourceLocation, spinner_opts: SpinnerOptions, opts:
 pub fn toast(src: std.lang.SourceLocation, opts: dvui.ToastOptions) void {
     var o = opts;
     if (o.displayFn == @as(dvui.Dialog.DisplayFn, dvui.toastDisplay)) o.displayFn = toastDisplay;
+    // lint-allow(raw-transient-surface): the one place a toast is raised; toastDisplay swaps in the shared surface
     dvui.toast(src, o);
 }
 
@@ -1913,4 +1931,52 @@ test "a toast's surface is the window's material: frosted with the blur on, fill
     // `transparent` and `none` have no blur: a plain fill, and no frost (`LiquidField` is not
     // there to draw clear glass in the testing backend).
     try std.testing.expect(!try fns.drawnAt(0));
+}
+
+test "a dialog's failure is one of Error, and only an allocation failure keeps its name" {
+    const fns = struct {
+        fn display(_: dvui.Id) Error!bool {
+            return error.Failed;
+        }
+    };
+    const df: DisplayFn = fns.display;
+    const why: []const u8 = if (df(dvui.Id.zero)) |_| "ok" else |err| switch (err) {
+        error.OutOfMemory => "oom",
+        error.Failed => "failed",
+    };
+    try std.testing.expectEqualStrings("failed", why);
+    try std.testing.expectEqual(@as(Error, error.OutOfMemory), failed("test", error.OutOfMemory));
+}
+
+test "the dialog window handles callback errors without propagating them" {
+    const display: *const fn (dvui.Id) error{}!void = dialogWindow;
+    _ = display;
+}
+
+test "glass shadows cull distant ink but preserve a fade reaching into the clip" {
+    const fns = struct {
+        fn frame() !dvui.App.Result {
+            const clip = dvui.clip(.{ .x = 0, .y = 0, .w = 100, .h = 100 });
+            defer dvui.clipSet(clip);
+            try std.testing.expect(ink.reaches(.{ .x = -1, .y = 20, .w = 0, .h = 1 }));
+            dvui.clipSet(.{});
+            try std.testing.expect(!ink.reaches(.{}));
+            dvui.clipSet(.{ .x = 0, .y = 0, .w = 100, .h = 100 });
+            for ([_]f32{ 200, 20, -15 }, [_]u32{ 0, 1, 1 }) |x, expected| {
+                const before = dvui.currentWindow().render_stats.draw_calls;
+                glassShadow(.{ .x = x, .y = 20, .w = 10, .h = 10 }, .all(2), 1, .{
+                    .fade = 10,
+                    .shrink = 0,
+                    .offset = .{},
+                    .color = .black,
+                    .alpha = 1,
+                }, 1);
+                try std.testing.expectEqual(expected, dvui.currentWindow().render_stats.draw_calls - before);
+            }
+            return .ok;
+        }
+    };
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 200 } });
+    defer t.deinit();
+    _ = try dvui.testing.step(fns.frame);
 }

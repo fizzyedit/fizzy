@@ -126,6 +126,9 @@ viewport_seen: bool = false,
 /// Added to the wall clock by `nanoTime`: how far a demo's silent frames have moved the app's
 /// clock on (`app.automation.Player.frames`). Only grows.
 clock_ahead_ns: i128 = 0,
+/// What `nanoTime` takes off the wall, so no frame begins more than a motion's step after the one
+/// before it (`glass.MotionClock`).
+motion_clock: glass.MotionClock = .{},
 /// Last known window rect while not maximized/fullscreen/minimized, tracked
 /// from move/resize events
 window_geometry: WindowGeometry = .{},
@@ -216,6 +219,9 @@ pub const Viewport = struct {
     /// pointer is read against it, and it is kept above every window by its level, not ordered over
     /// the main one.
     passive: bool = false,
+    /// Windows: whether a carry window is topmost, as last applied
+    /// (`win32_titlebar.viewportCarryTopmost`): while the app is active, not after it is left.
+    carry_topmost: bool = true,
     /// A held pointer over it is read as over what is beneath it — the main window — this frame
     /// (`viewportSeeThrough`): a float's window gone to its ghost while a view is carried out of it.
     see_through: bool = false,
@@ -1365,7 +1371,7 @@ pub fn floatingWindowBackground(self: *SDLBackend, id: dvui.Id, rect: dvui.Rect.
             glass.programs.publishHost();
             glass.LiquidField.publishEnabled(liquid);
             const lens = builtin.target.os.tag == .macos and liquid and glass.LiquidField.ready();
-            glass.LiquidField.publishLook(if (lens) glass_look.inApp(opacity) else null);
+            if (lens) glass.LiquidField.publishLook(glass_look.Looks.fromOpacity(opacity));
             const s = dvui.windowNaturalScale();
             glass.BlurBackdrop.frostPane(id, rect, corners.scale(1 / s, dvui.CornerRect), s, .{
                 .radius = if (lens) glass_look.text_blur else if (m.kind == .blur) pane.blur / 2 else pane.blur,
@@ -1470,6 +1476,7 @@ fn materialPlatform(self: *SDLBackend) materials.Platform {
         .os = builtin.target.os.tag,
         .liquid_glass = liquidGlassAvailable(),
         .compositor_blur = platform.linux_titlebar.blurOffered(self.window),
+        .dwm_backdrop = platform.win32_titlebar.backdropOffered(self.window),
     };
     self.material_platform = p;
     return p;
@@ -1524,7 +1531,7 @@ pub fn viewportOpenMenu(self: *SDLBackend, at: viewport_map.Rect, radius: f32, r
         .macos => {
             _ = fizzy_macos_viewport_menu(cocoaWindow(vp.window), cocoaWindow(self.window), platform.window.ns_visual_effect_material, radius, @intFromBool(dialog));
             // Gone while the app is left (a quiet run is never active: its menus stay).
-            if (!dialog and !quiet) fizzy_macos_viewport_menu_hides(cocoaWindow(vp.window));
+            if (platform.window_layout.hidesWhenAppLeft(if (dialog) .dialog else .menu, quiet)) fizzy_macos_viewport_menu_hides(cocoaWindow(vp.window));
             vp.ride = switch (ride) {
                 .none => null,
                 .main => self.window,
@@ -1777,12 +1784,19 @@ fn openViewport(self: *SDLBackend, at: viewport_map.Rect, title_text: [:0]const 
     // Dressed by `viewportOpenMenu`, and no hit test: nothing in it moves or resizes it.
     if (menu) return vp;
     if (role == .overlay) {
-        if (comptime builtin.target.os.tag == .macos) fizzy_macos_viewport_overlay(cocoaWindow(window), cocoaWindow(self.window));
+        if (comptime builtin.target.os.tag == .macos) {
+            fizzy_macos_viewport_overlay(cocoaWindow(window), cocoaWindow(self.window));
+            // Its bubbles and zones stood over other apps' windows while fizzy was in the background.
+            if (platform.window_layout.hidesWhenAppLeft(.overlay, quiet)) fizzy_macos_viewport_menu_hides(cocoaWindow(window));
+        }
         return vp;
     }
     if (carry) {
         switch (comptime builtin.target.os.tag) {
-            .macos => fizzy_macos_viewport_carry(cocoaWindow(window), cocoaWindow(self.window), platform.window.ns_visual_effect_material),
+            .macos => {
+                fizzy_macos_viewport_carry(cocoaWindow(window), cocoaWindow(self.window), platform.window.ns_visual_effect_material);
+                if (platform.window_layout.hidesWhenAppLeft(.carry, quiet)) fizzy_macos_viewport_menu_hides(cocoaWindow(window));
+            },
             .windows => if (c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(window), c.SDL_PROP_WINDOW_WIN32_HWND_POINTER, null)) |hwnd| {
                 platform.win32_titlebar.viewportCarryChrome(hwnd);
             },
@@ -2828,6 +2842,16 @@ pub fn renderPresent(self: *SDLBackend) void {
     // window is (`mainHeld`). Presented into while a sibling's way ran, every frame waited on its
     // drawable, and the moving window's way ran at 55 frames a second, the main window's at 120.
     const main_moving = platform.window.windowMovingItself(self.window);
+    // A carry window stands over every window only while the app is the active one.
+    if (comptime builtin.target.os.tag == .windows) {
+        const active = appActive();
+        for (&self.viewport_slots) |*slot| {
+            const vp = if (slot.*) |*v| v else continue;
+            if (!vp.passive or vp.carry_topmost == active) continue;
+            vp.carry_topmost = active;
+            if (c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(vp.window), c.SDL_PROP_WINDOW_WIN32_HWND_POINTER, null)) |hwnd| platform.win32_titlebar.viewportCarryTopmost(hwnd, active);
+        }
+    }
     var moving_vp: ?*Viewport = null;
     for (&self.viewport_slots) |*slot| if (slot.*) |*v| if (v.shown and platform.window.windowMovingItself(v.window)) {
         moving_vp = v;
@@ -2921,7 +2945,7 @@ pub fn backend(self: *SDLBackend) dvui.Backend {
 
 pub fn nanoTime(self: *SDLBackend) i128 {
     const ret = std.Io.Clock.awake.now(self.io);
-    return ret.nanoseconds + self.clock_ahead_ns;
+    return self.motion_clock.now(ret.nanoseconds + self.clock_ahead_ns);
 }
 
 pub fn sleep(self: *SDLBackend, ns: u64) void {
@@ -3366,6 +3390,16 @@ fn releaseTouches(self: *SDLBackend, win: *dvui.Window) !void {
 /// This allows "ontop" application main loop to ignore such events since they
 /// are meant for something visually floating on top of the main application.
 pub fn addEvent(self: *SDLBackend, win: *dvui.Window, event: c.SDL_Event) !bool {
+    const first = win.events.items.len;
+    const time_ns: i128 = self.nanoTime() - @as(i128, c.SDL_GetTicksNS()) + @as(i128, event.common.timestamp);
+    defer for (win.events.items[first..]) |e| {
+        var buf: [32]u8 = undefined;
+        // The prefix and a u16 event number fit in 32 bytes.
+        // Backend packages cannot import core; match core/input_time.zig key().
+        const key = std.mem.print(&buf, "_input_time_{d}", .{e.num}) catch unreachable;
+        dvui.dataSet(win, win.data().id, key, time_ns);
+    };
+
     switch (event.type) {
         if (sdl3) c.SDL_EVENT_KEY_DOWN else c.SDL_KEYDOWN => {
             const sdl_key: i32 = if (sdl3) @intCast(event.key.key) else event.key.keysym.sym;
@@ -3567,6 +3601,8 @@ pub fn addEvent(self: *SDLBackend, win: *dvui.Window, event: c.SDL_Event) !bool 
             if (self.log_events) {
                 log.debug("event FOCUS_GAINED\n", .{});
             }
+            // A frame to put a carry window back over the others (`renderPresent`).
+            if (builtin.target.os.tag == .windows) self.refresh();
             if (dvui.accesskit_enabled and builtin.target.os.tag == .linux) {
                 dvui.AccessKit.c.accesskit_unix_adapter_update_window_focus_state(win.accesskit.adapter, true);
             } else if (dvui.accesskit_enabled and builtin.target.os.tag == .macos) {
@@ -4061,7 +4097,8 @@ pub fn main(main_init: std.process.Init) !u8 {
 
         Health.current.frameBegin(c.SDL_GetTicksNS());
         // marks the beginning of a frame for dvui, can call dvui functions after this
-        try win.begin(nstime);
+        try win.begin(back.motion_clock.frameTime(win.frame_time_ns, nstime));
+        back.motion_clock.publish();
 
         // send all SDL events to dvui for processing
         try back.addAllEvents(&win);
@@ -4317,10 +4354,11 @@ fn appIterate(_: ?*anyopaque) callconv(.c) c.SDL_AppResult {
 
     app_frame_open = true;
     // marks the beginning of a frame for dvui, can call dvui functions after this
-    appState.win.begin(nstime) catch |err| {
+    appState.win.begin(appState.back.motion_clock.frameTime(appState.win.frame_time_ns, nstime)) catch |err| {
         log.err("dvui.Window.begin failed: {any}", .{err});
         return c.SDL_APP_FAILURE;
     };
+    appState.back.motion_clock.publish();
 
     const app = dvui.App.get() orelse unreachable;
     os_windows.beforeFrame();

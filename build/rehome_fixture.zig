@@ -13,11 +13,16 @@ var chosen: ?Fault = null;
 
 fn fault(b: *std.Build) Fault {
     if (chosen) |f| return f;
-    chosen = b.option(Fault, "rehome-fixture-fault", "Break the rehome fixture on purpose (libc, cycle, plain); the build must fail") orelse .none;
+    chosen = b.option(
+        Fault,
+        "rehome-fixture-fault",
+        "Break the rehome fixture on purpose (libc, cycle, plain); the build must fail",
+    ) orelse .none;
     return chosen.?;
 }
 
-/// root -> child (dvui, C sources, framework-free "plain" module, and a way back to root) and root -> same_child.
+/// root -> child (dvui, C sources, framework-free "plain" module, and a way back to root) and root
+/// -> same_child.
 pub fn graph(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.OptimizeMode) *std.Build.Module {
     const old_dvui = sdk.dvuiDependency(b, .{
         .target = target,
@@ -57,7 +62,8 @@ fn expect(ok: bool, what: []const u8) void {
 }
 
 /// `source` is what `create` made, `copy` what `rehome` made of it. `same_target` is whether the
-/// copy was made for the target the source is pinned to, so its framework-free module may be shared.
+/// copy was made for the target the source is pinned to, so its framework-free module may be
+/// shared.
 pub fn check(b: *std.Build, source: *std.Build.Module, copy: *std.Build.Module, same_target: bool) void {
     const f = fault(b);
     const source_child = source.import_table.get("child").?;
@@ -67,5 +73,8 @@ pub fn check(b: *std.Build, source: *std.Build.Module, copy: *std.Build.Module, 
     const back = copied_child.import_table.get("back").?;
     expect(if (f == .cycle) back == source else back == copy, "a cycle maps to the copy of its root");
     const shared = copied_child.import_table.get("plain") == source_child.import_table.get("plain");
-    expect(if (f == .plain) shared != same_target else shared == same_target, "a framework-free module is shared only where the target is the same");
+    expect(
+        if (f == .plain) shared != same_target else shared == same_target,
+        "a framework-free module is shared only where the target is the same",
+    );
 }

@@ -224,13 +224,14 @@ pub fn configFolder(
 }
 
 pub fn configFolderZ(
+    gpa: std.mem.Allocator,
     buf: []u8,
     io: std.Io,
     environ: std.process.Environ,
     fallback: []const u8,
     dir_name: []const u8,
 ) ?[:0]const u8 {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
     const folder = configFolder(arena.allocator(), io, arena.allocator(), environ, fallback, dir_name) catch return null;
     if (folder.len + 1 > buf.len) return null;

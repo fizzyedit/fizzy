@@ -23,7 +23,7 @@ editor: *Editor,
 api: Api = undefined,
 /// Holds `infos` and every string and chapter list in them, until the next build.
 arena: std.heap.ArenaAllocator,
-infos: std.ArrayListUnmanaged(Api.Info) = .empty,
+infos: std.ArrayList(Api.Info) = .empty,
 /// The host's demos generation `infos` was built for; null: never built.
 built_for: ?u32 = null,
 /// The form factor the tapes were built for: a phone's tour has other steps and other timings.
@@ -91,10 +91,13 @@ fn build(self: *Demos) void {
     self.built_for = self.editor.app.host.demos_generation;
     self.built_phone = fizzy.core.platform.formFactor() == .mobile;
     const gpa = self.editor.app.gpa;
+    var lacking: [std.enums.values(fizzy.core.material.Kind).len][]const u8 = undefined;
+    const lacks = Demo.materialsLacking(&lacking);
     for (&Demo.catalog.entries) |*e| {
         var script: automation.Script = .init(gpa, e.name, e.title);
         script.check = automation.Input.check;
         script.compact = self.built_phone;
+        script.lacks = lacks;
         e.build(&script) catch |err| {
             script.deinit();
             dvui.log.warn("demos: '{s}' did not build: {t}", .{ e.name, err });

@@ -34,7 +34,7 @@ pub fn queuePath(_: []const u8) void {}
 
 /// On native this iterates the OS argv and resolves file args to absolute paths.
 /// On web there's no argv (the page URL could theoretically carry one in
-/// `?file=…` later, but that's a future concern); return a minimal `argv[0]`
+/// `?file=...` later, but that's a future concern); return a minimal `argv[0]`
 /// only so `freeResolvedArgv` has something to free.
 pub fn collectAndResolveArgv(
     gpa: std.mem.Allocator,

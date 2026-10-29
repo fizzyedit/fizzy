@@ -12,7 +12,8 @@
 #
 # The GLSL is complete source, for the web backend's programs (`core.gfx.programs`): its inputs
 # are named as the web's vertex shader writes them (`vColor`, `vTextureCoord`), its samplers by
-# unit (`uSampler` 0, `uTex1` 1), its uniforms `uData`, the names `web/web.js` binds.
+# unit (`uSampler` 0, `uTex1` 1), its uniforms `uData`, the names dvui's `web.js` binds
+# (`web/patches/dvui/0009`).
 #
 # Needs `shadercross` and `spirv-cross` on PATH. Exits non-zero if any shader does not compile.
 set -euo pipefail

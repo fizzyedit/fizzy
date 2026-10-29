@@ -31,6 +31,74 @@ pub const Tuning = struct {
     idle_s: f32 = 0.08,
 };
 
+/// How far content follows a finger dragged past its end: the farther past, the less it moves.
+pub const Rubber = struct {
+    /// How much of the finger's travel shows at the edge itself.
+    c: f32,
+    /// The overscroll the drag approaches but never reaches (units).
+    limit: f32,
+};
+
+/// iOS's rubber band in points: about a third of the finger's travel shows at 120 points past.
+/// Android stretches or glows instead; when it is done, its value sits beside this one.
+pub const rubber_band: Rubber = .{ .c = 0.55, .limit = 101.5 };
+
+/// The overscroll shown for a finger `excess` past the end (either sign).
+pub fn rubber(excess: f32, r: Rubber) f32 {
+    const x = @abs(excess);
+    return std.math.copysign(r.c * x * r.limit / (r.c * x + r.limit), excess);
+}
+
+/// The finger travel past the end that `rubber` shows as `overscroll`: where a drag that
+/// catches a springing area takes over from.
+pub fn unrubber(overscroll: f32, r: Rubber) f32 {
+    const o = @min(@abs(overscroll), r.limit * 0.999);
+    return std.math.copysign(o * r.limit / (r.c * (r.limit - o)), overscroll);
+}
+
+/// A place of interest in a scroll area, in the area's own units.
+pub const Notch = struct {
+    at: f32,
+    /// How far from `at` a release may land, or a lift come to rest, and still be drawn in.
+    capture: f32 = 64,
+    /// Release speeds at or above this pass the notch (units/s).
+    pass_speed: f32 = 1500,
+};
+
+/// The decay a coast needs to end on a notch.
+pub const Aim = struct { at: f32, decay: f32 };
+
+/// Where a coast released at `origin` with `v` ends: `origin` when it does not start.
+pub fn landing(origin: f32, v: f32, t: Tuning) f32 {
+    if (@abs(v) <= t.stop) return origin;
+    return origin + (v - std.math.sign(v) * t.stop) / t.decay;
+}
+
+/// The notch a release at `origin` with `v` lands within reach of, and the decay that ends the
+/// coast on it exactly, or null for a release that passes: too fast, or no notch ahead within
+/// its capture of the landing. The nearest to the landing wins.
+pub fn aim(origin: f32, v: f32, t: Tuning, notches: []const Notch) ?Aim {
+    if (@abs(v) <= t.stop) return null;
+    const end = landing(origin, v, t);
+    var best: ?Notch = null;
+    for (notches) |n| {
+        if ((n.at - origin) * v <= 0 or @abs(end - n.at) > n.capture or @abs(v) >= n.pass_speed) continue;
+        if (best == null or @abs(end - n.at) < @abs(end - best.?.at)) best = n;
+    }
+    const n = best orelse return null;
+    return .{ .at = n.at, .decay = (@abs(v) - t.stop) / @abs(n.at - origin) };
+}
+
+/// The position of the notch within whose capture `pos` is, the nearest to it, or null.
+pub fn nearest(pos: f32, notches: []const Notch) ?f32 {
+    var best: ?f32 = null;
+    for (notches) |n| {
+        if (@abs(pos - n.at) > n.capture) continue;
+        if (best == null or @abs(pos - n.at) < @abs(pos - best.?)) best = n.at;
+    }
+    return best;
+}
+
 /// True while a release coast is still running.
 coasting: bool = false,
 /// Current coast velocity (units/s).
@@ -95,11 +163,10 @@ pub fn release(self: *Fling, t: Tuning) bool {
     return self.coasting;
 }
 
-/// Touch sampling: record this frame's movement into the position/time history.
-/// Call once per frame the drag moved, exactly like `sample`.
-pub fn sampleTimed(self: *Fling, frame_delta: f32) void {
-    self.hist_pos += frame_delta;
-    self.hist[self.hist_head] = .{ .pos = self.hist_pos, .t = dvui.frameTimeNS() };
+/// Record one motion sample using its timestamp in the backend nanosecond clock.
+pub fn sampleTimed(self: *Fling, delta: f32, time_ns: i128) void {
+    self.hist_pos += delta;
+    self.hist[self.hist_head] = .{ .pos = self.hist_pos, .t = time_ns };
     self.hist_head = (self.hist_head + 1) % hist_cap;
     if (self.hist_len < hist_cap) self.hist_len += 1;
 }
@@ -115,6 +182,11 @@ fn histAt(self: *const Fling, i: usize) TimedSample {
 /// real motion, and to frame jitter because displacement and time come from the same
 /// pair of samples. Returns true if a coast started.
 pub fn releaseWindowed(self: *Fling, t: Tuning, window_s: f32) bool {
+    return self.releaseWindowedAt(t, window_s, dvui.frameTimeNS());
+}
+
+/// Release using the input event time in the backend nanosecond clock.
+pub fn releaseWindowedAt(self: *Fling, t: Tuning, window_s: f32, time_ns: i128) bool {
     self.coasting = false;
     var dbg: Debug = .{ .samples = self.hist_len };
     if (self.hist_len >= 2) {
@@ -132,7 +204,7 @@ pub fn releaseWindowed(self: *Fling, t: Tuning, window_s: f32) bool {
         }
 
         const dt: f32 = @floatCast(@as(f64, @floatFromInt(newest.t - old.t)) / 1_000_000_000.0);
-        const idle_s: f32 = @floatCast(@as(f64, @floatFromInt(dvui.frameTimeNS() - newest.t)) / 1_000_000_000.0);
+        const idle_s: f32 = @floatCast(@as(f64, @floatFromInt(time_ns - newest.t)) / 1_000_000_000.0);
         dbg.dt = dt;
         dbg.idle_s = idle_s;
         if (dt > 0.0) {
@@ -150,14 +222,17 @@ pub fn releaseWindowed(self: *Fling, t: Tuning, window_s: f32) bool {
     return self.coasting;
 }
 
-/// Advance the coast one frame and return the position delta to apply, or null when
+/// Advance the coast by the last frame's duration and return the position delta to apply, or null when
 /// not coasting. On the frame the coast finishes it still returns the final delta
 /// but leaves `coasting` false, so check `coasting` afterward to detect the stop.
 pub fn step(self: *Fling, t: Tuning) ?f32 {
     if (!self.coasting) return null;
     const dt = dvui.secondsSinceLastFrame();
-    const delta = self.vel * dt;
-    self.vel *= @exp(-t.decay * dt);
+    // The integral of the decaying speed over this frame, not speed times the frame: the
+    // position then depends on the elapsed time alone, however it was cut into frames.
+    const keep = @exp(-t.decay * dt);
+    const delta = self.vel * (1.0 - keep) / t.decay;
+    self.vel *= keep;
     if (@abs(self.vel) < t.stop) self.coasting = false;
     return delta;
 }
@@ -166,4 +241,50 @@ pub fn step(self: *Fling, t: Tuning) ?f32 {
 pub fn cancel(self: *Fling) void {
     self.coasting = false;
     self.vel = 0.0;
+}
+
+test "the rubber band shows a third of the travel at 120 points and never reaches its limit" {
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0 / 3.0), rubber(120, rubber_band) / 120, 0.01);
+    try std.testing.expectEqual(@as(f32, -rubber(300, rubber_band)), rubber(-300, rubber_band));
+    try std.testing.expect(rubber(1e6, rubber_band) < rubber_band.limit);
+    for ([_]f32{ -250, -3, 0, 40, 300 }) |x| {
+        try std.testing.expectApproxEqAbs(x, unrubber(rubber(x, rubber_band), rubber_band), 0.01);
+    }
+}
+
+/// Where a coast released at `origin` with `v` stops, from its closed form.
+fn coastEnd(origin: f32, v: f32, decay: f32, t: Tuning) f32 {
+    return origin + v / decay * (1 - t.stop / @abs(v));
+}
+
+test "landing is where the coast ends" {
+    const t: Tuning = .{ .decay = 2, .stop = 20 };
+    try std.testing.expectEqual(@as(f32, 290), landing(0, 600, t));
+    try std.testing.expectEqual(@as(f32, 7), landing(7, 15, t));
+    for ([_]f32{ 600, -600, 3000, -3000 }) |v| {
+        try std.testing.expectApproxEqAbs(landing(0, v, t), coastEnd(0, v, t.decay, t), 1e-3);
+    }
+}
+
+test "aim lands the coast on the notch" {
+    const t: Tuning = .{ .decay = 2, .stop = 20 };
+    const a = aim(0, 600, t, &.{.{ .at = 300 }}).?;
+    try std.testing.expectApproxEqAbs(@as(f32, 580.0 / 300.0), a.decay, 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 300), coastEnd(0, 600, a.decay, t), 1e-3);
+    const back = aim(0, -600, t, &.{.{ .at = -300 }}).?;
+    try std.testing.expectApproxEqAbs(@as(f32, -300), coastEnd(0, -600, back.decay, t), 1e-3);
+}
+
+test "aim lets a fast, a far or a behind release go" {
+    const t: Tuning = .{ .decay = 2, .stop = 20 };
+    try std.testing.expectEqual(@as(?Aim, null), aim(0, 2000, t, &.{.{ .at = 1000 }}));
+    try std.testing.expectEqual(@as(?Aim, null), aim(0, 600, t, &.{.{ .at = 400 }}));
+    try std.testing.expectEqual(@as(?Aim, null), aim(0, 600, t, &.{.{ .at = -50 }}));
+}
+
+test "the nearest notch to the landing wins" {
+    const t: Tuning = .{ .decay = 2, .stop = 20 };
+    try std.testing.expectEqual(@as(f32, 280), aim(0, 600, t, &.{ .{ .at = 330 }, .{ .at = 280 } }).?.at);
+    try std.testing.expectEqual(@as(?f32, 280), nearest(290, &.{ .{ .at = 330 }, .{ .at = 280 } }));
+    try std.testing.expectEqual(@as(?f32, null), nearest(400, &.{.{ .at = 330 }}));
 }

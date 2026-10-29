@@ -40,6 +40,7 @@ Fizzy (Editor) ←── Host registries + EditorAPI ──→ Plugin (register(
 - **`archive`** — opens a `.zip` as a mounted folder (the web's "open a vault" path, too).
 - **`devtools`** — the dashboard: where the app's time goes, from `core.profile`, for a person and an agent alike.
 - **`guides`** — every demo the app can play, on the rail: fizzy's tour and each plugin's own, by chapter, through the `demos` service.
+- **`dashboard`** — what needs the person, one card at a time (a carousel with a slide between cards), drawn from the `dashboard.cards` service; with no provider it offers a demo of three cards.
 - `shared` — build helpers used across plugins' `static/integration.zig` (not a plugin itself).
 
 **Pixi (pixel-art editor) and Drive (Google Drive as a mount) live outside this repo** as third-party-style plugins ([`fizzyedit/pixi`](https://github.com/fizzyedit/pixi), [`fizzyedit/drive`](https://github.com/fizzyedit/drive)) — they ship and update purely through the plugin store (`docs/PLUGINS.md` §6), with no special treatment in Fizzy itself. **Trust `ls plugins/` and `jj log` over any doc's plugin list.**
@@ -76,15 +77,40 @@ all decided at comptime (`App.loads_plugins`). What is fizzy's own (bundle id, u
 `VERSION`, its plist and resource script) only fizzy's root `build.zig` passes (`Options.own`);
 an app sets its identity through fizzy's options (`app-name`, `app-bundle-id`, `app_version`,
 `repo-url`, `app-package-title`, `app-icon`, `app-icon-ico`, `app-icon-icns`, …), and
-`try fizzy.addPackageSteps(b, fizzy_dep)` gives its own build `package` and `packageall`. See
+`try fizzy.addPackageSteps(b, fizzy_dep)` gives its own build `package` and `packageall`, which
+ship the files of each directory in `package-dirs` beside the executable and pass `vpk-args` to
+`vpk pack`. See
 [`fizzyedit/example-app`](https://github.com/fizzyedit/example-app), which bundles
 `fizzyedit/example-plugin`.
+
+A plugin package with dependencies of its own builds its static module against the executables
+that link it: it exposes a function over `fizzy.plugin.staticModule(b, framework, .{})`, and the
+app lists what that returns for `fizzy.framework(fizzy_dep, .native)`. Such a module is linked as
+it is, its dependencies with the targets, modules and C sources its build gave them. An unwired
+`"plugin"` module is copied for each executable instead (`build/plugins.zig`'s `rehome`), and
+gets each of what the SDK exports a plugin (`dvui`, `core`, `fizzy_sdk`, `icons`, `tape`,
+`replay`) that its build did not wire, the executable's own.
+`fizzy.addApp` is `buildApp` returning the executables, for steps of the app's own. An entry's
+`targets` names the kinds of executable that link it, each with the module built against that
+kind's framework (`.{ .target = .web, .module = ... }`); one the browser cannot run names only
+`.native`.
+It returns the web build too, one directory (`web`; the page and the rest apart, `web_page` and
+`web_files`), and `fizzy.addWebSteps(b, fizzy_dep)` gives an app built with `buildApp` a `web`
+step that installs it.
 
 **The example repos move with fizzy.** `fizzyedit/example-app` (fizzy as a library, in every
 shape) and `fizzyedit/example-plugin` (the plugin template) live outside this repo, and CI builds
 both against each pull request's own tree (`scripts/check-examples.sh`, which you can run
 locally): a change here that breaks either fails here. A change that needs them changed too
 lands its PR in that repo alongside.
+
+An app that wants fizzy's own shape with a different frame sets the **`Chrome`** build options
+(`src/editor/Chrome.zig`): `-Dchrome-sidebar-edge=right` puts the rail and Sidebar on the right
+(the width stays the Sidebar's `extent`), `-Dchrome-panel=false` leaves out the Panel and fizzy's
+Output view, `-Dchrome-menu-bar=false` and `-Dchrome-infobar=false` leave out those bars
+(macOS keeps its native menu). The defaults are fizzy's own frame. An app-supplied layout
+(`-Dapp-layout=`) draws its own frame. The phone shape reads only `sidebar_edge` (landscape
+sheets) and `panel`.
 
 ## Plugin store: built, not forward-looking
 

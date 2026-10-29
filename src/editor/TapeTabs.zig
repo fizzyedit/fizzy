@@ -23,7 +23,7 @@ const app = @import("app");
 const automation = app.automation;
 const Editor = @import("Editor.zig");
 
-playing: std.ArrayListUnmanaged(*Playback) = .empty,
+playing: std.ArrayList(*Playback) = .empty,
 /// The next playback's number, for its root.
 next: u32 = 1,
 /// A tape waiting for the plugins its documents need (`openWhenReady`): its bytes, owned.
@@ -107,7 +107,7 @@ pub fn openWhenReady(self: *TapeTabs, editor: *Editor, bytes: []const u8, alone:
     }.any;
     var owned = automation.Tape.load(gpa, bytes, check) catch return error.BadTape;
     defer owned.deinit();
-    var owners: std.ArrayListUnmanaged([]u8) = .empty;
+    var owners: std.ArrayList([]u8) = .empty;
     errdefer {
         for (owners.items) |o| gpa.free(o);
         owners.deinit(gpa);
@@ -135,7 +135,7 @@ pub fn openWhenReady(self: *TapeTabs, editor: *Editor, bytes: []const u8, alone:
 fn wait(self: *TapeTabs, editor: *Editor) void {
     const w = if (self.waiting) |*waiting| waiting else return;
     const since = w.since_ns orelse since: {
-        w.since_ns = dvui.frameTimeNS();
+        w.since_ns = core.MotionClock.wallFrameNs();
         break :since w.since_ns.?;
     };
     const gpa = editor.app.gpa;
@@ -158,7 +158,7 @@ fn wait(self: *TapeTabs, editor: *Editor) void {
     }
     if (missing) |o| {
         const native = comptime @import("builtin").target.cpu.arch != .wasm32;
-        if (native or failed or dvui.frameTimeNS() - since > wait_limit_ns) {
+        if (native or failed or core.MotionClock.wallFrameNs() - since > wait_limit_ns) {
             dvui.log.warn("tape: it needs the plugin '{s}', which is not loaded", .{o});
             core.dialogs.toast(@src(), .{ .message = dvui.currentWindow().arena().print("This tape needs the {s} plugin", .{o}) catch "This tape needs a plugin that is not loaded" });
             w.deinit(gpa);
