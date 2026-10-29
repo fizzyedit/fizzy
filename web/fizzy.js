@@ -42,6 +42,25 @@ export function wheelTicks(ev, state) {
   return { events, state: { lowest, lowestBatch } };
 }
 
+// One wheel reader per canvas, for the worker path and the page's own loop. The classifier's
+// batch minima reset after a second without wheel input: the user may have switched devices.
+// A trackpad pinch is the pinch listener's.
+export function wheelInput(canvas, send, now = () => Date.now()) {
+  let state = { lowest: [99999, 99999], lowestBatch: [99999, 99999] };
+  let lastMs = now();
+  canvas.addEventListener("wheel", (ev) => {
+    if (ev.ctrlKey && ev.deltaMode === 0) return;
+    ev.preventDefault();
+    ev.stopImmediatePropagation();
+    const ms = now();
+    if (ms - lastMs > 1000) state.lowestBatch = [99999, 99999];
+    lastMs = ms;
+    const result = wheelTicks(ev, state);
+    state = result.state;
+    for (const { axis, trackpad, ticks } of result.events) send(axis, trackpad, ticks);
+  }, { capture: true, passive: false });
+}
+
 // Pointer input is batched before crossing the worker boundary. Times are absolute
 // performance-clock milliseconds; subtracting the receiver's origin preserves latency.
 export function pointerInput(canvas, send, clockOrigin = performance.timeOrigin, done = () => {}) {
@@ -941,8 +960,8 @@ export class Fizzy {
     // (every modern browser synthesizes this). Two things to do here in the capture phase,
     // before dvui's bubble-phase listener on the canvas:
     //   1. preventDefault + stopImmediatePropagation — keeps the browser from page-zooming
-    //      and keeps dvui's wheel handler from folding the tiny pinch delta into its
-    //      `scroll_lowest` minimum (an all-time min that never resets and otherwise
+    //      and keeps the wheel reader from folding the tiny pinch delta into its
+    //      `lowest` minimum (an all-time min that never resets and otherwise
     //      poisons trackpad scroll sensitivity for the rest of the session).
     //   2. Forward the magnification into the wasm trackpad accumulator
     //      (`FizzyWebTrackpadMagnification`). The canvas widget drains it each frame and
@@ -1308,17 +1327,7 @@ export class Fizzy {
       canvas.addEventListener("contextmenu", (ev) => ev.preventDefault());
       pointerInput(canvas, post, performance.timeOrigin, oskCheck);
 
-      let scrollState = { lowest: [99999, 99999], lowestBatch: [99999, 99999] };
-      let scrollLastMs = Date.now();
-      canvas.addEventListener("wheel", (ev) => {
-        ev.preventDefault();
-        const now = Date.now();
-        if (now - scrollLastMs > 1000) scrollState.lowestBatch = [99999, 99999];
-        scrollLastMs = now;
-        const result = wheelTicks(ev, scrollState);
-        scrollState = result.state;
-        for (const { axis, ticks, trackpad } of result.events) event(4, axis, trackpad, ticks, 0);
-      }, { passive: false });
+      wheelInput(canvas, (axis, trackpad, ticks) => event(4, axis, trackpad, ticks, 0));
 
       canvas.addEventListener("pointerdown", () => inputFilter.clear());
       const keydown = (ev) => {
@@ -1414,6 +1423,10 @@ export class Fizzy {
             }
             app.requestRender();
           }, performance.timeOrigin, () => app.oskCheck());
+          wheelInput(dvuiCanvas, (axis, trackpad, ticks) => {
+            app.instance.exports.add_event(4, axis, trackpad, ticks, 0);
+            app.requestRender();
+          });
           for (const name of ["touchstart", "touchmove", "touchend", "touchcancel", "mousedown", "mousemove", "mouseup"]) {
             dvuiCanvas.addEventListener(name, (ev) => ev.stopImmediatePropagation(), { capture: true });
           }
