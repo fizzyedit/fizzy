@@ -46,6 +46,8 @@ snap: bool,
 /// Whether this area may overscroll: not under a parent that takes what it cannot, and not when
 /// something else places its content.
 bands: bool,
+/// Whether a scroll area of the same subwindow encloses this one and takes what it cannot scroll.
+nested: bool,
 /// The places of interest this frame (`notches`).
 notch_list: []const Fling.Notch = &.{},
 
@@ -121,6 +123,7 @@ pub fn init(src: std.builtin.SourceLocation, init_opts: dvui.ScrollAreaWidget.In
     var have_parent = false;
     if (c.parentScroll) |parent| have_parent = parent.subwindowId == c.subwindowId;
     var self: ScrollArea = .{
+        .nested = have_parent,
         .area = area,
         .si = area.si,
         .touch = dvui.dataGetPtrDefault(null, c.data().id, "_touch", Touch, .{}),
@@ -276,8 +279,7 @@ fn processMotionScroll(self: *ScrollArea, motion: dvui.Point.Physical, scale: f3
     const before = si.viewport.topLeft();
     var moved: dvui.Point = .{};
 
-    var have_parent = false;
-    if (c.parentScroll) |parent| have_parent = parent.subwindowId == c.subwindowId;
+    const have_parent = self.nested;
 
     // Propagate unless this area did the whole scroll in the main direction of movement.
     var propagate = false;

@@ -43,14 +43,18 @@ pub const Edge = struct {
 
 /// How far content shows past the edge for a finger `pull` points past it (sign kept); `extent`
 /// is the viewport's length. The farther past, the less it moves, and it never reaches `extent`.
+/// An unmeasured or empty viewport has no band.
 pub fn band(pull: f32, extent: f32, e: Edge) f32 {
+    if (extent <= 0) return 0;
     const x = @abs(pull);
     return std.math.copysign((1 - 1 / (x * e.resistance / extent + 1)) * extent, pull);
 }
 
 /// The inverse of `band`: the pull that shows `shown` past the edge, where a finger that catches
 /// a moving band takes over from. A `shown` at or beyond `extent` is held just inside it.
+/// An unmeasured or empty viewport has no pull.
 pub fn pullFor(shown: f32, extent: f32, e: Edge) f32 {
+    if (extent <= 0) return 0;
     const b = @min(@abs(shown), extent * 0.999);
     return std.math.copysign(extent / e.resistance * b / (extent - b), shown);
 }
@@ -261,6 +265,17 @@ pub fn step(self: *Fling, t: Tuning) ?f32 {
 pub fn cancel(self: *Fling) void {
     self.coasting = false;
     self.vel = 0.0;
+}
+
+test "empty viewports have no band or pull" {
+    for ([_]f32{ 0, -1 }) |extent| {
+        for ([_]f32{ -120, 0, 120 }) |distance| {
+            try std.testing.expectEqual(@as(f32, 0), band(distance, extent, .{}));
+            try std.testing.expectEqual(@as(f32, 0), pullFor(distance, extent, .{}));
+        }
+    }
+    try std.testing.expectEqual(@as(f32, 0), band(0, 400, .{}));
+    try std.testing.expectEqual(@as(f32, 0), pullFor(0, 400, .{}));
 }
 
 test "band and pullFor are inverses, and the band stays inside the viewport" {
