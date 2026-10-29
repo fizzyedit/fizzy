@@ -42,16 +42,6 @@ pub fn processEvents(self: *Button) void {
     });
 }
 
-/// Test an event against dvui's widget event routing, without consuming it.
-pub fn matchEvent(self: *Button, e: *dvui.Event) bool {
-    return self.inner.matchEvent(e);
-}
-
-/// Update hover state using dvui's border rectangle.
-pub fn processHover(self: *Button) void {
-    self.inner.processHover();
-}
-
 /// Draw the styled border and background without expanding them to the touch target.
 pub fn drawBackground(self: *Button) void {
     self.inner.drawBackground();
@@ -87,29 +77,9 @@ pub fn clicked(self: *Button) bool {
     return self.inner.clicked();
 }
 
-/// The inner dvui widget and its layout vtable, valid until `deinit`.
-pub fn widget(self: *Button) dvui.Widget {
-    return self.inner.widget();
-}
-
 /// Borrow the inner widget data; valid until `deinit`.
 pub fn data(self: *Button) *dvui.WidgetData {
     return self.inner.data();
-}
-
-/// Delegate child placement to the inner widget using dvui layout coordinates.
-pub fn rectFor(self: *Button, id: dvui.Id, min_size: dvui.Size, e: dvui.Options.Expand, g: dvui.Options.Gravity) dvui.Rect {
-    return self.inner.rectFor(id, min_size, e, g);
-}
-
-/// Convert a local rectangle to physical screen coordinates using the inner widget.
-pub fn screenRectScale(self: *Button, rect: dvui.Rect) dvui.RectScale {
-    return self.inner.screenRectScale(rect);
-}
-
-/// Report a child's minimum size to the inner widget's layout.
-pub fn minSizeForChild(self: *Button, size: dvui.Size) void {
-    self.inner.minSizeForChild(size);
 }
 
 /// Finish layout and restore the parent; releases a dvui-allocated widget if applicable.
@@ -119,9 +89,8 @@ pub fn deinit(self: *Button) void {
 
 test "touch clicks six points outside a 32 point border without changing its drawn rect" {
     const Frame = struct {
-        // The test callback writes these on the testing window's thread.
+        // Each field is written by the test callback on the testing window's thread.
         var border: dvui.Rect.Physical = .{};
-        // The test callback writes this on the testing window's thread.
         var click: bool = false;
 
         fn draw() !dvui.App.Result {

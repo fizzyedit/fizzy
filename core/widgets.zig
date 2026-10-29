@@ -19,7 +19,6 @@ const dvui = @import("dvui");
 const builtin = @import("builtin");
 const icons = @import("icons");
 const platform = @import("platform.zig");
-const keyboard = @import("keyboard.zig");
 const dialogs = @import("dialogs.zig");
 const draw = @import("draw.zig");
 const anchor = @import("replay").anchor;
@@ -229,7 +228,7 @@ pub fn textEntryDeinit(te: *dvui.TextEntryWidget) void {
     const focused = wd.id == dvui.focusedWidgetId();
     te.deinit();
     // The entry's own scroll area must be closed before scrolling the enclosing area.
-    keyboard.scrollIntoView(&wd, focused);
+    @import("keyboard.zig").scrollIntoView(&wd, focused);
 }
 
 /// A context menu's surface, opened at the point the pointer was pressed. Every right-click
