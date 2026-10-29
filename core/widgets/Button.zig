@@ -4,9 +4,9 @@ const dvui = @import("dvui");
 const form_factor = @import("../form_factor.zig");
 const Button = @This();
 
-pub const InitOptions = dvui.ButtonWidget.InitOptions;
-
 inner: dvui.ButtonWidget,
+
+pub const InitOptions = dvui.ButtonWidget.InitOptions;
 
 /// Install a button using dvui interaction and layout options; pair with `deinit`.
 /// Call during a frame, then process events before drawing its background and children.
@@ -30,10 +30,10 @@ pub fn hitRect(self: *Button) dvui.Rect.Physical {
     return rect;
 }
 
-/// Consume this frame’s clicks using the touch hit rectangle; call once before drawing.
+/// Consume this frame's clicks using the touch hit rectangle; call once before drawing.
 pub fn processEvents(self: *Button) void {
     // TODO(touch-target arbitration): choose the nearest border before consuming overlapping
-    // targets; processing order wins today, including over a neighbour’s border. Resolve before
+    // targets; processing order wins today, including over a neighbour's border. Resolve before
     // migrating tightly packed toolbars.
     self.inner.click = dvui.clicked(self.data(), .{
         .rect = self.hitRect(),
@@ -42,12 +42,12 @@ pub fn processEvents(self: *Button) void {
     });
 }
 
-/// Test an event against dvui’s widget event routing, without consuming it.
+/// Test an event against dvui's widget event routing, without consuming it.
 pub fn matchEvent(self: *Button, e: *dvui.Event) bool {
     return self.inner.matchEvent(e);
 }
 
-/// Update hover state using dvui’s border rectangle.
+/// Update hover state using dvui's border rectangle.
 pub fn processHover(self: *Button) void {
     self.inner.processHover();
 }
@@ -57,7 +57,7 @@ pub fn drawBackground(self: *Button) void {
     self.inner.drawBackground();
 }
 
-/// Draw the keyboard focus indicator after drawing the button’s children.
+/// Draw the keyboard focus indicator after drawing the button's children.
 pub fn drawFocus(self: *Button) void {
     self.inner.drawFocus();
 }
@@ -72,7 +72,7 @@ pub fn focused(self: *Button) bool {
     return self.inner.focused();
 }
 
-/// Whether this frame’s event processing marked the button hovered.
+/// Whether this frame's event processing marked the button hovered.
 pub fn hovered(self: *Button) bool {
     return self.inner.hovered();
 }
@@ -107,7 +107,7 @@ pub fn screenRectScale(self: *Button, rect: dvui.Rect) dvui.RectScale {
     return self.inner.screenRectScale(rect);
 }
 
-/// Report a child’s minimum size to the inner widget’s layout.
+/// Report a child's minimum size to the inner widget's layout.
 pub fn minSizeForChild(self: *Button, size: dvui.Size) void {
     self.inner.minSizeForChild(size);
 }
@@ -118,10 +118,6 @@ pub fn deinit(self: *Button) void {
 }
 
 test "touch clicks six points outside a 32 point border without changing its drawn rect" {
-    const widgets = @import("../widgets.zig");
-    _ = &widgets.button;
-    _ = &widgets.buttonIcon;
-    _ = &widgets.buttonLabelAndIcon;
     const Frame = struct {
         // The test callback writes these on the testing window's thread.
         var border: dvui.Rect.Physical = .{};
@@ -166,4 +162,33 @@ test "touch clicks six points outside a 32 point border without changing its dra
     try std.testing.expectEqual(.mouse, dvui.pointerKind());
     try std.testing.expect(!Frame.click);
     try std.testing.expectEqual(original, Frame.border);
+}
+
+test "button verbs draw and accept a touch outside their borders" {
+    const widgets = @import("../widgets.zig");
+    const Frame = struct {
+        // The draw callback writes the click results on the testing window's thread.
+        var clicks: [3]bool = .{ false, false, false };
+
+        fn draw() !dvui.App.Result {
+            const opts: dvui.Options = .{ .rect = .{ .x = 50, .y = 50, .w = 32, .h = 32 }, .margin = dvui.Rect.all(0) };
+            clicks[0] = widgets.button(@src(), "Label", .{}, opts);
+            clicks[1] = widgets.buttonIcon(@src(), "Icon", dvui.entypo.cross, .{}, .{}, opts.override(.{ .rect = .{ .x = 50, .y = 100, .w = 32, .h = 32 } }));
+            clicks[2] = widgets.buttonLabelAndIcon(@src(), .{ .label = "Both", .tvg_bytes = dvui.entypo.cross }, opts.override(.{ .rect = .{ .x = 50, .y = 150, .w = 32, .h = 32 } }));
+            return .ok;
+        }
+    };
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 200, .h = 200 } });
+    defer t.deinit();
+    try dvui.testing.settle(Frame.draw);
+    const cw = dvui.currentWindow();
+    for (0..3) |i| {
+        // Six points left of each border, at its vertical centre.
+        const norm: dvui.Point = .{ .x = 44.0 / 200.0, .y = (66.0 + 50.0 * @as(f32, @floatFromInt(i))) / 200.0 };
+        _ = try cw.addEventPointer(.{ .button = .touch0, .action = .press, .xynorm = norm });
+        _ = try dvui.testing.step(Frame.draw);
+        _ = try cw.addEventPointer(.{ .button = .touch0, .action = .release, .xynorm = norm });
+        _ = try dvui.testing.step(Frame.draw);
+        for (Frame.clicks, 0..) |activated, j| try std.testing.expectEqual(i == j, activated);
+    }
 }
