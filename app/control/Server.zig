@@ -1275,8 +1275,8 @@ test "a stopped server ends a keep-alive connection waiting for its next request
 }
 
 /// A client that asks for `GET /remote` to become a byte stream: reads the `101`, writes `ping`
-/// right behind its request, reads four bytes, then reads to the end unless `leave`, which closes
-/// the socket as soon as it has the head.
+/// right behind its request, reads four bytes, then holds the socket open until `release` unless
+/// `leave`, which closes the socket as soon as it has the head.
 const UpgradePeer = struct {
     io: Io,
     path: []const u8,
@@ -1284,7 +1284,7 @@ const UpgradePeer = struct {
     head: [160]u8 = undefined,
     head_len: usize = 0,
     reply: [4]u8 = undefined,
-    ended: bool = false,
+    release: Io.Event = .unset,
 
     fn run(self: *UpgradePeer) void {
         const addr = Io.net.UnixAddress.init(self.path) catch return;
@@ -1304,8 +1304,9 @@ const UpgradePeer = struct {
         }
         if (self.leave) return;
         r.interface.readSliceAll(&self.reply) catch return;
-        var more: [1]u8 = undefined;
-        self.ended = if (r.interface.readSliceShort(&more)) |n| n == 0 else |_| true;
+        // Windows AF_UNIX does not reliably deliver EOF. Keep the peer open so the test can
+        // prove the server finishes the link without the client closing it first.
+        self.release.wait(self.io) catch return;
     }
 };
 
@@ -1355,16 +1356,17 @@ test "an upgraded connection carries bytes both ways until the app closes it" {
     }
     try std.testing.expectEqualStrings("ping", got.items);
     try link.send("pong");
-    // Closing ends the client's read, after what was queued is written.
+    // The server must finish while the client holds its socket open, after writing the queue.
     link.close();
+    waited = 0;
+    while (!link.isGone() and waited < 2000) : (waited += 1) io.sleep(.fromMilliseconds(1), .awake) catch {};
+    const finished_while_peer_open = link.isGone();
+    peer.release.set(io);
     thread.join();
     try std.testing.expect(std.mem.startsWith(u8, peer.head[0..peer.head_len], "HTTP/1.1 101 Switching Protocols\r\n"));
     try std.testing.expect(std.mem.find(u8, peer.head[0..peer.head_len], "upgrade: fizzy-remote-view/1\r\n") != null);
     try std.testing.expectEqualStrings("pong", &peer.reply);
-    try std.testing.expect(peer.ended);
-    waited = 0;
-    while (!link.isGone() and waited < 2000) : (waited += 1) io.sleep(.fromMilliseconds(1), .awake) catch {};
-    try std.testing.expect(link.isGone());
+    try std.testing.expect(finished_while_peer_open);
 }
 
 test "a client that leaves an upgraded connection finishes its link" {
