@@ -81,6 +81,7 @@ pub fn build(b: *std.Build) !void {
     const optimize = b.standardOptimizeOption(.{});
 
     const base: @import("build/app.zig").Options = .{
+        .look = .{ .motion = b.option(f32, "look-motion", "Initial motion level until the person chooses one") },
         .windows_msvc_libc_opt = windows_msvc_libc_opt,
         .fetch_msvc_opt = fetch_msvc_opt,
         .macos_sign_app_identity = macos_sign_app_identity,
@@ -110,6 +111,8 @@ pub fn build(b: *std.Build) !void {
             .plist = "assets/macos/info.plist",
         } else null,
     };
+
+    if (b.pkg_hash.len == 0) @import("build/android.zig").add(b);
 
     // A consumer that bundles plugins of its own cannot say so through `b.dependency`
     // options (a plugin is a module from another package, not a value), so it passes

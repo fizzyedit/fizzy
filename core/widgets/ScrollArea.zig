@@ -622,6 +622,7 @@ test "coast displacement follows each frame gap" {
     var previous_y = t_drawn_y;
     // frameAfter draws at the current timestamp, then begins the next frame with this gap.
     // Alternating long and short gaps exposes a displacement applied one frame late.
+    var max_error: f32 = 0;
     for ([_]u64{ 8, 25, 8, 25, 8, 25, 8, 25 }) |next_gap| {
         const time = dvui.currentWindow().frame_time_ns;
         try frameAfter(next_gap);
@@ -630,11 +631,15 @@ test "coast displacement follows each frame gap" {
         const to_s = @as(f64, @floatFromInt(time - release_time)) / std.time.ns_per_s;
         const expected: f32 = @floatCast(release_speed / tuning.decay *
             (@exp(-tuning.decay * from_s) - @exp(-tuning.decay * to_s)));
+        std.debug.print("coast frame: gap={d} ms, drawn={d:.6} px, integral={d:.6} px, error={d:.6} px\n", .{
+            @divTrunc(time - previous_time, std.time.ns_per_ms), displacement, expected, displacement - expected,
+        });
         // Check what reaches the renderer against the release integral, including its decay.
-        try std.testing.expectApproxEqAbs(expected, displacement, 0.0001);
+        max_error = @max(max_error, @abs(displacement - expected));
         previous_time = time;
         previous_y = t_drawn_y;
     }
+    try std.testing.expectApproxEqAbs(@as(f32, 0), max_error, 0.0001);
 }
 
 test "a coast requests another frame even when its timestamp has not advanced" {
