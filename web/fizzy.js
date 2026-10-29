@@ -1037,7 +1037,8 @@ export class Fizzy {
         focusQuietly(hidden);
       }
 
-      // Initialize before worker setup can deliver text-input messages.
+      // Forward keyboard edits to the fragment before the caret as typing to the worker.
+      // Declare before worker.onmessage, which may deliver textInput immediately.
       const inputFilter = new TextInput(hidden, {
         text: (text) => post({ type: "text", text }),
         backspace: () => {

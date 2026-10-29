@@ -148,6 +148,7 @@ const workerMessages = [];
 let workerInstance;
 const { TextInput } = await import(pathToFileURL(path.join(dir, "web.js")).href);
 TextInput.prototype.clear = () => { filterClears++; };
+// This spy checks routing; text-input.test.js exercises the real filter and Backspace.
 TextInput.prototype.keydown = (ev) => { filteredKeys.push(ev.key); };
 Canvas.prototype.transferControlToOffscreen = function () { return {}; };
 globalThis.OffscreenCanvas = class {};
@@ -176,11 +177,11 @@ workerCanvas.dispatch("pointerdown", { pointerId: 1, pointerType: "mouse", butto
 assert.equal(filterClears, 2, "pointer input still clears the filter");
 const hidden = document.body.children[0];
 assert.equal(key(hidden).defaultPrevented, false, "the worker hidden input is recognized without asking main-thread wasm");
-for (const key of ["a", "Backspace"]) {
-  hidden.dispatch("keydown", { key, preventDefault() {} });
-  hidden.dispatch("keyup", { key });
+for (const pressedKey of ["a", "Backspace"]) {
+  hidden.dispatch("keydown", { key: pressedKey, preventDefault() {} });
+  hidden.dispatch("keyup", { key: pressedKey });
 }
-assert.deepEqual(filteredKeys, ["a", "Backspace"], "typing and backspace reach the filter after early text input");
+assert.deepEqual(filteredKeys, ["a", "Backspace"], "typing and backspace are routed to the filter spy after early text input");
 assert.deepEqual(workerMessages.filter((m) => m.type === "key").map((m) => [m.kind, m.key]), [
   [5, "a"], [6, "a"], [5, "Backspace"], [6, "Backspace"],
 ], "typing and backspace still reach the worker");
