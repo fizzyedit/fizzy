@@ -448,7 +448,13 @@ test "rearrange: a track without kick can run a set" {
     defer set.deinit(test_allocator);
     set.begin();
     try set.place(test_allocator, 1, .{});
-    try testing.expect(!try set.end(test_allocator, 0, .{ .follow = true }));
+    try testing.expect(try set.end(test_allocator, 0, .{}));
+    set.begin();
+    const target: Rect = .{ .x = 10, .y = 20, .w = 30, .h = 40 };
+    try set.place(test_allocator, 1, target);
+    try testing.expect(!try set.end(test_allocator, ms, .{}));
+    try testing.expectEqual(Shown{ .rect = target, .presence = 1, .phase = .present }, set.shown(1).?);
+    try testing.expect(set.settled());
 }
 
 test "rearrange: allocation failures release all owned storage" {
@@ -500,4 +506,32 @@ test "rearrange: follow retires leaving items and reveals measuring items" {
         try testing.expectEqual(Shown{ .rect = target, .presence = 1, .phase = .present }, set.shown(key).?);
     }
     try testing.expect(set.settled());
+}
+
+test "rearrange: all rect lanes move while a new measurement holds pending targets" {
+    var set: Set = .{};
+    defer set.deinit(test_allocator);
+    set.begin();
+    try set.place(test_allocator, 1, .{});
+    _ = try set.end(test_allocator, 0, .{});
+    set.begin();
+    try set.place(test_allocator, 1, .{});
+    _ = try set.end(test_allocator, 100 * ms, .{});
+    const target: Rect = .{ .x = 100, .y = -100, .w = 200, .h = 300 };
+    set.begin();
+    try set.place(test_allocator, 1, target);
+    _ = try set.end(test_allocator, 125 * ms, .{});
+    try testing.expectEqual(Rect{ .x = 25, .y = -25, .w = 25, .h = 25 }, set.shown(1).?.rect);
+    set.begin();
+    try set.place(test_allocator, 1, .{});
+    try set.place(test_allocator, 2, .{});
+    _ = try set.end(test_allocator, 150 * ms, .{});
+    try testing.expectEqual(target, set.items.get(1).?.target);
+    try testing.expectEqual(Rect{ .x = 50, .y = -50, .w = 50, .h = 50 }, set.shown(1).?.rect);
+    set.begin();
+    try set.place(test_allocator, 1, .{});
+    try set.place(test_allocator, 2, .{});
+    _ = try set.end(test_allocator, 175 * ms, .{});
+    try testing.expectEqual(Rect{}, set.items.get(1).?.target);
+    try testing.expectEqual(Rect{ .x = 25, .y = -25, .w = 25, .h = 25 }, set.shown(1).?.rect);
 }
