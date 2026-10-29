@@ -54,7 +54,7 @@ with tempfile.TemporaryDirectory() as tmp:
 PY
 ```
 Expected output (temporary files are removed when the example finishes):
+
     status: done
     patch: True signature: True
-
 Tests live in `scripts/slot/tests`: `cd scripts && python3 -m unittest discover -s slot/tests -t .`.
