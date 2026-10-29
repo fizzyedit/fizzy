@@ -62,7 +62,7 @@ pub const std_options: std.Options = .{
     .logFn = dvui.App.logFn,
 };
 
-// Written by appFrame on SDL's application thread.
+// Written only by appFrame on SDL's application thread: one writer, so no atomic.
 var taps: u32 = 0;
 
 fn appFrame() !dvui.App.Result {

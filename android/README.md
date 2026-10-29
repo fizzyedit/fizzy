@@ -27,7 +27,7 @@ native library, installed at `zig-out/android/x86_64/libfizzy_hello.so` (or `and
 for aarch64). It does not require Java, APK signing, or an emulator. Neither Android step is
 part of a default desktop build.
 
-dvui's `sdl3` dependency is lazy: the first `zig build apk` configures, fetches it and configures
+dvui's `sdl3` dependency is lazy: the first `scripts/zb build apk` configures, fetches it and configures
 again. Other options: `-Dandroid-ndk`, `-Dandroid-build-tools`, `-Dandroid-platform`, `-Dandroid-keystore`. The app id is `dev.fizzy.hello` (`build/bundle_id.zig`).
 
 ## Run in the emulator (pop-os)
