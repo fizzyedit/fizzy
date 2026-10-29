@@ -1,4 +1,4 @@
-//! Reading and writing `keybinds.zon` — the user's keybinding overrides.
+//! Reading and writing `keybinds.zon` - the user's keybinding overrides.
 //!
 //! Only overrides live on disk. Defaults stay in code, so a user who has never rebound anything
 //! has no `keybinds.zon` at all (same principle as R12's "omit all-default blocks" in
@@ -300,7 +300,7 @@ fn collectBlock(
     }
 }
 
-/// Parse a `keybinds.zon` source. Only allocation failure is an error — everything else lands in
+/// Parse a `keybinds.zon` source. Only allocation failure is an error - everything else lands in
 /// `File.diagnostics`.
 pub fn parse(gpa: Allocator, source: [:0]const u8, platform: Platform) Allocator.Error!File {
     var c: Collector = .{ .gpa = gpa };
@@ -358,7 +358,7 @@ pub fn parse(gpa: Allocator, source: [:0]const u8, platform: Platform) Allocator
     };
 }
 
-/// In-place: `shell.save` → `fizzy.save`. Both prefixes are 5 chars + `.`.
+/// In-place: `shell.save` -> `fizzy.save`. Both prefixes are 5 chars + `.`.
 fn migrateLegacyShellCommandId(cmd: []u8) void {
     if (cmd.len >= 6 and std.mem.eql(u8, cmd[0..6], "shell.")) {
         @memcpy(cmd[0..5], "fizzy");
@@ -401,7 +401,7 @@ pub fn format(gpa: Allocator, bindings: []const OwnedBinding) ![]u8 {
     }
     if (wrote_fizzy) try w.writeAll("    },\n");
 
-    // Distinct plugin ids, in first-seen order — stable output, no allocation for a sort.
+    // Distinct plugin ids, in first-seen order - stable output, no allocation for a sort.
     var wrote_plugins = false;
     for (bindings, 0..) |b, i| {
         const id = b.owner_id orelse continue;

@@ -514,7 +514,7 @@ fn add_event_raw(w: *dvui.Window, which: u8, int1: u32, int2: u32, float1: f32, 
         var buf: [32]u8 = undefined;
         // The prefix and a u16 event number fit in 32 bytes.
         // Backend packages cannot import core; match core/input_time.zig key().
-        const key = std.fmt.bufPrint(&buf, "_input_time_{d}", .{e.num}) catch unreachable;
+        const key = std.mem.print(&buf, "_input_time_{d}", .{e.num}) catch unreachable;
         dvui.dataSet(w, w.data().id, key, time_ns);
     };
 

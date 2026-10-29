@@ -1,5 +1,5 @@
 //! Plugin-store backend: catalog fetch (summary + this host's release shard) + verified download,
-//! plus a `Catalog` that owns the latest parsed documents. Pure of dvui/globals — the caller
+//! plus a `Catalog` that owns the latest parsed documents. Pure of dvui/globals - the caller
 //! supplies `allocator`, a `std.Io`, and the host's own `abi_fingerprint` as a hex string (the
 //! caller already computes this from `sdk.dylib.abi_fingerprint`; this layer stays free of
 //! SDK-specific concerns). The store UI drives `Catalog` and tracks per-plugin install state
@@ -19,7 +19,7 @@ pub const SummaryEntry = registry.SummaryEntry;
 pub const ReleaseShard = registry.ReleaseShard;
 pub const ShardRelease = registry.ShardRelease;
 
-/// Lifecycle of the catalog fetch (not a per-plugin install state — that lives in the UI).
+/// Lifecycle of the catalog fetch (not a per-plugin install state - that lives in the UI).
 pub const Status = enum(u8) { idle, fetching, ready, failed };
 
 const ParsedSummary = std.json.Parsed(registry.Summary);
@@ -28,7 +28,7 @@ const ParsedShard = std.json.Parsed(registry.ReleaseShard);
 /// Owns the latest parsed `summary.json` + this host's `<abi_fingerprint>/releases.json`.
 /// Native refresh runs off the UI thread in an `Io.Group` worker; the web build has no threads
 /// and instead `pump`s browser GETs on the UI thread. Shared state is guarded by a
-/// `std.Io.Mutex` on native — lock with `dvui.io`. The owner must outlive any in-flight refresh
+/// `std.Io.Mutex` on native - lock with `dvui.io`. The owner must outlive any in-flight refresh
 /// (in the app it is `Editor`-owned, app-lifetime).
 ///
 /// Read access goes through `acquire`/`release`: hold the lock across any read of the returned
@@ -36,7 +36,7 @@ const ParsedShard = std.json.Parsed(registry.ReleaseShard);
 ///
 /// The summary and the shard fail independently: a summary fetch failure is a hard catalog
 /// failure (nothing to browse), but a shard fetch failure just means no install/update info is
-/// available this round — the shard falls back to `registry.ReleaseShard.empty` (or whatever was
+/// available this round - the shard falls back to `registry.ReleaseShard.empty` (or whatever was
 /// last fetched successfully), so the browse list still renders with every plugin showing "no
 /// compatible build in store" rather than the whole tab erroring out. A fresh `abi_fingerprint`
 /// generation with no shard published yet looks identical to a network hiccup from here, which is
@@ -55,7 +55,7 @@ pub const Catalog = struct {
     /// Shutdown has to *stop* an in-flight fetch, not merely wait for it. Nothing in the fetch
     /// path sets a network timeout, so a registry host that accepts nothing and refuses nothing
     /// (blackholed route, captive portal) parks the worker in a blocking connect for as long as
-    /// the OS allows — with a `std.Thread`, `deinit`'s `join` inherits that wait and the whole
+    /// the OS allows - with a `std.Thread`, `deinit`'s `join` inherits that wait and the whole
     /// app hangs at quit with no diagnostics. A `std.Io.Group` is the same shape the LSP client
     /// uses (`core/lsp/Client.zig`'s `tasks`): `cancel` requests cancelation *and* awaits, and
     /// `Io.Threaded` interrupts the blocked syscall so the worker returns `error.Canceled`
@@ -77,8 +77,8 @@ pub const Catalog = struct {
     }
 
     pub fn deinit(self: *Catalog) void {
-        // Cancels *and* awaits, so the worker is provably finished — and therefore done touching
-        // `summary`/`shard` — before they're freed below. No-op when nothing is in flight.
+        // Cancels *and* awaits, so the worker is provably finished - and therefore done touching
+        // `summary`/`shard` - before they're freed below. No-op when nothing is in flight.
         // Wasm has no worker; the browser GETs are abandoned with the cache in `web_fetch`.
         if (comptime !is_wasm) self.tasks.cancel(self.io);
         if (self.summary) |*p| p.deinit();
@@ -96,7 +96,7 @@ pub const Catalog = struct {
     }
 
     /// Kick off a background refresh. No-op while one is already in flight. Must be called from
-    /// the UI thread — `Io.Group` is explicitly not threadsafe against its own `await`/`cancel`.
+    /// the UI thread - `Io.Group` is explicitly not threadsafe against its own `await`/`cancel`.
     pub fn refresh(self: *Catalog) void {
         if (self.status() == .fetching) return;
         if (comptime is_wasm) {
@@ -126,8 +126,8 @@ pub const Catalog = struct {
         self.status_value.store(@backingInt(Status.fetching), .release);
     }
 
-    /// Advance in-flight browser GETs. UI thread, wasm only — a no-op natively. `fetcher` is the
-    /// wasm `web_fetch` module (`request(allocator, url)` → pending / ready / failed); it is
+    /// Advance in-flight browser GETs. UI thread, wasm only - a no-op natively. `fetcher` is the
+    /// wasm `web_fetch` module (`request(allocator, url)` -> pending / ready / failed); it is
     /// passed in rather than imported so this file stays a standalone test root (relative
     /// `@import` cannot leave `plugin_store/`). Native callers pass `{}`.
     // anytype: The browser fetch module or native empty stub is supplied without a web import.
@@ -155,7 +155,7 @@ pub const Catalog = struct {
                         self.summary = parsed;
                         self.wasm_phase = .shard;
                         // Ask for the shard now, not on the next pump: the web draws a frame only
-                        // when something asks for one, and nothing may — the update pass runs with
+                        // when something asks for one, and nothing may - the update pass runs with
                         // no store tab open to keep a spinner turning.
                         self.pump(fetcher);
                     },
@@ -196,8 +196,8 @@ pub const Catalog = struct {
         self.status_value.store(@backingInt(Status.failed), .release);
     }
 
-    /// Runs in the task group. Every failure path — including `error.Canceled` from a shutdown
-    /// mid-fetch — lands on `.failed`, which is also the right resting state for a canceled
+    /// Runs in the task group. Every failure path - including `error.Canceled` from a shutdown
+    /// mid-fetch - lands on `.failed`, which is also the right resting state for a canceled
     /// refresh: the app is on its way down, and a later `refresh` would overwrite it anyway.
     fn worker(self: *Catalog) void {
         const fresh_summary = registry.fetchSummary(self.allocator, self.io, self.summary_url) catch {
@@ -228,12 +228,12 @@ pub const Catalog = struct {
     };
 
     /// Lock the catalog and return the latest snapshot, or null if the summary has never loaded
-    /// successfully. The slices stay valid until the matching `release` — hold the lock across
+    /// successfully. The slices stay valid until the matching `release` - hold the lock across
     /// any read of them. Pair with `release`.
     ///
     /// **The lock is held either way**, including when this returns null. It used to unlock on
     /// the null path, which made the pairing conditional while every caller writes an
-    /// unconditional `defer release()` — so drawing the store before the first summary arrived
+    /// unconditional `defer release()` - so drawing the store before the first summary arrived
     /// (offline, or the first launch of a fresh install) unlocked an unlocked mutex and panicked
     /// in `std.Io`. A lock whose release depends on the return value is a lock nobody can use
     /// correctly.
@@ -254,7 +254,7 @@ pub const Catalog = struct {
 };
 
 /// Counted, not clocked. `Clock.boot` reads zero on the web, so every "refresh" built the
-/// identical `?_=0` URL — which the in-page fetch cache (`web_fetch`, keyed by URL) then
+/// identical `?_=0` URL - which the in-page fetch cache (`web_fetch`, keyed by URL) then
 /// answered from memory forever. Refresh appeared to do nothing until the page was reloaded,
 /// which was the only thing that cleared that map. The clock is still mixed in so two runs of
 /// the app do not start from the same number on a platform where it works.

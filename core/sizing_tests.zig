@@ -10,6 +10,7 @@
 //! nothing else: every bug this pair has had was a dvui event-routing or layout-settle rule rather
 //! than arithmetic, and reading the code caught none of them.
 test {
+    _ = @import("glass.zig");
     _ = @import("widgets/Split.zig");
     _ = @import("widgets/ContextWidget.zig");
     // Touch drag and fling of a scroll area.
@@ -37,4 +38,6 @@ test {
     _ = @import("widgets/FloatingTooltipWidget.zig");
     // One motion clock: a late frame holds motion, and real time still counts it.
     _ = @import("motion_clock_tests.zig");
+    // The keyboard inset: the root ends above it and a focused field scrolls above it.
+    _ = @import("keyboard.zig");
 }

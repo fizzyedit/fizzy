@@ -3,7 +3,6 @@
 const std = @import("std");
 const dvui = @import("dvui");
 const core = @import("core");
-const PluginStore = @import("../store/PluginStore.zig");
 const Layout = @import("Layout.zig");
 const Chooser = Layout.Chooser;
 
@@ -20,15 +19,15 @@ pub const Host = struct {
         drawFooterItems: *const fn (ctx: ?*anyopaque, size: f32) void,
         /// Whether the side pane is on screen, as opposed to closed or folded away.
         sidePaneShown: *const fn (ctx: ?*anyopaque) bool,
-        /// How many installed plugins wait for the person to say whether to load them.
-        undecidedPluginCount: *const fn (ctx: ?*anyopaque) usize,
+        /// How many plugins wait for a load decision in this view; zero for other views.
+        undecidedPluginCount: *const fn (ctx: ?*anyopaque, view_id: []const u8) usize,
         /// An icon's rect in physical pixels, to register with a custom title bar it overlaps.
         iconRect: *const fn (ctx: ?*anyopaque, r: dvui.Rect.Physical) void,
     };
 };
 
-/// Which end of the rail a view sits at. The app's own views — registered by fizzy, owned by no
-/// plugin (the store, settings) — are the rail's footer: always in view, the same in every
+/// Which end of the rail a view sits at. The app's own views - registered by fizzy, owned by no
+/// plugin (the store, settings) - are the rail's footer: always in view, the same in every
 /// install. What plugins contribute is the list above, in the place's order, and it is the part
 /// that grows: with more than fit, it scrolls, passing under the footer rather than pushing it
 /// off the end. A rule about who registered a view, not a list of ids, so a view the app adds
@@ -39,7 +38,7 @@ fn isFooter(view: *const Layout.Surface) bool {
 
 /// What the sidebar wants the caller to do this frame. We defer the call out to the caller
 /// because the sidebar runs *before* the side pane's `paned` is re-created for this
-/// frame — dereferencing the side pane's `paned` (e.g. via `peekClose`/`open`) from inside the
+/// frame - dereferencing the side pane's `paned` (e.g. via `peekClose`/`open`) from inside the
 /// sidebar click handler would touch last frame's freed widget, which on wasm32 trips
 /// "reached unreachable code".
 pub const Action = enum { none, open, close };
@@ -48,8 +47,8 @@ pub const Action = enum { none, open, close };
 /// region accepts, rather than every surface in `host.surfaces`. That is what
 /// makes a user's keyword override actually move an icon out of (or into) this rail.
 ///
-/// Two vertical `Layout.Chooser`s over the sidebar's place — the plugin views scrolling above,
-/// fizzy's own pinned below — so the rail picks, and carries a dragged icon in the view drag,
+/// Two vertical `Layout.Chooser`s over the sidebar's place - the plugin views scrolling above,
+/// fizzy's own pinned below - so the rail picks, and carries a dragged icon in the view drag,
 /// along the rail to reorder it or off it to another place, the same way every tab strip does.
 /// What is the rail's own
 /// is only how an icon looks and what picking the showing one means: it opens or closes the
@@ -136,7 +135,7 @@ const footer_glass_ramp: f32 = 12;
 
 /// The footer's glass: the dialogs' frost over the list scrolling under it, so an icon passing
 /// beneath is blurred out of the way rather than drawn through the footer's own. Only as much as
-/// there is list under it — with the rail's usual handful of plugin views there is none, and the
+/// there is list under it - with the rail's usual handful of plugin views there is none, and the
 /// footer is the bare rail it always was.
 fn drawFooterGlass(id: dvui.Id, rs: dvui.RectScale, under: f32) void {
     const g = std.math.clamp(under / (footer_glass_ramp * rs.s), 0, 1);
@@ -174,15 +173,11 @@ fn pickAction(host: Host, c: *const Chooser, so_far: Action) Action {
     return if (host.vtable.sidePaneShown(host.ctx)) .close else .open;
 }
 
-/// One rail icon: the chooser's item, drawn as the view's glyph with the store's attention badge.
+/// One rail icon: the chooser's item, drawn as the view's glyph with the host's attention badge for that view.
 /// Returns the bottom of the item's cell, in physical pixels.
 fn drawIcon(host: Host, c: *Chooser, view: *Layout.Surface, index: usize) f32 {
-    // Only the store view can carry one; nothing else in the rail has a pending-decision notion.
-    const undecided_count: usize = if (std.mem.eql(u8, view.id, PluginStore.view_id))
-        host.vtable.undecidedPluginCount(host.ctx)
-    else
-        0;
-    // Say what the dot means — a bare badge on a 20px rail icon is otherwise a riddle.
+    const undecided_count = host.vtable.undecidedPluginCount(host.ctx, view.id);
+    // Say what the dot means - a bare badge on a 20px rail icon is otherwise a riddle.
     const detail: ?[]const u8 = if (undecided_count > 0)
         dvui.currentWindow().arena().print("{d} plugin{s} ready to load", .{
             undecided_count,
@@ -198,14 +193,14 @@ fn drawIcon(host: Host, c: *Chooser, view: *Layout.Surface, index: usize) f32 {
 
     // Register the icon as interactive in the title bar so clicks reach DVUI even when it
     // overlaps the top drag strip where fizzy draws its own title bar (Windows, Linux). Only the
-    // topmost icon(s) actually sit inside the strip — anything below is registered harmlessly.
+    // topmost icon(s) actually sit inside the strip - anything below is registered harmlessly.
     host.vtable.iconRect(host.ctx, it.data().rectScale().r);
 
     Chooser.icon(view, it.selected, it.hovered(), rail_icon, index);
 
     // Attention badge, same idiom (and colour) as the infobar's app-update dot: a plugin build
     // is sitting in `plugins/` waiting for the user to say whether to load it, and the card that
-    // offers it is inside this very view. Purely condition-driven — it disappears when the last
+    // offers it is inside this very view. Purely condition-driven - it disappears when the last
     // undecided build is loaded, switched off, or removed, not when the tab is merely opened.
     if (undecided_count > 0) {
         const brs = it.data().rectScale();

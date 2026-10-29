@@ -9,6 +9,7 @@
 //! like the app's — see `core.widgets` for the divide.
 const std = @import("std");
 const dvui = @import("dvui");
+const ink = @import("glass.zig");
 const rounding = @import("corners.zig");
 const liquid_glass = @import("glass").liquid_glass;
 const liquid_blob = @import("glass").liquid_blob;
@@ -468,13 +469,16 @@ pub fn surfaceShadow() dvui.Options.BoxShadow {
 /// drawn after the glass so the glass never blurs it in (`liquid_glass.drawShadow`). Call after
 /// the frost; an opaque surface keeps the ordinary box shadow under its fill.
 pub fn glassShadow(r: dvui.Rect.Physical, corners: dvui.CornerRect, scale: f32, bs: dvui.Options.BoxShadow, alpha_mult: f32) void {
+    const spread = (bs.fade + @max(@abs(bs.offset.x), @abs(bs.offset.y))) * scale;
+    const ring = r.insetAll(scale * bs.shrink);
+    if (!ink.reaches(ring.insetAll(-spread))) return;
     // The glass's own outline, always: the ring hugs the pane, whatever corners the shadow was
     // described with (resolved through the theme's corner kind, they could come out square
     // beside glass that is explicitly round).
     const theme = dvui.themeGet();
     const c = corners.finalize(&theme);
     const radii: liquid_glass.Radii = .{ c.tl.radius() * scale, c.bl.radius() * scale, c.br.radius() * scale, c.tr.radius() * scale };
-    liquid_glass.drawShadow(r.insetAll(scale * bs.shrink), radii, bs.fade * scale, bs.offset.scale(scale, dvui.Point.Physical), bs.color, bs.alpha * alpha_mult);
+    liquid_glass.drawShadow(ring, radii, bs.fade * scale, bs.offset.scale(scale, dvui.Point.Physical), bs.color, bs.alpha * alpha_mult);
 }
 
 // ---- tooltips: the same surface, small ------------------------------------------------------
@@ -1947,4 +1951,32 @@ test "a dialog's failure is one of Error, and only an allocation failure keeps i
 test "the dialog window handles callback errors without propagating them" {
     const display: *const fn (dvui.Id) error{}!void = dialogWindow;
     _ = display;
+}
+
+test "glass shadows cull distant ink but preserve a fade reaching into the clip" {
+    const fns = struct {
+        fn frame() !dvui.App.Result {
+            const clip = dvui.clip(.{ .x = 0, .y = 0, .w = 100, .h = 100 });
+            defer dvui.clipSet(clip);
+            try std.testing.expect(ink.reaches(.{ .x = -1, .y = 20, .w = 0, .h = 1 }));
+            dvui.clipSet(.{});
+            try std.testing.expect(!ink.reaches(.{}));
+            dvui.clipSet(.{ .x = 0, .y = 0, .w = 100, .h = 100 });
+            for ([_]f32{ 200, 20, -15 }, [_]u32{ 0, 1, 1 }) |x, expected| {
+                const before = dvui.currentWindow().render_stats.draw_calls;
+                glassShadow(.{ .x = x, .y = 20, .w = 10, .h = 10 }, .all(2), 1, .{
+                    .fade = 10,
+                    .shrink = 0,
+                    .offset = .{},
+                    .color = .black,
+                    .alpha = 1,
+                }, 1);
+                try std.testing.expectEqual(expected, dvui.currentWindow().render_stats.draw_calls - before);
+            }
+            return .ok;
+        }
+    };
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 200 } });
+    defer t.deinit();
+    _ = try dvui.testing.step(fns.frame);
 }

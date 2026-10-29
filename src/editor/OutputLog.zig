@@ -26,7 +26,7 @@ const allocator = std.heap.page_allocator;
 // (the very first startup log line included), and contention here is negligible — occasional
 // writes from a log call, one read per panel draw.
 var spin: std.atomic.Mutex = .unlocked;
-var lines: std.ArrayListUnmanaged(Line) = .empty;
+var lines: std.ArrayList(Line) = .empty;
 /// How many times the log has been cleared (`clears`).
 var clear_count: u32 = 0;
 
