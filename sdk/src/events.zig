@@ -45,7 +45,8 @@ pub const Declaration = struct {
 
 /// Whether `pattern` (a name, `prefix*`, or `*`) takes the event `name`.
 pub fn matches(pattern: []const u8, name: []const u8) bool {
-    if (pattern.len > 0 and pattern[pattern.len - 1] == '*') return std.mem.startsWith(u8, name, pattern[0 .. pattern.len - 1]);
+    if (pattern.len > 0 and pattern[pattern.len - 1] == '*')
+        return std.mem.startsWith(u8, name, pattern[0 .. pattern.len - 1]);
     return std.mem.eql(u8, pattern, name);
 }
 
@@ -55,7 +56,13 @@ pub fn parse(comptime T: type, arena: std.mem.Allocator, event: Event) !T {
     const text = std.mem.trim(u8, event.payload, " \t\r\n");
     const source = try arena.dupeSentinel(u8, if (text.len == 0) ".{}" else text, 0);
     var diag: std.zon.parse.Diagnostics = undefined;
-    return std.zon.parse.fromSlice(T, .{ .gpa = arena, .arena = arena, .source = source, .diagnostics = &diag, .ignore_unknown_fields = true });
+    return std.zon.parse.fromSlice(T, .{
+        .gpa = arena,
+        .arena = arena,
+        .source = source,
+        .diagnostics = &diag,
+        .ignore_unknown_fields = true,
+    });
 }
 
 // ---- what fizzy announces ----
@@ -133,7 +140,8 @@ pub const PathEvent = struct {
 /// - **Best-effort.** Not every platform has a watcher (`Host.folderWatchActive`), and one can drop
 ///   changes under load: then `truncated` is set and `events` is incomplete, so rescan rather
 ///   than trust the list (a build, a branch switch, an npm install). Treat it as a prompt to go
-///   look, not a ledger; a plugin that must stay correct keeps a slow rescan for when no watch runs.
+///   look, not a ledger; a plugin that must stay correct keeps a slow rescan for when no watch
+///   runs.
 /// - The project's file set (`Host.files`) is already updated by the time it is heard.
 pub const FilesChanged = struct {
     events: []const PathEvent,
@@ -151,13 +159,17 @@ test "a payload parses as its type, skipping what the type lacks" {
     defer arena.deinit();
     const changed = try parse(FilesChanged, arena.allocator(), .{
         .name = "fizzy.files.changed",
-        .payload = ".{ .events = .{ .{ .path = \"/p/a.md\", .kind = .renamed, .object = .file, .old_path = \"/p/b.md\" } }, .truncated = true, .later = 1 }",
+        .payload = ".{ .events = .{ .{ .path = \"/p/a.md\", .kind = .renamed, .object = .file, " ++
+            ".old_path = \"/p/b.md\" } }, .truncated = true, .later = 1 }",
     });
     try std.testing.expectEqual(@as(usize, 1), changed.events.len);
     try std.testing.expectEqualStrings("/p/b.md", changed.events[0].old_path);
     try std.testing.expectEqual(PathEvent.Kind.renamed, changed.events[0].kind);
     try std.testing.expect(changed.truncated);
-    const closed = try parse(Path, arena.allocator(), .{ .name = "fizzy.folder.closed", .payload = ".{ .path = \"/p\" }" });
+    const closed = try parse(Path, arena.allocator(), .{
+        .name = "fizzy.folder.closed",
+        .payload = ".{ .path = \"/p\" }",
+    });
     try std.testing.expectEqualStrings("/p", closed.path);
 }
 
