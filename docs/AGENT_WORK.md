@@ -48,7 +48,8 @@ A PR carries one stage label at a time; each names whose turn it is.
 
 `reviewer:<team>-<kind>` (for example `reviewer:linux-codex`) assigns a review; a reviewer adds
 `reviewing:<team>-<kind>` while it is in progress and removes it when its `REVIEW` is posted.
-A different worker than the author reviews. Not every reviewer reviews every PR: the PM names who.
+A worker of another kind than the author reviews: one reviewer by default, two where
+[`REVIEW.md`](REVIEW.md) says so. The PM names who.
 
 ### Markers
 
@@ -56,8 +57,8 @@ A comment on the thread starts with its marker, so the harness and the next read
 
 - `TRIAGE`: the PM's first read: the stage to enter, the reviewers, and any `APPROACH` it wants.
 - `REVIEW`: a reviewer's answer in the format of [`REVIEW.md`](REVIEW.md) (its four questions).
-- `RULING`: the PM's decision on the findings. It lists only the must-fix ones; a finding not
-  listed is not owed a change.
+- `RULING`: the PM's decision on the findings. It lists the must-fix ones and the minor findings
+  to answer; a finding not listed is not owed a change, and follow-ups are never owed one.
 - `FIXES @<new head commit>`: the author's answer after pushing, one line per ruled finding:
   `<reviewer> F<n> fixed: <what, with the commit>` or `<reviewer> F<n> declined: <reason>`.
 - `VERIFY`: a reviewer's check that each fix holds, and that nothing else moved.
@@ -104,48 +105,73 @@ bottom. The body, in order:
 
 1. `## In plain words`: two to four sentences. What changes for a person using fizzy, and why it
    matters. No function, file or flag names.
-2. `## What you will notice`: what a person sees or feels, or `Nothing visible: internal` and
+2. `## What changes`: bullets, in plain terms, with at least one fenced code snippet taken from the
+   diff (a before/after or the key function, 15 lines at most), so a reader sees the change itself.
+3. `## What you will notice`: what a person sees or feels, or `Nothing visible: internal` and
    what it makes possible.
-3. `## How this serves fizzy`: one sentence naming the goal or principle the change moves and the
-   result for people, linked to its anchor in [`VISION.md`](VISION.md), for example
-   `[Phones and tablets](https://github.com/fizzyedit/fizzy/blob/main/docs/VISION.md#mobile)`.
 4. `## How we know it works`: in plain terms: the tests that fail without the change, the check
    on a real device, the measurement.
-5. A collapsed `<details><summary>For agents: technical summary</summary>` block holding `## Goal`,
+5. `## How this serves fizzy`: one sentence naming the goal or principle the change moves and the
+   result for people, linked to its anchor in [`VISION.md`](VISION.md), for example
+   `[Phones and tablets](https://github.com/fizzyedit/fizzy/blob/main/docs/VISION.md#mobile)`.
+6. A collapsed `<details><summary>For agents: technical summary</summary>` block holding `## Goal`,
    `## What changed and why`, `## How it was verified` and `## Not done / follow-ups`.
+7. The **agent notes**, the last line of the body: a hidden comment
+   `<!-- agent-notes {"issue":N,"worker":"codex","slot":"linux-codex-3","status":"draft|ready","area":"core/widgets","open_questions":[],"next":"review|fixes|merge"} -->`.
+   It is the one known place for agents to leave each other notes; agents read and write only this
+   block (and the PR thread for findings), never free text in the body. `agent-finish` writes it
+   (worker and slot from `FIZZY_WORKER` and `FIZZY_SLOT`, `status` `draft` at the claim and `ready`
+   after the gates) and on a rerun keeps the `open_questions` and `next` the last agent set.
 
-The title follows the same rule: `area: what changes`, in words a visitor understands. The stage
-is not in the body: the PM's status comment, kept current, opens with it in one plain sentence.
+The title follows the same rule: `area: what changes`, 72 characters at most, in words a visitor
+understands. It is never a branch slug: `windows: work-723` and `linux: touch-slop` are refused.
+The claim's draft PR takes the work issue's title; the finished title is the first line
+`# area: what changes` of `PR_SUMMARY.md`, which `agent-finish` sets. The stage is not in the body:
+the PM's status comment, kept current, opens with it in one plain sentence.
 
 A worker writes the plain sections first, in `PR_SUMMARY.md` (step 5 below), and
 `scripts/agent-finish` puts the technical half in the collapsed block. `scripts/check-pr-body
-<file|PR number>` checks a body: the four sections are there and not empty, the vision link names
-an anchor that exists, and the block is there. `agent-finish` runs it before the gates and
-refuses to publish a body that fails; the PM runs it on a person's PR at triage.
+[--title <title>] <file|PR number>` checks a page: the title, the five sections there, in order and
+not empty or still the template's text, the snippet, the vision link naming an anchor that exists,
+the block, and the agent notes (required on a PR number, checked when a file has them: valid JSON
+with every key above). A page whose notes say `"status":"draft"` may still have empty sections;
+a `ready` one may not. `agent-finish` runs it before the gates and refuses to publish a page that
+fails; the PM runs it on a person's PR at triage.
 
 An example, PR #978 rewritten:
 
-```markdown
+````markdown
 ## In plain words
 
 On a phone, tapping a text box opened the keyboard and closed it again straight away, so you could
 not type in fizzy's web app at all. Typing on a phone is how many people talk to fizzy, so this
 had to work.
 
+## What changes
+
+- A touch on the screen no longer also counts as a mouse click, and that click was what took the
+  focus back from the text box.
+
+```js
+// web/fizzy.js, pointerInput
+canvas.addEventListener("touchstart", (e) => e.preventDefault(), { capture: true, passive: false });
+canvas.addEventListener("touchend", (e) => e.preventDefault(), { capture: true, passive: false });
+```
+
 ## What you will notice
 
 Tap a text box on a phone or tablet and the keyboard opens and stays open. Nothing changes with a
 mouse or a keyboard.
 
-## How this serves fizzy
-
-[Phones and tablets](https://github.com/fizzyedit/fizzy/blob/main/docs/VISION.md#mobile): typing
-on a phone works in the web app.
-
 ## How we know it works
 
 A new test replays the browser's events for a tap: without the fix the text box loses focus, with
 it the text box keeps it. The check on a real phone is still to do and is listed below.
+
+## How this serves fizzy
+
+[Phones and tablets](https://github.com/fizzyedit/fizzy/blob/main/docs/VISION.md#mobile): typing
+on a phone works in the web app.
 
 <details><summary>For agents: technical summary</summary>
 
@@ -169,7 +195,9 @@ which the hidden input keeps focus. Fails without the change.
 The 10-of-10 phone check needs a real phone (the QA loop).
 
 </details>
-```
+
+<!-- agent-notes {"issue":978,"worker":"claude","slot":"web","status":"ready","area":"web","open_questions":[],"next":"review"} -->
+````
 
 ## Trust boundary
 
@@ -233,7 +261,7 @@ PR creation. Fix the reported problem and retry finish. Neither helper merges or
 ## Where verification happens
 
 Three places, in order: the worker's **local gates** (step 3), which decide whether the PR is
-worth pushing; **cross-review** by a different worker; and **CI at ready**. A draft PR runs only
+worth pushing; **cross-review** by a worker of another kind; and **CI at ready**. A draft PR runs only
 the light `changes` job (`ci.yml`); `ci-ok` is skipped on drafts. Pushing to a draft costs almost
 nothing and proves nothing; `gh pr ready` starts the full matrix, and `ci-ok` is the required
 check on that run. A reviewer waits for finished checks, so a draft is reviewed from its diff and the gate output in its body,
