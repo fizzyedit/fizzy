@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# Check a PR body against docs/AGENT_WORK.md "The PR page": the plain sections a visitor reads, the
+# vision anchor, and the collapsed technical summary. `check-pr-body <file|PR number>`.
+set -euo pipefail
+fail() { echo "check-pr-body: $*" >&2; exit 2; }
+[[ $# == 1 ]] || fail 'usage: check-pr-body <file|PR number>'
+cd "$(dirname "$0")/.."
+if [[ $1 =~ ^[1-9][0-9]*$ ]]; then
+    body=$(gh pr view "$1" --repo fizzyedit/fizzy --json body --jq .body) || fail "cannot read PR #$1"
+else
+    body=$(<"$1") || fail "cannot read $1"
+fi
+# Template hints are HTML comments, often several lines long: they are not content.
+body=$(tr -d '\r' <<<"$body" | awk '
+    {
+        line = $0; out = ""
+        while (line != "") {
+            if (inside) {
+                i = index(line, "-->")
+                if (!i) break
+                line = substr(line, i + 3); inside = 0
+            } else {
+                i = index(line, "<!--")
+                if (!i) { out = out line; break }
+                out = out substr(line, 1, i - 1); line = substr(line, i + 4); inside = 1
+            }
+        }
+        print out
+    }')
+problems=()
+# The text under a `## <heading>`, up to the next heading or the technical summary.
+section() {
+    awk -v h="## $1" '
+        $0 == h { on = 1; next }
+        on && (/^##? / || /^<details>/) { exit }
+        on && !/^[[:space:]]*$/ { print }
+    ' <<<"$body"
+}
+for heading in 'In plain words' 'What you will notice' 'How this serves fizzy' 'How we know it works'; do
+    text=$(section "$heading")
+    if [[ -z $text || $text == '(to fill)' ]]; then problems+=("\"## $heading\" is missing or empty"); fi
+done
+anchors=$(grep -o 'docs/VISION\.md#[a-z0-9-]*' <<<"$(section 'How this serves fizzy')" | sed 's/.*#//' | sort -u || true)
+if [[ -z $anchors ]]; then
+    problems+=('"## How this serves fizzy" links no docs/VISION.md#<anchor>')
+fi
+for anchor in $anchors; do
+    grep -qF "<a id=\"$anchor\"></a>" docs/VISION.md || problems+=("docs/VISION.md has no anchor \"$anchor\"")
+done
+grep -qF '<details><summary>For agents: technical summary</summary>' <<<"$body" ||
+    problems+=('no collapsed "For agents: technical summary" block')
+for problem in ${problems[@]+"${problems[@]}"}; do echo "check-pr-body: $1: $problem" >&2; done
+[[ ${#problems[@]} == 0 ]] || exit 1
+echo "check-pr-body: $1: passes"
