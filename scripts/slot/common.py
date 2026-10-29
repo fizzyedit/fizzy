@@ -1,4 +1,10 @@
-"""Shared slot protocol parsing, accounting and OpenSSH signatures (stdlib only)."""
+"""Shared helpers for the slot protocol (Python standard library only).
+
+Load and validate a job file, build its output manifest, and sign and verify
+the manifest with OpenSSH. Count changed lines against a base commit and
+recognise test paths for separate test and non-test accounting.
+See scripts/slot/PROTOCOL.md for the protocol these helpers implement.
+"""
 import hashlib
 import json
 import math
