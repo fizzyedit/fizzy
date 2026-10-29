@@ -222,9 +222,21 @@ jobs:
         with:
           script: |
             const { owner, repo } = context.repo;
-            const app = getOctokit(process.env.APP_TOKEN);
-            const send = (event_type, client_payload) => app.rest.repos.createDispatchEvent({
-              owner, repo: 'work', event_type, client_payload });
+            // github-script v7 has no getOctokit (v9 adds it): call the dispatch API directly.
+            const send = async (event_type, client_payload) => {
+              const res = await fetch(`https://api.github.com/repos/${owner}/work/dispatches`, {
+                method: 'POST',
+                headers: {
+                  Accept: 'application/vnd.github+json',
+                  Authorization: `Bearer ${process.env.APP_TOKEN}`,
+                  'X-GitHub-Api-Version': '2022-11-28',
+                  'Content-Type': 'application/json',
+                  'User-Agent': 'fizzy-bridge',
+                },
+                body: JSON.stringify({ event_type, client_payload }),
+              });
+              if (res.status !== 204) throw new Error(`dispatch ${event_type}: ${res.status} ${await res.text()}`);
+            };
             let pr;
             if (context.eventName === 'workflow_run') {
               const run = context.payload.workflow_run;
