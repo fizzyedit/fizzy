@@ -48,7 +48,8 @@ A PR carries one stage label at a time; each names whose turn it is.
 
 `reviewer:<team>-<kind>` (for example `reviewer:linux-codex`) assigns a review; a reviewer adds
 `reviewing:<team>-<kind>` while it is in progress and removes it when its `REVIEW` is posted.
-A different worker than the author reviews. Not every reviewer reviews every PR: the PM names who.
+A different worker than the author reviews: one reviewer by default, two where
+[`REVIEW.md`](REVIEW.md) says so. The PM names who.
 
 ### Markers
 
@@ -56,8 +57,8 @@ A comment on the thread starts with its marker, so the harness and the next read
 
 - `TRIAGE`: the PM's first read: the stage to enter, the reviewers, and any `APPROACH` it wants.
 - `REVIEW`: a reviewer's answer in the format of [`REVIEW.md`](REVIEW.md) (its four questions).
-- `RULING`: the PM's decision on the findings. It lists only the must-fix ones; a finding not
-  listed is not owed a change.
+- `RULING`: the PM's decision on the findings. It lists the must-fix ones and the minor findings
+  to answer; a finding not listed is not owed a change, and follow-ups are never owed one.
 - `FIXES @<new head commit>`: the author's answer after pushing, one line per ruled finding:
   `<reviewer> F<n> fixed: <what, with the commit>` or `<reviewer> F<n> declined: <reason>`.
 - `VERIFY`: a reviewer's check that each fix holds, and that nothing else moved.
