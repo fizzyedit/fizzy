@@ -283,13 +283,20 @@ test "rearrange: a new key is measured for one frame and holds the others" {
     try testing.expectEqual(Phase.measuring, set.shown(2).?.phase);
     try testing.expectEqual(@as(f32, 0), set.shown(2).?.presence);
     try testing.expectEqual(@as(f32, 0), set.shown(1).?.rect.x);
-    try frame(&set, &.{ 2, 1 }, &.{ 20, 100 }, 200, false);
+    const target: Rect = .{ .x = 100, .y = -100, .w = 200, .h = 300 };
+    set.begin();
+    try set.place(test_allocator, 2, .{ .x = 20 });
+    try set.place(test_allocator, 1, target);
+    _ = try set.end(test_allocator, 200 * ms, .{});
     try testing.expectEqual(Phase.entering, set.shown(2).?.phase);
-    try testing.expectEqual(@as(f32, 50), set.shown(1).?.rect.x);
+    try testing.expectEqual(Rect{ .x = 50, .y = -50, .w = 50, .h = 50 }, set.shown(1).?.rect);
     // Another measuring key holds the destination, but an existing move keeps stepping.
-    try frame(&set, &.{ 3, 2, 1 }, &.{ 30, 20, 500 }, 225, false);
-    try testing.expectEqual(@as(f32, 75), set.shown(1).?.rect.x);
-    try testing.expectEqual(@as(f32, 100), set.items.get(1).?.target.x);
+    try frame(&set, &.{ 3, 2, 1 }, &.{ 30, 20, 0 }, 225, false);
+    try testing.expectEqual(Rect{ .x = 75, .y = -75, .w = 75, .h = 75 }, set.shown(1).?.rect);
+    try testing.expectEqual(target, set.items.get(1).?.target);
+    try frame(&set, &.{ 3, 2, 1 }, &.{ 30, 20, 0 }, 250, false);
+    try testing.expectEqual(Rect{}, set.items.get(1).?.target);
+    try testing.expectEqual(Rect{ .x = 50, .y = -50, .w = 50, .h = 50 }, set.shown(1).?.rect);
 }
 
 test "rearrange: a key left out leaves from where it was shown and is retired at presence 0" {
@@ -506,32 +513,4 @@ test "rearrange: follow retires leaving items and reveals measuring items" {
         try testing.expectEqual(Shown{ .rect = target, .presence = 1, .phase = .present }, set.shown(key).?);
     }
     try testing.expect(set.settled());
-}
-
-test "rearrange: all rect lanes move while a new measurement holds pending targets" {
-    var set: Set = .{};
-    defer set.deinit(test_allocator);
-    set.begin();
-    try set.place(test_allocator, 1, .{});
-    _ = try set.end(test_allocator, 0, .{});
-    set.begin();
-    try set.place(test_allocator, 1, .{});
-    _ = try set.end(test_allocator, 100 * ms, .{});
-    const target: Rect = .{ .x = 100, .y = -100, .w = 200, .h = 300 };
-    set.begin();
-    try set.place(test_allocator, 1, target);
-    _ = try set.end(test_allocator, 125 * ms, .{});
-    try testing.expectEqual(Rect{ .x = 25, .y = -25, .w = 25, .h = 25 }, set.shown(1).?.rect);
-    set.begin();
-    try set.place(test_allocator, 1, .{});
-    try set.place(test_allocator, 2, .{});
-    _ = try set.end(test_allocator, 150 * ms, .{});
-    try testing.expectEqual(target, set.items.get(1).?.target);
-    try testing.expectEqual(Rect{ .x = 50, .y = -50, .w = 50, .h = 50 }, set.shown(1).?.rect);
-    set.begin();
-    try set.place(test_allocator, 1, .{});
-    try set.place(test_allocator, 2, .{});
-    _ = try set.end(test_allocator, 175 * ms, .{});
-    try testing.expectEqual(Rect{}, set.items.get(1).?.target);
-    try testing.expectEqual(Rect{ .x = 25, .y = -25, .w = 25, .h = 25 }, set.shown(1).?.rect);
 }
