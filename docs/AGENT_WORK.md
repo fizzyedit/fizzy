@@ -48,7 +48,7 @@ A PR carries one stage label at a time; each names whose turn it is.
 
 `reviewer:<team>-<kind>` (for example `reviewer:linux-codex`) assigns a review; a reviewer adds
 `reviewing:<team>-<kind>` while it is in progress and removes it when its `REVIEW` is posted.
-A different worker than the author reviews: one reviewer by default, two where
+A worker of another kind than the author reviews: one reviewer by default, two where
 [`REVIEW.md`](REVIEW.md) says so. The PM names who.
 
 ### Markers
@@ -150,7 +150,7 @@ PR creation. Fix the reported problem and retry finish. Neither helper merges or
 ## Where verification happens
 
 Three places, in order: the worker's **local gates** (step 3), which decide whether the PR is
-worth pushing; **cross-review** by a different worker; and **CI at ready**. A draft PR runs only
+worth pushing; **cross-review** by a worker of another kind; and **CI at ready**. A draft PR runs only
 the light `changes` job (`ci.yml`); `ci-ok` is skipped on drafts. Pushing to a draft costs almost
 nothing and proves nothing; `gh pr ready` starts the full matrix, and `ci-ok` is the required
 check on that run. A reviewer waits for finished checks, so a draft is reviewed from its diff and the gate output in its body,

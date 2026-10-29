@@ -73,8 +73,8 @@ findings; the writer answers them in `FIXES` before the PR is approved. The PM f
 
 ## How many reviews
 
-One reviewer reviews an ordinary PR: a different worker than the author, on the other always-on
-system when it can. The PM adds a second reviewer when the PR:
+One reviewer reviews an ordinary PR: a worker of another kind than the author (claude, codex or
+agy), on the other always-on system when it can. The PM adds a second reviewer when the PR:
 
 - is risky: CI, the gate, agent rules, credentials, releases, `AGENTS.md` or `CLAUDE.md`;
 - changes a shared piece (one a design note in fizzyedit/plans covers);
