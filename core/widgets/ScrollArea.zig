@@ -513,7 +513,7 @@ fn settleBy(area_px: f32, viewport: f32, max: f32, scale: f32) f32 {
     // content's origin, not the viewport: the area itself may sit between pixels.
     const origin = area_px - viewport * scale;
     var by = (origin - @round(origin)) / scale;
-    // Past an edge dvui's bounce would pull it back off the pixel, so round the other way.
+    // Round the other way if snapping would put the viewport outside its scroll range.
     if (viewport + by < 0) by += 1 / scale;
     if (viewport + by > max) by -= 1 / scale;
     return by;
