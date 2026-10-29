@@ -556,8 +556,8 @@ fn headerValue(head: *std.http.Server.Request, arena: std.mem.Allocator, name: [
     return null;
 }
 
-/// The connection is `link`'s from here: the `101`, then what the peer sends into the link while a
-/// task of its own writes what the app queues on it. Ends when the peer goes, the app closes the
+/// The connection is `link`'s from here: the `101`, then a reader task fills the inbox while this
+/// task writes what the app queues. Ends when the peer goes, the app closes the
 /// link, or the server stops; the link is finished last, whichever, and not touched after.
 fn serveLink(self: *Server, link: *Link, stream: Io.net.Stream, reader: *Io.Reader, writer: *Io.Writer, token: []const u8) void {
     defer link.finish();
@@ -573,8 +573,15 @@ fn serveLink(self: *Server, link: *Link, stream: Io.net.Stream, reader: *Io.Read
     }
     writer.print("HTTP/1.1 101 Switching Protocols\r\nconnection: Upgrade\r\nupgrade: {s}\r\n\r\n", .{token}) catch return;
     writer.flush() catch return;
-    var sender = self.io.concurrent(writeLink, .{ self, link, stream, writer }) catch return;
-    defer sender.cancel(self.io);
+    var receiver = self.io.concurrent(readLink, .{ self, link, reader }) catch return;
+    // Cancellation interrupts the blocked read on Windows too; socket shutdown may not.
+    defer receiver.cancel(self.io);
+    self.writeLink(link, writer);
+}
+
+/// Fill the inbox until the peer leaves, then wake the writer so the connection can finish.
+fn readLink(self: *Server, link: *Link, reader: *Io.Reader) void {
+    defer link.close();
     while (!self.stopping.load(.acquire)) {
         const bytes = reader.peekGreedy(1) catch return;
         link.push(bytes) catch return;
@@ -582,9 +589,8 @@ fn serveLink(self: *Server, link: *Link, stream: Io.net.Stream, reader: *Io.Read
     }
 }
 
-/// Write what the app queues on `link` until it closes it or a write fails, then shut the socket
-/// down, which ends the read that `serveLink` is blocked in.
-fn writeLink(self: *Server, link: *Link, stream: Io.net.Stream, writer: *Io.Writer) void {
+/// Write what the app queues on `link` until it closes it or a write fails.
+fn writeLink(self: *Server, link: *Link, writer: *Io.Writer) void {
     while (true) {
         // Read first: what was queued before `close` is still written.
         const closing = link.closing.load(.acquire);
@@ -597,7 +603,6 @@ fn writeLink(self: *Server, link: *Link, stream: Io.net.Stream, writer: *Io.Writ
         if (closing) break;
         link.out_ready.wait(self.io) catch break;
     }
-    stream.shutdown(self.io, .both) catch {};
 }
 
 /// Write events to the connection until the client goes, falls too far behind, or the server
@@ -1338,12 +1343,22 @@ test "an upgraded connection carries bytes both ways until the app closes it" {
 
     var peer: UpgradePeer = .{ .io = io, .path = path };
     const thread = try std.Thread.spawn(.{}, UpgradePeer.run, .{&peer});
+    var joined = false;
+    defer if (!joined) {
+        peer.release.set(io);
+        server.stop();
+        thread.join();
+    };
     var taken: std.ArrayList(*Request) = .empty;
     defer taken.deinit(gpa);
     const req = try takeOne(&server, &taken);
     try std.testing.expectEqualStrings("fizzy-remote-view/1", req.upgrade.?);
     var link: Link = .init(gpa, io, noWake);
-    defer link.deinit();
+    defer {
+        // The server's tasks must finish before the queues they use are freed, even on failure.
+        server.stop();
+        link.deinit();
+    }
     req.answerUpgrade(&server, &link);
 
     // What the client wrote behind its request is the link's.
@@ -1363,6 +1378,7 @@ test "an upgraded connection carries bytes both ways until the app closes it" {
     const finished_while_peer_open = link.isGone();
     peer.release.set(io);
     thread.join();
+    joined = true;
     try std.testing.expect(std.mem.startsWith(u8, peer.head[0..peer.head_len], "HTTP/1.1 101 Switching Protocols\r\n"));
     try std.testing.expect(std.mem.find(u8, peer.head[0..peer.head_len], "upgrade: fizzy-remote-view/1\r\n") != null);
     try std.testing.expectEqualStrings("pong", &peer.reply);
