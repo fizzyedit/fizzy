@@ -214,7 +214,7 @@ const fizzyImports = (target) => ({
         });
     },
     fizzy_web_toggle_fullscreen() {
-        postMessage({ type: "fullscreen" });
+        postMessage({ type: "fullscreen", stack: new Error("fullscreen wasm import").stack });
     },
     fizzy_web_fullscreen_supported() {
         return env.fullscreenSupported ? 1 : 0;

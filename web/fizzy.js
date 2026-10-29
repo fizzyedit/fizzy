@@ -342,7 +342,7 @@ export class Fizzy {
         // View › Toggle Full Screen. The request runs a frame after the key press or click
         // that asked for it, which is still inside the browser's user-activation window.
         fizzy_web_toggle_fullscreen() {
-          toggleFullscreen();
+          toggleFullscreen("wasm import");
         },
         // False where a page cannot go full screen (Safari on iPhone), so the command is disabled.
         fizzy_web_fullscreen_supported() {
@@ -868,8 +868,18 @@ export class Fizzy {
     function fullscreenTarget() {
       return opts.fullscreenElement ?? dvuiCanvas.parentElement ?? dvuiCanvas;
     }
-    function toggleFullscreen() {
+    function toggleFullscreen(caller, workerStack) {
       const target = fullscreenTarget();
+      console.debug("fizzy: fullscreen request", {
+        caller,
+        action: document.fullscreenElement === target ? "exit" : "enter",
+        userActivation: {
+          isActive: navigator.userActivation?.isActive,
+          hasBeenActive: navigator.userActivation?.hasBeenActive,
+        },
+        stack: new Error("fullscreen request").stack,
+        workerStack,
+      });
       if (document.fullscreenElement === target) {
         document.exitFullscreen().catch(() => {});
       } else if (target.requestFullscreen) {
@@ -1126,7 +1136,7 @@ export class Fizzy {
             }
             break;
           case "fullscreen":
-            toggleFullscreen();
+            toggleFullscreen("worker message", m.stack);
             break;
           case "oauth": {
             let blobUrl = null;
