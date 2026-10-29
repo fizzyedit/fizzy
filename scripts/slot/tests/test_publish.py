@@ -21,6 +21,12 @@ class PublishTests(Artifacts):
         self.assertEqual(push.call_count, 1)
         self.assertIn('Part of fizzyedit/work#722', state['prs'][0]['body'])
 
+    def test_write_labels_author_kind_instead_of_issue_work_kind(self):
+        state, _ = self.publish_twice()
+        create = next(call for call in state['calls'] if call[:2] == ['pr', 'create'])
+        labels = [create[index + 1] for index, arg in enumerate(create) if arg == '--label']
+        self.assertCountEqual(labels, ['area:scripts', 'kind:codex'])
+
     def test_review_changes_dispatches_rework(self):
         self.review()
         state, push = self.publish_twice()

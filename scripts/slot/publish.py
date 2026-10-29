@@ -101,10 +101,8 @@ def publish(job_dir, out):
         push(job, out, result, job['branch'])
         body = result['pr_body'] + f'\n\nPart of {repo}#{number}\n\n' + marker
         args = ['pr', 'create', '--repo', FIZZY, '--head', job['branch'], '--title', result['title'],
-                '--body', body, '--label', f'area:{job["issue"]["area"]}']
-        for label in job['issue']['labels']:
-            if label.startswith('kind:'):
-                args += ['--label', label]
+                '--body', body, '--label', f'area:{job["issue"]["area"]}',
+                '--label', f'kind:{result["agent_kind"]}']
         if verdict['risky']:
             args += ['--label', 'gate:yes']
         gh(*args)
