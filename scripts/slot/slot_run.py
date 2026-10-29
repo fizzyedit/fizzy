@@ -212,7 +212,8 @@ def run(job, job_dir, out, keep):
     try:
         try:
             (out / 'agent').mkdir()
-            values = {**job, 'out_agent': str(out / 'agent')}
+            decline_path = work / 'decline.md'
+            values = {**job, 'out_agent': str(out / 'agent'), 'decline_path': str(decline_path)}
             prompt = (ROOT / 'prompts' / (job['kind'] + '.md')).read_text(encoding='utf-8').format_map(values)
             if os.environ.get('SLOT_MODEL'):
                 command += [config['model_flag'], os.environ['SLOT_MODEL']]
@@ -223,8 +224,12 @@ def run(job, job_dir, out, keep):
                              prompt.encode() if config['prompt'] == 'stdin' else None)
                 if rc == 64 or rc in config.get('auth_exit', []):
                     raise BrokenSlot('agent not signed in')
-                if (out / 'agent' / 'decline.md').exists():
-                    result.update(status='declined', decline=read_agent(out, 'decline.md'))
+                if not decline_path.exists():
+                    decline_path = out / 'agent' / 'decline.md'
+                if decline_path.exists():
+                    shutil.copyfile(decline_path, out / 'decline.md')
+                    result.update(status='declined', decline=(out / 'decline.md').read_text(
+                        encoding='utf-8', errors='replace'))
                 elif rc != 0:
                     raise ValueError(f'agent exited {rc}')
                 elif job['kind'] == 'review':
