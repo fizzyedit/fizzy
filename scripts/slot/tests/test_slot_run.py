@@ -105,6 +105,38 @@ class SlotRunTests(unittest.TestCase):
                 self.assertEqual(self.result('declined')['decline'], note)
                 self.assertFalse((self.root / 'home/work' / self.job['id']).exists())
 
+    def test_workspace_pr_body_and_report_are_collected(self):
+        agent = self.root / 'workspace_agent.py'
+        agent.write_text("from pathlib import Path\n"
+                         "import json, sys\n"
+                         "prompt = sys.stdin.read()\n"
+                         "for label, text in [('PR body path: ', '## In plain words\\nA useful change.'), "
+                         "('Report path: ', 'Verified.')]:\n"
+                         "    if label not in prompt: continue\n"
+                         "    path = Path(prompt.split(label, 1)[1].splitlines()[0])\n"
+                         "    assert path.is_absolute() and path.parent == Path.cwd()\n"
+                         "    path.write_text(text)\n"
+                         "if prompt.startswith('Review'):\n"
+                         "    out = Path(prompt.split('Output directory: ', 1)[1].splitlines()[0])\n"
+                         "    (out / 'review.json').write_text(json.dumps(dict(verdict='clean', findings=[], follow_ups=[])))\n"
+                         "else:\n"
+                         "    Path('hello.txt').write_text('improved\\n')\n")
+        for kind in ('write', 'rework', 'review'):
+            with self.subTest(kind=kind):
+                self.job['kind'] = kind
+                self.job['id'] = 'workspace-artifacts-' + kind
+                self.out = self.root / ('out-' + kind)
+                self.assertEqual(self.run_slot(agent=agent, keep=True), 0, self.detail)
+                result = self.result('done')
+                self.assertEqual(result['report'], 'Verified.')
+                self.assertEqual((self.out / 'agent/report.md').read_text(), 'Verified.')
+                if kind != 'review':
+                    self.assertEqual(result['pr_body'], '## In plain words\nA useful change.')
+                    self.assertEqual(result['changed']['files'], 1)
+                work = self.root / 'home/work' / self.job['id']
+                self.assertFalse((work / 'pr-body.md').exists())
+                self.assertFalse((work / 'report.md').exists())
+
     def test_no_change_fails(self):
         self.assertEqual(self.run_slot('no-change'), 4, self.detail)
         self.assertEqual(self.result('failed')['error'], 'no change')

@@ -213,15 +213,24 @@ def run(job, job_dir, out, keep):
         try:
             (out / 'agent').mkdir()
             decline_path = work / 'decline.md'
-            values = {**job, 'out_agent': str(out / 'agent'), 'decline_path': str(decline_path)}
+            values = {**job, 'out_agent': str(out / 'agent'), 'decline_path': str(decline_path),
+                      'pr_body_path': str(work / 'pr-body.md'), 'report_path': str(work / 'report.md')}
             prompt = (ROOT / 'prompts' / (job['kind'] + '.md')).read_text(encoding='utf-8').format_map(values)
             if os.environ.get('SLOT_MODEL'):
                 command += [config['model_flag'], os.environ['SLOT_MODEL']]
             if config['prompt'] == 'arg':
                 command.append(prompt)
             with (out / 'log.txt').open('wb') as log:
-                rc = execute(command, work, log, deadline,
-                             prompt.encode() if config['prompt'] == 'stdin' else None)
+                try:
+                    rc = execute(command, work, log, deadline,
+                                 prompt.encode() if config['prompt'] == 'stdin' else None)
+                finally:
+                    # Collect sandbox outputs before staging the implementation patch.
+                    for name in ('pr-body.md', 'report.md', 'decline.md'):
+                        source = work / name
+                        if source.is_file():
+                            shutil.copyfile(source, out / 'agent' / name)
+                            source.unlink()
                 if rc == 64 or rc in config.get('auth_exit', []):
                     raise BrokenSlot('agent not signed in')
                 if not decline_path.exists():
