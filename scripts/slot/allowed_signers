@@ -1,0 +1,5 @@
+# Registered slot identities are maintained by the PM.
+pop-os-claude-1 namespaces="fizzy-slot" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHf08C2IiXv40q8MFcTZ1BPd6wI5a26w8EYicq5c41zR
+pop-os-claude-2 namespaces="fizzy-slot" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHf08C2IiXv40q8MFcTZ1BPd6wI5a26w8EYicq5c41zR
+pop-os-codex-1 namespaces="fizzy-slot" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOBOTefN2pnnDM55x8lMr4V7aSbM/DNnBpDn2FbCRX6Z
+pop-os-codex-2 namespaces="fizzy-slot" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOBOTefN2pnnDM55x8lMr4V7aSbM/DNnBpDn2FbCRX6Z

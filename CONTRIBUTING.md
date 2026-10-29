@@ -30,9 +30,10 @@ into kickoff prompts, wrappers or runners.
   `windows`, `linux`, `ci`, `docs`, and so on.
 - **The PR title is the commit on `main`.** PRs are squash-merged, the title becoming the subject
   and the body the message. Title: `area: what changes`, at most 72 characters, saying what a
-  user or plugin author sees. The rest (why, what was measured, what was tried and dropped) goes
-  in the body. jj descriptions follow the same shape: a short first line, a blank line, then the
-  paragraph.
+  user or plugin author sees, in words a visitor understands. The body opens with plain sections
+  for someone who has never read the code (`docs/AGENT_WORK.md`, "The PR page"); the rest (why,
+  what was measured, what was tried and dropped) goes in its collapsed technical summary. jj
+  descriptions follow the same shape: a short first line, a blank line, then the paragraph.
 
 ## Claim before you build
 
@@ -210,6 +211,7 @@ maintainer makes the SDK **live** on the site (below).
 
 | What | Where |
 |---|---|
+| What fizzy is for: its goals and principles | `docs/VISION.md` |
 | What fizzy is, and its architecture rules | `AGENTS.md` |
 | How Zig and comments are written | `docs/STYLE.md`, `docs/ZIG.md` |
 | How we work | this file |

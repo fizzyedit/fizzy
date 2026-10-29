@@ -27,7 +27,7 @@
 //! overscrolls; a nested one hands the motion to its parent, as before.
 const std = @import("std");
 const dvui = @import("dvui");
-const input_time = @import("../input_time.zig");
+const input_time = @import("glass").input_time;
 const profile = @import("../profile.zig");
 const Fling = @import("../Fling.zig");
 const glass = @import("glass");
@@ -183,7 +183,7 @@ pub fn deinit(self: *ScrollArea) void {
     var finger_delta: dvui.Point = .{};
     const was_dragging = t.dragging;
     var released = false;
-    var release_ns = dvui.frameTimeNS();
+    var release_ns = glass.MotionClock.wallFrameNs();
     for (dvui.events()) |*e| {
         if (e.evt != .mouse or !e.evt.mouse.button.touch()) continue;
         const finger = e.evt.mouse.button;
@@ -1085,6 +1085,33 @@ test "steady event times release at steady speed across bursts of 3, 0, 1" {
     _ = try cw.addEventPointer(.{ .button = .touch0, .action = .release, .xynorm = .{ .x = 0.5, .y = y } });
     try frameAfter(16);
     try std.testing.expectApproxEqAbs(@as(f32, 1000), t_release_velocity, 0.1);
+}
+
+test "a flick stamped as the backend stamps it coasts at its true speed across a late frame" {
+    var test_window = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer test_window.deinit();
+    t_use_dvui = false;
+    const cw = dvui.currentWindow();
+    try dvui.testing.settle(testFrame);
+    const h = cw.data().rect.h;
+    var y: f32 = 0.8;
+    _ = try cw.addEventPointer(.{ .button = .touch0, .action = .press, .xynorm = .{ .x = 0.5, .y = y } });
+    try frameAfter(16);
+    const start = glass.MotionClock.wallFrameNs();
+    // Twelve motions of 10 points every 8 ms: 1250 points/s. A frame of 120 ms falls between the
+    // sixth and seventh, as a stalled phone's would.
+    for (1..13) |k| {
+        y -= 10 / h;
+        const before = cw.event_num;
+        _ = try cw.addEventTouchMotion(.touch0, 0.5, y, 0, -10 / h);
+        input_time.stamp(cw, before, start + @as(i128, @intCast(k)) * 8 * std.time.ns_per_ms);
+        if (k == 6) try frameAfter(120);
+    }
+    const before = cw.event_num;
+    _ = try cw.addEventPointer(.{ .button = .touch0, .action = .release, .xynorm = .{ .x = 0.5, .y = y } });
+    input_time.stamp(cw, before, start + 12 * 8 * std.time.ns_per_ms);
+    try frameAfter(16);
+    try std.testing.expectApproxEqRel(@as(f32, 1250), t_release_velocity, 0.1);
 }
 
 /// Where a flick of `frames` moves of `step` points a frame comes to rest with `n` set.
