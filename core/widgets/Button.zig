@@ -35,21 +35,12 @@ pub fn processEvents(self: *Button) void {
     // TODO(touch-target arbitration): choose the nearest border before consuming overlapping
     // targets; processing order wins today, including over a neighbour's border. Resolve before
     // migrating tightly packed toolbars.
+    // dvui's ButtonWidget uses this same click path; only the hit rectangle differs.
     self.inner.click = dvui.clicked(self.data(), .{
         .rect = self.hitRect(),
         .hovered = &self.inner.hover,
         .touch_drag = self.inner.init_options.touch_drag,
     });
-}
-
-/// Test an event against dvui's widget event routing, without consuming it.
-pub fn matchEvent(self: *Button, e: *dvui.Event) bool {
-    return self.inner.matchEvent(e);
-}
-
-/// Update hover state using dvui's border rectangle.
-pub fn processHover(self: *Button) void {
-    self.inner.processHover();
 }
 
 /// Draw the styled border and background without expanding them to the touch target.
@@ -67,49 +58,14 @@ pub fn style(self: *Button) dvui.Options {
     return self.inner.style();
 }
 
-/// Whether this button owns keyboard focus in the current window.
-pub fn focused(self: *Button) bool {
-    return self.inner.focused();
-}
-
-/// Whether this frame's event processing marked the button hovered.
-pub fn hovered(self: *Button) bool {
-    return self.inner.hovered();
-}
-
-/// Whether this button currently holds pointer capture.
-pub fn pressed(self: *Button) bool {
-    return self.inner.pressed();
-}
-
 /// Whether event processing activated the button this frame.
 pub fn clicked(self: *Button) bool {
     return self.inner.clicked();
 }
 
-/// The inner dvui widget and its layout vtable, valid until `deinit`.
-pub fn widget(self: *Button) dvui.Widget {
-    return self.inner.widget();
-}
-
 /// Borrow the inner widget data; valid until `deinit`.
 pub fn data(self: *Button) *dvui.WidgetData {
     return self.inner.data();
-}
-
-/// Delegate child placement to the inner widget using dvui layout coordinates.
-pub fn rectFor(self: *Button, id: dvui.Id, min_size: dvui.Size, e: dvui.Options.Expand, g: dvui.Options.Gravity) dvui.Rect {
-    return self.inner.rectFor(id, min_size, e, g);
-}
-
-/// Convert a local rectangle to physical screen coordinates using the inner widget.
-pub fn screenRectScale(self: *Button, rect: dvui.Rect) dvui.RectScale {
-    return self.inner.screenRectScale(rect);
-}
-
-/// Report a child's minimum size to the inner widget's layout.
-pub fn minSizeForChild(self: *Button, size: dvui.Size) void {
-    self.inner.minSizeForChild(size);
 }
 
 /// Finish layout and restore the parent; releases a dvui-allocated widget if applicable.
@@ -121,7 +77,6 @@ test "touch clicks six points outside a 32 point border without changing its dra
     const Frame = struct {
         // The test callback writes these on the testing window's thread.
         var border: dvui.Rect.Physical = .{};
-        // The test callback writes this on the testing window's thread.
         var click: bool = false;
 
         fn draw() !dvui.App.Result {
