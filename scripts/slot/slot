@@ -1,0 +1,13 @@
+#!/usr/bin/env python3
+"""Slot protocol command dispatcher."""
+import sys
+import slot_run
+
+if __name__ == '__main__':
+    if len(sys.argv) > 1 and sys.argv[1] == 'run':
+        sys.exit(slot_run.main(sys.argv[2:]))
+    if len(sys.argv) > 1 and sys.argv[1] in ('validate', 'publish'):
+        print('not built yet', file=sys.stderr)
+    else:
+        print('usage: slot run JOB_DIR --out OUT_DIR [--keep-checkout]', file=sys.stderr)
+    sys.exit(2)
