@@ -148,4 +148,3 @@ pub const palette = @import("palette.zig");
 
 /// Preferences shared by applications, independent of app-local settings.
 pub const person = @import("person.zig");
-
