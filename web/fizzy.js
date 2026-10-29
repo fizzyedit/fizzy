@@ -257,6 +257,12 @@ export class Fizzy {
   run() {
     const opts = this.opts;
     const storageName = this.storageName;
+    let focusEpoch = 0;
+    window.addEventListener("focus", () => {
+      focusEpoch++;
+      if (dvuiApp) dvuiApp.requestRender();
+    });
+    const fileKey = (path) => path === "fizzyedit.person" ? path : storageName + ".file:" + path;
     const persists = opts.persist !== false;
     const onReady = opts.onReady ?? (() => {});
     const onError = opts.onError ?? (() => {});
@@ -469,8 +475,9 @@ export class Fizzy {
         },
         // `core.fs` on the web: the app's own small files (settings.zon, recents.zon,
         // keybinds.zon) live in localStorage, keyed by the path the app would have used.
+        fizzy_web_focus_epoch() { return focusEpoch; },
         fizzy_web_storage_get(keyPtr, keyLen, bufPtr, bufLen) {
-          const key = storageName + ".file:" + utf8.decode(new Uint8Array(wasmInstance.exports.memory.buffer, keyPtr, keyLen));
+          const key = fileKey(utf8.decode(new Uint8Array(wasmInstance.exports.memory.buffer, keyPtr, keyLen)));
           let value = null;
           try { value = store.getItem(key); } catch (_) {}
           if (value === null) return 0xffffffff;
@@ -480,12 +487,12 @@ export class Fizzy {
         },
         fizzy_web_storage_set(keyPtr, keyLen, valPtr, valLen) {
           const mem = wasmInstance.exports.memory.buffer;
-          const key = storageName + ".file:" + utf8.decode(new Uint8Array(mem, keyPtr, keyLen));
+          const key = fileKey(utf8.decode(new Uint8Array(mem, keyPtr, keyLen)));
           const value = utf8.decode(new Uint8Array(mem, valPtr, valLen));
           try { store.setItem(key, value); } catch (err) { console.warn("fizzy: could not store", key, err); }
         },
         fizzy_web_storage_remove(keyPtr, keyLen) {
-          const key = storageName + ".file:" + utf8.decode(new Uint8Array(wasmInstance.exports.memory.buffer, keyPtr, keyLen));
+          const key = fileKey(utf8.decode(new Uint8Array(wasmInstance.exports.memory.buffer, keyPtr, keyLen)));
           try { store.removeItem(key); } catch (_) {}
         },
         // What the page remembers for an id, so the host can load it again after a disable
@@ -1106,10 +1113,13 @@ export class Fizzy {
         reduce: media("(prefers-reduced-motion: reduce)"),
       });
       const storage = {};
+      window.addEventListener("focus", () => {
+        try { post({ type: "personFocus", value: store.getItem("fizzyedit.person") }); } catch (_) {}
+      });
       try {
         for (let i = 0; i < store.length; i++) {
           const key = store.key(i);
-          if (key && key.startsWith(storageName + ".")) storage[key] = store.getItem(key);
+          if (key && (key === "fizzyedit.person" || key.startsWith(storageName + "."))) storage[key] = store.getItem(key);
         }
       } catch (_) {}
 
