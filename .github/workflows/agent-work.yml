@@ -1,4 +1,4 @@
-# The label side of docs/AGENT_WORK.md: `running:*` is a lock, a stranded claim is released, and
+by# The label side of docs/AGENT_WORK.md: `running:*` is a lock, a stranded claim is released, and
 # `merge-ok` stays the maintainers'. Labels and events only: no checkout, no model calls, and
 # event data is read in JavaScript, never interpolated into a shell. One secret: the `bridge`
 # job's dispatch-only App key, in environment `bridge` (main only). Not part of
@@ -222,7 +222,7 @@ jobs:
         with:
           script: |
             const { owner, repo } = context.repo;
-            const app = github.getOctokit(process.env.APP_TOKEN);
+            const app = getOctokit(process.env.APP_TOKEN);
             const send = (event_type, client_payload) => app.rest.repos.createDispatchEvent({
               owner, repo: 'work', event_type, client_payload });
             let pr;
