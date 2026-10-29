@@ -184,6 +184,19 @@ test "touch targets never shrink a border larger than the minimum" {
             defer button.deinit();
             try std.testing.expectEqual(.touch, dvui.pointerKind());
             try std.testing.expectEqual(button.data().borderRectScale().r, button.hitRect());
+            {
+                var wide: Button = undefined;
+                wide.init(@src(), .{}, .{
+                    .rect = .{ .x = 0, .y = 0, .w = 80, .h = 32 },
+                    .margin = dvui.Rect.all(0),
+                });
+                defer wide.deinit();
+                const border = wide.data().borderRectScale();
+                const hit = wide.hitRect();
+                try std.testing.expectEqual(border.r.w, hit.w);
+                try std.testing.expectEqual(form_factor.min_hit * border.s, hit.h);
+                try std.testing.expectEqual(border.r.center(), hit.center());
+            }
             return .ok;
         }
     };
