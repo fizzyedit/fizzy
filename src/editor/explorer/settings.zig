@@ -717,7 +717,7 @@ fn drawFloatWindows() void {
     drawToggle(&editor.app.settings.float_windows, "Floats in their own windows");
     // Taken at launch: changed, it waits for a restart, offered here and in the info bar.
     if (editor.restartPending()) {
-        if (dvui.button(@src(), "Restart", .{}, .{ .gravity_y = 0.5, .margin = .{ .x = 6 }, .padding = .{ .x = 8, .w = 8, .y = 2, .h = 2 } })) {
+        if (core.widgets.button(@src(), "Restart", .{}, .{ .gravity_y = 0.5, .margin = .{ .x = 6 }, .padding = .{ .x = 8, .w = 8, .y = 2, .h = 2 } })) {
             restart.request();
         }
     }

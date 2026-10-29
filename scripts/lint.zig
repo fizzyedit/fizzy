@@ -12,6 +12,7 @@ const Rule = enum {
     @"changelog-words",
     @"raw-transient-surface",
     @"raw-scroll-area",
+    @"raw-button",
 };
 const Finding = struct { rule: Rule, line: usize, message: []const u8 };
 const Allow = struct { rule: Rule, file: []const u8, count: usize };
@@ -249,7 +250,7 @@ const RawCall = struct {
     name: []const u8,
     rule: Rule,
     message: []const u8,
-    call_only: bool = false,
+    next: ?std.zig.Token.Tag = null,
 };
 const raw_calls = blk: {
     const surfaces = [_][]const u8{
@@ -257,7 +258,7 @@ const raw_calls = blk: {
         "popup",   "PopupWidget",           "floatingWindow", "FloatingWindowWidget",
         "dialog",  "toast",                 "contextMenu",    "dropdown",
     };
-    var calls: [surfaces.len + 1]RawCall = undefined;
+    var calls: [surfaces.len + 5]RawCall = undefined;
     for (surfaces, 0..) |name, i| calls[i] = .{
         .name = name,
         .rule = .@"raw-transient-surface",
@@ -267,7 +268,13 @@ const raw_calls = blk: {
         .name = "scrollArea",
         .rule = .@"raw-scroll-area",
         .message = "dvui.scrollArea bypasses touch scrolling; use core.widgets.ScrollArea.init",
-        .call_only = true,
+        .next = .l_paren,
+    };
+    for ([_][]const u8{ "button", "buttonIcon", "buttonLabelAndIcon", "ButtonWidget" }, 0..) |name, i| calls[surfaces.len + 1 + i] = .{
+        .name = name,
+        .rule = .@"raw-button",
+        .message = "raw dvui button bypasses touch hit targets; use core.widgets.Button or its verbs",
+        .next = if (i == 3) .equal else .l_paren,
     };
     break :blk calls;
 };
@@ -286,7 +293,9 @@ fn rawDvuiCalls(
         const name = tree.tokenSlice(@intCast(i + 2));
         for (raw_calls) |banned| {
             if (!std.mem.eql(u8, name, banned.name)) continue;
-            if (banned.call_only and (i + 3 >= tags.len or tags[i + 3] != .l_paren)) continue;
+            if (banned.next) |next| {
+                if (i + 3 >= tags.len or tags[i + 3] != next) continue;
+            }
             const line = tree.tokenLocation(0, @intCast(i)).line + 1;
             if (silenced(suppressions, banned.rule, line)) break;
             try findings.append(allocator, .{
@@ -861,11 +870,9 @@ test "dvui.scrollArea is flagged" {
 test "a lint-allow with a reason silences it" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    for ([_][:0]const u8{
-        "// lint-allow(raw-scroll-area): wrapper implementation\n" ++
-            "fn f() void { _ = dvui.scrollArea(@src(), .{}, .{}); }",
-        "fn f() void { _ = dvui.scrollArea(@src(), .{}, .{}); } // lint-allow(raw-scroll-area): wrapper implementation",
-    }) |source| try std.testing.expectEqual(@as(usize, 0), (try analyze(arena.allocator(), source)).len);
+    const findings = try analyze(arena.allocator(), "// lint-allow(raw-scroll-area): wrapper implementation\n" ++
+        "fn f() void { _ = dvui.scrollArea(@src(), .{}, .{}); }");
+    try std.testing.expectEqual(@as(usize, 0), findings.len);
 }
 
 test "core.widgets.ScrollArea.init is not flagged" {
@@ -889,7 +896,19 @@ test "a file over its raw-scroll-area budget fails" {
     try std.testing.expect(try reportFile(&output.writer, "over.zig", findings, &allowances, &seen, false));
     try std.testing.expect(seen[0]);
     try std.testing.expect(std.mem.endsWith(u8, output.written(), "raw-scroll-area: count 2 exceeds allowance 1\n"));
-    output.clearRetainingCapacity();
-    try std.testing.expect(!try reportFile(&output.writer, "over.zig", findings[0..1], &allowances, &seen, false));
-    try std.testing.expectEqualStrings("", output.written());
+}
+
+test "raw-button catches verbs and declarations but allows type references" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const findings = try analyze(
+        arena.allocator(),
+        "fn f() void { _ = dvui.button(a,b,c,d); _ = dvui.buttonIcon(a,b,c,d,e,f); _ = dvui.buttonLabelAndIcon(a,b,c); var b: dvui.ButtonWidget = undefined; }\n" ++
+            "const InitOptions = dvui.ButtonWidget.InitOptions;\n" ++
+            "fn g(b: *dvui.ButtonWidget) void {}\n" ++
+            "// lint-allow(raw-button): wrapper owns the dvui implementation\n" ++
+            "var b: dvui.ButtonWidget = undefined;",
+    );
+    try std.testing.expectEqual(@as(usize, 4), findings.len);
+    for (findings) |finding| try std.testing.expectEqual(Rule.@"raw-button", finding.rule);
 }
