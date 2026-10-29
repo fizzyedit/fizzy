@@ -556,8 +556,8 @@ fn headerValue(head: *std.http.Server.Request, arena: std.mem.Allocator, name: [
     return null;
 }
 
-/// The connection is `link`'s from here: the `101`, then a reader task fills the inbox while this
-/// task writes what the app queues. Ends when the peer goes, the app closes the
+/// The connection is `link`'s from here: the `101`, then what the peer sends into the link while a
+/// task of its own writes what the app queues on it. Ends when the peer goes, the app closes the
 /// link, or the server stops; the link is finished last, whichever, and not touched after.
 fn serveLink(self: *Server, link: *Link, stream: Io.net.Stream, reader: *Io.Reader, writer: *Io.Writer, token: []const u8) void {
     defer link.finish();
@@ -573,15 +573,8 @@ fn serveLink(self: *Server, link: *Link, stream: Io.net.Stream, reader: *Io.Read
     }
     writer.print("HTTP/1.1 101 Switching Protocols\r\nconnection: Upgrade\r\nupgrade: {s}\r\n\r\n", .{token}) catch return;
     writer.flush() catch return;
-    var receiver = self.io.concurrent(readLink, .{ self, link, reader }) catch return;
-    // Cancellation interrupts the blocked read on Windows too; socket shutdown may not.
-    defer receiver.cancel(self.io);
-    self.writeLink(link, writer);
-}
-
-/// Fill the inbox until the peer leaves, then wake the writer so the connection can finish.
-fn readLink(self: *Server, link: *Link, reader: *Io.Reader) void {
-    defer link.close();
+    var sender = self.io.concurrent(writeLink, .{ self, link, stream, writer }) catch return;
+    defer sender.cancel(self.io);
     while (!self.stopping.load(.acquire)) {
         const bytes = reader.peekGreedy(1) catch return;
         link.push(bytes) catch return;
@@ -589,8 +582,9 @@ fn readLink(self: *Server, link: *Link, reader: *Io.Reader) void {
     }
 }
 
-/// Write what the app queues on `link` until it closes it or a write fails.
-fn writeLink(self: *Server, link: *Link, writer: *Io.Writer) void {
+/// Write what the app queues on `link` until it closes it or a write fails, then shut the socket
+/// down, which ends the read that `serveLink` is blocked in.
+fn writeLink(self: *Server, link: *Link, stream: Io.net.Stream, writer: *Io.Writer) void {
     while (true) {
         // Read first: what was queued before `close` is still written.
         const closing = link.closing.load(.acquire);
@@ -603,6 +597,7 @@ fn writeLink(self: *Server, link: *Link, writer: *Io.Writer) void {
         if (closing) break;
         link.out_ready.wait(self.io) catch break;
     }
+    stream.shutdown(self.io, .both) catch {};
 }
 
 /// Write events to the connection until the client goes, falls too far behind, or the server
@@ -1280,8 +1275,8 @@ test "a stopped server ends a keep-alive connection waiting for its next request
 }
 
 /// A client that asks for `GET /remote` to become a byte stream: reads the `101`, writes `ping`
-/// right behind its request, reads four bytes, then holds the socket open until `release` unless
-/// `leave`, which closes the socket as soon as it has the head.
+/// right behind its request, reads four bytes, then reads to the end unless `leave`, which closes
+/// the socket as soon as it has the head.
 const UpgradePeer = struct {
     io: Io,
     path: []const u8,
@@ -1289,7 +1284,7 @@ const UpgradePeer = struct {
     head: [160]u8 = undefined,
     head_len: usize = 0,
     reply: [4]u8 = undefined,
-    release: Io.Event = .unset,
+    ended: bool = false,
 
     fn run(self: *UpgradePeer) void {
         const addr = Io.net.UnixAddress.init(self.path) catch return;
@@ -1309,9 +1304,8 @@ const UpgradePeer = struct {
         }
         if (self.leave) return;
         r.interface.readSliceAll(&self.reply) catch return;
-        // Windows AF_UNIX does not reliably deliver EOF. Keep the peer open so the test can
-        // prove the server finishes the link without the client closing it first.
-        self.release.wait(self.io) catch return;
+        var more: [1]u8 = undefined;
+        self.ended = if (r.interface.readSliceShort(&more)) |n| n == 0 else |_| true;
     }
 };
 
@@ -1338,26 +1332,17 @@ test "an upgraded connection carries bytes both ways until the app closes it" {
     defer gpa.free(path);
     defer removeTestSocket(path);
     var server: Server = .{ .gpa = gpa, .io = io, .socket_path = path, .wake = noWake };
-    var link: Link = .init(gpa, io, noWake);
-    defer link.deinit();
     try server.start();
+    defer server.stop();
 
     var peer: UpgradePeer = .{ .io = io, .path = path };
-    const thread = std.Thread.spawn(.{}, UpgradePeer.run, .{&peer}) catch |err| {
-        server.stop();
-        return err;
-    };
-    var joined = false;
-    defer {
-        peer.release.set(io);
-        // Stop tasks before joining a peer that may still be waiting for its reply.
-        server.stop();
-        if (!joined) thread.join();
-    }
+    const thread = try std.Thread.spawn(.{}, UpgradePeer.run, .{&peer});
     var taken: std.ArrayList(*Request) = .empty;
     defer taken.deinit(gpa);
     const req = try takeOne(&server, &taken);
     try std.testing.expectEqualStrings("fizzy-remote-view/1", req.upgrade.?);
+    var link: Link = .init(gpa, io, noWake);
+    defer link.deinit();
     req.answerUpgrade(&server, &link);
 
     // What the client wrote behind its request is the link's.
@@ -1370,18 +1355,16 @@ test "an upgraded connection carries bytes both ways until the app closes it" {
     }
     try std.testing.expectEqualStrings("ping", got.items);
     try link.send("pong");
-    // The server must finish while the client holds its socket open, after writing the queue.
+    // Closing ends the client's read, after what was queued is written.
     link.close();
-    waited = 0;
-    while (!link.isGone() and waited < 2000) : (waited += 1) io.sleep(.fromMilliseconds(1), .awake) catch {};
-    const finished_while_peer_open = link.isGone();
-    peer.release.set(io);
     thread.join();
-    joined = true;
     try std.testing.expect(std.mem.startsWith(u8, peer.head[0..peer.head_len], "HTTP/1.1 101 Switching Protocols\r\n"));
     try std.testing.expect(std.mem.find(u8, peer.head[0..peer.head_len], "upgrade: fizzy-remote-view/1\r\n") != null);
     try std.testing.expectEqualStrings("pong", &peer.reply);
-    try std.testing.expect(finished_while_peer_open);
+    try std.testing.expect(peer.ended);
+    waited = 0;
+    while (!link.isGone() and waited < 2000) : (waited += 1) io.sleep(.fromMilliseconds(1), .awake) catch {};
+    try std.testing.expect(link.isGone());
 }
 
 test "a client that leaves an upgraded connection finishes its link" {
