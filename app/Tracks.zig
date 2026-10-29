@@ -1414,7 +1414,7 @@ const KeptStand = struct {
         dvui.io = testing.io;
         const root = try tmp.dir.realPathFileAlloc(dvui.io, ".", testing.allocator);
         defer testing.allocator.free(root);
-        path = try std.fmt.bufPrint(&path_buf, "{s}/doc", .{root});
+        path = try std.mem.print(&path_buf, "{s}/doc", .{root});
         var t = Stand.tracks();
         errdefer t.deinit();
         const dir = try std.fs.path.join(testing.allocator, &.{ root, "tracks" });

@@ -1,10 +1,10 @@
-//! One-shot migrations for `settings.zon` layout changes — see plans/PLUGIN_MANIFEST_PLAN.md.
+//! One-shot migrations for `settings.zon` layout changes - see plans/PLUGIN_MANIFEST_PLAN.md.
 //!
-//! 1. `mergeLegacyPerPluginFiles` — pre-R10 one-file-per-plugin (`<plugins_dir>/<id>.settings.zon`)
+//! 1. `mergeLegacyPerPluginFiles` - pre-R10 one-file-per-plugin (`<plugins_dir>/<id>.settings.zon`)
 //!    into the merged `.plugins.<id>` field (R10).
-//! 2. `migrateToPerPluginEnabled` — pre-R12 flat `.plugins.<id> = .{ <author fields> }` + top-level
-//!    `disabled_plugins` into nested `.{ .enabled = …, .settings = .{ … } }` (R12).
-//! 3. `windowGlass` — the dialogs' own glass settings (`dialog_opacity`, `dialog_blur`, …) into the
+//! 2. `migrateToPerPluginEnabled` - pre-R12 flat `.plugins.<id> = .{ <author fields> }` + top-level
+//!    `disabled_plugins` into nested `.{ .enabled = ..., .settings = .{ ... } }` (R12).
+//! 3. `windowGlass` - the dialogs' own glass settings (`dialog_opacity`, `dialog_blur`, ...) into the
 //!    window's opacity, which every glass now reads.
 const builtin = @import("builtin");
 const std = @import("std");
@@ -65,9 +65,9 @@ const LegacyDisk = struct {
 };
 
 /// Rewrites pre-R12 flat `.plugins.<id>` blocks + top-level `disabled_plugins` into the nested
-/// `.{ .enabled = …, .settings = .{ … } }` shape (and drops `disabled_plugins` from the file).
+/// `.{ .enabled = ..., .settings = .{ ... } }` shape (and drops `disabled_plugins` from the file).
 /// Also writes `.enabled = true` for any on-disk plugin directory that was previously enabled by
-/// default (absent from `disabled_plugins`) but had no settings block — under R12, absence means
+/// default (absent from `disabled_plugins`) but had no settings block - under R12, absence means
 /// disabled. Idempotent: already-nested blocks are left alone; a file with no legacy list and no
 /// flat blocks is a no-op. Best-effort throughout.
 pub fn migrateToPerPluginEnabled(allocator: std.mem.Allocator, settings_zon_path: []const u8, plugins_dir: ?[]const u8) void {
@@ -137,7 +137,7 @@ pub fn migrateToPerPluginEnabled(allocator: std.mem.Allocator, settings_zon_path
                 if (id.len == 0 or id[0] == '.') continue;
                 if (containsId(legacy.disabled_plugins, id)) continue;
                 if (hasBlock(blocks, id)) continue;
-                // Already covered by an overlay entry? (shouldn't be — no prior block)
+                // Already covered by an overlay entry? (shouldn't be - no prior block)
                 if (overlayHas(overlay.items, id)) continue;
                 needs_write = true;
                 const new_block = SettingsPluginsZon.composePluginIdBlock(allocator, .{ .enabled = true }, null) catch continue;
@@ -155,8 +155,8 @@ pub fn migrateToPerPluginEnabled(allocator: std.mem.Allocator, settings_zon_path
 
     if (!needs_write) return;
 
-    // Regenerate fizzy's own fields from a Settings parse (unknown fields — including the legacy
-    // `disabled_plugins` list — are ignored), so the rewritten file drops that list for free.
+    // Regenerate fizzy's own fields from a Settings parse (unknown fields - including the legacy
+    // `disabled_plugins` list - are ignored), so the rewritten file drops that list for free.
     var parsed_arena: std.heap.ArenaAllocator = .init(allocator);
     defer parsed_arena.deinit();
     const parsed = Settings.parseOnly(allocator, parsed_arena.allocator(), data) catch |err| {
@@ -188,13 +188,13 @@ pub fn migrateToPerPluginEnabled(allocator: std.mem.Allocator, settings_zon_path
 /// A block counts as modern the moment it carries **any** fizzy-reserved field, or a nested
 /// `.settings`. Getting this wrong is destructive in a way that is easy to miss: a block judged
 /// "flat" has its entire contents wrapped into `.settings` and stamped `.enabled = true`, which
-/// would silently reinterpret fizzy-reserved data as plugin-author settings — an `.extensions`
+/// would silently reinterpret fizzy-reserved data as plugin-author settings - an `.extensions`
 /// assignment would stop routing files and reappear as an unknown author field.
 ///
 /// The reserved names come from `SettingsPluginsZon.Reserved` itself rather than a hand-kept
 /// list, so adding a field there can never leave this check behind. (It already had: only
-/// `enabled` was listed, so an `.auto_update = false`-only block — which the app itself can
-/// write for a disabled plugin — was being swallowed too.)
+/// `enabled` was listed, so an `.auto_update = false`-only block - which the app itself can
+/// write for a disabled plugin - was being swallowed too.)
 fn isAlreadyNested(gpa: std.mem.Allocator, text: []const u8) bool {
     const z = gpa.dupeSentinel(u8, text, 0) catch return false;
     defer gpa.free(z);
@@ -248,7 +248,7 @@ const LegacyGlass = struct {
 };
 
 /// Called from `Settings.parseOnly`, on every platform the web included: the window's glass read
-/// from settings written before it took the dialogs' — those with any of the dialogs' own glass
+/// from settings written before it took the dialogs' - those with any of the dialogs' own glass
 /// settings in them, which the next write drops (unknown to `Settings`), so this runs until then
 /// and never after. Where the window is opaque the opacity is the dialogs', the window's own having
 /// been only the window's. Its frost is no setting any more (`glass_look.frost_level`), so the
@@ -266,4 +266,37 @@ pub fn windowGlass(allocator: std.mem.Allocator, data: [:0]const u8, settings: *
         settings.window_opacity_dark = std.math.clamp(o, 0, 1);
         settings.window_opacity_light = std.math.clamp(o, 0, 1);
     };
+}
+
+const LegacyMotion = struct {
+    motion: ?f32 = null,
+};
+
+/// Moves the app's saved level into the shared preferences without replacing a person's choice.
+/// Persists the shared file before dropping the field, so a failed write can be retried.
+pub fn personMotion(gpa: std.mem.Allocator, io: std.Io, settings_path: []const u8, person_dir: []const u8) !void {
+    const data = core.fs.readZ(gpa, io, settings_path) catch return;
+    defer gpa.free(data);
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    var diag: std.zon.parse.Diagnostics = undefined;
+    const legacy = std.zon.parse.fromSlice(LegacyMotion, .{
+        .gpa = gpa,
+        .arena = arena.allocator(),
+        .source = data,
+        .diagnostics = &diag,
+        .ignore_unknown_fields = true,
+    }) catch return;
+    const level = legacy.motion orelse return;
+    var person = core.person.load(io, person_dir);
+    if (person.motion == null) {
+        person.motion = level;
+        try core.person.save(io, person_dir, person);
+    }
+    const parsed = try Settings.parseOnly(gpa, arena.allocator(), data);
+    const own = try Settings.serialize(&parsed, gpa);
+    defer gpa.free(own);
+    const composed = try SettingsPluginsZon.composeMergedText(gpa, own, data, &.{});
+    defer gpa.free(composed);
+    try core.fs.write(io, settings_path, composed);
 }

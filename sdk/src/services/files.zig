@@ -37,7 +37,12 @@ pub const Api = struct {
         createDir: *const fn (ctx: *anyopaque, path: []const u8) anyerror!void,
         /// Rename `path` to `new_path`, rewriting the path of every open document it names — the
         /// one document for a file, everything beneath it for a directory.
-        rename: *const fn (ctx: *anyopaque, path: []const u8, new_path: []const u8, kind: std.Io.File.Kind) anyerror!void,
+        rename: *const fn (
+            ctx: *anyopaque,
+            path: []const u8,
+            new_path: []const u8,
+            kind: std.Io.File.Kind,
+        ) anyerror!void,
         /// Delete `path` (a file, or an empty directory) and close whatever that removed from
         /// under the editor. An unsaved document still raises the app's normal unsaved-close
         /// prompt: the file being gone from disk is exactly when those edits are the only copy.

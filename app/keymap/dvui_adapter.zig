@@ -5,7 +5,7 @@
 //! projects single-stroke bindings back *out* into `dvui.Window.keybinds`.
 //!
 //! That projection is not optional. `TextEntryWidget` calls `ke.matchBind("char_left")` and
-//! `Menu.zig` calls `cw.keybinds.get("save")` to render accelerators — both read the dvui map
+//! `Menu.zig` calls `cw.keybinds.get("save")` to render accelerators - both read the dvui map
 //! directly. Chords have no representation there at all (`dvui.enums.Keybind` is one key plus
 //! modifier flags), so they exist only in the resolver.
 
@@ -60,7 +60,7 @@ pub fn chordFrom(ke: dvui.Event.Key) ?Chord {
 }
 
 /// Lower a chord to a dvui keybind. Every modifier is stated explicitly (rather than left null)
-/// so a projected bind matches only the exact combination — `matchKeyBind` treats a null field
+/// so a projected bind matches only the exact combination - `matchKeyBind` treats a null field
 /// as "don't care", which would make `ctrl+s` also fire on `ctrl+shift+s`.
 pub fn toKeybind(c: Chord) dvui.enums.Keybind {
     return .{

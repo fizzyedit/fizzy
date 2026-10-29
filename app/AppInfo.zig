@@ -1,5 +1,5 @@
 //! Everything that makes a fizzy-based application *this* application rather than fizzy: the
-//! window title, bundle id, config folder, registry URL, theme names, exe name — one record an
+//! window title, bundle id, config folder, registry URL, theme names, exe name - one record an
 //! app built on fizzy fills in, instead of literals scattered through the tree.
 //!
 //! Values arrive from the build (`build_opts`) so the same record is available at comptime for
@@ -9,8 +9,8 @@ const build_opts = @import("build_opts");
 
 const AppInfo = @This();
 
-/// Short lowercase identifier. The executable name, the Velopack packId, and — unless
-/// `config_dir` overrides it — the on-disk config directory.
+/// Short lowercase identifier. The executable name, the Velopack packId, and - unless
+/// `config_dir` overrides it - the on-disk config directory.
 name: []const u8,
 
 /// Human-facing name: window title, About dialog, installer title.

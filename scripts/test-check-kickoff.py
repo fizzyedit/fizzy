@@ -21,7 +21,8 @@ class KickoffTests(unittest.TestCase):
         self.fields = kickoff.template_fields()
         self.values = {name: "example" for name in self.fields}
         self.values.update(Branch="ci/check-kickoff", Gates="scripts/zb build",
-                           Rules="PRs say Part of fizzyedit/work#42")
+                           Rules="PRs say Part of fizzyedit/work#42",
+                           Serves="docs/VISION.md#mobile")
 
     def body(self):
         return "\n".join(f"{name}: {value}" for name, value in self.values.items())
@@ -43,13 +44,14 @@ class KickoffTests(unittest.TestCase):
                     self.values[name] = saved
 
     def test_all_failures_reported(self):
-        self.values.update(Branch="Bad branch", Gates="scripts/zb zig build", Rules="no reference")
-        failures = kickoff.validate(self.body() + "x" * 1600, self.fields)
-        self.assertEqual({f.split(":")[0] for f in failures}, {"Branch", "Gates", "Rules", "Body"})
+        self.values.update(Branch="Bad branch", Gates="scripts/zb zig build", Rules="no reference",
+                           Serves="docs/VISION.md#nowhere")
+        failures = kickoff.validate(self.body() + "x" * kickoff.MAX_CHARACTERS, self.fields)
+        self.assertEqual({f.split(":")[0] for f in failures}, {"Branch", "Gates", "Rules", "Serves", "Body"})
 
     def test_length_boundary_and_unicode(self):
         body = self.body() + "\né" * 10
-        body += "x" * (1600 - len(body))
+        body += "x" * (kickoff.MAX_CHARACTERS - len(body))
         self.assertEqual(kickoff.validate(body, self.fields), [])
         self.assertTrue(any(f.startswith("Body:") for f in kickoff.validate(body + "x", self.fields)))
 

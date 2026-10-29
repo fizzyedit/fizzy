@@ -39,9 +39,9 @@ test "input timestamps cover motion replacing the trailing position event" {
     const input_time = fizzy.core.input_time;
     const time_ns: i128 = win.frame_time_ns + std.time.ns_per_ms;
 
-    const before = win.events.items.len;
+    const before = win.event_num;
     _ = try win.addEventTouchMotion(.touch0, 0.1, 0.1, 0.01, 0.01);
-    @import("input_time").stamp(win, before, time_ns);
+    input_time.stamp(win, before, time_ns);
     var motions: usize = 0;
     for (win.events.items) |event| {
         if (event.evt == .mouse and event.evt.mouse.action == .motion) {
@@ -56,14 +56,15 @@ test "an ignored input preserves preceding event timestamps" {
     var ctx = try shim.init(std.testing.allocator);
     defer ctx.deinit(std.testing.allocator);
     const win = dvui.currentWindow();
+    const input_time = fizzy.core.input_time;
     const time_ns = win.frame_time_ns + std.time.ns_per_ms;
-    const before = win.events.items.len;
+    const before = win.event_num;
     _ = try win.addEventTouchMotion(.touch0, 0.1, 0.1, 0.01, 0.01);
-    @import("input_time").stamp(win, before, time_ns);
-    @import("input_time").stamp(win, win.events.items.len, time_ns + std.time.ns_per_ms);
+    input_time.stamp(win, before, time_ns);
+    input_time.stamp(win, win.event_num, time_ns + std.time.ns_per_ms);
     for (win.events.items) |event| {
         if (event.evt == .mouse and event.evt.mouse.action == .motion) {
-            try std.testing.expectEqual(time_ns, fizzy.core.input_time.get(event.num));
+            try std.testing.expectEqual(time_ns, input_time.get(event.num));
         }
     }
 }
@@ -6638,6 +6639,186 @@ fn peakOf(comptime f: fn (f32, f32) f32, lv: f32) f32 {
     return peak;
 }
 
+test "motion: failed migration leaves startup preferences usable and legacy data intact" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(io, ".", gpa);
+    defer gpa.free(root);
+    const settings = try std.fs.path.join(gpa, &.{ root, "settings.zon" });
+    defer gpa.free(settings);
+    const blocked = try std.fs.path.join(gpa, &.{ root, "blocked" });
+    defer gpa.free(blocked);
+    try tmp.dir.writeFile(io, .{ .sub_path = "settings.zon", .data = ".{ .motion = 0.6 }" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "blocked", .data = "a file cannot be a config directory" });
+    ctx.editor.app.gpa = gpa;
+    ctx.editor.person_dir = blocked;
+    ctx.editor.loadPerson(settings);
+    try std.testing.expectEqual(@as(?f32, null), ctx.editor.person.motion);
+    const data = try fizzy.core.fs.read(gpa, io, settings);
+    defer gpa.free(data);
+    try std.testing.expectEqualStrings(".{ .motion = 0.6 }", data);
+    try tmp.dir.deleteFile(io, "blocked");
+    ctx.editor.loadPerson(settings);
+    try std.testing.expectEqual(@as(?f32, 0.6), ctx.editor.person.motion);
+}
+
+test "motion: a profiled instance keeps person.zon under its profile root" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(io, ".", gpa);
+    defer gpa.free(root);
+
+    const profiled = try fizzy.Editor.personDir(gpa, root, "/the/persons/config");
+    defer gpa.free(profiled);
+    try std.testing.expectEqualStrings(root, profiled);
+    try fizzy.core.person.save(io, profiled, .{ .motion = 0.2 });
+    try tmp.dir.access(io, "person.zon", .{});
+
+    const shared = try fizzy.Editor.personDir(gpa, null, "/the/persons/config");
+    defer gpa.free(shared);
+    const want_shared = try std.fs.path.join(gpa, &.{ "/the/persons/config", "fizzyedit" });
+    defer gpa.free(want_shared);
+    try std.testing.expectEqualStrings(want_shared, shared);
+}
+
+test "motion: migration and focus share the person's choice across app configs" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(io, ".", gpa);
+    defer gpa.free(root);
+    const person_dir = try std.fs.path.join(gpa, &.{ root, "person" });
+    defer gpa.free(person_dir);
+    const Migration = @import("app").settings.Migration;
+    try tmp.dir.createDirPath(io, "first");
+    try tmp.dir.createDirPath(io, "second");
+    const first = try std.fs.path.join(gpa, &.{ root, "first", "settings.zon" });
+    defer gpa.free(first);
+    const second = try std.fs.path.join(gpa, &.{ root, "second", "settings.zon" });
+    defer gpa.free(second);
+    try fizzy.core.fs.write(io, first, ".{ .motion = 0.6 }");
+    try Migration.personMotion(gpa, io, first, person_dir);
+    try std.testing.expectEqual(@as(?f32, 0.6), fizzy.core.person.load(io, person_dir).motion);
+    const migrated = try fizzy.core.fs.read(gpa, io, first);
+    defer gpa.free(migrated);
+    try std.testing.expect(std.mem.find(u8, migrated, ".motion =") == null);
+
+    try fizzy.core.person.save(io, person_dir, .{ .motion = 0.2 });
+    try fizzy.core.fs.write(io, second, ".{ .motion = 0.6 }");
+    try Migration.personMotion(gpa, io, second, person_dir);
+    try std.testing.expectEqual(@as(?f32, 0.2), fizzy.core.person.load(io, person_dir).motion);
+
+    const editor = ctx.editor;
+    editor.app.gpa = gpa;
+    editor.person_dir = person_dir;
+    editor.person_mtime = null;
+    editor.reloadPerson();
+    try std.testing.expectEqual(@as(f32, 0.2), fizzy.core.person.motionLevel(editor.person, 1));
+    try fizzy.core.person.save(io, person_dir, .{ .motion = 0.8 });
+    // Coarse filesystem clocks can give consecutive replacements the same timestamp.
+    const shared = try tmp.dir.openFile(io, "person/person.zon", .{ .mode = .read_write });
+    defer shared.close(io);
+    try shared.setTimestamps(io, .{ .modify_timestamp = .{ .new = .{ .nanoseconds = @intCast(editor.person_mtime.? + std.time.ns_per_s) } } });
+    editor.reloadPerson();
+    try std.testing.expectEqual(@as(f32, 0.8), fizzy.core.person.motionLevel(editor.person, 0.3));
+    const M = fizzy.core.motion;
+    M.publish(fizzy.core.person.motionLevel(.{}, 0.3), M.default_speed, false, false, 1);
+    try std.testing.expectEqual(@as(f32, 0.3), M.level());
+    for ([_]f32{ 0.3, 1 }) |app_level| {
+        M.publish(fizzy.core.person.motionLevel(editor.person, app_level), M.default_speed, false, false, 1);
+        try std.testing.expectEqual(@as(f32, 0.8), M.level());
+    }
+    for ([_]?f32{ null, 0, 0.8, 1 }) |level| {
+        M.publish(fizzy.core.person.motionLevel(.{ .motion = level }, 1), M.default_speed, true, false, 1);
+        try std.testing.expect(M.off());
+    }
+}
+
+test "motion: pending shared choices stay in memory until flushed" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir = try tmp.dir.realPathFileAlloc(io, ".", gpa);
+    defer gpa.free(dir);
+    ctx.editor.app.gpa = gpa;
+    ctx.editor.person_dir = dir;
+    try fizzy.core.person.save(io, dir, .{ .motion = 0.2 });
+    ctx.editor.person.motion = 0.8;
+    ctx.editor.markPersonDirty();
+    try std.testing.expectEqual(@as(?f32, 0.2), fizzy.core.person.load(io, dir).motion);
+    ctx.editor.reloadPerson();
+    try std.testing.expectEqual(@as(?f32, 0.8), ctx.editor.person.motion);
+    ctx.editor.savePerson();
+    try std.testing.expectEqual(@as(?f32, 0.8), fizzy.core.person.load(io, dir).motion);
+    try std.testing.expectEqual(@as(?i128, null), ctx.editor.person_save_deadline_ns);
+}
+
+test "motion: settings reset saves null and draws the shared default" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir = try tmp.dir.realPathFileAlloc(std.testing.io, ".", gpa);
+    defer gpa.free(dir);
+    ctx.editor.app.gpa = gpa;
+    ctx.editor.person_dir = dir;
+    ctx.editor.person.motion = 0.8;
+    const frame = struct {
+        fn draw() !dvui.App.Result {
+            var box = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal });
+            defer box.deinit();
+            for (fizzy.Explorer.settings.groups) |group| for (group.items) |item| {
+                if (std.mem.eql(u8, item.key, "motion")) item.draw.?();
+            };
+            return .ok;
+        }
+    }.draw;
+    dvui.debug.captureFrame();
+    defer dvui.debug.clearCaptures(dvui.currentWindow().gpa);
+    _ = try dvui.testing.step(frame);
+    _ = try dvui.testing.step(frame);
+    var reset: ?dvui.Point.Physical = null;
+    for (dvui.debug.lastCapture().?.widgets.items) |widget| {
+        if (widget.text) |text| if (std.mem.eql(u8, text, "Reset to system default")) {
+            reset = widget.rect_border.center();
+        };
+    }
+    _ = try dvui.currentWindow().addEventMouseMotion(.{ .pt = reset orelse return error.TestUnexpectedResult });
+    try dvui.testing.click(.left);
+    _ = try dvui.testing.step(frame);
+    try std.testing.expectEqual(@as(?f32, null), ctx.editor.person.motion);
+    try std.testing.expectEqual(@as(?f32, null), fizzy.core.person.load(std.testing.io, dir).motion);
+    dvui.debug.captureFrame();
+    _ = try dvui.testing.step(frame);
+    _ = try dvui.testing.step(frame);
+    var default_shown = false;
+    var shared_shown = false;
+    var reset_shown = false;
+    for (dvui.debug.lastCapture().?.widgets.items) |widget| {
+        if (widget.text) |text| {
+            if (std.mem.eql(u8, text, "Reset to system default")) reset_shown = true;
+            if (std.mem.startsWith(u8, text, "System default (")) default_shown = true;
+            if (std.mem.eql(u8, text, "Applies to every fizzy app.")) shared_shown = true;
+        }
+    }
+    try std.testing.expect(default_shown);
+    try std.testing.expect(shared_shown);
+    try std.testing.expect(!reset_shown);
+}
+
 test "motion: every curve starts at 0 and lands on 1, at every level" {
     const M = fizzy.core.motion;
     var lv: f32 = 0;
@@ -10806,6 +10987,8 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
     try editor.postInit();
     try dvui.testing.settle(headlessFrame);
     try std.testing.expectEqualStrings(root, editor.app.config_folder);
+    // The person's choices stay in the profile too, not in the shared config folder.
+    try std.testing.expectEqualStrings(root, editor.person_dir);
     // A plugin's data folder (`Host.pluginDataFolder`): under the profile, made on the first ask,
     // the same borrowed path after, one per plugin.
     {

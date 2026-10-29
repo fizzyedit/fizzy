@@ -7,7 +7,8 @@ import sys
 from pathlib import Path
 
 TEMPLATE = Path(__file__).resolve().parents[1] / "docs/AGENT_WORK.md"
-MAX_CHARACTERS = 1600
+VISION = TEMPLATE.with_name("VISION.md")
+MAX_CHARACTERS = 1800
 
 
 def template_fields():
@@ -45,6 +46,13 @@ def validate(body, fields):
         failures.append("Gates: use scripts/zb build, not scripts/zb zig build")
     if not re.search(r"fizzyedit/work#(?:[1-9][0-9]*|N)\b", values.get("Rules", "")):
         failures.append("Rules: must require a PR reference to fizzyedit/work#N")
+    anchors = re.findall(r"docs/VISION\.md#([a-z0-9-]+)", values.get("Serves", ""))
+    if not anchors:
+        failures.append("Serves: must link a docs/VISION.md#<anchor>")
+    vision = VISION.read_text(encoding="utf-8")
+    for anchor in anchors:
+        if f'<a id="{anchor}"></a>' not in vision:
+            failures.append(f'Serves: docs/VISION.md has no anchor "{anchor}"')
     return failures
 
 

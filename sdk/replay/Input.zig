@@ -261,7 +261,7 @@ test "a role in an anchor's name is the place the stage says it is now" {
     // A tape is data: a name too long for the buffer is unresolved, not a trap.
     const head: [tag_max]u8 = @splat('x');
     var tag_buf: [tag_max + 16]u8 = undefined;
-    const tag = try std.fmt.bufPrint(&tag_buf, "{s}:role:documents", .{&head});
+    const tag = try std.mem.print(&tag_buf, "{s}:role:documents", .{&head});
     try std.testing.expectEqualStrings("", resolve(stage, tag, &buf));
     try std.testing.expect(tagData(stage, tag) == null);
 }

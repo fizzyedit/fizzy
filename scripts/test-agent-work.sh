@@ -6,8 +6,17 @@ source_root=$PWD
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 fail() { echo "FAIL: $*" >&2; exit 1; }
-mkdir -p "$tmp/repo/scripts" "$tmp/bin"
-cp scripts/agent-{prepare,finish} "$tmp/repo/scripts/"
+mkdir -p "$tmp/repo/scripts" "$tmp/repo/docs" "$tmp/repo/.jj" "$tmp/repo/.git" "$tmp/bin"
+cp scripts/agent-{prepare,finish} scripts/check-pr-body "$tmp/repo/scripts/"
+cp docs/VISION.md "$tmp/repo/docs/"
+# A summary in the shape of docs/AGENT_WORK.md "The PR page", where jj and git each keep it.
+plain=$'## In plain words\n\nA tap opens the keyboard.\n\n## What you will notice\n\nTyping works.\n\n'
+plain+=$'## How this serves fizzy\n\n[Phones and tablets](https://github.com/fizzyedit/fizzy/blob/main/docs/VISION.md#mobile).\n\n'
+plain+=$'## How we know it works\n\nA test that fails without it.\n\n'
+technical=$'## Goal\n\ng\n\n## What changed and why\n\nw\n\n## How it was verified\n\nv\n\n## Not done / follow-ups\n\nn'
+summary() { printf '%s\n' "$plain$technical" | tee "$tmp/repo/.jj/PR_SUMMARY.md" >"$tmp/repo/.git/PR_SUMMARY.md"; }
+no_summary() { rm -f "$tmp/repo/.jj/PR_SUMMARY.md" "$tmp/repo/.git/PR_SUMMARY.md"; }
+summary
 export AGENT_TEST_DIR=$tmp
 export AGENT_PREPARE_ALLOW_TMP=1  # the test checkout may itself sit under /tmp
 export PATH="$tmp/bin:$PATH"
@@ -16,6 +25,7 @@ cat >"$tmp/bin/jj" <<'FAKE'
 set -e
 printf '%s\n' "$*" >>"$AGENT_TEST_DIR/calls"
 if [[ ${AGENT_TEST_GIT:-} == 1 && $1 == root ]]; then exit 1; fi
+if [[ $1 == root ]]; then echo "$AGENT_TEST_DIR/repo"; exit 0; fi
 case "$1 $2" in
     'workspace add')
         destination=${*: -1}
@@ -106,6 +116,25 @@ touch "$tmp/no-summary"
 if "$finish" 42 >"$tmp/output" 2>&1; then fail 'missing summary accepted'; fi
 [[ ! -e $tmp/body ]] || fail 'published without Build Summary'
 rm "$tmp/no-summary"
+"$finish" 42 >"$tmp/output"
+grep -qxF '<details><summary>For agents: technical summary</summary>' "$tmp/body" || fail 'technical summary not collapsed'
+[[ $(grep -c '^## In plain words$' "$tmp/body") == 1 ]] || fail 'plain words section'
+[[ $(grep -n '^## How we know it works$' "$tmp/body" | cut -d: -f1) -lt $(grep -n '^## Goal$' "$tmp/body" | cut -d: -f1) ]] ||
+    fail 'plain sections not above the technical ones'
+no_summary
+rm "$tmp/body"
+if "$finish" 42 >"$tmp/output" 2>&1; then fail 'missing PR page accepted'; fi
+[[ ! -e $tmp/body ]] || fail 'published without the plain sections'
+grep -q 'How this serves fizzy' "$tmp/output" || fail 'missing section not named'
+printf '# ci: a tap opens the keyboard\n%s\n' "${plain/VISION.md#mobile/VISION.md#nowhere}$technical" >"$tmp/repo/.jj/PR_SUMMARY.md"
+if "$finish" 42 >"$tmp/output" 2>&1; then fail 'unknown vision anchor accepted'; fi
+grep -q 'no anchor "nowhere"' "$tmp/output" || fail 'unknown anchor not named'
+printf '# ci: a tap opens the keyboard\n%s\n' "$plain$technical" >"$tmp/repo/.jj/PR_SUMMARY.md"
+: >"$tmp/calls"
+"$finish" 42 >"$tmp/output"
+grep -q -- '--title ci: a tap opens the keyboard' "$tmp/calls" || fail 'PR title from the summary'
+! grep -q '^# ci:' "$tmp/body" || fail 'title line left in the body'
+summary
 bad=$(mktemp -d /tmp/agent-test.XXXXXX)
 mkdir "$bad/scripts"
 cp "$tmp/repo/scripts/agent-prepare" "$bad/scripts/"
@@ -120,6 +149,7 @@ case "$1 $2" in
     'symbolic-ref --quiet') echo ci/git ;;
     'rev-list --count') echo "${AGENT_TEST_AHEAD:-1}" ;;
     'diff origin/main') echo ' scripts/git-example | 1 +' ;;
+    'rev-parse --git-dir') echo "$AGENT_TEST_DIR/repo/.git" ;;
 esac
 FAKE
 chmod +x "$tmp/bin/git"
@@ -140,8 +170,13 @@ AGENT_TEST_EXISTING=1 AGENT_TEST_BODY=$'Part of fizzyedit/work#7\n\n## Goal\n\no
 [[ $(head -n 1 "$tmp/body") == 'Part of fizzyedit/work#7' ]] || fail 'rework replaced Part of line'
 grep -qx 'Rework: work#99' "$tmp/body" || fail 'rework line missing'
 ! grep -q 'Part of fizzyedit/work#99' "$tmp/body" || fail 'rework issue became Part of'
-AGENT_TEST_EXISTING=1 AGENT_TEST_BODY=$'Part of fizzyedit/work#7\nRework: work#5\n\nsummary\n\n<!-- agent-finish: generated below -->' "$finish" 99 >"$tmp/output"
+# Without PR_SUMMARY.md the body above the marker is read back, its collapsed block kept once.
+no_summary
+summary_body=$(printf '%s\n' "$plain<details><summary>For agents: technical summary</summary>"$'\n\n'"$technical"$'\n\n</details>')
+AGENT_TEST_EXISTING=1 AGENT_TEST_BODY=$'Part of fizzyedit/work#7\nRework: work#5\n\n'"$summary_body"$'\n\n<!-- agent-finish: generated below -->' "$finish" 99 >"$tmp/output"
 [[ $(grep -c '^Rework:' "$tmp/body") == 1 ]] || fail 'old rework line carried into summary'
+[[ $(grep -c 'For agents: technical summary' "$tmp/body") == 1 ]] || fail 'technical summary wrapped twice'
+summary
 AGENT_TEST_EXISTING=1 AGENT_TEST_BODY=$'Part of fizzyedit/work#42\n\nx' "$finish" 42 >"$tmp/output"
 ! grep -q '^Rework:' "$tmp/body" || fail 'rework line on a same-issue run'
 AGENT_TEST_EXISTING=1 "$finish" 42 >"$tmp/output"

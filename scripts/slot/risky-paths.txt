@@ -1,0 +1,1 @@
+^(sdk/|build/|\.github/|build\.zig|core/platform\.zig$|scripts/lint|AGENTS\.md$|CLAUDE\.md$)|(^|/)(rules?|credentials?|secrets?|releases?)([/._-]|$)

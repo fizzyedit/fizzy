@@ -195,7 +195,7 @@ const Op = struct {
         }
 
         // Ids first: closing mutates the open-document list this walks.
-        var ids: std.ArrayListUnmanaged(u64) = .empty;
+        var ids: std.ArrayList(u64) = .empty;
         defer ids.deinit(self.allocator);
         var i: usize = 0;
         while (i < self.openDocCount()) : (i += 1) {

@@ -33,6 +33,8 @@ pub const water_surface = @import("gfx/water_surface.zig");
 pub const math = @import("math/math.zig");
 pub const fs = @import("fs.zig");
 pub const platform = @import("platform.zig");
+/// The on-screen keyboard: the root lays out above its inset, a focused field scrolls above it.
+pub const keyboard = @import("keyboard.zig");
 pub const paths = @import("paths.zig");
 
 /// Resolves the user's real login-shell `PATH` — see `shell_env.zig`.
@@ -49,6 +51,8 @@ pub const anim = @import("anim.zig");
 pub const motion = @import("glass").motion;
 /// The clock motion runs on, and the wall time of the frame for what means real time.
 pub const MotionClock = @import("glass").MotionClock;
+/// Event times on the wall clock, shared through the dvui window (plugin images included).
+pub const input_time = @import("glass").input_time;
 /// A motion's clock stepped by its frames, so a long frame holds it rather than skipping it on.
 pub const FrameClock = @import("glass").FrameClock;
 /// Where each row of a variable-height list sits and how far its height can be trusted; std-only.
@@ -142,5 +146,5 @@ pub const transport = struct {
 /// Fixed Fizzy accent colours — theme-independent. See `palette.zig`.
 pub const palette = @import("palette.zig");
 
-/// Input timestamps shared through the dvui window, including plugin images.
-pub const input_time = @import("input_time.zig");
+/// Preferences shared by applications, independent of app-local settings.
+pub const person = @import("person.zig");
