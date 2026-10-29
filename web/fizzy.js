@@ -128,8 +128,12 @@ export function keyboardInset(win, send, canvas = null, owns = () => true) {
     bottom = next;
     send({ type: "inset", bottom });
   };
-  const vk = win.navigator?.virtualKeyboard;
   const vv = win.visualViewport;
+  const viewport = win.document?.querySelector('meta[name="viewport"]')?.content ?? "";
+  const overlays = /(?:^|[,;])\s*interactive-widget\s*=\s*overlays-content\s*(?:[,;]|$)/i.test(viewport);
+  // A resizing viewport and VK geometry can use different origins. Measure only the
+  // visual viewport unless the page explicitly requests an overlay (or has no VV API).
+  const vk = overlays || !vv ? win.navigator?.virtualKeyboard : null;
   const update = () => {
     const current = rect();
     const base = rest ?? current;
@@ -157,7 +161,7 @@ export function keyboardInset(win, send, canvas = null, owns = () => true) {
   win.addEventListener?.("resize", update);
   win.addEventListener?.("orientationchange", () => { rest = null; update(); });
   if (vk) {
-    vk.overlaysContent = true;
+    if (overlays) vk.overlaysContent = true;
     vk.addEventListener("geometrychange", update);
   } else if (vv) {
     vv.addEventListener("resize", update);
