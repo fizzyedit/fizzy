@@ -1,0 +1,6 @@
+[mcp_servers.fizzy-sandbox]
+command = "/Users/foxnne/dev/fizzyedit/agent/zig-out/bin/fizzy-mcp"
+args = [
+    "--profile",
+    "/Users/foxnne/dev/fizzy-sandbox",
+]
