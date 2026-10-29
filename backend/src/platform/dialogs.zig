@@ -114,7 +114,7 @@ const PendingDialogResult = struct {
     files: ?[][:0]const u8,
     mode: DialogMode = .open,
 };
-var pending_dialog_results: std.ArrayListUnmanaged(PendingDialogResult) = .empty;
+var pending_dialog_results: std.ArrayList(PendingDialogResult) = .empty;
 /// A spinlock: held for a list append or remove, between a dialog's thread and the frame.
 var pending_dialog_lock: std.atomic.Mutex = .unlocked;
 

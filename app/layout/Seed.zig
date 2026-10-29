@@ -11,7 +11,7 @@ const DockLayout = core.widgets.DockLayout;
 
 const Seed = @This();
 
-/// A binary tree of splits with named leaves at the fringes — the same shape as
+/// A binary tree of splits with named leaves at the fringes - the same shape as
 /// `DockLayout.Snapshot.Tree`, with region spec on the leaves instead of tab slugs.
 pub const Tree = union(enum) {
     split: Tree.Split,
@@ -87,7 +87,7 @@ fn snapshotNode(node: *const Tree, allocator: std.mem.Allocator) !DockLayout.Sna
     }
 }
 
-/// `{origin}/{l|r|t|b}{n}` — the same mint as `SplitTree`, unique among `dock`'s panel ids.
+/// `{origin}/{l|r|t|b}{n}` - the same mint as `SplitTree`, unique among `dock`'s panel ids.
 pub fn mintName(dock: *const DockLayout, origin: []const u8, side: DockLayout.Side, buf: []u8) ?[]const u8 {
     const letter: u8 = switch (side) {
         .left => 'l',

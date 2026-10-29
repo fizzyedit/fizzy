@@ -528,7 +528,8 @@ pub fn explorerRect(self: *Host) dvui.Rect {
     return if (self.fizzy_api) |a| a.explorerRect() else .{};
 }
 
-/// The explorer scroll area's virtual content size (fizzy layout). Zero size if fizzy isn't installed.
+/// The explorer scroll area's virtual content size (fizzy layout). Zero size if fizzy isn't
+/// installed.
 pub fn explorerVirtualSize(self: *Host) dvui.Size {
     return if (self.fizzy_api) |a| a.explorerVirtualSize() else .{};
 }
@@ -828,9 +829,9 @@ pub fn isPathIgnored(
 }
 
 /// True when fizzy has a live filesystem watcher on the open root folder — i.e. when
-/// `fizzy.files.changed` (`events.FilesChanged`) will actually be emitted. A plugin that must stay correct
-/// (an index, a file tree) should keep a slow rescan for when this is false, and can skip it
-/// entirely when it is true.
+/// `fizzy.files.changed` (`events.FilesChanged`) will actually be emitted. A plugin that must stay
+/// correct (an index, a file tree) should keep a slow rescan for when this is false, and can skip
+/// it entirely when it is true.
 pub fn folderWatchActive(self: *Host) bool {
     return if (self.fizzy_api) |a| a.folderWatchActive() else false;
 }
@@ -1008,7 +1009,11 @@ pub fn registerPlugin(self: *Host, plugin: *Plugin) !void {
     if (self.pluginByIdIgnoringCase(plugin.id)) |p| {
         // The loader reports a duplicate by its id; this one it could not explain.
         if (!std.mem.eql(u8, p.id, plugin.id))
-            std.log.warn("plugin '{s}' not registered: '{s}' is registered already, and ids differing only in case are one id", .{ plugin.id, p.id });
+            std.log.warn("plugin '{s}' not registered: '{s}' is registered already, " ++
+                "and ids differing only in case are one id", .{
+                plugin.id,
+                p.id,
+            });
         return error.DuplicatePluginId;
     }
     try self.plugins.append(self.allocator, plugin);
@@ -1729,7 +1734,8 @@ pub fn registerCommand(self: *Host, cmd: Command) !void {
                 // Its own base again (a reload of its registrations): the new one stands in place.
                 b.* = cmd;
             } else {
-                if (slot.bases.items.len > 0) std.log.warn("command {s}: {s} registered it again; {s}'s is kept, this one held in reserve (set `replaces` to override it)", .{
+                if (slot.bases.items.len > 0) std.log.warn("command {s}: {s} registered it again; " ++
+                    "{s}'s is kept, this one held in reserve (set `replaces` to override it)", .{
                     cmd.id,
                     if (cmd.owner) |o| o.id else "the host",
                     if (slot.bases.items[0].owner) |o| o.id else "the host",
@@ -2035,7 +2041,12 @@ fn intern(self: *Host, who: Author) u32 {
         self.allocator.free(plugin);
         return self.internFailed();
     };
-    self.authors.append(self.allocator, .{ .kind = who.kind, .plugin = plugin, .session = who.session, .label = label }) catch {
+    self.authors.append(self.allocator, .{
+        .kind = who.kind,
+        .plugin = plugin,
+        .session = who.session,
+        .label = label,
+    }) catch {
         self.allocator.free(plugin);
         self.allocator.free(label);
         return self.internFailed();
@@ -2079,12 +2090,15 @@ fn noteAuthor(self: *Host, doc_id: u64, step: Step) void {
         .undone, .redone => {
             doc.top = step.top;
             const made = self.stepAuthor(doc_id, step.id);
-            if (!made.same(who)) self.emitZon(if (step.kind == .undone) "fizzy.history.undone" else "fizzy.history.redone", events.StepTaken{
-                .path = if (self.docById(doc_id)) |d| d.owner.documentPath(d) else "",
-                .step = step.id,
-                .made_by = made,
-                .by = who,
-            });
+            if (!made.same(who)) self.emitZon(
+                if (step.kind == .undone) "fizzy.history.undone" else "fizzy.history.redone",
+                events.StepTaken{
+                    .path = if (self.docById(doc_id)) |d| d.owner.documentPath(d) else "",
+                    .step = step.id,
+                    .made_by = made,
+                    .by = who,
+                },
+            );
         },
     }
 }
@@ -2129,7 +2143,12 @@ pub fn documentEdited(self: *Host, doc_id: u64) void {
     self.activity_seq += 1;
     self.activity_run = self.command_runs;
     const agent: ?u32 = if (who.kind == .agent) self.acting.author orelse self.input_author else null;
-    self.activity.append(self.allocator, .{ .seq = self.activity_seq, .doc_id = doc_id, .title = title, .agent = agent }) catch {
+    self.activity.append(self.allocator, .{
+        .seq = self.activity_seq,
+        .doc_id = doc_id,
+        .title = title,
+        .agent = agent,
+    }) catch {
         self.allocator.free(title);
         return;
     };
@@ -2137,7 +2156,8 @@ pub fn documentEdited(self: *Host, doc_id: u64) void {
 }
 
 /// Run a command's body as the running command, so the edits it makes are its own.
-/// `replaced`: reached through `callReplaced`. It and an override count as overriding (`inProgress`).
+/// `replaced`: reached through `callReplaced`. It and an override count as overriding
+/// (`inProgress`).
 fn running(self: *Host, c: Command, replaced: bool) ?Command {
     const outer = self.running_command;
     self.running_command = c;
@@ -2350,10 +2370,18 @@ pub fn callCommand(self: *Host, id: []const u8, args: []const u8, results: std.m
 /// `callCommand` for a caller that can wait: a command answering in a later frame
 /// (`Command.Call.later`) gives its ticket, and `sink` hears the answer once it comes
 /// (`finishCall`). A null sink drops it, as `callCommand` does.
-pub fn callCommandAwaiting(self: *Host, id: []const u8, args: []const u8, results: std.mem.Allocator, sink: ?CallSink) AwaitedOutcome {
+pub fn callCommandAwaiting(
+    self: *Host,
+    id: []const u8,
+    args: []const u8,
+    results: std.mem.Allocator,
+    sink: ?CallSink,
+) AwaitedOutcome {
     // A copy, not the registry's entry: the body may register, replace or unregister commands.
     const c = (self.command(id) orelse return .{ .now = .unknown }).*;
-    if (self.inProgress(id)) return .{ .now = .{ .failed = "it called itself; an override reaches what it replaced with callReplaced" } };
+    if (self.inProgress(id)) return .{
+        .now = .{ .failed = "it called itself; an override reaches what it replaced with callReplaced" },
+    };
     return self.callResolved(c, args, results, false, sink);
 }
 
@@ -2361,10 +2389,21 @@ pub fn callCommandAwaiting(self: *Host, id: []const u8, args: []const u8, result
 /// older override, else the base, the way `callCommand` would. How an override adds to a command
 /// rather than taking it over: calling `id` itself would run the override again, and is refused.
 /// `.unknown` when `caller` has no override of `id`, or it replaced nothing.
-pub fn callReplaced(self: *Host, caller: *Plugin, id: []const u8, args: []const u8, results: std.mem.Allocator) CommandOutcome {
+pub fn callReplaced(
+    self: *Host,
+    caller: *Plugin,
+    id: []const u8,
+    args: []const u8,
+    results: std.mem.Allocator,
+) CommandOutcome {
     const slot = self.command_slots.get(id) orelse return .unknown;
     const i = slot.overrideOf(caller) orelse return .unknown;
-    const below = if (i > 0) slot.overrides.items[i - 1] else if (slot.bases.items.len > 0) slot.bases.items[0] else return .unknown;
+    const below = if (i > 0)
+        slot.overrides.items[i - 1]
+    else if (slot.bases.items.len > 0)
+        slot.bases.items[0]
+    else
+        return .unknown;
     return switch (self.callResolved(below, args, results, true, null)) {
         .now => |out| out,
         .later => .{ .ok = null },
@@ -2379,7 +2418,14 @@ fn inProgress(self: *Host, id: []const u8) bool {
 }
 
 /// `replaced`: reached through `callReplaced`, so running inside an override (`inProgress`).
-fn callResolved(self: *Host, c: Command, args: []const u8, results: std.mem.Allocator, replaced: bool, sink: ?CallSink) AwaitedOutcome {
+fn callResolved(
+    self: *Host,
+    c: Command,
+    args: []const u8,
+    results: std.mem.Allocator,
+    replaced: bool,
+    sink: ?CallSink,
+) AwaitedOutcome {
     const owner = c.owner orelse return .{ .now = .unknown };
     if (c.isEnabled) |enabled| {
         if (!enabled(owner.state)) return .{ .now = .disabled };
@@ -2388,7 +2434,9 @@ fn callResolved(self: *Host, c: Command, args: []const u8, results: std.mem.Allo
     defer prof.end();
     const run_with = c.runWith orelse {
         const trimmed = std.mem.trim(u8, args, " \t\r\n");
-        if (trimmed.len > 0 and !std.mem.eql(u8, trimmed, ".{}")) return .{ .now = .{ .bad_args = "this command takes no arguments" } };
+        if (trimmed.len > 0 and !std.mem.eql(u8, trimmed, ".{}")) return .{
+            .now = .{ .bad_args = "this command takes no arguments" },
+        };
         const outer = self.running(c, replaced);
         defer self.ran(c, outer, replaced);
         c.run.?(owner.state) catch |err| return .{ .now = .{ .failed = owner.errorName(err) } };
@@ -2410,12 +2458,22 @@ fn callResolved(self: *Host, c: Command, args: []const u8, results: std.mem.Allo
         return .{ .now = if (call.bad_args) .{ .bad_args = msg } else .{ .failed = msg } };
     };
     self.last_showing_ms = call.showing_ms;
-    if (call.failed) return .{ .now = if (call.bad_args) .{ .bad_args = call.message orelse "bad arguments" } else .{ .failed = call.message orelse "failed" } };
+    if (call.failed) return .{
+        .now = if (call.bad_args)
+            .{ .bad_args = call.message orelse "bad arguments" }
+        else
+            .{ .failed = call.message orelse "failed" },
+    };
     if (!call.deferred) return .{ .now = .{ .ok = call.result } };
     // Nobody waits: started, with nothing kept for an answer nobody hears (`callWanted` is false).
     const s = sink orelse return .{ .later = ticket };
     // Out of memory: answered now as failed, rather than owed to a waiter that never hears.
-    self.calls_pending.append(self.allocator, .{ .ticket = ticket, .owner = owner, .sink = s, .acting = self.acted() }) catch
+    self.calls_pending.append(self.allocator, .{
+        .ticket = ticket,
+        .owner = owner,
+        .sink = s,
+        .acting = self.acted(),
+    }) catch
         return .{ .now = .{ .failed = "out of memory" } };
     return .{ .later = ticket };
 }
@@ -2529,7 +2587,13 @@ pub fn documentOpenedFor(self: *Host, ext: []const u8, path: []const u8, bytes: 
 /// Non-blocking hover lookup: the first provider with a cached/ready hover result for
 /// `byte_offset` in `bytes` (the document at `path`), or null. See
 /// `LanguageSupport.VTable.hover`.
-pub fn hoverFor(self: *Host, ext: []const u8, path: []const u8, bytes: []const u8, byte_offset: usize) ?language.HoverResult {
+pub fn hoverFor(
+    self: *Host,
+    ext: []const u8,
+    path: []const u8,
+    bytes: []const u8,
+    byte_offset: usize,
+) ?language.HoverResult {
     for (self.language_support.items) |*ls| {
         const hook = ls.vtable.hover orelse continue;
         const owner = ls.owner orelse continue;
@@ -2540,7 +2604,13 @@ pub fn hoverFor(self: *Host, ext: []const u8, path: []const u8, bytes: []const u
 
 /// The first provider that resolves a definition for `byte_offset` in `bytes` (the document
 /// at `path`), or null. May block briefly — see `LanguageSupport.VTable.gotoDefinition`.
-pub fn gotoDefinitionFor(self: *Host, ext: []const u8, path: []const u8, bytes: []const u8, byte_offset: usize) ?language.DefinitionLocation {
+pub fn gotoDefinitionFor(
+    self: *Host,
+    ext: []const u8,
+    path: []const u8,
+    bytes: []const u8,
+    byte_offset: usize,
+) ?language.DefinitionLocation {
     for (self.language_support.items) |*ls| {
         const hook = ls.vtable.gotoDefinition orelse continue;
         const owner = ls.owner orelse continue;
@@ -2552,7 +2622,13 @@ pub fn gotoDefinitionFor(self: *Host, ext: []const u8, path: []const u8, bytes: 
 /// Non-blocking inline-completion lookup: the first provider with a cached/ready suggestion
 /// for the cursor at `byte_offset` in `bytes` (the document at `path`), or null. See
 /// `LanguageSupport.VTable.completion`.
-pub fn completionFor(self: *Host, ext: []const u8, path: []const u8, bytes: []const u8, byte_offset: usize) ?[]const language.CompletionItem {
+pub fn completionFor(
+    self: *Host,
+    ext: []const u8,
+    path: []const u8,
+    bytes: []const u8,
+    byte_offset: usize,
+) ?[]const language.CompletionItem {
     for (self.language_support.items) |*ls| {
         const hook = ls.vtable.completion orelse continue;
         const owner = ls.owner orelse continue;
@@ -2565,7 +2641,14 @@ pub fn completionFor(self: *Host, ext: []const u8, path: []const u8, bytes: []co
 /// resolved documentation string for candidate `index` from the completion result at
 /// `byte_offset` in `bytes` (the document at `path`), or null. See
 /// `LanguageSupport.VTable.resolveCompletionDocumentation`.
-pub fn resolveCompletionDocumentationFor(self: *Host, ext: []const u8, path: []const u8, bytes: []const u8, byte_offset: usize, index: usize) ?[]const u8 {
+pub fn resolveCompletionDocumentationFor(
+    self: *Host,
+    ext: []const u8,
+    path: []const u8,
+    bytes: []const u8,
+    byte_offset: usize,
+    index: usize,
+) ?[]const u8 {
     for (self.language_support.items) |*ls| {
         const hook = ls.vtable.resolveCompletionDocumentation orelse continue;
         const owner = ls.owner orelse continue;
@@ -2577,7 +2660,13 @@ pub fn resolveCompletionDocumentationFor(self: *Host, ext: []const u8, path: []c
 /// Non-blocking signature-help lookup: the first provider with a cached/ready result for the
 /// call the cursor at `byte_offset` in `bytes` (the document at `path`) currently sits inside,
 /// or null. See `LanguageSupport.VTable.signatureHelp`.
-pub fn signatureHelpFor(self: *Host, ext: []const u8, path: []const u8, bytes: []const u8, byte_offset: usize) ?language.SignatureHelpResult {
+pub fn signatureHelpFor(
+    self: *Host,
+    ext: []const u8,
+    path: []const u8,
+    bytes: []const u8,
+    byte_offset: usize,
+) ?language.SignatureHelpResult {
     for (self.language_support.items) |*ls| {
         const hook = ls.vtable.signatureHelp orelse continue;
         const owner = ls.owner orelse continue;
@@ -2790,7 +2879,9 @@ fn dispatchNewDocument(self: *Host, candidate: Candidate, parent_path: ?[]const 
         return;
     };
     var args: std.Io.Writer.Allocating = .init(self.arena());
-    std.zon.stringify.serialize(.{ .parent_path = parent_path orelse "" }, .{ .whitespace = false }, &args.writer) catch return;
+    std.zon.stringify.serialize(.{ .parent_path = parent_path orelse "" }, .{
+        .whitespace = false,
+    }, &args.writer) catch return;
     switch (self.callCommand(c.id, args.written(), self.arena())) {
         .ok => {},
         .failed => |why| dvui.log.err("New File: {s}: {s}", .{ c.id, why }),
@@ -3126,13 +3217,48 @@ test "unregisterPlugin removes a plugin's contributions, service, and resets act
 
     try host.registerPlugin(&keeper);
     try host.registerPlugin(&plugin);
-    try host.registerSurface(.{ .id = "keeper.view", .owner = &keeper, .title = "K", .keywords = keywords.ide.sidebar, .draw = noopCenter });
-    try host.registerSurface(.{ .id = "victim.view", .owner = &plugin, .title = "V", .keywords = keywords.ide.sidebar, .draw = noopCenter });
-    try host.registerSurface(.{ .id = "victim.bottom", .owner = &plugin, .title = "V", .keywords = keywords.ide.panel, .draw = noopCenter });
-    try host.registerSurface(.{ .id = "victim.center", .owner = &plugin, .title = "V", .keywords = keywords.ide.main, .draw = noopCenter });
+    try host.registerSurface(.{
+        .id = "keeper.view",
+        .owner = &keeper,
+        .title = "K",
+        .keywords = keywords.ide.sidebar,
+        .draw = noopCenter,
+    });
+    try host.registerSurface(.{
+        .id = "victim.view",
+        .owner = &plugin,
+        .title = "V",
+        .keywords = keywords.ide.sidebar,
+        .draw = noopCenter,
+    });
+    try host.registerSurface(.{
+        .id = "victim.bottom",
+        .owner = &plugin,
+        .title = "V",
+        .keywords = keywords.ide.panel,
+        .draw = noopCenter,
+    });
+    try host.registerSurface(.{
+        .id = "victim.center",
+        .owner = &plugin,
+        .title = "V",
+        .keywords = keywords.ide.main,
+        .draw = noopCenter,
+    });
     try host.registerMenu(.{ .id = "victim.menu", .owner = &plugin, .draw = noopDraw });
-    try host.registerMenuSection(.{ .id = "victim.section", .parent_menu_id = "fizzy.menu.view", .owner = &plugin, .draw = noopDraw });
-    try host.registerNativeMenuItem(.{ .id = "victim.native", .parent_menu_id = "fizzy.menu.view", .owner = &plugin, .title = "V", .run = noopDraw });
+    try host.registerMenuSection(.{
+        .id = "victim.section",
+        .parent_menu_id = "fizzy.menu.view",
+        .owner = &plugin,
+        .draw = noopDraw,
+    });
+    try host.registerNativeMenuItem(.{
+        .id = "victim.native",
+        .parent_menu_id = "fizzy.menu.view",
+        .owner = &plugin,
+        .title = "V",
+        .run = noopDraw,
+    });
     try host.registerCommand(.{ .id = "victim.cmd", .owner = &plugin, .title = "V", .run = noopRun });
     try host.registerFileRowFillColor(.{ .owner = &plugin, .color = noColor });
     try host.registerFileRowDecorator(.{ .owner = &plugin, .draw = noDecoration });
@@ -3367,7 +3493,13 @@ test "an override adds to what it replaced through callReplaced, and cannot call
     var app = Plugin{ .state = &host, .vtable = &vtable, .id = "app", .display_name = "App" };
     S.app = &app;
     try host.registerCommand(.{ .id = "pixi.pack", .owner = &pixi, .title = "Pack", .run = S.base });
-    try host.registerCommand(.{ .id = "pixi.pack", .owner = &app, .title = "Pack More", .run = S.override, .replaces = true });
+    try host.registerCommand(.{
+        .id = "pixi.pack",
+        .owner = &app,
+        .title = "Pack More",
+        .run = S.override,
+        .replaces = true,
+    });
 
     try testing.expect(host.callCommand("pixi.pack", "", testing.allocator) == .ok);
     try testing.expectEqual(@as(u32, 1), S.override_runs);
@@ -3413,7 +3545,13 @@ test "a plain command may run itself; an override running its id is refused" {
     testing.log_level = .err;
     defer testing.log_level = log_level;
     try host.registerCommand(.{ .id = "t.wrapped", .owner = &t, .title = "Wrapped", .run = S.countdown });
-    try host.registerCommand(.{ .id = "t.wrapped", .owner = &app, .title = "Wrapper", .run = S.override, .replaces = true });
+    try host.registerCommand(.{
+        .id = "t.wrapped",
+        .owner = &app,
+        .title = "Wrapper",
+        .run = S.override,
+        .replaces = true,
+    });
     try host.runCommand("t.wrapped");
     try testing.expectEqual(error.CommandRanItself, S.ran_itself.?);
 }
@@ -3431,7 +3569,13 @@ test "a New File command cannot be overridden yet" {
         fn f(_: *anyopaque) anyerror!void {}
     }.f;
     try host.registerCommand(.{ .id = "pixi.new.sprite", .owner = &pixi, .title = "Sprite", .run = noopRun });
-    try host.registerCommand(.{ .id = "pixi.new.sprite", .owner = &app, .title = "App Sprite", .run = noopRun, .replaces = true });
+    try host.registerCommand(.{
+        .id = "pixi.new.sprite",
+        .owner = &app,
+        .title = "App Sprite",
+        .run = noopRun,
+        .replaces = true,
+    });
     try testing.expectEqualStrings("Sprite", host.command("pixi.new.sprite").?.title);
 }
 
@@ -3463,7 +3607,13 @@ test "a claim on a document holds an override of its owner's command too" {
     host.installFizzyApi(.{ .ctx = &ctx, .vtable = &api_vt });
 
     // An override registered before pixi's own command, and before pixi loads: held by name.
-    try host.registerCommand(.{ .id = "pixi.undo", .owner = &app, .title = "App Undo", .run = S.run, .replaces = true });
+    try host.registerCommand(.{
+        .id = "pixi.undo",
+        .owner = &app,
+        .title = "App Undo",
+        .run = S.run,
+        .replaces = true,
+    });
     _ = try host.claimDocument(&holder, 7, "Holder");
     try testing.expectError(error.DocumentClaimed, host.runCommand("pixi.undo"));
     try host.registerPlugin(&pixi);
@@ -3481,7 +3631,13 @@ test "a claim on a document holds an override of its owner's command too" {
     try host.registerPlugin(&acme);
     try host.registerPlugin(&paint);
     S.owner = &paint;
-    try host.registerCommand(.{ .id = "acme.paint.undo", .owner = &app, .title = "App Paint Undo", .run = S.run, .replaces = true });
+    try host.registerCommand(.{
+        .id = "acme.paint.undo",
+        .owner = &app,
+        .title = "App Paint Undo",
+        .run = S.run,
+        .replaces = true,
+    });
     try testing.expectError(error.DocumentClaimed, host.runCommand("acme.paint.undo"));
     S.owner = &acme;
     try host.runCommand("acme.paint.undo");
@@ -3722,10 +3878,27 @@ test "commands with arguments: callCommand, runCommand's fallback, and listing" 
     var plugin = Plugin{ .state = &state, .vtable = &vtable, .id = "t", .display_name = "T" };
 
     // A command that could never run is refused at registration.
-    try testing.expectError(error.CommandCannotRun, host.registerCommand(.{ .id = "t.none", .owner = &plugin, .title = "None" }));
+    try testing.expectError(error.CommandCannotRun, host.registerCommand(.{
+        .id = "t.none",
+        .owner = &plugin,
+        .title = "None",
+    }));
 
-    try host.registerCommand(.{ .id = "t.goTo", .owner = &plugin, .title = "Go To", .params = S.GoTo.params, .runWith = S.GoTo.bind(S.goTo), .isEnabled = S.isEnabled });
-    try host.registerCommand(.{ .id = "t.tidy", .owner = &plugin, .title = "Tidy", .params = S.Tidy.params, .runWith = S.Tidy.bind(S.tidy) });
+    try host.registerCommand(.{
+        .id = "t.goTo",
+        .owner = &plugin,
+        .title = "Go To",
+        .params = S.GoTo.params,
+        .runWith = S.GoTo.bind(S.goTo),
+        .isEnabled = S.isEnabled,
+    });
+    try host.registerCommand(.{
+        .id = "t.tidy",
+        .owner = &plugin,
+        .title = "Tidy",
+        .params = S.Tidy.params,
+        .runWith = S.Tidy.bind(S.tidy),
+    });
     try host.registerCommand(.{ .id = "t.plain", .owner = &plugin, .title = "Plain", .run = S.plain });
 
     try testing.expectEqual(@as(usize, 3), host.commandCount());
@@ -3795,7 +3968,13 @@ test "a surface's title can change: the Host keeps the copy, and frees it with t
     try host.registerPlugin(&plugin);
 
     // A plugin renames its own surface; the title it passed need not outlive the call.
-    try host.registerSurface(.{ .id = "chat.chats", .owner = &plugin, .title = "Chats", .keywords = keywords.ide.sidebar, .draw = noopCenter });
+    try host.registerSurface(.{
+        .id = "chat.chats",
+        .owner = &plugin,
+        .title = "Chats",
+        .keywords = keywords.ide.sidebar,
+        .draw = noopCenter,
+    });
     {
         var scratch = "Chats (3)".*;
         try host.setSurfaceTitle("chat.chats", &scratch);
@@ -3807,7 +3986,13 @@ test "a surface's title can change: the Host keeps the copy, and frees it with t
     try host.setSurfaceTitle("no.such", "ignored");
 
     // A document's tab keeps its file name until its owner names it, then follows the name.
-    try host.registerSurface(.{ .id = "chat.doc:/chats/a.chat", .owner = &plugin, .title = "a.chat", .keywords = keywords.ide.main, .draw = noopCenter });
+    try host.registerSurface(.{
+        .id = "chat.doc:/chats/a.chat",
+        .owner = &plugin,
+        .title = "a.chat",
+        .keywords = keywords.ide.main,
+        .draw = noopCenter,
+    });
     const doc: DocHandle = .{ .ptr = undefined, .id = 1, .owner = &plugin };
     host.documentTitleChanged(doc);
     try testing.expectEqualStrings("a.chat", host.surfaceById("chat.doc:/chats/a.chat").?.title);
@@ -3840,7 +4025,10 @@ test "a step is its author's, the person's when nobody else acts, and the top fo
     host.endAct(outer);
     try std.testing.expect(host.stepAuthor(doc, 2).same(claude));
     try std.testing.expectEqualStrings("Claude", host.stepAuthor(doc, 3).label);
-    try std.testing.expectEqual(host.step_authors.getPtr(doc).?.steps.get(2).?.run, host.step_authors.getPtr(doc).?.steps.get(3).?.run);
+    try std.testing.expectEqual(
+        host.step_authors.getPtr(doc).?.steps.get(2).?.run,
+        host.step_authors.getPtr(doc).?.steps.get(3).?.run,
+    );
     try std.testing.expectEqual(@as(u64, 3), host.topStep(doc).?.id);
 
     // The person's step after it is theirs, and the top.
@@ -3977,7 +4165,10 @@ test "a command answering later: its waiter hears it once, a caller that cannot 
 
     // A caller that waits gets the ticket, and hears the answer when it comes, once.
     var heard: LaterFixture.Heard = .{};
-    const out = host.callCommandAwaiting("t.slow", "", results.allocator(), .{ .ctx = &heard, .done = LaterFixture.Heard.done });
+    const out = host.callCommandAwaiting("t.slow", "", results.allocator(), .{
+        .ctx = &heard,
+        .done = LaterFixture.Heard.done,
+    });
     try testing.expectEqual(fixture.ticket, out.later);
     try testing.expect(host.callWanted(fixture.ticket));
     host.finishCall(fixture.ticket, .{ .ok = ".{ .n = 1 }" });
@@ -4023,7 +4214,10 @@ test "a command answering later is finished as the author who called it" {
     var heard: LaterFixture.Heard = .{ .host = &host };
     const outer = host.act(.{ .kind = .agent, .plugin = "agent", .session = 7, .label = "Claude" });
     const run = host.acting.run;
-    _ = host.callCommandAwaiting("t.slow", "", results.allocator(), .{ .ctx = &heard, .done = LaterFixture.Heard.done });
+    _ = host.callCommandAwaiting("t.slow", "", results.allocator(), .{
+        .ctx = &heard,
+        .done = LaterFixture.Heard.done,
+    });
     host.endAct(outer);
 
     // A later frame: nobody acts now, yet the answer is the caller's.
@@ -4073,7 +4267,7 @@ const NestedFixture = struct {
     }
 };
 
-test "later answers: nested calls keep their own tickets, an early answer is the caller's now, a gone waiter is never called" {
+test "later answers: nested tickets, early answers, and gone waiters" {
     var host = Host.init(testing.allocator);
     defer host.deinit();
     const vtable = Plugin.VTable{};
@@ -4081,7 +4275,12 @@ test "later answers: nested calls keep their own tickets, an early answer is the
     var plugin = Plugin{ .state = &fixture, .vtable = &vtable, .id = "t", .display_name = "T" };
     try host.registerCommand(.{ .id = "t.inner", .owner = &plugin, .title = "Inner", .runWith = NestedFixture.inner });
     try host.registerCommand(.{ .id = "t.outer", .owner = &plugin, .title = "Outer", .runWith = NestedFixture.outer });
-    try host.registerCommand(.{ .id = "t.cached", .owner = &plugin, .title = "Cached", .runWith = NestedFixture.cached });
+    try host.registerCommand(.{
+        .id = "t.cached",
+        .owner = &plugin,
+        .title = "Cached",
+        .runWith = NestedFixture.cached,
+    });
     var results: std.heap.ArenaAllocator = .init(testing.allocator);
     defer results.deinit();
 
@@ -4108,7 +4307,11 @@ test "later answers: nested calls keep their own tickets, an early answer is the
     var waiter_state: u8 = 0;
     var waiter = Plugin{ .state = &waiter_state, .vtable = &waiter_vtable, .id = "w", .display_name = "W" };
     var unheard: LaterFixture.Heard = .{};
-    _ = host.callCommandAwaiting("t.inner", "", results.allocator(), .{ .ctx = &unheard, .done = LaterFixture.Heard.done, .owner = &waiter });
+    _ = host.callCommandAwaiting("t.inner", "", results.allocator(), .{
+        .ctx = &unheard,
+        .done = LaterFixture.Heard.done,
+        .owner = &waiter,
+    });
     host.withdrawPlugin(&waiter);
     try testing.expect(!host.callWanted(fixture.inner_ticket));
     host.finishCall(fixture.inner_ticket, .{ .ok = null });

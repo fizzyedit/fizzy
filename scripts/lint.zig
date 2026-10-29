@@ -11,6 +11,7 @@ const Rule = enum {
     @"anytype-reason",
     @"changelog-words",
     @"raw-transient-surface",
+    @"raw-scroll-area",
 };
 const Finding = struct { rule: Rule, line: usize, message: []const u8 };
 const Allow = struct { rule: Rule, file: []const u8, count: usize };
@@ -192,7 +193,7 @@ fn analyze(allocator: std.mem.Allocator, source: [:0]const u8) ![]Finding {
             }
         }
     }
-    try rawTransientSurfaces(allocator, tree, suppressions.items, &findings);
+    try rawDvuiCalls(allocator, tree, suppressions.items, &findings);
     var create_line: ?usize = null;
     var has_destroy = false;
     for (0..tree.nodes.len) |index| {
@@ -243,17 +244,35 @@ fn analyze(allocator: std.mem.Allocator, source: [:0]const u8) ![]Finding {
     return findings.toOwnedSlice(allocator);
 }
 
-/// dvui's own entry points for a transient surface. Each paints its background inside `init`, where
-/// the app's glass cannot get beneath it, so a surface made with one is a different material from
-/// every other popup. `core.widgets` (and `core.dialogs` for toasts and dialogs) wrap the same
-/// widgets with the shared surface; an exception says why in a `lint-allow` comment.
-const raw_surface_names = [_][]const u8{
-    "tooltip", "FloatingTooltipWidget", "floatingMenu",   "FloatingMenuWidget",
-    "popup",   "PopupWidget",           "floatingWindow", "FloatingWindowWidget",
-    "dialog",  "toast",                 "contextMenu",    "dropdown",
+/// A dvui entry point with a shared core wrapper; exceptions name their reason inline.
+const RawCall = struct {
+    name: []const u8,
+    rule: Rule,
+    message: []const u8,
+    call_only: bool = false,
+};
+const raw_calls = blk: {
+    const surfaces = [_][]const u8{
+        "tooltip", "FloatingTooltipWidget", "floatingMenu",   "FloatingMenuWidget",
+        "popup",   "PopupWidget",           "floatingWindow", "FloatingWindowWidget",
+        "dialog",  "toast",                 "contextMenu",    "dropdown",
+    };
+    var calls: [surfaces.len + 1]RawCall = undefined;
+    for (surfaces, 0..) |name, i| calls[i] = .{
+        .name = name,
+        .rule = .@"raw-transient-surface",
+        .message = "dvui." ++ name ++ " paints its own surface; use the core.widgets / core.dialogs wrapper",
+    };
+    calls[surfaces.len] = .{
+        .name = "scrollArea",
+        .rule = .@"raw-scroll-area",
+        .message = "dvui.scrollArea bypasses touch scrolling; use core.widgets.ScrollArea.init",
+        .call_only = true,
+    };
+    break :blk calls;
 };
 
-fn rawTransientSurfaces(
+fn rawDvuiCalls(
     allocator: std.mem.Allocator,
     tree: std.zig.Ast,
     suppressions: []const Suppression,
@@ -265,17 +284,15 @@ fn rawTransientSurfaces(
         if (tags[i] != .identifier or tags[i + 1] != .period or tags[i + 2] != .identifier) continue;
         if (!std.mem.eql(u8, tree.tokenSlice(@intCast(i)), "dvui")) continue;
         const name = tree.tokenSlice(@intCast(i + 2));
-        for (raw_surface_names) |banned| {
-            if (!std.mem.eql(u8, name, banned)) continue;
+        for (raw_calls) |banned| {
+            if (!std.mem.eql(u8, name, banned.name)) continue;
+            if (banned.call_only and (i + 3 >= tags.len or tags[i + 3] != .l_paren)) continue;
             const line = tree.tokenLocation(0, @intCast(i)).line + 1;
-            if (silenced(suppressions, .@"raw-transient-surface", line)) break;
+            if (silenced(suppressions, banned.rule, line)) break;
             try findings.append(allocator, .{
-                .rule = .@"raw-transient-surface",
+                .rule = banned.rule,
                 .line = line,
-                .message = try allocator.print(
-                    "dvui.{s} paints its own surface; use the core.widgets / core.dialogs wrapper",
-                    .{name},
-                ),
+                .message = banned.message,
             });
             break;
         }
@@ -831,4 +848,48 @@ test "report-only findings preserve failures from enforced rules" {
     try std.testing.expect(try reportFile(&output.writer, "mixed.zig", &findings, &.{}, &.{}, false));
     try std.testing.expect(std.mem.containsAtLeast(u8, output.written(), 1, "changelog-words: history (report-only)"));
     try std.testing.expect(std.mem.containsAtLeast(u8, output.written(), 1, "anyerror: count 1 exceeds allowance 0"));
+}
+
+test "dvui.scrollArea is flagged" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const findings = try analyze(arena.allocator(), "fn f() void { _ = dvui.scrollArea(@src(), .{}, .{}); }");
+    try std.testing.expectEqual(@as(usize, 1), findings.len);
+    try std.testing.expectEqual(Rule.@"raw-scroll-area", findings[0].rule);
+}
+
+test "a lint-allow with a reason silences it" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    for ([_][:0]const u8{
+        "// lint-allow(raw-scroll-area): wrapper implementation\n" ++
+            "fn f() void { _ = dvui.scrollArea(@src(), .{}, .{}); }",
+        "fn f() void { _ = dvui.scrollArea(@src(), .{}, .{}); } // lint-allow(raw-scroll-area): wrapper implementation",
+    }) |source| try std.testing.expectEqual(@as(usize, 0), (try analyze(arena.allocator(), source)).len);
+}
+
+test "core.widgets.ScrollArea.init is not flagged" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    for ([_][:0]const u8{
+        "fn f() void { _ = core.widgets.ScrollArea.init(@src(), .{}, .{}); }",
+        "const f = dvui.scrollArea;",
+        "const W = dvui.ScrollAreaWidget;",
+        "const text = \"dvui.scrollArea()\"; // dvui.scrollArea()",
+    }) |source| try std.testing.expectEqual(@as(usize, 0), (try analyze(arena.allocator(), source)).len);
+}
+
+test "a file over its raw-scroll-area budget fails" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const findings = try analyze(arena.allocator(), "fn f() void { _ = dvui.scrollArea(.{}); _ = dvui.scrollArea(.{}); }");
+    const allowances = [_]Allow{.{ .rule = .@"raw-scroll-area", .file = "over.zig", .count = 1 }};
+    var seen = [_]bool{false};
+    var output: std.Io.Writer.Allocating = .init(arena.allocator());
+    try std.testing.expect(try reportFile(&output.writer, "over.zig", findings, &allowances, &seen, false));
+    try std.testing.expect(seen[0]);
+    try std.testing.expect(std.mem.endsWith(u8, output.written(), "raw-scroll-area: count 2 exceeds allowance 1\n"));
+    output.clearRetainingCapacity();
+    try std.testing.expect(!try reportFile(&output.writer, "over.zig", findings[0..1], &allowances, &seen, false));
+    try std.testing.expectEqualStrings("", output.written());
 }

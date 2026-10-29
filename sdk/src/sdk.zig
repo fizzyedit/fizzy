@@ -111,9 +111,9 @@ pub const Manifest = @import("Manifest.zig");
 
 /// Services: capability offered by name and version rather than by the ABI.
 ///
-/// `"files"`, `"automation"` and `"demos"` are the application's; the rest are plugins'. Every one of them is
-/// optional — a caller handles null and offers what it can, which is what lets one plugin build
-/// run in applications that have wildly different amounts of machinery.
+/// `"files"`, `"automation"` and `"demos"` are the application's; the rest are plugins'. Every one
+/// of them is optional — a caller handles null and offers what it can, which is what lets one
+/// plugin build run in applications that have wildly different amounts of machinery.
 pub const services = struct {
     pub const files = @import("services/files.zig");
     pub const workbench = @import("services/workbench.zig");

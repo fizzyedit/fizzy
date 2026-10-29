@@ -28,7 +28,7 @@ window_len: usize = 0,
 /// How many have been taken; the last is `taken`.
 taken: u32 = 0,
 /// The last picture taken: premultiplied RGBA, row by row, `width` by `height`.
-pixels: std.ArrayListUnmanaged(u8) = .empty,
+pixels: std.ArrayList(u8) = .empty,
 width: u32 = 0,
 height: u32 = 0,
 

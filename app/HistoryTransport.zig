@@ -306,7 +306,7 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
         if (opts.corner) |c| {
             self.liquid.step(now, c.point());
             // Into a vial, the new step splashes the surface, as a drop landing would: after the
-            // step, so a step landing after an idle spell — when the liquid starts afresh, still —
+            // step, so a step landing after an idle spell - when the liquid starts afresh, still -
             // splashes all the same. Only into a vial: a liquid nothing steps would hold its
             // splashes for when a vial came.
             if (stepped) self.liquid.splashIn();
@@ -521,7 +521,7 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
     const home: ?dvui.Rect.Physical = if (from) |f| if (opts.corner) |c| c.home(s) else dome.bud(f) else null;
     const travel: f32 = if (from) |f| dome.bud(f).h else 0;
     // Out of a corner vial, which is whole at rest, the glass is whole throughout: eased toward a
-    // dome's quiet presence, it was glass at partial alpha — a hole — and the vial at full alpha
+    // dome's quiet presence, it was glass at partial alpha - a hole - and the vial at full alpha
     // the frame it went back in, a flash.
     const prev_alpha = dvui.alpha(if (opts.corner != null and from != null) 1 else if (from != null) dome.glassAlpha(self.presence.value, p) else p);
     defer dvui.alphaSet(prev_alpha);
@@ -653,8 +653,8 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
     return pressed;
 }
 
-/// When each bubble buds out of the grip, as a share of the growing — the line first, then the
-/// nearest the grip outward: export, redo, play, undo, the tab — each on its own moment so none
+/// When each bubble buds out of the grip, as a share of the growing - the line first, then the
+/// nearest the grip outward: export, redo, play, undo, the tab - each on its own moment so none
 /// travels stacked on another; and how high each arcs, so their paths fan out. As `phys`: undo,
 /// line, redo, export, play; then the tab.
 const bud_delays = [6]f32{ 0.3, 0, 0.16, 0.08, 0.23, 0.36 };

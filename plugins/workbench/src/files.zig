@@ -543,7 +543,7 @@ pub fn editableLabel(id_extra: usize, label: []const u8, color: dvui.Color, kind
             .id_extra = id_extra,
             .font = font,
         });
-        defer te.deinit();
+        defer core.widgets.textEntryDeinit(te);
         _ = core.widgets.textEntryMenu(te);
 
         // Text edit should handle any click events, so if we find one unhandled after the text edit

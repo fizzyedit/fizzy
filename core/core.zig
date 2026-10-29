@@ -33,6 +33,8 @@ pub const water_surface = @import("gfx/water_surface.zig");
 pub const math = @import("math/math.zig");
 pub const fs = @import("fs.zig");
 pub const platform = @import("platform.zig");
+/// The on-screen keyboard: the root lays out above its inset, a focused field scrolls above it.
+pub const keyboard = @import("keyboard.zig");
 pub const paths = @import("paths.zig");
 
 /// Resolves the user's real login-shell `PATH` — see `shell_env.zig`.
@@ -143,3 +145,7 @@ pub const transport = struct {
 
 /// Fixed Fizzy accent colours — theme-independent. See `palette.zig`.
 pub const palette = @import("palette.zig");
+
+/// Preferences shared by applications, independent of app-local settings.
+pub const person = @import("person.zig");
+
