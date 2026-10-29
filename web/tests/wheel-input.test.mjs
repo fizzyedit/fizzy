@@ -1,13 +1,12 @@
 import { readFileSync } from 'node:fs';
+import { runInNewContext } from 'node:vm';
 import assert from 'node:assert/strict';
 
 const source = readFileSync(new URL('../fizzy.js', import.meta.url), 'utf8');
-// Import the whole module with only its browser dependencies replaced.
-const moduleSource = source.replace(/import \{ Dvui, TextInput \} from "[^"\n]+";/,
-  'class Dvui {} class TextInput {}');
-globalThis.document = { fullscreenEnabled: false };
-const { wheelTicks, wheelInput } = await import(`data:text/javascript;base64,${Buffer.from(moduleSource).toString('base64')}`);
-delete globalThis.document;
+// Exercise the shared wheel reader without loading the browser runtime.
+const adapter = source.slice(source.indexOf('export function wheelTicks'), source.indexOf('// Pointer input'));
+const { wheelTicks, wheelInput } = runInNewContext(
+  adapter.replaceAll('export function', 'function') + '\n({ wheelTicks, wheelInput })');
 const initial = () => ({ lowest: [99999, 99999], lowestBatch: [99999, 99999] });
 const event = (deltaY, extra = {}) => ({ deltaX: 0, deltaY, deltaMode: 0, ...extra });
 const vertical = (result) => Array.from(result.events, ({ axis, ticks, trackpad }) => ({ axis, ticks, trackpad }));
