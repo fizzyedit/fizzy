@@ -62,6 +62,7 @@ pub const std_options: std.Options = .{
     .logFn = dvui.App.logFn,
 };
 
+// Written by appFrame on SDL's application thread.
 var taps: u32 = 0;
 
 fn appFrame() !dvui.App.Result {

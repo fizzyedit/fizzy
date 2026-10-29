@@ -20,6 +20,10 @@
 //!
 //! Deferred, each with the seam it will use:
 //!
+//! - Android safe-area and keyboard insets: window geometry and IME events, without resizing
+//!   the window when the keyboard opens.
+//! - Android surface loss and recreation: lifecycle events to release and rebuild the swapchain.
+//! - Android low memory and save-before-kill: lifecycle events delivered to the app.
 //! - Gamepads and raw mouse/keyboard input for games: new `Event.Payload` variants and a
 //!   `Caps` flag; devices are named by an id, like `Touch.device`.
 //! - Tablets and pens (pressure, tilt, eraser): a `Pointer` extension carrying pressure, with the
