@@ -364,7 +364,7 @@ pub fn settleGhost(state: *Layout.State) bool {
     }
     const cw = dvui.currentWindow();
     const now = cw.frame_time_ns;
-    const slop = ghost_rest_slop * cw.natural_scale;
+    const slop = (if (dvui.pointerKind() == .touch) core.TouchHold.slop_pt else ghost_rest_slop) * cw.natural_scale;
     const dx = mouse.x - d.ghost_rest_at.x;
     const dy = mouse.y - d.ghost_rest_at.y;
     if (d.ghost_rest_ns == 0 or dx * dx + dy * dy > slop * slop) {

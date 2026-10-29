@@ -149,3 +149,6 @@ pub const person = @import("person.zig");
 
 /// Input timestamps shared through the dvui window, including plugin images.
 pub const input_time = @import("input_time.zig");
+
+/// Shared touch hold rules and the one tap-versus-drag slop.
+pub const TouchHold = @import("TouchHold.zig");

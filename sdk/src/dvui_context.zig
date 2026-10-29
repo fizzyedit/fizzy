@@ -40,12 +40,6 @@ pub fn inject(
     }
 }
 
-/// How far a finger may drift and still tap (natural px). dvui's 3 is a mouse's slop: a
-/// fingertip wanders further than that between down and up, and past it a button cancels its
-/// click (it reads as the start of a scroll or drag) and a held context menu gives up its
-/// hold. Taps on small targets — a tab's close button, a swatch — failed about as often as
-/// they landed.
-pub const touch_drag_threshold: f32 = 10;
 /// dvui's own default, for the mouse.
 pub const mouse_drag_threshold: f32 = 3;
 
@@ -75,7 +69,7 @@ pub fn syncTouchInput() void {
 
 fn applyDragThreshold() void {
     const touch = dvui.dataGet(null, input_id, input_key, bool) orelse false;
-    dvui.Dragging.threshold = if (touch) touch_drag_threshold else mouse_drag_threshold;
+    dvui.Dragging.threshold = if (touch) @import("core").TouchHold.slop_pt else mouse_drag_threshold;
 }
 
 /// Push the host exe's current dvui state into a loaded plugin image.
@@ -86,4 +80,44 @@ pub fn syncHostIntoPlugin(setter: SetContextFn) void {
         if (comptime dvui.useFreeType) @ptrCast(&dvui.ft2lib) else null,
         &dvui.debug,
     );
+}
+
+const std = @import("std");
+
+test "touch presses use the shared slop and mouse presses restore three points" {
+    var t = try dvui.testing.init(.{});
+    defer t.deinit();
+    const previous = dvui.Dragging.threshold;
+    defer dvui.Dragging.threshold = previous;
+    _ = try t.window.addEventPointer(.{ .button = .touch0, .action = .press, .xynorm = .{ .x = 0.1, .y = 0.1 } });
+    syncTouchInput();
+    try std.testing.expectEqual(@import("core").TouchHold.slop_pt, dvui.Dragging.threshold);
+    _ = try t.window.addEventMouseButton(.left, .press);
+    syncTouchInput();
+    try std.testing.expectEqual(@as(f32, 3), dvui.Dragging.threshold);
+}
+
+fn touchButtonFrame() !dvui.App.Result {
+    syncTouchInput();
+    const clicked = dvui.button(@src(), "Touch target", .{}, .{ .min_size_content = .{ .w = 200, .h = 100 } });
+    dvui.dataSet(null, input_id, "test_clicked", clicked);
+    return .ok;
+}
+
+test "a touch button clicks after twelve points of drift but not sixteen" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 200 } });
+    defer t.deinit();
+    const previous = dvui.Dragging.threshold;
+    defer dvui.Dragging.threshold = previous;
+    try dvui.testing.settle(touchButtonFrame);
+    for ([_]f32{ 12, 16 }) |drift| {
+        _ = try t.window.addEventPointer(.{ .button = .touch0, .action = .press, .xynorm = .{ .x = 0.1, .y = 0.1 } });
+        _ = try dvui.testing.step(touchButtonFrame);
+        const moved_x = 0.1 + drift / 300;
+        _ = try t.window.addEventPointer(.{ .button = .touch0, .action = .{ .motion = .{ .x = drift * t.window.natural_scale, .y = 0 } }, .xynorm = .{ .x = moved_x, .y = 0.1 } });
+        _ = try dvui.testing.step(touchButtonFrame);
+        _ = try t.window.addEventPointer(.{ .button = .touch0, .action = .release, .xynorm = .{ .x = moved_x, .y = 0.1 } });
+        _ = try dvui.testing.step(touchButtonFrame);
+        try std.testing.expectEqual(drift == 12, dvui.dataGet(null, input_id, "test_clicked", bool).?);
+    }
 }

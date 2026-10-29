@@ -11,7 +11,8 @@ const TouchHold = @This();
 /// How long a finger holds still before it selects (the platforms' long-press, about half a second).
 pub const delay_ns: i128 = 450 * std.time.ns_per_ms;
 
-/// Points a finger may drift and still be holding.
+/// The one touch slop, in points: read by SelectableText holds, dvui drag thresholds
+/// (sdk.dvui_context), and ViewDrag ghost rests.
 pub const slop_pt: f32 = 14;
 
 /// A finger is down on the text, still holding or finished with this press.
