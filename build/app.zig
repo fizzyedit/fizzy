@@ -1124,6 +1124,8 @@ fn addTests(
         // Where a new view goes by the shape of the room, and which way an adaptive split runs.
         // std-only (see placement.zig); the workbench and the docking widget ask it.
         .{ "fizzy-placement-tests", "core/placement.zig" },
+        // Keyed layout motion and release arithmetic, independent of drawing.
+        .{ "fizzy-rearrange-tests", "core/rearrange.zig" },
         // A document state as the bytes that differ from another: how a track's checkpoints
         // stay small. std-only (see state_delta.zig); `Tracks` keeps its checkpoints with it.
         .{ "fizzy-state-delta-tests", "app/state_delta.zig" },
@@ -1203,7 +1205,7 @@ fn addTests(
     tour_tests.root_module.addImport("tape", b.createModule(.{
         .target = target,
         .optimize = optimize,
-        .root_source_file = b.path("sdk/tape/root.zig"),
+        .root_source_file = b.dependency("fizzy_sdk", .{}).path("tape/root.zig"),
     }));
     try unit_test_artifacts.append(b.allocator, tour_tests);
 
@@ -1262,7 +1264,7 @@ fn addTests(
         keymap_module.addImport("tape", b.createModule(.{
             .target = target,
             .optimize = optimize,
-            .root_source_file = b.path("sdk/tape/root.zig"),
+            .root_source_file = b.dependency("fizzy_sdk", .{}).path("tape/root.zig"),
         }));
         try unit_test_artifacts.append(b.allocator, b.addTest(.{
             .name = "fizzy-keymap-tests",
@@ -1344,7 +1346,7 @@ fn addTests(
             .root_module = b.createModule(.{
                 .target = target,
                 .optimize = optimize,
-                .root_source_file = b.path("sdk/remote/fake_fizzy.zig"),
+                .root_source_file = b.dependency("fizzy_sdk", .{}).path("remote/fake_fizzy.zig"),
             }),
         });
         const fake_options = b.addOptions();
@@ -1354,7 +1356,7 @@ fn addTests(
             .root_module = b.createModule(.{
                 .target = target,
                 .optimize = optimize,
-                .root_source_file = b.path("sdk/remote/root.zig"),
+                .root_source_file = b.dependency("fizzy_sdk", .{}).path("remote/root.zig"),
                 .imports = &.{.{ .name = "fake_fizzy_options", .module = fake_options.createModule() }},
             }),
             .filters = test_filters,
@@ -1463,13 +1465,13 @@ fn addTests(
         const replay_only = b.createModule(.{
             .target = target,
             .optimize = optimize,
-            .root_source_file = b.path("sdk/replay/root.zig"),
+            .root_source_file = b.dependency("fizzy_sdk", .{}).path("replay/root.zig"),
         });
         replay_only.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
         replay_only.addImport("tape", b.createModule(.{
             .target = target,
             .optimize = optimize,
-            .root_source_file = b.path("sdk/tape/root.zig"),
+            .root_source_file = b.dependency("fizzy_sdk", .{}).path("tape/root.zig"),
         }));
         const replay_tests = b.addTest(.{
             .name = "fizzy-replay-tests",
@@ -2055,7 +2057,7 @@ fn addTests(
         bench_module.addImport("tape", b.createModule(.{
             .target = target,
             .optimize = optimize,
-            .root_source_file = b.path("sdk/tape/root.zig"),
+            .root_source_file = b.dependency("fizzy_sdk", .{}).path("tape/root.zig"),
         }));
         const bench_tape = b.addTest(.{ .name = "fizzy-bench-tape", .root_module = bench_module });
 

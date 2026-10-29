@@ -7,6 +7,7 @@
 //! fresh one. The explorer is pressed open only if it is not showing already. A snapshot holds the window's
 //! arrangement too (`Demo.Snapshot`), so a seek back across a split or a float puts the window
 //! back as it was then, rather than replaying from the keyframe.
+const std = @import("std");
 const Tape = @import("tape").Tape;
 const Script = @import("tape").Script;
 const catalog = @import("catalog.zig");
@@ -201,7 +202,6 @@ pub fn build(s: *Script) !void {
 }
 
 test "a frost-first tour names the frosted glass it shows" {
-    const std = @import("std");
     var s: Script = .init(std.testing.allocator, "tour", "Tour");
     s.lacks = &.{"liquid"};
     try build(&s);
