@@ -465,3 +465,39 @@ fn allocationFailure(allocator: Allocator) !void {
     _ = try set.end(allocator, 0, .{});
     try set.drawOrder(allocator, &order);
 }
+
+test "rearrange: measurement uses the second layout's complete rect" {
+    var set: Set = .{};
+    defer set.deinit(test_allocator);
+    set.begin();
+    try set.place(test_allocator, 1, .{ .x = 10, .y = 20, .w = 30, .h = 40 });
+    _ = try set.end(test_allocator, 0, .{});
+    const measured: Rect = .{ .x = 100, .y = 200, .w = 300, .h = 400 };
+    set.begin();
+    try set.place(test_allocator, 1, measured);
+    try testing.expect(try set.end(test_allocator, 50 * ms, .{}));
+    const shown = set.shown(1).?;
+    try testing.expectEqual(measured, shown.rect);
+    try testing.expectEqual(@as(f32, 0.5), shown.presence);
+    try testing.expectEqual(Phase.entering, shown.phase);
+}
+
+test "rearrange: follow retires leaving items and reveals measuring items" {
+    var set: Set = .{};
+    defer set.deinit(test_allocator);
+    try frame(&set, &.{ 1, 2 }, &.{ 0, 0 }, 0, false);
+    try frame(&set, &.{ 1, 2 }, &.{ 0, 0 }, 100, false);
+    try frame(&set, &.{ 2, 3 }, &.{ 100, 200 }, 125, false);
+    try testing.expectEqual(Phase.leaving, set.shown(1).?.phase);
+    try testing.expectEqual(Phase.measuring, set.shown(3).?.phase);
+    set.begin();
+    const target: Rect = .{ .x = 20, .y = 30, .w = 40, .h = 50 };
+    try set.place(test_allocator, 2, target);
+    try set.place(test_allocator, 3, target);
+    try testing.expect(!try set.end(test_allocator, 126 * ms, .{ .follow = true }));
+    try testing.expectEqual(null, set.shown(1));
+    for ([_]Key{ 2, 3 }) |key| {
+        try testing.expectEqual(Shown{ .rect = target, .presence = 1, .phase = .present }, set.shown(key).?);
+    }
+    try testing.expect(set.settled());
+}
