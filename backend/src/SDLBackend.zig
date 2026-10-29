@@ -1478,8 +1478,8 @@ pub fn materialMissing(self: *SDLBackend, material: MaterialKind) ?[]const u8 {
 }
 
 /// What this platform can show this frame (`glass_look.Offer`): the OS bodies it found — AppKit's
-/// vibrancy, its Liquid Glass, DWM's backdrops, the compositor's blur. The kinds are the
-/// catalogue's.
+/// vibrancy, its Liquid Glass, DWM's backdrops, the compositor's blur — and whether the person
+/// asked the OS to reduce transparency. The kinds are the catalogue's.
 pub fn materialOffer(self: *SDLBackend) glass_look.Offer {
     if (self.material_offer) |o| return o;
     const found: glass_look.Natives = .init(.{
@@ -1488,10 +1488,21 @@ pub fn materialOffer(self: *SDLBackend) glass_look.Offer {
         .dwm = platform.win32_titlebar.backdropOffered(self.window),
         .compositor_blur = platform.linux_titlebar.blurOffered(self.window),
     });
-    const o: glass_look.Offer = .init(.fromOs(builtin.target.os.tag), found, true, false);
+    const o: glass_look.Offer = .init(.fromOs(builtin.target.os.tag), found, true, reduceTransparency());
     self.material_offer = o;
     return o;
 }
+
+/// Whether the person asked the OS to reduce transparency: macOS's Accessibility setting, Windows'
+/// Transparency effects turned off. No source on Linux.
+fn reduceTransparency() bool {
+    return switch (comptime builtin.target.os.tag) {
+        .macos => fizzy_native_reduce_transparency() != 0,
+        .windows => platform.win32_titlebar.transparencyOff(),
+        else => false,
+    };
+}
+extern fn fizzy_native_reduce_transparency() c_int;
 
 /// What `role`'s windows are made of this frame (`glass_look.resolve`): the window material and the
 /// person's body over the app's asks (its published looks), on this platform's offer.
