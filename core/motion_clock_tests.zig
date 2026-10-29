@@ -242,3 +242,27 @@ const TimeoutSink = struct {
         self.failures += 1;
     }
 };
+
+test "a flick keeps its true speed across a stalled frame the motion clock held" {
+    const Fling = @import("Fling.zig");
+    var rig = try Rig.init(true);
+    defer rig.deinit();
+    const cw = dvui.currentWindow();
+    var fling: Fling = .{};
+    fling.begin();
+    const step_ns = 8 * ms;
+    const per_motion: f32 = 0.04;
+    for (0..12) |i| {
+        // The frame between motions 6 and 7 stalls, so the motion clock falls behind the wall.
+        if (i == 6) try rig.frame(120);
+        const before = cw.event_num;
+        _ = try cw.addEventTouchMotion(.touch0, 0.5, 0.5, 0, 0.01);
+        const stamped: i128 = @as(i128, @intCast(i)) * step_ns;
+        glass.input_time.stamp(cw, before, stamped);
+        fling.sampleTimed(per_motion, glass.input_time.get(cw.event_num));
+    }
+    try std.testing.expect(MotionClock.wallFrameNs() - dvui.frameTimeNS() > 50 * ms);
+    try std.testing.expect(fling.releaseWindowedAt(.{}, 0.1, 11 * step_ns + 4 * ms));
+    const true_speed = per_motion / (@as(f32, step_ns) / std.time.ns_per_s);
+    try std.testing.expectApproxEqRel(true_speed, fling.vel, 0.1);
+}
