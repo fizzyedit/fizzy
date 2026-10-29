@@ -1338,27 +1338,26 @@ test "an upgraded connection carries bytes both ways until the app closes it" {
     defer gpa.free(path);
     defer removeTestSocket(path);
     var server: Server = .{ .gpa = gpa, .io = io, .socket_path = path, .wake = noWake };
+    var link: Link = .init(gpa, io, noWake);
+    defer link.deinit();
     try server.start();
-    defer server.stop();
 
     var peer: UpgradePeer = .{ .io = io, .path = path };
-    const thread = try std.Thread.spawn(.{}, UpgradePeer.run, .{&peer});
-    var joined = false;
-    defer if (!joined) {
-        peer.release.set(io);
+    const thread = std.Thread.spawn(.{}, UpgradePeer.run, .{&peer}) catch |err| {
         server.stop();
-        thread.join();
+        return err;
     };
+    var joined = false;
+    defer {
+        peer.release.set(io);
+        // Stop tasks before joining a peer that may still be waiting for its reply.
+        server.stop();
+        if (!joined) thread.join();
+    }
     var taken: std.ArrayList(*Request) = .empty;
     defer taken.deinit(gpa);
     const req = try takeOne(&server, &taken);
     try std.testing.expectEqualStrings("fizzy-remote-view/1", req.upgrade.?);
-    var link: Link = .init(gpa, io, noWake);
-    defer {
-        // The server's tasks must finish before the queues they use are freed, even on failure.
-        server.stop();
-        link.deinit();
-    }
     req.answerUpgrade(&server, &link);
 
     // What the client wrote behind its request is the link's.

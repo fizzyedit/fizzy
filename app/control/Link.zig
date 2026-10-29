@@ -30,7 +30,7 @@ outbox: std.ArrayList(u8) = .empty,
 out_ready: Io.Event = .unset,
 /// When `close` was first called (awake-clock ns + 1), 0 before: `reapStuck` measures from it.
 closed_at: std.atomic.Value(u64) = .init(0),
-/// The app is done with the link: its tasks end, and the socket with them. Set by `close`.
+/// The link is closing: its tasks end, and the socket with them. Set by `close`.
 closing: std.atomic.Value(bool) = .init(false),
 /// The connection's tasks are done with the link: the peer left, or `close` was answered. Only
 /// then may the app `deinit` it; the tasks touch nothing after setting this.
@@ -71,7 +71,7 @@ pub fn send(self: *Link, bytes: []const u8) error{OutOfMemory}!void {
     self.abort();
 }
 
-/// End the connection once what is queued is written. UI thread.
+/// End the connection once what is queued is written. Safe from any thread.
 pub fn close(self: *Link) void {
     const now: u64 = @intCast(Io.Clock.awake.now(self.io).nanoseconds + 1);
     _ = self.closed_at.cmpxchgStrong(0, now, .acq_rel, .acquire);
