@@ -78,7 +78,7 @@ quitting: bool = false,
 /// window itself. Freed when the demo lets go (`freeSaved`).
 entries: std.AutoArrayHashMapUnmanaged(*const automation.Tape.Keyframe, *Arrangement) = .empty,
 /// Every plugin's settings as the demo found them, as ZON, to give back at the end.
-settings_saved: std.ArrayListUnmanaged(SavedSettings) = .empty,
+settings_saved: std.ArrayList(SavedSettings) = .empty,
 /// The app's own settings a tape can change, as the demo found them: only the window's material
 /// (`fizzy.windowMaterial`) so far. A copy of the whole would not do: some hold strings it owns.
 material_saved: ?core.material.Kind = null,

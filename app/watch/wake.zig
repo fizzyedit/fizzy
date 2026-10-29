@@ -2,7 +2,7 @@
 //!
 //! Every watcher here runs its own thread and has the same need: it has buffered something, and
 //! the UI thread may be parked in the event loop with nothing to draw. Waking it is a single call
-//! into the *application's* backend — `window.backend.refresh()` for fizzy — which is the one
+//! into the *application's* backend - `window.backend.refresh()` for fizzy - which is the one
 //! thing in this directory that cannot be answered without knowing whose window it is.
 //!
 //! So the application answers it once, at startup, and the watchers stop caring. A single
@@ -11,7 +11,7 @@
 //! never set this) degrades to "the change is picked up on the next frame something else causes"
 //! rather than failing.
 //!
-//! Safe to call from any thread — that is the whole point of it. See `Editor.fizzyRefresh`'s doc
+//! Safe to call from any thread - that is the whole point of it. See `Editor.fizzyRefresh`'s doc
 //! comment for how that was verified: one call reliably wakes the blocked loop for exactly one
 //! frame.
 var hook: ?*const fn () void = null;

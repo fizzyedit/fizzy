@@ -1,13 +1,13 @@
 //! The declarative `plugin.zig.zon` manifest (`Manifest`): identity/version metadata a plugin
 //! author declares, and fizzy reads back out of a loaded dylib.
 //!
-//! See `plans/PLUGIN_MANIFEST_PLAN.md`'s "Locked decisions": the author's `plugin.zig.zon`
-//! declares `id`/`name`/`version`/`min_sdk_version`/`description`/`tags` and nothing else (R16
-//! added `description` — the store's plugin detail page needs one for every plugin, not just ones
-//! with a registry entry; R17 added `tags` the same way, so browse-list search/categorization
-//! also works for a plugin with no registry entry yet). Capability (which hooks a plugin implements, what it registers) has no
-//! declare-and-audit list — `plugin.zig`'s `register()` + vtable is the single source of truth,
-//! enforced by nothing beyond normal Zig compilation.
+//! See `plans/PLUGIN_MANIFEST_PLAN.md`'s "Locked decisions": the author's `plugin.zig.zon` declares
+//! `id`/`name`/`version`/`min_sdk_version`/`description`/`tags` and nothing else (R16 added
+//! `description` — the store's plugin detail page needs one for every plugin, not just ones with a
+//! registry entry; R17 added `tags` the same way, so browse-list search/categorization also works
+//! for a plugin with no registry entry yet). Capability (which hooks a plugin implements, what it
+//! registers) has no declare-and-audit list — `plugin.zig`'s `register()` + vtable is the single
+//! source of truth, enforced by nothing beyond normal Zig compilation.
 //!
 //! The typed, `std.SemanticVersion`-based shape actually baked into a dylib's C-ABI exports is
 //! `dylib.Identity` — build-injected from this same `plugin.zig.zon`, never parsed from it at

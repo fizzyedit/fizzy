@@ -1,13 +1,13 @@
 //! Runtime plugin loading on the web: a plugin built as a wasm *side module* (see
-//! `sdk/plugin_sdk.zig`'s `create` for wasm32 and `plans/REVIEW_2026-09.md` §2), fetched and
+//! `sdk/plugin_sdk.zig`'s `create` for wasm32 and `plans/REVIEW_2026-09.md` section2), fetched and
 //! linked into the page by `web/fizzy.js`'s `loadPlugin`, which hands back one function-table
 //! index per entry point. On wasm32 a function pointer *is* a table index, so from there this
 //! runs the same sequence the desktop loader runs (`PluginLoader.loadAndRegister`): fingerprint,
 //! versions, id, inject the host's globals, `fizzy_plugin_register`.
 //!
 //! The fetch is asynchronous, so a load is two halves: `begin` asks the page, and the page's
-//! `FizzyWebPluginReady` lands in `pump`'s callback on the next frame. There is no unload — a
-//! side module cannot leave the table — so "disable" is "hide", as the review notes.
+//! `FizzyWebPluginReady` lands in `pump`'s callback on the next frame. There is no unload - a
+//! side module cannot leave the table - so "disable" is "hide", as the review notes.
 const std = @import("std");
 const builtin = @import("builtin");
 const dvui = @import("dvui");
@@ -62,7 +62,7 @@ pub const PreRegister = struct {
     arg_c: ?*anyopaque = null,
 };
 
-/// Entry points by name → table index, in the order `web/fizzy.js`'s `pluginEntryPoints`
+/// Entry points by name -> table index, in the order `web/fizzy.js`'s `pluginEntryPoints`
 /// lists them (the same order as `plugin_sdk.dylib_exports`).
 pub const WebDynLib = struct {
     indices: [entry_names.len]u32,
@@ -175,7 +175,7 @@ pub fn init(gpa: std.mem.Allocator) void {
 /// whatever its file happens to be called.
 ///
 /// `sha256` is the hash the registry published for this download, as lowercase hex. The page
-/// checks the bytes against it before compiling anything, and refuses the module on a mismatch —
+/// checks the bytes against it before compiling anything, and refuses the module on a mismatch -
 /// the check the desktop downloader has always done, which a web install skipped entirely. Empty
 /// skips it, which is right for a file served beside the app and wrong for anything else.
 pub fn begin(gpa: std.mem.Allocator, id: []const u8, url: []const u8, sha256: []const u8, cb: ArrivedFn, ctx: ?*anyopaque) error{OutOfMemory}!u32 {
@@ -252,7 +252,7 @@ fn readVersionTriplet(get_fn: ?dylib_api.GetSdkVersionFn) std.SemanticVersion {
     return .{ .major = 0, .minor = 0, .patch = 0 };
 }
 
-/// The versions a linked module declares, read whether or not `prepare` accepts it — the web's
+/// The versions a linked module declares, read whether or not `prepare` accepts it - the web's
 /// `probeVersionInfo`, so a refused build is reported with the same detail as one on disk. Only
 /// the triplet getters run, which `prepare` already calls on a module whose fingerprint is wrong.
 pub fn versionInfo(lib: WebDynLib) PluginVersionInfo {
@@ -345,7 +345,7 @@ pub fn prepare(url: []const u8, expected_id: []const u8, lib_in: WebDynLib) Load
     };
 }
 
-/// Check and register in one step — the desktop loader's shape, for a plain load.
+/// Check and register in one step - the desktop loader's shape, for a plain load.
 pub fn loadAndRegister(
     host: *Host,
     allocator: std.mem.Allocator,

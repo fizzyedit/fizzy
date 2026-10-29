@@ -44,8 +44,18 @@ pub const Api = struct {
     };
 
     pub const VTable = struct {
-        render: *const fn (ctx: *anyopaque, bytes: []const u8, gpa: std.mem.Allocator, opts: RenderOptions) anyerror!void,
-        renderInline: *const fn (ctx: *anyopaque, bytes: []const u8, gpa: std.mem.Allocator, opts: InlineOptions) anyerror!void,
+        render: *const fn (
+            ctx: *anyopaque,
+            bytes: []const u8,
+            gpa: std.mem.Allocator,
+            opts: RenderOptions,
+        ) anyerror!void,
+        renderInline: *const fn (
+            ctx: *anyopaque,
+            bytes: []const u8,
+            gpa: std.mem.Allocator,
+            opts: InlineOptions,
+        ) anyerror!void,
         release: *const fn (ctx: *anyopaque, id_extra: u64) void,
         defaultView: *const fn (ctx: *anyopaque) DefaultView,
         setDefaultView: *const fn (ctx: *anyopaque, view: DefaultView) void,

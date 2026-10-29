@@ -3,14 +3,14 @@
 //!
 //! The third nightwatch adapter in this directory, and the only one whose output leaves fizzy.
 //! `SettingsWatcher` reconciles `settings.zon`; `DocumentWatcher` reloads open tabs. Neither
-//! helps a plugin that cares about files nobody has open — a file tree that should show what an
+//! helps a plugin that cares about files nobody has open - a file tree that should show what an
 //! agent just created, a link indexer whose graph goes stale when a wikilink is deleted from a
 //! closed file, a language server owing `didChangeWatchedFiles`.
 //!
 //! Three things belong on this side of the SDK boundary rather than in each plugin:
 //!
 //! 1. **Thread hop.** Nightwatch calls its handler on its own thread. Plugins are dylibs; a
-//!    callback arriving on a thread the plugin never created — possibly mid-unload — is a
+//!    callback arriving on a thread the plugin never created - possibly mid-unload - is a
 //!    crash. Events are buffered here and handed over from `tick`, on the UI thread.
 //! 2. **Ignore rules.** Only fizzy knows them (`IgnoreRules`). Filtering here means `.git`,
 //!    build output and gitignored paths never reach a plugin, instead of every plugin
@@ -23,13 +23,13 @@
 //! without any plugin noticing.
 //!
 //! Not every folder is watched. Where the backend watches folder by folder (inotify), hidden
-//! folders (`.git`, `.zig-cache`, …), `node_modules` and `zig-pkg` never are
+//! folders (`.git`, `.zig-cache`, ...), `node_modules` and `zig-pkg` never are
 //! (`folder_events.skipWatchDir`), and a tree past `folder_events.max_dir_watches`, or past
 //! what the OS allows, is watched only in part. Elsewhere events from hidden folders are dropped
-//! anyway (`record`). `active` — `Host.folderWatchActive` — is true only while the tree is
+//! anyway (`record`). `active` - `Host.folderWatchActive` - is true only while the tree is
 //! covered, so a plugin knows when to keep its own rescan.
 //!
-//! `have_impl` is false on wasm and any unsupported OS — the watcher is simply not started
+//! `have_impl` is false on wasm and any unsupported OS - the watcher is simply not started
 //! there, and `Host.folderWatchActive` reports false so a plugin knows to keep its own slow
 //! rescan (same degrade-gracefully spirit as `SettingsWatcher` / `DocumentWatcher`).
 const builtin = @import("builtin");
@@ -69,7 +69,7 @@ pub const have_impl = switch (builtin.target.os.tag) {
 };
 
 /// Spin lock over `std.atomic.Mutex` (which is try-lock only). A blocking primitive here would
-/// mean `std.Io.Mutex` and therefore `dvui.io` on nightwatch's thread — the one thing the doc
+/// mean `std.Io.Mutex` and therefore `dvui.io` on nightwatch's thread - the one thing the doc
 /// comments on the other two adapters single out as not to be touched from a watcher callback.
 /// Both critical sections are a bounded memcpy or a pointer swap, so there is nothing to block
 /// on for long enough to be worth a real wait.
@@ -91,7 +91,7 @@ folder: ?[]u8 = null,
 impl: if (have_impl) Impl else void = if (have_impl) .{} else {},
 
 /// Guards `shared` only. Held for a bounded memcpy on the producer and a pointer swap on the
-/// consumer — never across a plugin call.
+/// consumer - never across a plugin call.
 mutex: Spin = .{},
 shared: Buf,
 staging: Buf,
@@ -103,7 +103,7 @@ out: []PathEvent,
 
 const Impl = if (have_impl) struct {
     const nightwatch = @import("nightwatch");
-    /// `Default` on purpose — this watches a whole tree, which is the case every backend's
+    /// `Default` on purpose - this watches a whole tree, which is the case every backend's
     /// default variant is built for. On macOS that is FSEvents (see the `macos_fsevents` build
     /// option), which watches the subtree from a single stream; the kqueue fallback would want
     /// a file descriptor per directory *and* per file, and a project folder is exactly the
@@ -370,7 +370,7 @@ const Impl = if (have_impl) struct {
         if (self.folder == null) return;
 
         // Where the backend watches folder by folder, the walker follows folders coming and
-        // going — before the dot reject, which would hide a folder moved out of view.
+        // going - before the dot reject, which would hide a folder moved out of view.
         if (!Backend.watches_recursively and kind == .created) markAnnounced(impl, path);
         if (!Backend.watches_recursively and object == .dir) switch (kind) {
             .created => queueFolder(self, .appeared, path, ""),
@@ -407,7 +407,7 @@ const Impl = if (have_impl) struct {
     }
 } else void;
 
-/// Allocates the ring buffers. Does not start nightwatch — `setFolder` does, once a folder is
+/// Allocates the ring buffers. Does not start nightwatch - `setFolder` does, once a folder is
 /// open and `self` is at its final address.
 pub fn init(gpa: Allocator) !FolderWatcher {
     if (comptime !have_impl) return error.Unsupported;
@@ -452,7 +452,7 @@ pub fn active(self: *const FolderWatcher) bool {
 }
 
 /// Point the watcher at `path` (or nowhere, when null). Must be called only once `self` is at
-/// its **final** address — nightwatch retains `&self.impl.handler` for the watcher's lifetime,
+/// its **final** address - nightwatch retains `&self.impl.handler` for the watcher's lifetime,
 /// the same constraint `SettingsWatcher.start` documents.
 ///
 /// Best-effort throughout: a folder that can't be watched is a degraded experience, never a
@@ -537,7 +537,7 @@ fn stopWatch(self: *FolderWatcher) void {
 /// What the application does with a settled batch, and which of them it wants at all.
 ///
 /// The watcher's job ends at "these paths changed, coalesced, off the watcher thread". Deciding
-/// that `.zig-cache/` is noise, and deciding who hears about the rest, is the application's — so
+/// that `.zig-cache/` is noise, and deciding who hears about the rest, is the application's - so
 /// both are here rather than inside the watcher, which is what lets this file belong to any app.
 pub const Sink = struct {
     ctx: *anyopaque,

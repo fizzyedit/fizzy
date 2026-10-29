@@ -1,11 +1,11 @@
 //! What a viewer sees of a demo, over the app: the pointer the tape moves and a ripple where it
 //! clicks, the keys it presses, its captions, and the bar to drive it with.
 //!
-//! Everything here is a function of the player's state and demo time — the caption showing is
-//! whichever the tape has at `now`, the keystroke pill the last key op within a second of it —
+//! Everything here is a function of the player's state and demo time - the caption showing is
+//! whichever the tape has at `now`, the keystroke pill the last key op within a second of it -
 //! so a seek shows exactly what live play showed at that moment, and there is nothing to rewind.
 //!
-//! The cards are the app's floating surface — a menu's, a tooltip's: in the window's material
+//! The cards are the app's floating surface - a menu's, a tooltip's: in the window's material
 //! (`core.material`), Liquid Glass where the window is made of it, as the key pills and the bar
 //! are, else frosted at the dialog style (blur, opacity, refraction); cut with its corners,
 //! shadowed with its ring, and opening and closing on its curves (`Reveal`). With the blur off,
@@ -13,7 +13,7 @@
 //!
 //! Each part is a subwindow that takes no input (events fall through to the app; the bar is
 //! hit-tested by `Player.frame` from the rects recorded here), raised above every other subwindow
-//! each frame in drawing order, the pointer last — it has to be drawn over the menu it opened and
+//! each frame in drawing order, the pointer last - it has to be drawn over the menu it opened and
 //! over the caption explaining it.
 const std = @import("std");
 const dvui = @import("dvui");
@@ -58,7 +58,7 @@ pub fn draw(player: *Player) void {
 
 /// Draw the pointer of the live tape `driver` is playing, if any, and the ripple where it last
 /// clicked (`replay.overlay`), its fade scaled for reduced motion. A live tape has no captions,
-/// keys or bar — it is not something to watch, only to see. Call once a frame, after everything
+/// keys or bar - it is not something to watch, only to see. Call once a frame, after everything
 /// else in the frame has drawn.
 pub fn drawLive(driver: *LiveDriver) void {
     plain.drawLive(driver, .{ .fade_ms = motion.durationMs(plain_fade_ms) });
@@ -84,13 +84,13 @@ fn theme() dvui.Theme {
 // ---- the glass -----------------------------------------------------------------------------
 
 /// A card's corners: a floating surface's (`dialogs.surfaceCorners`), resolved against the theme
-/// up front — the frost is handed them directly, and unresolved it would draw them square.
+/// up front - the frost is handed them directly, and unresolved it would draw them square.
 fn corners() dvui.CornerRect {
     const t = theme();
     return core.dialogs.surfaceCorners().finalize(&t);
 }
 
-/// A card's own options: the space it takes and nothing it paints — `glass` lays the surface
+/// A card's own options: the space it takes and nothing it paints - `glass` lays the surface
 /// down under what it holds, kept clear of its corners however round they are.
 fn cardOptions(pad: dvui.Rect) dvui.Options {
     const inset = core.dialogs.cornerInset(corners().tl.radius());
@@ -103,7 +103,7 @@ fn cardOptions(pad: dvui.Rect) dvui.Options {
 }
 
 /// How long a card takes to open: a little quicker than a menu (`motion.open_us`), since a demo's
-/// cards come and go all the while — in ms at the user's speed.
+/// cards come and go all the while - in ms at the user's speed.
 fn openMs() f64 {
     return motion.durationMs(@as(f32, @floatFromInt(motion.open_us)) / 1000 * 0.7);
 }
@@ -112,7 +112,7 @@ fn closeMs() f64 {
     return motion.durationMs(260);
 }
 
-/// How far open a card is: its glass formed (`form`, 0…1) and grown out of its origin (`grow`,
+/// How far open a card is: its glass formed (`form`, 0...1) and grown out of its origin (`grow`,
 /// past 1 while it overshoots), and the alpha of what it holds.
 const Reveal = struct {
     form: f32 = 1,
@@ -121,19 +121,19 @@ const Reveal = struct {
 
     const shut: Reveal = .{ .form = 0, .grow = 0, .alpha = 0 };
 
-    /// How much of its place a card this open takes up, 0…1, for what is stacked on it.
+    /// How much of its place a card this open takes up, 0...1, for what is stacked on it.
     fn room(self: Reveal) f32 {
         return std.math.clamp(self.grow, 0, 1);
     }
 
-    /// `u` (0…1) of the way through opening, as a tooltip or a menu opens: the glass forming and
+    /// `u` (0...1) of the way through opening, as a tooltip or a menu opens: the glass forming and
     /// what it holds fading in together (`motion.fade`) while it grows into place (`motion.enter`).
     fn opening(u: f32) Reveal {
         const f = motion.fade(u);
         return .{ .form = f, .grow = motion.enter(u), .alpha = f };
     }
 
-    /// `w` (0…1) of the way through closing, as a window closes: drawn back into its origin on
+    /// `w` (0...1) of the way through closing, as a window closes: drawn back into its origin on
     /// the leaving curve (`motion.exit`), the glass unforming with it, what it holds opaque for
     /// the first half of the way and gone as it arrives.
     fn closing(w: f32) Reveal {
@@ -155,14 +155,14 @@ const Reveal = struct {
     }
 };
 
-/// The surface under a card — `wd` a box that paints nothing of its own (`cardOptions`) — `r` of
+/// The surface under a card - `wd` a box that paints nothing of its own (`cardOptions`) - `r` of
 /// the way open, grown out of `origin` (a point in it, as fractions), in the material every
 /// floating surface wears (`core.dialogs.dialogFrost`): the frost at the dialog style, clear
 /// glass where the blur is off and the glass program draws, with the shadow ring round it; with
 /// neither, the dialog fill over its shadow. What the card draws after this is cut to the glass
 /// as it grows.
 ///
-/// Before the alpha for its contents is set: glass forms rather than fades (`r.form`) — a frost
+/// Before the alpha for its contents is set: glass forms rather than fades (`r.form`) - a frost
 /// replaces what it covers, and at partial alpha would punch a hole.
 fn glass(wd: *dvui.WidgetData, origin: dvui.Point, r: Reveal) void {
     const s = wd.borderRectScale().s;
@@ -192,7 +192,7 @@ fn glass(wd: *dvui.WidgetData, origin: dvui.Point, r: Reveal) void {
     dvui.clipSet(dvui.clipGet().intersect(rect));
 }
 
-/// The glass under a pill — a key just pressed, the seek's progress — `r` of the way open, grown
+/// The glass under a pill - a key just pressed, the seek's progress - `r` of the way open, grown
 /// out of `origin` as `glass` grows a card: a capsule of the same glass as the transport bar's
 /// bubbles (`core.dialogs.glassBubbles`), so the player's controls and what it shows are one
 /// material. What the pill draws after this is cut to the glass as it grows.
@@ -226,8 +226,8 @@ const stack_gap: f32 = 14;
 
 /// The demo's words and keys at the current moment, each where it belongs: a title card in the
 /// middle of the home view (`Caption.Place.middle`); a callout beside the action for a caption
-/// that narrates the pointer (`Tape.besideAction`); and everything else — captions about no one
-/// thing, and the keys just pressed — stacked together at home (`drawStack`). All kept whole on
+/// that narrates the pointer (`Tape.besideAction`); and everything else - captions about no one
+/// thing, and the keys just pressed - stacked together at home (`drawStack`). All kept whole on
 /// the window, above `floor`.
 fn drawCaptions(player: *Player, tape: *const Tape, win: dvui.Rect, floor: f32) void {
     const now = player.now();
@@ -291,7 +291,7 @@ const Stacked = struct {
 };
 
 /// The popups at home, stacked up from its foot: the newest lowest, each older one above those
-/// after it — as far above as they are open, so the stack pushes up as one opens below and
+/// after it - as far above as they are open, so the stack pushes up as one opens below and
 /// settles back as one below it closes.
 fn drawStack(player: *Player, tape: *const Tape, items: []Stacked, win: dvui.Rect, floor: f32) void {
     std.sort.insertion(Stacked, items, {}, Stacked.before);
@@ -338,7 +338,7 @@ fn drawTitle(stage: Stage, tape: *const Tape, c: Tape.Caption, index: usize, sho
 }
 
 /// A caption that narrates what the pointer does: a callout beside what it is about, where the
-/// viewer is looking — or, while there is nothing drawn yet to sit beside, at the foot of the home
+/// viewer is looking - or, while there is nothing drawn yet to sit beside, at the foot of the home
 /// view. It keeps its spot until the tape's focus moves on or the spot stops being good, then
 /// travels there once, calmly (`Calm`). Each caption (`index`) its own widget, so none is placed by
 /// the size of the one before it.
@@ -457,7 +457,7 @@ const Subject = struct { rect: dvui.Rect, key: u64 };
 
 /// What a caption sits beside: what it names (`Caption.near`), else what the pointer is aimed at in
 /// its time (`Tape.aimedAt`), looking `lead_ms` ahead so it sets off with the pointer rather than
-/// after it — the point the pointer goes to, when that is a whole pane, and the pointer itself
+/// after it - the point the pointer goes to, when that is a whole pane, and the pointer itself
 /// while what it goes to is still to be drawn (a row in a pane that is opening). Null when there is
 /// nothing to sit beside.
 fn subjectOf(player: *Player, tape: *const Tape, c: Tape.Caption, win: dvui.Rect) ?Subject {
@@ -468,8 +468,8 @@ fn subjectOf(player: *Player, tape: *const Tape, c: Tape.Caption, win: dvui.Rect
     const until = player.now() + lead_ms;
     while (ahead < tape.ops.len and @as(f64, @floatFromInt(tape.ops[ahead].at)) <= until) ahead += 1;
     const aim = tape.aimedAt(c, ahead) orelse return null;
-    // One subject wherever on it the pointer goes — on a pane, how far the point moves is left to
-    // the callout's reach (`Calm.reach`) — and another while it is still to be drawn, so the
+    // One subject wherever on it the pointer goes - on a pane, how far the point moves is left to
+    // the callout's reach (`Calm.reach`) - and another while it is still to be drawn, so the
     // callout goes to it once it is rather than staying by the pointer.
     var h = std.hash.Wyhash.init(1);
     h.update(aim.tag);
@@ -482,7 +482,7 @@ fn subjectOf(player: *Player, tape: *const Tape, c: Tape.Caption, win: dvui.Rect
 }
 
 /// What a callout must not cover, besides what it is beside: what the caption says to keep clear
-/// (`Caption.clear`); what the pointer goes to in the caption's time — the thing, or the point on
+/// (`Caption.clear`); what the pointer goes to in the caption's time - the thing, or the point on
 /// a pane, since covering an editor is unavoidable but covering where in it the pointer goes is
 /// not; every bar out under the overlay (`dome.barsOut`: a document's history bar, a corner
 /// vial), which is what a step brings out. Never the pointer itself: a callout holds its place
@@ -616,7 +616,7 @@ fn keysCard(player: *Player, op: Tape.Op, shown: Reveal) void {
 // ---- the transport bar ---------------------------------------------------------------------
 
 /// The bar's pieces, left to right: round buttons for chapter back, play/pause and chapter
-/// forward, the scrubber's capsule, and a round close — separate bubbles of one liquid glass.
+/// forward, the scrubber's capsule, and a round close - separate bubbles of one liquid glass.
 const Piece = enum { prev, play, next, track, close };
 /// Each piece's diameter, points; the track's width is what the bar leaves it.
 const piece_d = [_]f32{ 36, 44, 36, 44, 32 };
@@ -1055,8 +1055,8 @@ fn barTrack(player: *Player, tape: *const Tape, bounds: dvui.Rect, r: dvui.Rect,
     return line;
 }
 
-/// The bar opening when `want` turns true and closing when it turns false — 0 shut to 1 open,
-/// linear in time over `bar_grow_us` at the user's speed, the curves being `dome.pullFrom`'s —
+/// The bar opening when `want` turns true and closing when it turns false - 0 shut to 1 open,
+/// linear in time over `bar_grow_us` at the user's speed, the curves being `dome.pullFrom`'s -
 /// kept on `tr` from frame to frame. Wall time (`now_ns`, `Player.wallNs`): it answers the
 /// viewer's pointer, not the demo. Turned round part way, it carries on from as open as it is.
 fn barProgress(tr: *Player.Transport, now_ns: i128, want: bool) f32 {

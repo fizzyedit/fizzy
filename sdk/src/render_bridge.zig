@@ -150,7 +150,10 @@ fn textureFromTarget(ctx: ?*anyopaque, target: *const proxy_bridge.TextureDesc) 
     return proxy_bridge.textureDescFrom(tex);
 }
 
-fn textureFromTargetTemp(ctx: ?*anyopaque, target: *const proxy_bridge.TextureDesc) callconv(.c) proxy_bridge.TextureDesc {
+fn textureFromTargetTemp(
+    ctx: ?*anyopaque,
+    target: *const proxy_bridge.TextureDesc,
+) callconv(.c) proxy_bridge.TextureDesc {
     const win = windowFromCtx(ctx);
     const tex_target = targetFromDesc(target) catch return emptyTextureDesc();
     const tex = win.backend.textureFromTargetTemp(tex_target) catch return emptyTextureDesc();

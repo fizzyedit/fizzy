@@ -174,7 +174,7 @@ fn settle(self: *Workspaces) void {
     const wb = &editor.workbench;
     var l = layoutOf(editor);
 
-    var gone: std.ArrayListUnmanaged([]const u8) = .empty;
+    var gone: std.ArrayList([]const u8) = .empty;
     var any_placed = false;
     var it = editor.app.layout.assignments.valueIterator();
     while (it.next()) |ids| for (ids.*) |id| {
@@ -455,7 +455,7 @@ fn close(ctx: *anyopaque, grouping: u64) void {
     // A place that cannot close keeps the room, but not a list naming a view that is going.
     for (editor.app.host.assignedRegionNames()) |name| {
         const ids = editor.app.host.assignedSurfaces(name) orelse continue;
-        var kept: std.ArrayListUnmanaged([]const u8) = .empty;
+        var kept: std.ArrayList([]const u8) = .empty;
         var found = false;
         for (ids) |x| {
             if (std.mem.eql(u8, x, id)) found = true else kept.append(l.arena, x) catch return;

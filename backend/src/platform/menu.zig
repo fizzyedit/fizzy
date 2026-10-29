@@ -88,8 +88,8 @@ var bar_items: std.AutoHashMapUnmanaged(u32, objc.Object) = .empty;
 
 const ExtraMenuItem = struct { item: objc.Object, menu: objc.Object };
 const ExtraLeaf = struct { parent: objc.Object, item: objc.Object, tag: u32 };
-var extra_menus: std.ArrayListUnmanaged(ExtraMenuItem) = .empty;
-var extra_leaves: std.ArrayListUnmanaged(ExtraLeaf) = .empty;
+var extra_menus: std.ArrayList(ExtraMenuItem) = .empty;
+var extra_leaves: std.ArrayList(ExtraLeaf) = .empty;
 
 // Choices, written from AppKit's action (main thread) and drained in the frame: one pending per
 // part of the bar, as a menu choice is one at a time.

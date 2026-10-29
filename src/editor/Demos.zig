@@ -23,7 +23,7 @@ editor: *Editor,
 api: Api = undefined,
 /// Holds `infos` and every string and chapter list in them, until the next build.
 arena: std.heap.ArenaAllocator,
-infos: std.ArrayListUnmanaged(Api.Info) = .empty,
+infos: std.ArrayList(Api.Info) = .empty,
 /// The host's demos generation `infos` was built for; null: never built.
 built_for: ?u32 = null,
 /// The form factor the tapes were built for: a phone's tour has other steps and other timings.

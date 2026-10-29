@@ -9,8 +9,8 @@
 //! moved. A new step splashes it (`splashIn`), an undo or redo knocks it (`knock`), and its level
 //! eases to the history's fill (`setLevel`).
 //!
-//! **It lets the app sleep.** `settled` says when nothing moves — the surface flat and still, the
-//! level where it is going — and the caller asks for frames only while it is not. A long gap
+//! **It lets the app sleep.** `settled` says when nothing moves - the surface flat and still, the
+//! level where it is going - and the caller asks for frames only while it is not. A long gap
 //! between frames (the app slept, or its frames come slower than the liquid can follow) starts it
 //! afresh, still, at its level: frames that never come quickly enough never keep it moving.
 //!
@@ -39,7 +39,7 @@ count: u32 = 0,
 const tension: f32 = 900;
 const stiffness: f32 = 30;
 const damping: f32 = 2.6;
-/// Pixels of tip per pixel-per-second² of acceleration across, at the vessel's edges.
+/// Pixels of tip per pixel-per-second^2 of acceleration across, at the vessel's edges.
 const tip_gain: f32 = 0.00045;
 /// How hard a splash pushes the column it lands on down, pixels per second.
 const splash: f32 = 90;

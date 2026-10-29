@@ -16,7 +16,7 @@
 //! Bodies are JSON, converted at this edge (`json.zig`). A request sent as `application/zon` is
 //! passed through as ZON and answered in ZON. Errors are HTTP's: 404 for an unknown command, 400
 //! for arguments that do not fit, 409 for a command not enabled now, 500 for one that ran and
-//! failed, each with `{"error": "…"}`.
+//! failed, each with `{"error": "..."}`.
 const std = @import("std");
 const sdk = @import("fizzy_sdk");
 const AppInfo = @import("../AppInfo.zig");

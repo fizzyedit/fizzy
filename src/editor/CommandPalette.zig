@@ -438,7 +438,7 @@ fn rankFiles(self: *CommandPalette, gpa: std.mem.Allocator, root: []const u8, qu
     self.file_hits_valid = false;
 
     const arena = dvui.currentWindow().arena();
-    var hits: std.ArrayListUnmanaged(fuzzy.Ranked(usize)) = .empty;
+    var hits: std.ArrayList(fuzzy.Ranked(usize)) = .empty;
     for (self.index.items, 0..) |abs, i| {
         const rel = relativeToRoot(root, abs);
         // `plain = false`: these are real paths, so zf's basename weighting is what makes
@@ -501,7 +501,7 @@ fn collectCommandRows(editor: *Editor, query: *const fuzzy.Query) []Row {
     // (`Recents.commands`), most recent first, then everything else — alphabetical with no query,
     // best match first with one. A query filters both, so the recent matches lead the results.
     const Hit = struct { item: usize, score: f64, recency: ?usize };
-    var hits: std.ArrayListUnmanaged(Hit) = .empty;
+    var hits: std.ArrayList(Hit) = .empty;
     for (editor.app.host.commands.items, 0..) |c, i| {
         if (c.visibility != .external or !shouldShowCommand(editor, c.id)) continue;
         // Match against the title, the id, *and* the owning plugin's name, so "Save All",
@@ -536,7 +536,7 @@ fn collectCommandRows(editor: *Editor, query: *const fuzzy.Query) []Row {
     std.mem.sort(Hit, hits.items, Order{ .commands = commands, .by_score = !query.isEmpty() }, Order.lessThan);
 
     const any_recent = hits.items.len > 0 and hits.items[0].recency != null;
-    var rows: std.ArrayListUnmanaged(Row) = .empty;
+    var rows: std.ArrayList(Row) = .empty;
     for (hits.items, 0..) |h, n| {
         if (rows.items.len >= max_rows) break;
         const c = commands[h.item];
@@ -571,7 +571,7 @@ fn collectChoiceRows(param: sdk.Command.Param, query: *const fuzzy.Query) []Row 
         else => return &.{},
     };
     const arena = dvui.currentWindow().arena();
-    var rows: std.ArrayListUnmanaged(Row) = .empty;
+    var rows: std.ArrayList(Row) = .empty;
     for (choices) |choice| {
         if (!query.isEmpty() and fuzzy.score(choice, query, .{ .plain = true }) == null) continue;
         rows.append(arena, .{ .choice = choice }) catch break;
@@ -789,7 +789,7 @@ pub fn draw(self: *CommandPalette, editor: *Editor) void {
             entry.textLayout.selection.moveCursor(std.math.maxInt(usize), false);
         }
         _ = core.widgets.textEntryMenu(entry);
-        entry.deinit();
+        core.widgets.textEntryDeinit(entry);
     }
 
     if (asked) |a| self.drawAskedHint(a, text_color);
