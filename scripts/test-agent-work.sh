@@ -10,12 +10,16 @@ mkdir -p "$tmp/repo/scripts" "$tmp/repo/docs" "$tmp/repo/.jj" "$tmp/repo/.git" "
 cp scripts/agent-{prepare,finish} scripts/check-pr-body "$tmp/repo/scripts/"
 cp docs/VISION.md "$tmp/repo/docs/"
 # A summary in the shape of docs/AGENT_WORK.md "The PR page", where jj and git each keep it.
-plain=$'## In plain words\n\nA tap opens the keyboard.\n\n## What you will notice\n\nTyping works.\n\n'
-plain+=$'## How this serves fizzy\n\n[Phones and tablets](https://github.com/fizzyedit/fizzy/blob/main/docs/VISION.md#mobile).\n\n'
+fence='```'
+plain=$'## In plain words\n\nA tap opens the keyboard.\n\n'
+plain+=$'## What changes\n\n- A tap no longer closes the keyboard.\n\n'"${fence}zig"$'\nevent.preventDefault();\n'"$fence"$'\n\n'
+plain+=$'## What you will notice\n\nTyping works.\n\n'
 plain+=$'## How we know it works\n\nA test that fails without it.\n\n'
+plain+=$'## How this serves fizzy\n\n[Phones and tablets](https://github.com/fizzyedit/fizzy/blob/main/docs/VISION.md#mobile).\n\n'
 technical=$'## Goal\n\ng\n\n## What changed and why\n\nw\n\n## How it was verified\n\nv\n\n## Not done / follow-ups\n\nn'
 summary() { printf '%s\n' "$plain$technical" | tee "$tmp/repo/.jj/PR_SUMMARY.md" >"$tmp/repo/.git/PR_SUMMARY.md"; }
 no_summary() { rm -f "$tmp/repo/.jj/PR_SUMMARY.md" "$tmp/repo/.git/PR_SUMMARY.md"; }
+titled() { printf '# ci: a tap opens the keyboard\n%s\n' "$plain$technical" | tee "$tmp/repo/.jj/PR_SUMMARY.md" >"$tmp/repo/.git/PR_SUMMARY.md"; }
 summary
 export AGENT_TEST_DIR=$tmp
 export AGENT_PREPARE_ALLOW_TMP=1  # the test checkout may itself sit under /tmp
@@ -45,6 +49,7 @@ cat >"$tmp/bin/gh" <<'FAKE'
 #!/usr/bin/env bash
 set -e
 printf '%s\n' "$*" >>"$AGENT_TEST_DIR/calls"
+if [[ $1 == issue && $2 == view ]]; then echo 'Typing works on a phone'; fi
 if [[ $1 == pr && $2 == list && ${AGENT_TEST_EXISTING:-} == 1 ]]; then echo 12; fi
 if [[ $1 == pr && $2 == view && -n ${AGENT_TEST_BODY:-} ]]; then printf '%s\n' "$AGENT_TEST_BODY"; fi
 if [[ $1 == pr && ( $2 == create || $2 == edit ) ]]; then
@@ -93,9 +98,14 @@ grep -q 'earlier output omitted' "$tmp/body" || fail 'tail marker'
 rm "$tmp/long"
 : >"$tmp/calls"
 touch "$tmp/no-desc"
+# The branch's slug is no title: a summary that names none is refused.
+if "$finish" 42 >"$tmp/output" 2>&1; then fail 'slug title accepted'; fi
+grep -q 'is a slug' "$tmp/output" || fail 'slug title not named'
+titled
 "$finish" 42 >"$tmp/output"
 grep -q 'describe -r @ -m ci: example' "$tmp/calls" || fail 'empty description filled'
 rm "$tmp/no-desc"
+summary
 : >"$tmp/calls"
 "$finish" 42 >"$tmp/output"
 ! grep -q 'describe' "$tmp/calls" || fail 'worker description overwritten'
@@ -155,11 +165,13 @@ FAKE
 chmod +x "$tmp/bin/git"
 AGENT_TEST_GIT=1 "$prepare" ci/git >"$tmp/output"
 grep -q 'git worktree add -b ci/git' "$tmp/calls" || fail 'git worktree fallback'
+titled
 AGENT_TEST_GIT=1 "$finish" 42 >"$tmp/output"
+summary
 grep -q 'git push --set-upstream origin ci/git' "$tmp/calls" || fail 'git push fallback'
 : >"$tmp/calls"
 AGENT_TEST_GIT=1 AGENT_TEST_AHEAD=0 "$finish" --claim 42 >"$tmp/output"
-grep -q 'git commit --allow-empty -m ci: git: claim' "$tmp/calls" || fail 'git claim empty commit'
+grep -q 'git commit --allow-empty -m Typing works on a phone: claim' "$tmp/calls" || fail 'git claim empty commit'
 : >"$tmp/calls"
 AGENT_TEST_GIT=1 "$finish" --claim 42 >"$tmp/output"
 ! grep -q 'allow-empty' "$tmp/calls" || fail 'empty commit despite commits ahead'
@@ -181,6 +193,60 @@ AGENT_TEST_EXISTING=1 AGENT_TEST_BODY=$'Part of fizzyedit/work#42\n\nx' "$finish
 ! grep -q '^Rework:' "$tmp/body" || fail 'rework line on a same-issue run'
 AGENT_TEST_EXISTING=1 "$finish" 42 >"$tmp/output"
 grep -q '^Part of fizzyedit/work#42$' "$tmp/body" || fail 'fresh PR issue line'
+# The PR page checks: title, layout with a code snippet, and the agent-notes block.
+check=$tmp/repo/scripts/check-pr-body
+notes='<!-- agent-notes {"issue":978,"worker":"claude","slot":"windows","status":"ready","area":"web","open_questions":[],"next":"review"} -->'
+details=$'<details><summary>For agents: technical summary</summary>\n\n'"$technical"$'\n\n</details>'
+page() { printf '%s\n%s\n\n%s\n\n%s\n' "$1" "$plain$details" "${2-}" "${3-}"; }
+page '# web: a tap on a phone keeps the keyboard open' '' "$notes" >"$tmp/good.md"
+"$check" "$tmp/good.md" >"$tmp/output" 2>&1 || fail "good page refused: $(cat "$tmp/output")"
+bad() { # <file> <expected message>
+    if "$check" "$1" >"$tmp/output" 2>&1; then fail "accepted: $2"; fi
+    grep -q -- "$2" "$tmp/output" || fail "not named: $2 ($(cat "$tmp/output"))"
+}
+page '# windows: work-723' '' "$notes" >"$tmp/bad.md"; bad "$tmp/bad.md" 'is a slug'
+page '# linux: touch-slop' '' "$notes" >"$tmp/bad.md"; bad "$tmp/bad.md" 'is a slug'
+page '# web: a tap on a phone keeps the keyboard open and the page scrolls to the field at once' '' "$notes" >"$tmp/bad.md"
+bad "$tmp/bad.md" 'over 72 characters'
+page 'Part of #1' '' "$notes" >"$tmp/bad.md"
+"$check" --title 'work-723' "$tmp/bad.md" >"$tmp/output" 2>&1 && fail 'title without an area accepted'
+grep -q 'not "area: what changes"' "$tmp/output" || fail 'title shape not named'
+good=$(<"$tmp/good.md")
+printf '%s\n' "${good/${fence}zig/${fence}}" | sed '/^event.preventDefault/d;/^```$/d' >"$tmp/bad.md"
+bad "$tmp/bad.md" 'no fenced code snippet'
+long=$(seq 1 16 | sed 's/^/line /')
+printf '%s\n' "${good/event.preventDefault();/$long}" >"$tmp/bad.md"; bad "$tmp/bad.md" 'over 15 lines'
+swapped=${good/$'## What you will notice\n\nTyping works.\n\n'/}
+printf '%s\n' "${swapped/$'## In plain words'/$'## What you will notice\n\nTyping works.\n\n## In plain words'}" >"$tmp/bad.md"
+bad "$tmp/bad.md" 'not all there in order'
+page '# web: a tap on a phone keeps the keyboard open' '' '<!-- agent-notes {"issue":978, -->' >"$tmp/bad.md"
+bad "$tmp/bad.md" 'agent-notes'
+page '# web: a tap on a phone keeps the keyboard open' '' "${notes/\"slot\":\"windows\",/}" >"$tmp/bad.md"
+bad "$tmp/bad.md" 'lacks "slot"'
+page '# web: a tap on a phone keeps the keyboard open' '' "${notes/\"next\":\"review\"/\"next\":\"later\"}" >"$tmp/bad.md"
+bad "$tmp/bad.md" '"next" is not'
+page '# web: a tap on a phone keeps the keyboard open' "$notes" 'trailing text' >"$tmp/bad.md"
+bad "$tmp/bad.md" 'not the last thing'
+# A claim draft may be empty; a ready page may not.
+draft=${notes/ready/draft}
+empty_plain=${plain//A tap opens the keyboard./Draft: work in progress}
+printf '%s\n%s\n' "$empty_plain$details" "$draft" >"$tmp/draft.md"
+"$check" "$tmp/draft.md" >"$tmp/output" 2>&1 || fail "empty draft refused: $(cat "$tmp/output")"
+printf '%s\n%s\n' "$empty_plain$details" "$notes" >"$tmp/bad.md"; bad "$tmp/bad.md" 'missing or empty'
+# The worked example in docs/AGENT_WORK.md (PR #978 rewritten) passes the check.
+awk '/^````markdown/ { on = 1; next } /^````$/ { on = 0 } on' "$source_root/docs/AGENT_WORK.md" >"$tmp/example.md"
+"$check" --title 'web: a tap on a phone keeps the keyboard open' "$tmp/example.md" >"$tmp/output" 2>&1 ||
+    fail "the documented example fails: $(cat "$tmp/output")"
+# agent-finish: the claim draft takes the work issue's title; every page ends with its notes.
+: >"$tmp/calls"
+"$finish" --claim 42 >"$tmp/output"
+grep -q -- '--title Typing works on a phone' "$tmp/calls" || fail 'claim title from the work issue'
+tail -n 1 "$tmp/body" | grep -q '"issue":42.*"status":"draft"' || fail 'claim agent-notes'
+"$finish" 42 >"$tmp/output"
+tail -n 1 "$tmp/body" | grep -q '"status":"ready"' || fail 'finish agent-notes'
+"$check" "$tmp/body" >"$tmp/output" 2>&1 || fail "published page refused: $(cat "$tmp/output")"
+AGENT_TEST_EXISTING=1 AGENT_TEST_BODY=$'Part of fizzyedit/work#42\n\n'"${notes/\"open_questions\":[]/\"open_questions\":[\"which phone?\"]}" "$finish" 42 >"$tmp/output"
+tail -n 1 "$tmp/body" | grep -q 'which phone?' || fail 'agent-notes questions lost on a rerun'
 cat >"$tmp/bin/uname" <<'FAKE'
 #!/usr/bin/env bash
 echo Linux

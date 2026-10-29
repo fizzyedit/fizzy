@@ -508,15 +508,9 @@ export fn add_event(which: u8, int1: u32, int2: u32, float1: f32, float2: f32, t
 }
 
 fn add_event_raw(w: *dvui.Window, which: u8, int1: u32, int2: u32, float1: f32, float2: f32, time_ms: f64) !void {
-    const first = w.events.items.len;
+    const before = w.event_num;
     const time_ns: i128 = @as(i128, @intFromFloat((if (std.math.isFinite(time_ms)) time_ms else wasm.wasm_now()) * 1_000_000.0)) + w.backend.impl.clock_ahead_ns;
-    defer for (w.events.items[first..]) |e| {
-        var buf: [32]u8 = undefined;
-        // The prefix and a u16 event number fit in 32 bytes.
-        // Backend packages cannot import core; match core/input_time.zig key().
-        const key = std.mem.print(&buf, "_input_time_{d}", .{e.num}) catch unreachable;
-        dvui.dataSet(w, w.data().id, key, time_ns);
-    };
+    defer glass.input_time.stamp(w, before, time_ns);
 
     have_event = true;
     //event_temps.append(.{
