@@ -103,6 +103,7 @@
     .{ .rule = .@"raw-scroll-area", .file = "src/editor/dialogs/FileTypeDefaults.zig", .count = 1 },
     .{ .rule = .@"raw-scroll-area", .file = "src/editor/dialogs/PluginUpdates.zig", .count = 1 },
     .{ .rule = .@"raw-scroll-area", .file = "tests/integration.zig", .count = 3 },
+    .{ .rule = .@"raw-button", .file = "android/src/main.zig", .count = 1 },
     .{ .rule = .@"raw-button", .file = "app/ActivityFeed.zig", .count = 1 },
     .{ .rule = .@"raw-button", .file = "app/layout/Picker.zig", .count = 3 },
     .{ .rule = .@"raw-button", .file = "app/layout/Region.zig", .count = 1 },

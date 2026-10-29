@@ -48,7 +48,7 @@ pub const Node = struct {
 pub const Branch = struct {
     dir: dvui.enums.Direction,
     side: Side,
-    /// The leaf that was split — keeps keywords and assignment.
+    /// The leaf that was split - keeps keywords and assignment.
     origin: []const u8,
     /// The leaf minted on this split. Kept even after that side is split again,
     /// so a nested tree still writes every link to disk.
@@ -324,7 +324,7 @@ pub const Forest = struct {
         return null;
     }
 
-    /// Two places one split made — the two leaves of one branch — as the place a join keeps and
+    /// Two places one split made - the two leaves of one branch - as the place a join keeps and
     /// the one it closes. Null for any other pair: only a split's own two halves are one place
     /// again when joined, so that is the only pair the middle of a place joins.
     ///
@@ -383,7 +383,7 @@ pub const Forest = struct {
         }
     }
 
-    /// The place whose split `name` is a part of — the root its tree is keyed by — or `name`
+    /// The place whose split `name` is a part of - the root its tree is keyed by - or `name`
     /// itself when it was never split or is a root. Null when the forest has never heard of it.
     pub fn rootOf(self: *const Forest, name: []const u8) ?[]const u8 {
         var it = self.roots.iterator();
@@ -416,7 +416,7 @@ pub const Forest = struct {
         }
     }
 
-    /// Drop `root`'s whole tree: the place is gone, and every split of it with it — a float
+    /// Drop `root`'s whole tree: the place is gone, and every split of it with it - a float
     /// closing. Nothing to do for a place never split.
     pub fn forget(self: *Forest, gpa: std.mem.Allocator, root_name: []const u8) void {
         const kv = self.roots.fetchRemove(root_name) orelse return;

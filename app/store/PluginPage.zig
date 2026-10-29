@@ -8,7 +8,7 @@
 //!
 //! The mount is what makes that possible without a new host API: `DocumentIo` opens any path a
 //! mount claims by reading its bytes, on the desktop and in the browser alike. So the page's
-//! "file" is one line — the plugin's id — and everything else is looked up from the catalog at
+//! "file" is one line - the plugin's id - and everything else is looked up from the catalog at
 //! draw time, where it is anyway (a plugin installs, updates, or goes away while its page is
 //! open, and the page should say so without being reloaded).
 const std = @import("std");
@@ -25,19 +25,19 @@ const DocHandle = sdk.DocHandle;
 pub const extension = ".fizzyplugin";
 
 /// The mount every page lives under. A page's path is `store://pages/<display name><extension>`,
-/// so the tab shows the plugin's name — a tab strip is a row of file names, and "Google Drive"
+/// so the tab shows the plugin's name - a tab strip is a row of file names, and "Google Drive"
 /// is what that plugin is called.
 ///
 /// Scheme *and* authority, with no trailing slash, because that is what a mount prefix is here:
 /// `FileTable.pathOnMount` asks that the rest of the path start with `/`, so a bare `store://`
-/// matched nothing and every page fell through to the disk — "Failed to open file" for a file
+/// matched nothing and every page fell through to the disk - "Failed to open file" for a file
 /// that was right there in memory. `gdrive://<account>` has the same shape for the same reason.
 pub const mount_prefix = "store://pages";
 
 pub const plugin_id = "fizzy.store";
 
 /// What the store gives this module so a page can draw itself without importing `PluginStore`
-/// (which imports this file). One vtable, filled in at registration — the same `{ctx, vtable}`
+/// (which imports this file). One vtable, filled in at registration - the same `{ctx, vtable}`
 /// seam the app uses everywhere it needs to name fizzy from underneath.
 pub const PageDraw = struct {
     /// Draw the header for `plugin_id`: title, version, publisher, and the page's controls.
@@ -48,7 +48,7 @@ pub const PageDraw = struct {
     /// store cannot say, which shows the "no README" state rather than fetching nothing.
     source: *const fn (plugin_id: []const u8) ?Source,
     /// What this plugin is called, for the tab. Null when the store has never heard of it, and
-    /// then the tab falls back to the file name — which is the id, and still says something.
+    /// then the tab falls back to the file name - which is the id, and still says something.
     title: *const fn (plugin_id: []const u8) ?[]const u8,
     /// Draw the page's tab strip with `tab` selected; returns the tab after any click. Drawn by
     /// the store because it is the store's styling, chosen per page because the tab is a
@@ -108,7 +108,7 @@ pub const Document = struct {
 const State = struct {
     docs: std.AutoArrayHashMapUnmanaged(u64, Document) = .empty,
     mounted: bool = false,
-    /// What the pages' filesystem has answered and not yet delivered — see `pages_fs`.
+    /// What the pages' filesystem has answered and not yet delivered - see `pages_fs`.
     answers: ?core.vfs.Deferred = null,
 };
 
@@ -187,7 +187,7 @@ pub fn open(host: *sdk.Host, id: []const u8, grouping: u64) !void {
 }
 
 /// A page's address: the plugin's id, not its name. The path is what a saved layout stores and
-/// reopens from, so it has to be the stable thing — and the tab still reads "Google Drive",
+/// reopens from, so it has to be the stable thing - and the tab still reads "Google Drive",
 /// because `documentTitle` answers that separately.
 fn pathFor(gpa: std.mem.Allocator, id: []const u8) ![]u8 {
     return gpa.print("{s}/{s}{s}", .{ mount_prefix, id, extension });
@@ -209,7 +209,7 @@ fn focus(host: *sdk.Host, doc: Document) !void {
 // ---- the pages' filesystem -------------------------------------------------------------------
 //
 // There is nothing behind it. A page's whole content is the plugin id in its own path, so this
-// answers a read by parsing the path it was asked about — which is what makes a page restorable
+// answers a read by parsing the path it was asked about - which is what makes a page restorable
 // from a saved layout with no state at all. A `Mem` filled in as pages opened could not: on the
 // next run the layout asks for `store://pages/pixi.fizzyplugin` before anything has opened one,
 // the file is not there, and the tab is dropped with "NotFound".
@@ -230,7 +230,7 @@ const fs_vtable: core.vfs.Fs.VTable = .of(.{
 });
 
 /// Every answer is known on the spot, and still arrives from `pump`, as `Fs` promises: the
-/// open that asked has to have its bookkeeping in place — the loading tab the page lands in —
+/// open that asked has to have its bookkeeping in place - the loading tab the page lands in -
 /// before the page exists.
 fn answers() *core.vfs.Deferred {
     return &state.answers.?;
@@ -288,7 +288,7 @@ fn documentStackAlign(_: *anyopaque) usize {
     return @alignOf(Document);
 }
 fn loadDocument(_: *anyopaque, path: []const u8, out_doc: *anyopaque) anyerror!void {
-    // Never reached in practice — every page lives on the mount, so `DocumentIo` reads the bytes
+    // Never reached in practice - every page lives on the mount, so `DocumentIo` reads the bytes
     // and calls `loadDocumentFromBytes`. Kept because the vtable requires it and because a page
     // path could be restored from a layout after the mount is gone.
     _ = path;
@@ -362,7 +362,7 @@ fn drawDocument(_: *anyopaque, handle: DocHandle) anyerror!void {
     defer page.deinit();
 
     const draw = page_draw orelse return;
-    // The header answers "is this plugin still a thing the store knows about" — a page can
+    // The header answers "is this plugin still a thing the store knows about" - a page can
     // outlive the plugin it is about (uninstalled, or a registry that no longer lists it).
     if (!draw.header(doc.plugin)) {
         dvui.labelNoFmt(@src(), "The store no longer has this plugin.", .{}, .{
@@ -406,7 +406,7 @@ fn docBuf(ptr: *anyopaque) *Document {
 }
 
 /// The handle carries the pointer this module returned from `registerOpenDocument`, so trust it
-/// — but only after checking the id is one of ours, since a handle for another owner's document
+/// - but only after checking the id is one of ours, since a handle for another owner's document
 /// would otherwise be reinterpreted as a page.
 fn docFrom(handle: DocHandle) ?*Document {
     return state.docs.getPtr(handle.id);

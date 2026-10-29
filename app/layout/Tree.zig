@@ -53,7 +53,7 @@ pub fn leaf(self: *Tree) ?Leaf {
 pub fn deinit(self: *Tree) void {
     if (self.dock.changed) self.layout.state.markDirty();
     self.dock.deinit();
-    // A collapse may have handed a declared place's pin — and its name — to a sibling.
+    // A collapse may have handed a declared place's pin - and its name - to a sibling.
     if (self.layout.state.dock) |*d| {
         if (d.takeRenamed()) |r| {
             defer d.allocator.free(r.from);
