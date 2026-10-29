@@ -73,17 +73,12 @@ elif $claim; then
 else
     printf "$headings\n" '(to fill)' '(to fill)' '(to fill)' '(to fill)' >"$tmp/summary"
 fi
-changes=$(tail -n 1 "$tmp/stat" | awk '
-    /files? changed/ { n = $1; a = 0; d = 0 }
-    /insertion/ { for (i = 1; i < NF; i++) if ($(i + 1) ~ /^insertion/) a = $i }
-    /deletion/ { for (i = 1; i < NF; i++) if ($(i + 1) ~ /^deletion/) d = $i }
-    END { printf "%d files, +%d/-%d", n, a, d }')
 gates_label='not run yet'
 : >"$tmp/gates"
 if $claim; then
     printf 'Gates not run yet; `scripts/agent-finish %s` replaces this with their output.\n' "$issue" >>"$tmp/gates"
 else
-    gates_total=6
+    gates_total=8
     gates_passed=0
     run_gate() {
         local status=0
@@ -96,7 +91,7 @@ else
             tail -n 50 "$tmp/gate"
             printf '\n```\n\n'
         } >>"$tmp/gates"
-        [[ $status == 0 ]] || fail "gate failed: $*"
+        [[ $status == 0 ]] || fail "${merged_gate_prefix:-}gate failed: $*"
         if [[ $1 == scripts/zb ]]; then
             # A successful test count can accompany a failed build step; zig appends
             # "; M/M tests passed" to the steps line when tests ran.
@@ -107,7 +102,7 @@ else
                         $4 == "steps" && $5 ~ /^succeeded/) passed = 1
                 }
                 END { exit !passed }
-            ' "$tmp/gate" || fail "missing successful Build Summary: $*"
+            ' "$tmp/gate" || fail "${merged_gate_prefix:-}missing successful Build Summary: $*"
         fi
         gates_passed=$((gates_passed + 1))
     }
@@ -116,8 +111,44 @@ else
     for gate in test test-integration check-web test-sdk-version; do
         run_gate scripts/zb build "$gate" --summary all
     done
+    # Test the combined tree before publishing; main may have moved during the work.
+    if $use_jj; then
+        jj git fetch --remote origin --branch main || fail 'BLOCKED: could not fetch origin/main'
+        main_ahead=$(jj log -r "main@origin ~ ancestors($rev)" --no-graph -T 'commit_id') ||
+            fail 'BLOCKED: could not compare the branch with origin/main'
+        if [[ -n $main_ahead ]]; then
+            jj new -r "$rev" -r main@origin -m "$title" || fail 'BLOCKED: could not merge origin/main'
+            jj bookmark set "$branch" -r @
+            rev=@
+        fi
+        conflicted=$(jj log -r "$rev" --no-graph -T 'conflict') ||
+            fail 'BLOCKED: could not check the merge for conflicts'
+        [[ $conflicted != true ]] ||
+            fail 'BLOCKED: merge with origin/main has conflicts; resolve them and retry finish'
+    else
+        if ! git diff --cached --quiet; then
+            git commit -m "$title"
+        fi
+        git fetch origin main || fail 'BLOCKED: could not fetch origin/main'
+        git merge --no-edit FETCH_HEAD ||
+            fail 'BLOCKED: merge with origin/main failed; resolve it and retry finish'
+    fi
+    merged_gate_prefix='BLOCKED: after merging origin/main: '
+    reason='BLOCKED: checks after merging origin/main failed; fix and retry finish'
+    run_gate zig run scripts/lint.zig
+    run_gate scripts/zb build test --summary all
+    if $use_jj; then
+        jj diff --from main@origin --to "$rev" --stat >"$tmp/stat"
+    else
+        git diff origin/main --stat >"$tmp/stat"
+    fi
     gates_label="$gates_passed of $gates_total passed"
 fi
+changes=$(tail -n 1 "$tmp/stat" | awk '
+    /files? changed/ { n = $1; a = 0; d = 0 }
+    /insertion/ { for (i = 1; i < NF; i++) if ($(i + 1) ~ /^insertion/) a = $i }
+    /deletion/ { for (i = 1; i < NF; i++) if ($(i + 1) ~ /^deletion/) d = $i }
+    END { printf "%d files, +%d/-%d", n, a, d }')
 # A rework run on an existing PR keeps the PR's own work issue: its running: lock and
 # close-merged find the PR by that line.
 part_of=$(grep -m1 -E '^Part of fizzyedit/work#[1-9][0-9]*$' <<<"$pr_body" || true)

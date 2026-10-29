@@ -133,9 +133,14 @@ runs the publishing helper after collecting the edits.
    `## How it was verified` (the tests that fail without the change; screenshots or a tape for a
    UI change) and `## Not done / follow-ups`.
 6. When the work is done run `scripts/agent-finish <issue>` in the worker checkout. It checks
-   formatting and the build gates, records the current change (keeping your description; it
-   only fills in an empty one), pushes, and updates the PR body, creating the draft if the
-   claim step was skipped. The body is `Part of fizzyedit/work#N`, your summary, then two
+   formatting and the build gates, then fetches and merges the latest `origin/main` into the
+   branch (`git fetch origin main` and `git merge`, or the jj equivalent). It re-runs
+   `zig run scripts/lint.zig` and `scripts/zb build test --summary all` on that merged tree
+   before publishing or handing it off to be marked ready. Resolve merge conflicts or failed
+   checks in the same run and retry; if that cannot be done, report `BLOCKED` with the reason.
+   Never force-push. `--claim` skips this finish check so the early draft can open.
+   It records the current change (keeping your description; it only fills in an empty one),
+   pushes, and updates the PR body, creating the draft if the claim step was skipped. The body is `Part of fizzyedit/work#N`, your summary, then two
    collapsed sections: the diff stat (`Changes (N files, +A/-D)`) and the last 50 lines of each
    gate's output (`Gates: K of K passed`). With no `PR_SUMMARY.md` it keeps the summary already in
    the PR body (above the `agent-finish: generated below` marker); with neither it writes the
@@ -144,7 +149,8 @@ runs the publishing helper after collecting the edits.
 
 Both helpers exit non-zero and print a one-line reason on failure. A failed prepare can leave
 its workspace for inspection; a failed finish can leave a published branch if GitHub refused
-PR creation. Fix the reported problem and retry finish. Neither helper merges or marks ready.
+PR creation. Fix the reported problem and retry finish. Finish merges main into the worker
+branch; neither helper merges a PR or marks it ready.
 
 ## Where verification happens
 

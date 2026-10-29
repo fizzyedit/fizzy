@@ -3,6 +3,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source_root=$PWD
+real_git=$(command -v git)
+export AGENT_TEST_REAL_GIT=$real_git
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 fail() { echo "FAIL: $*" >&2; exit 1; }
@@ -48,6 +50,12 @@ cat >"$tmp/repo/scripts/check-fmt.sh" <<'FAKE'
 #!/usr/bin/env bash
 if [[ -e $AGENT_TEST_DIR/fail ]]; then exit 1; fi
 echo formatted
+FAKE
+cat >"$tmp/bin/zig" <<'FAKE'
+#!/usr/bin/env bash
+printf 'zig %s\n' "$*" >>"$AGENT_TEST_DIR/calls"
+if [[ -f lint-broken ]]; then echo 'lint: main introduced a finding'; exit 1; fi
+echo 'lint passed'
 FAKE
 cat >"$tmp/repo/scripts/zb" <<'FAKE'
 #!/usr/bin/env bash
@@ -115,7 +123,9 @@ cat >"$tmp/bin/git" <<'FAKE'
 #!/usr/bin/env bash
 set -e
 printf 'git %s\n' "$*" >>"$AGENT_TEST_DIR/calls"
+if [[ ${AGENT_TEST_REAL_REPO:-} == 1 ]]; then exec "$AGENT_TEST_REAL_GIT" "$@"; fi
 case "$1 $2" in
+    'merge --no-edit') [[ ! -e $AGENT_TEST_DIR/merge-conflict ]] ;;
     'worktree add') mkdir -p "${*: -2:1}" ;;
     'symbolic-ref --quiet') echo ci/git ;;
     'rev-list --count') echo "${AGENT_TEST_AHEAD:-1}" ;;
@@ -127,6 +137,14 @@ AGENT_TEST_GIT=1 "$prepare" ci/git >"$tmp/output"
 grep -q 'git worktree add -b ci/git' "$tmp/calls" || fail 'git worktree fallback'
 AGENT_TEST_GIT=1 "$finish" 42 >"$tmp/output"
 grep -q 'git push --set-upstream origin ci/git' "$tmp/calls" || fail 'git push fallback'
+rm "$tmp/body"
+touch "$tmp/merge-conflict"
+: >"$tmp/calls"
+if AGENT_TEST_GIT=1 "$finish" 42 >"$tmp/output" 2>&1; then fail 'merge conflict accepted'; fi
+grep -q 'BLOCKED: merge with origin/main failed' "$tmp/output" || fail 'merge conflict reason'
+[[ ! -e $tmp/body ]] || fail 'published after merge conflict'
+! grep -q '^git push' "$tmp/calls" || fail 'pushed after merge conflict'
+rm "$tmp/merge-conflict"
 : >"$tmp/calls"
 AGENT_TEST_GIT=1 AGENT_TEST_AHEAD=0 "$finish" --claim 42 >"$tmp/output"
 grep -q 'git commit --allow-empty -m ci: git: claim' "$tmp/calls" || fail 'git claim empty commit'
@@ -146,6 +164,45 @@ AGENT_TEST_EXISTING=1 AGENT_TEST_BODY=$'Part of fizzyedit/work#42\n\nx' "$finish
 ! grep -q '^Rework:' "$tmp/body" || fail 'rework line on a same-issue run'
 AGENT_TEST_EXISTING=1 "$finish" 42 >"$tmp/output"
 grep -q '^Part of fizzyedit/work#42$' "$tmp/body" || fail 'fresh PR issue line'
+# A real local remote proves that fetching and merging main changes the checked tree.
+# Only Zig and GitHub remain fake; no network or application builds are needed.
+export AGENT_TEST_GIT=1 AGENT_TEST_REAL_REPO=1
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
+export GIT_AUTHOR_NAME=Test GIT_AUTHOR_EMAIL=test@example.invalid
+export GIT_COMMITTER_NAME=Test GIT_COMMITTER_EMAIL=test@example.invalid
+"$real_git" init -q --bare --initial-branch=main "$tmp/origin"
+"$real_git" init -q --initial-branch=main "$tmp/repo"
+(
+    cd "$tmp/repo"
+    git add scripts
+    git commit -qm base
+    git remote add origin "$tmp/origin"
+    git push -q origin main
+    git checkout -qb ci/behind
+    echo work > worker
+    git add worker
+    git commit -qm work
+    git checkout -q main
+    touch lint-broken
+    git add lint-broken
+    git commit -qm 'main introduces lint failure'
+    git push -q origin main
+    git checkout -q ci/behind
+)
+rm "$tmp/body"
+: >"$tmp/calls"
+if "$finish" 42 >"$tmp/output" 2>&1; then fail 'lint-breaking main accepted'; fi
+grep -q 'BLOCKED: after merging origin/main: gate failed: zig run scripts/lint.zig' "$tmp/output" || fail 'merged lint failure reason'
+[[ -f $tmp/repo/lint-broken ]] || fail 'latest main was not merged'
+[[ ! -e $tmp/body ]] || fail 'published after merged lint failure'
+! grep -q '^git push' "$tmp/calls" || fail 'pushed after merged lint failure'
+rm "$tmp/repo/lint-broken"
+"$finish" 42 >"$tmp/output"
+grep -q '8 of 8 passed' "$tmp/body" || fail 'merged gate evidence missing'
+grep -q 'zig run scripts/lint.zig' "$tmp/body" || fail 'lint evidence missing'
+"$real_git" --git-dir="$tmp/origin" rev-parse refs/heads/ci/behind >/dev/null || fail 'fixed branch not published'
+! grep -q -- '--force' "$tmp/calls" || fail 'force push used'
+unset AGENT_TEST_GIT AGENT_TEST_REAL_REPO
 cat >"$tmp/bin/uname" <<'FAKE'
 #!/usr/bin/env bash
 echo Linux
@@ -155,6 +212,7 @@ cat >"$tmp/cloud-setup.sh" <<'FAKE'
 touch "$AGENT_TEST_DIR/setup-ran"
 FAKE
 chmod +x "$tmp/bin/uname" "$tmp/cloud-setup.sh"
+rm "$tmp/bin/zig"
 # System bins provide the shell and basic tools, without the developer's Zig launcher.
 PATH="$tmp/bin:/usr/bin:/bin" "$prepare" ci/cloud >"$tmp/output"
 [[ -e $tmp/setup-ran ]] || fail 'Linux without Zig did not run cloud setup'
