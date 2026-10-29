@@ -376,7 +376,8 @@ pub fn readConfig(b: *std.Build, target: std.Build.ResolvedTarget, opts: Options
             \\*-windows-msvc needs MSVC + Windows SDK headers/libs.
             \\  One-shot install (macOS/Linux/Windows): zig build msvcup-setup
             \\  Then: zig build package -Dtarget=x86_64-windows-msvc   (auto-uses .velopack-msvc/zig-libc-x64.ini)
-            \\  Or auto-download in this build: add -Dfetch-msvc       (default on Windows hosts; forwards through packageall)
+            \\  Or auto-download in this build: add -Dfetch-msvc
+            \\    (default on Windows hosts; forwards through packageall)
             \\  Or pass: --libc path.ini  /  -Dwindows-msvc-libc=path.ini
         ).step
     else
@@ -525,8 +526,16 @@ pub fn readConfig(b: *std.Build, target: std.Build.ResolvedTarget, opts: Options
         "chrome-sidebar-edge",
         "Which end of the window the icon rail and Sidebar sit at: left (default) or right",
     ) orelse .left;
-    const chrome_panel = b.option(bool, "chrome-panel", "Draw the bottom Panel and its Output view (default: true)") orelse true;
-    const chrome_menu_bar = b.option(bool, "chrome-menu-bar", "Draw the in-window menu bar (default: true)") orelse true;
+    const chrome_panel = b.option(
+        bool,
+        "chrome-panel",
+        "Draw the bottom Panel and its Output view (default: true)",
+    ) orelse true;
+    const chrome_menu_bar = b.option(
+        bool,
+        "chrome-menu-bar",
+        "Draw the in-window menu bar (default: true)",
+    ) orelse true;
     const chrome_infobar = b.option(bool, "chrome-infobar", "Draw the infobar (default: true)") orelse true;
     build_opts.addOption(ChromeEdge, "chrome_sidebar_edge", chrome_sidebar_edge);
     build_opts.addOption(bool, "chrome_panel", chrome_panel);
@@ -1111,8 +1120,8 @@ fn addTests(
         // A motion's clock stepped by its frames, a long one held to a step. std-only (see
         // FrameClock.zig); the floats' landing and ghost run on it.
         .{ "fizzy-frame-clock-tests", "backend/src/glass/FrameClock.zig" },
-        // Variable-height row bookkeeping for a virtualized list. std-only, so anchors, measurements
-        // and width changes are tested without a Window.
+        // Variable-height row bookkeeping for a virtualized list. std-only, so anchors,
+        // measurements and width changes are tested without a Window.
         .{ "fizzy-height-index-tests", "core/HeightIndex.zig" },
         // Ring buffering and dot-segment filtering for the folder watcher. std-only so it can
         // be tested here; FolderWatcher.zig itself needs a live editor.

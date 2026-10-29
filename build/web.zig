@@ -11,9 +11,9 @@ pub const Web = struct {
     wasm: *std.Build.Step.Compile,
     /// The whole site, deployable as it is: `files` and `page`.
     site: std.Build.LazyPath,
-    /// Everything but the page: the wasm, `fizzy.js`, `web.js`, the worker, the font, the OAuth page, the
-    /// hosted demo tapes under `demos/` (fizzy's own build) and each plugin's pages under
-    /// `plugins/<id>/`.
+    /// Everything but the page: the wasm, `fizzy.js`, `web.js`, the worker, the font,
+    /// the OAuth page, the hosted demo tapes under `demos/` (fizzy's own build) and each
+    /// plugin's pages under `plugins/<id>/`.
     files: std.Build.LazyPath,
     /// `index.html`, stamped with `fizzy.js`'s hash.
     page: std.Build.LazyPath,
@@ -50,9 +50,9 @@ pub const Framework = struct {
 pub fn framework(b: *std.Build, optimize: std.lang.OptimizeMode) Framework {
     const web_target = target(b);
     // The web backend is fizzy's own (`src/backend/WebBackend.zig` + dvui's `web.js`, patched:
-    // `patchedWebJs`), started as a copy of dvui's: dvui is built in its `custom` mode and our backend linked to it, as dvui's
-    // build does for its own (`linkBackend`). Every option is the one dvui's `web` mode sets, so
-    // dvui's shape — and with it the plugin fingerprint — is exactly what it was.
+    // `patchedWebJs`). dvui is built in its `custom` mode and our backend linked to it,
+    // as dvui's build does for its own (`linkBackend`). Every option is the one
+    // dvui's `web` mode sets, so its shape and the plugin fingerprint match.
     const dvui_web_dep = sdk.dvuiDependency(b, .{
         .target = web_target,
         .optimize = optimize,
@@ -512,7 +512,8 @@ fn patchedWebJs(b: *std.Build, dvui_dep: *std.Build.Dependency) std.Build.LazyPa
     }.lessThan);
     const patches = b.allocator.alloc(std.Build.LazyPath, names.items.len) catch @panic("OOM");
     for (patches, names.items) |*p, name| p.* = b.path(b.pathJoin(&.{ patches_dir, name }));
-    const patched = b.dependency("patch", .{ .source = dvui_dep.path(""), .patches = patches }).namedLazyPath("patched");
+    const patch_dep = b.dependency("patch", .{ .source = dvui_dep.path(""), .patches = patches });
+    const patched = patch_dep.namedLazyPath("patched");
     return patched.path(b, "src/backends/web.js");
 }
 

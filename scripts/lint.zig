@@ -882,7 +882,10 @@ test "core.widgets.ScrollArea.init is not flagged" {
 test "a file over its raw-scroll-area budget fails" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    const findings = try analyze(arena.allocator(), "fn f() void { _ = dvui.scrollArea(.{}); _ = dvui.scrollArea(.{}); }");
+    const findings = try analyze(
+        arena.allocator(),
+        "fn f() void { _ = dvui.scrollArea(.{}); _ = dvui.scrollArea(.{}); }",
+    );
     const allowances = [_]Allow{.{ .rule = .@"raw-scroll-area", .file = "over.zig", .count = 1 }};
     var seen = [_]bool{false};
     var output: std.Io.Writer.Allocating = .init(arena.allocator());

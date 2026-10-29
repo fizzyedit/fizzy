@@ -37,7 +37,10 @@ pub fn build(b: *std.Build) !void {
             .{ .target = .web, .module = both.staticModule(both_dep.builder, fizzy.framework(fizzy_dep, .web)) },
         } },
         .{ .name = "fixture_native", .targets = &.{
-            .{ .target = .native, .module = native.staticModule(native_dep.builder, fizzy.framework(fizzy_dep, .native)) },
+            .{ .target = .native, .module = native.staticModule(
+                native_dep.builder,
+                fizzy.framework(fizzy_dep, .native),
+            ) },
         } },
     };
     const twice = list ++ [_]fizzy.BundledPlugin{list[2]};
