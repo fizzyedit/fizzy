@@ -1,0 +1,5 @@
+{
+  "claude": {"cmd": ["claude", "-p", "--output-format", "text", "--permission-mode", "acceptEdits"], "model_flag": "--model", "prompt": "stdin", "auth_exit": []},
+  "codex": {"cmd": ["codex", "exec", "--sandbox", "workspace-write", "-"], "windows_cmd": ["codex", "exec", "--dangerously-bypass-approvals-and-sandbox", "-"], "model_flag": "--model", "prompt": "stdin", "auth_exit": []},
+  "agy": {"cmd": ["agy", "-p"], "model_flag": "--model", "prompt": "arg", "auth_exit": []}
+}
