@@ -12,7 +12,8 @@ mobile); this hello draws no plugin yet, and it is dvui's own SDL3 backend, not 
 from the same SDL source the native side is built from, with the 9-line `src/FizzyActivity.java`.
 
 You need a JDK 17 or newer on `PATH` and the Android SDK (platform 35, build-tools 35.0.0, NDK
-27.2.12479018) on a Linux x86_64 host. A debug keystore is made once with
+27.2.12479018). The build selects the NDK toolchain directory for the host OS. Packaging
+requires a POSIX shell; only Linux packaging has been exercised. A debug keystore is made once with
 `keytool -genkey -v -keystore ~/.android/debug.keystore -alias androiddebugkey -storepass android
 -keypass android -keyalg RSA -validity 10000 -dname CN=debug`.
 
