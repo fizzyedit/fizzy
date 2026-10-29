@@ -50,9 +50,9 @@ pub const Framework = struct {
 pub fn framework(b: *std.Build, optimize: std.lang.OptimizeMode) Framework {
     const web_target = target(b);
     // The web backend is fizzy's own (`src/backend/WebBackend.zig` + dvui's `web.js`, patched:
-    // `patchedWebJs`). dvui is built in its `custom` mode and our backend linked to it,
-    // as dvui's build does for its own (`linkBackend`). Every option is the one
-    // dvui's `web` mode sets, so its shape and the plugin fingerprint match.
+    // `patchedWebJs`), based on dvui's backend. dvui is built in its `custom` mode and our
+    // backend linked to it, as dvui's build does for its own (`linkBackend`). Every option
+    // is the one dvui's `web` mode sets, preserving dvui's shape and plugin fingerprint.
     const dvui_web_dep = sdk.dvuiDependency(b, .{
         .target = web_target,
         .optimize = optimize,
