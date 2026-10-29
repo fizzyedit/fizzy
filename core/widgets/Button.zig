@@ -134,6 +134,15 @@ test "touch clicks six points outside a 32 point border without changing its dra
             button.processEvents();
             button.drawBackground();
             border = button.data().borderRectScale().r;
+            const hit = button.hitRect();
+            try std.testing.expectEqual(border.center(), hit.center());
+            if (dvui.pointerKind() == .touch) {
+                const scale = button.data().borderRectScale().s;
+                try std.testing.expectEqual(44 * scale, hit.w);
+                try std.testing.expectEqual(44 * scale, hit.h);
+            } else {
+                try std.testing.expectEqual(border, hit);
+            }
             click = button.clicked();
             return .ok;
         }
@@ -162,6 +171,30 @@ test "touch clicks six points outside a 32 point border without changing its dra
     try std.testing.expectEqual(.mouse, dvui.pointerKind());
     try std.testing.expect(!Frame.click);
     try std.testing.expectEqual(original, Frame.border);
+}
+
+test "touch targets never shrink a border larger than the minimum" {
+    const Frame = struct {
+        fn draw() !dvui.App.Result {
+            var button: Button = undefined;
+            button.init(@src(), .{}, .{
+                .rect = .{ .x = 50, .y = 50, .w = 80, .h = 60 },
+                .margin = dvui.Rect.all(0),
+            });
+            defer button.deinit();
+            try std.testing.expectEqual(.touch, dvui.pointerKind());
+            try std.testing.expectEqual(button.data().borderRectScale().r, button.hitRect());
+            return .ok;
+        }
+    };
+    var t = try dvui.testing.init(.{});
+    defer t.deinit();
+    _ = try dvui.currentWindow().addEventPointer(.{
+        .button = .touch0,
+        .action = .press,
+        .xynorm = .{ .x = 0.5, .y = 0.5 },
+    });
+    _ = try dvui.testing.step(Frame.draw);
 }
 
 test "button verbs draw and accept a touch outside their borders" {
