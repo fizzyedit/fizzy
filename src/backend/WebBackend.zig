@@ -538,11 +538,18 @@ fn add_event_raw(w: *dvui.Window, which: u8, int1: u32, int2: u32, float1: f32, 
             w.modifiers = web_mod_code_to_dvui(@intCast(int2));
             _ = try w.addEventMouseButton(buttonFromJS(int1), .release);
         },
-        4 => _ = try w.addEventMouseWheel(
-            float1 * dvui.scroll_speed,
-            if (int1 > 0) .vertical else .horizontal,
-            if (int2 == 0) .mouse else .trackpad,
-        ),
+        4 => {
+            _ = try w.addEventMouseWheel(
+                float1 * (if (int2 == 0) @as(f32, 100) else dvui.scroll_speed),
+                if (int1 > 0) .vertical else .horizontal,
+                if (int2 == 0) .mouse else .trackpad,
+            );
+            // Core reads the kind by event number, even in a mixed-device frame.
+            var buf: [32]u8 = undefined;
+            // The prefix and a u16 event number fit in 32 bytes.
+            const key = std.mem.print(&buf, "_wheel_trackpad_{d}", .{w.event_num}) catch unreachable;
+            dvui.dataSet(w, w.data().id, key, int2 != 0);
+        },
         5 => {
             const str = @as([*]u8, @ptrFromInt(int1))[0..int2];
             _ = try w.addEventKey(.{

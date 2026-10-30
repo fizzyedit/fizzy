@@ -8,66 +8,34 @@ const moduleSource = source.replace(/import \{ Dvui, TextInput \} from "[^"\n]+"
 globalThis.document = { fullscreenEnabled: false };
 const { wheelTicks, wheelInput } = await import(`data:text/javascript;base64,${Buffer.from(moduleSource).toString('base64')}`);
 delete globalThis.document;
-const initial = () => ({ lowest: [99999, 99999], lowestBatch: [99999, 99999] });
+const initial = () => ({ lowestBatch: [99999, 99999] });
 const event = (deltaY, extra = {}) => ({ deltaX: 0, deltaY, deltaMode: 0, ...extra });
-const vertical = (result) => Array.from(result.events, ({ axis, ticks, trackpad }) => ({ axis, ticks, trackpad }));
-
-for (const deltaY of [96, 66.67, 57.14, 100]) {
-  for (const direction of [1, -1]) {
-    const state = initial();
-    assert.deepEqual(vertical(wheelTicks(event(deltaY * direction, { wheelDeltaY: -120 * direction }), state)),
-      [{ axis: 1, ticks: -direction, trackpad: 0 }]);
-    assert.deepEqual(state, initial(), 'classification does not mutate the supplied state');
-  }
-}
-assert.deepEqual(vertical(wheelTicks(event(96, { wheelDeltaY: -240 }), initial())),
-  [{ axis: 1, ticks: -2, trackpad: 0 }]);
-
-for (const wheelDeltaY of [undefined, 0, -30]) {
-  let state = initial();
-  for (const deltaY of [3.5, 7, 12]) {
-    const result = wheelTicks(event(deltaY, { wheelDeltaY }), state);
-    assert.deepEqual(vertical(result), [{ axis: 1, ticks: -deltaY / 3.5 * 0.025, trackpad: 1 }]);
+const vertical = (result) => result.events.map(({ ticks, trackpad }) => ({ ticks, trackpad }));
+for (const prior of [0.25, 1, 3.5, 100]) {
+  let state = wheelTicks(event(prior), initial()).state;
+  let pixels = 0;
+  for (let i = 0; i < 10; i++) {
+    const result = wheelTicks(event(10, { wheelDeltaY: -30 }), state);
+    assert.deepEqual(vertical(result), [{ ticks: -10 / 80, trackpad: 1 }]);
+    pixels -= result.events[0].ticks * 80;
     state = result.state;
   }
+  assert.equal(pixels, 100);
 }
-// macOS trackpad flicks can also have legacy deltas that are multiples of 120.
-for (const direction of [1, -1]) {
-  for (const deltas of [[40, 80, 120], [3.5, 40, 80, 120]]) {
-    let state = initial();
-    for (const magnitude of deltas) {
-      const deltaY = magnitude * direction;
-      const result = wheelTicks(event(deltaY, { wheelDeltaY: -3 * deltaY }), state);
-      assert.deepEqual(vertical(result),
-        [{ axis: 1, ticks: -deltaY / deltas[0] * 0.025, trackpad: 1 }]);
-      state = result.state;
-    }
-  }
+for (const delta of [40, 80, 100, 120, 0.25]) {
+  assert.deepEqual(vertical(wheelTicks(event(delta, { wheelDeltaY: -3 * delta }), initial())),
+    [{ ticks: -delta / 80, trackpad: 1 }]);
 }
-for (const deltaMode of [1, 2]) {
-  let state = initial();
-  for (const deltaY of [3, 6]) {
-    const result = wheelTicks(event(deltaY, { deltaMode, wheelDeltaY: -120 }), state);
-    assert.deepEqual(vertical(result), [{ axis: 1, ticks: -deltaY / 3, trackpad: 0 }]);
-    state = result.state;
-  }
+for (const [delta, extra, ticks] of [
+  [100, {}, -1], [200, {}, -2], [66.67, { wheelDeltaY: -120 }, -1],
+  [96, { wheelDeltaY: -240 }, -2], [3, { deltaMode: 1 }, -1],
+  [4, { deltaMode: 1 }, -1], [6, { deltaMode: 1 }, -2],
+]) {
+  assert.deepEqual(vertical(wheelTicks(event(delta, extra), initial())), [{ ticks, trackpad: 0 }]);
 }
-for (const deltaY of [100, 16, 4.000244140625]) {
-  assert.deepEqual(vertical(wheelTicks(event(deltaY), initial())),
-    [{ axis: 1, ticks: deltaY === 4.000244140625 ? -0.025 : -1, trackpad: 0 }]);
-}
-for (const deltaX of [9, 40]) {
-  assert.deepEqual(vertical(wheelTicks(event(0, { deltaX, wheelDeltaY: -120 }), initial())),
-    [{ axis: 0, ticks: -1, trackpad: 0 }]);
-}
-assert.deepEqual(vertical(wheelTicks(event(0, { wheelDeltaY: 0 }), initial())), []);
-// A new batch forgets its minimum but retains the device-wide trackpad minimum.
-const trackpadState = wheelTicks(event(3.5), initial()).state;
-const nextBatch = { ...trackpadState, lowestBatch: [99999, 99999] };
-assert.deepEqual(vertical(wheelTicks(event(7), nextBatch)), [{ axis: 1, ticks: -0.05, trackpad: 1 }]);
-assert.deepEqual(vertical(wheelTicks(event(96, { wheelDeltaY: -120 }), trackpadState)),
-  [{ axis: 1, ticks: -1, trackpad: 0 }]);
-console.log('wheel input: scaled Windows notches, trackpads, line/page modes and fallback axes passed');
+const tail = [10, 8, 4, 2, 1, 0.25];
+assert.equal(tail.reduce((sum, delta) => sum - wheelTicks(event(delta), initial()).events[0].ticks * 80, 0),
+  tail.reduce((sum, delta) => sum + delta, 0));
 
 function reader() {
   let ms = 0;
@@ -99,14 +67,12 @@ function reader() {
 }
 {
   const r = reader();
-  r.emit(3.5);
-  r.emit(7);
+  r.emit(0.25);
+  r.emit(10);
   r.emit(100, {}, 500);
-  assert.deepEqual(r.sent.map((a) => a[1]), [1, 1, 1]);
-  r.emit(100, {}, 1100);
-  assert.deepEqual(r.sent.at(-1), [1, 0, -1], 'the batch minima reset after a second');
-  r.emit(7);
-  assert.deepEqual(r.sent.at(-1), [1, 1, -0.05], 'the all-time minimum is not reset');
+  r.emit(10, {}, 1100);
+  assert.deepEqual(r.sent, [[1, 1, -0.25 / 80], [1, 1, -10 / 80], [1, 0, -1], [1, 1, -10 / 80]],
+    'each event keeps its kind and pixel scale across batches');
 }
 {
   const r = reader();
@@ -115,4 +81,4 @@ function reader() {
   r.emit(100, { deltaX: 100 });
   assert.deepEqual(r.sent, [[0, 0, -1], [1, 0, -1]], 'both axes');
 }
-console.log('wheel reader: capture, scaled notches, batch reset, retained minimum, pinch and both axes passed');
+console.log('wheel reader: pixel distance, fractional history, momentum, notches, mixed kinds and capture passed');
