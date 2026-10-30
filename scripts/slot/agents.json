@@ -1,5 +1,101 @@
 {
-  "claude": {"cmd": ["claude", "-p", "--output-format", "text", "--permission-mode", "acceptEdits"], "model_flag": "--model", "prompt": "stdin", "auth_exit": []},
-  "codex": {"cmd": ["codex", "exec", "--sandbox", "workspace-write", "-"], "windows_cmd": ["codex", "exec", "--dangerously-bypass-approvals-and-sandbox", "-"], "model_flag": "--model", "prompt": "stdin", "auth_exit": []},
-  "agy": {"cmd": ["agy", "-p"], "model_flag": "--model", "prompt": "arg", "auth_exit": []}
+ "claude": {
+  "cmd": [
+   "claude",
+   "-p",
+   "--output-format",
+   "text",
+   "--permission-mode",
+   "acceptEdits",
+   "--allowedTools",
+   "Bash(scripts/zb:*)",
+   "Bash(./scripts/zb:*)",
+   "Bash(zig:*)",
+   "Bash(git status:*)",
+   "Bash(git diff:*)",
+   "Bash(git log:*)",
+   "Bash(git show:*)",
+   "Bash(git add:*)",
+   "Bash(git ls-files:*)",
+   "Bash(gh pr view:*)",
+   "Bash(gh issue view:*)",
+   "Bash(ls:*)",
+   "Bash(cat:*)",
+   "Bash(grep:*)",
+   "Bash(rg:*)",
+   "Bash(mkdir:*)",
+   "--add-dir",
+   "~/.cache/zig",
+   "--add-dir",
+   "~/.cache/fizzy-build-slots"
+  ],
+  "windows_cmd": [
+   "claude",
+   "-p",
+   "--output-format",
+   "text",
+   "--permission-mode",
+   "acceptEdits",
+   "--allowedTools",
+   "Bash(scripts/zb:*)",
+   "Bash(./scripts/zb:*)",
+   "Bash(zig:*)",
+   "Bash(git status:*)",
+   "Bash(git diff:*)",
+   "Bash(git log:*)",
+   "Bash(git show:*)",
+   "Bash(git add:*)",
+   "Bash(git ls-files:*)",
+   "Bash(gh pr view:*)",
+   "Bash(gh issue view:*)",
+   "Bash(ls:*)",
+   "Bash(cat:*)",
+   "Bash(grep:*)",
+   "Bash(rg:*)",
+   "Bash(mkdir:*)",
+   "--add-dir",
+   "%LOCALAPPDATA%\\zig"
+  ],
+  "model_flag": "--model",
+  "prompt": "stdin",
+  "auth_exit": []
+ },
+ "codex": {
+  "cmd": [
+   "codex",
+   "exec",
+   "--sandbox",
+   "workspace-write",
+   "--add-dir",
+   "~/.cache/zig",
+   "--add-dir",
+   "~/.cache/fizzy-build-slots",
+   "-"
+  ],
+  "windows_cmd": [
+   "codex",
+   "exec",
+   "--dangerously-bypass-approvals-and-sandbox",
+   "-"
+  ],
+  "model_flag": "--model",
+  "prompt": "stdin",
+  "auth_exit": []
+ },
+ "agy": {
+  "cmd": [
+   "agy",
+   "-p",
+   "--mode",
+   "accept-edits",
+   "--sandbox",
+   "--add-dir",
+   "~/.cache/zig",
+   "--add-dir",
+   "~/.cache/fizzy-build-slots"
+  ],
+  "model_flag": "--model",
+  "prompt": "arg",
+  "auth_exit": []
+ }
 }

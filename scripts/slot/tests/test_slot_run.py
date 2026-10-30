@@ -49,10 +49,10 @@ class SlotRunTests(unittest.TestCase):
     def git(self, repo, *args):
         return subprocess.check_output(['git', *args], cwd=repo, env=self.env, stderr=subprocess.PIPE).decode()
 
-    def run_slot(self, mode='write-ok', keep=False, agent=None):
+    def run_slot(self, mode='write-ok', keep=False, agent=None, command_args=()):
         (self.job_dir / 'job.json').write_text(json.dumps(self.job))
         agents = self.root / 'agents.json'
-        agents.write_text(json.dumps({self.env['SLOT_KIND']: dict(cmd=[sys.executable, str(agent or ROOT / 'fakes/agent.py'), mode],
+        agents.write_text(json.dumps({self.env['SLOT_KIND']: dict(cmd=[sys.executable, str(agent or ROOT / 'fakes/agent.py'), mode, *command_args],
                                                    prompt='stdin', model_flag='--model', auth_exit=[64])}))
         self.env['SLOT_AGENTS'] = str(agents)
         args = [sys.executable, str(ROOT / 'slot'), 'run', str(self.job_dir), '--out', str(self.out)]
@@ -81,6 +81,17 @@ class SlotRunTests(unittest.TestCase):
         self.assertEqual((self.base / 'hello.txt').read_text(), 'hello from agent\n')
         self.assertIn('Signed-off-by: fizzy test-slot <slot+test-slot@fizzy.invalid>', self.git(self.base, 'log', '-1', '--format=%B'))
         self.assertFalse((self.root / 'home/work' / self.job['id']).exists())
+
+    def test_add_dir_expands_home(self):
+        self.env['HOME'] = str(self.root)
+        self.env['USERPROFILE'] = str(self.root)
+        agent = self.root / 'args_agent.py'
+        agent.write_text("import os, sys\n"
+                         "from pathlib import Path\n"
+                         "assert sys.argv[2:] == ['--add-dir', str(Path(os.environ['HOME']) / 'x')]\n"
+                         "Path('hello.txt').write_text('expanded home\\n')\n")
+        self.assertEqual(self.run_slot(agent=agent, command_args=['--add-dir', '~/x']), 0, self.detail)
+        self.result('done')
 
     def test_decline(self):
         self.assertEqual(self.run_slot('decline'), 3, self.detail)
