@@ -19,12 +19,14 @@
 //! Keys and the bars are dvui's. A motion the area cannot take is passed to the enclosing scroll
 //! container's own `processMotionScroll`, so a dvui parent still scrolls (with dvui's coast).
 //!
-//! Past either end a finger drags the content on a rubber band (`Fling.rubber_band`) and, let go,
-//! it springs back to the edge; a coast that reaches an end carries into the overscroll and
-//! bounces back once. The overscroll is this area's own, not dvui's: `init` adds it to
-//! `si.viewport` before the children are laid out and `deinit` takes it off again before dvui's,
-//! whose clamp to 20 points and linear bounce then never see it. Only an outermost area
-//! overscrolls; a nested one hands the motion to its parent, as before.
+//! Past either end a finger drags the content on a rubber band (`Fling.band`) and, let go, it
+//! returns to the edge on a critically damped curve; a coast that reaches an end carries into the
+//! band and returns once. The area keeps one position per axis that may leave its range, and
+//! `si.viewport` is the part of it in range: the band is only where the content is *drawn*
+//! (`frame_viewport`, which hit-testing uses too), so dvui's own bounce never runs, and the wheel,
+//! keys, bars and `scrollTo`, which move `si.viewport`, cannot overscroll. A band is a closed
+//! form of the time since its segment began, never a sum of frames. Only an outermost area bands,
+//! and not one whose content something else places (`frame_viewport`, `lock_visible`).
 const std = @import("std");
 const dvui = @import("dvui");
 const input_time = @import("glass").input_time;
@@ -39,6 +41,11 @@ const ScrollArea = @This();
 area: *dvui.ScrollAreaWidget,
 si: *dvui.ScrollInfo,
 touch: *Touch,
+/// Whether this area may overscroll: not under a parent that takes what it cannot, and not when
+/// something else places its content.
+bands: bool,
+/// Whether a scroll area of the same subwindow encloses this one and takes what it cannot scroll.
+nested: bool,
 /// The places of interest this frame (`notches`).
 notch_list: []const Fling.Notch = &.{},
 
@@ -49,13 +56,12 @@ const Touch = struct {
     dragging: bool = false,
     wheel_pending: dvui.Point = .{},
     wheel_time_ns: i128 = 0,
+    /// Where the drawn position (`si.viewport` plus `over`) was at the last frame's end.
     last_viewport: dvui.Point = .{},
     last_coast: dvui.Point = .{},
-    coast_start_ns: i128 = 0,
-    coast_origin: dvui.Point = .{},
-    coast_velocity: dvui.Point = .{},
-    /// The decay each axis's coast runs on: `tuning.decay`, or the one that ends it on a notch.
-    coast_decay: dvui.Point = .{ .x = tuning.decay, .y = tuning.decay },
+    /// What each axis is doing on its own, apart from a finger.
+    seg_x: Segment = .{},
+    seg_y: Segment = .{},
     /// While seating, the notch the content is drawn onto, and the spring that draws it there
     /// (`pos.y` is how far the viewport is from `seat_at`).
     seat_at: f32 = 0,
@@ -66,16 +72,31 @@ const Touch = struct {
     /// How far the content is drawn past its ends this frame: negative past the start, positive
     /// past the end, zero along an axis that is in range.
     over: dvui.Point = .{},
-    /// While dragging, how far the finger has gone past the ends (`over` is its `Fling.rubber`).
-    excess: dvui.Point = .{},
-    /// After the finger lifts or a coast reaches an end, carries `over` back to zero.
-    back: Spring = .{},
-    springing: bool = false,
+    /// While dragging, how far the finger has gone past the ends (`over` is its `Fling.band`).
+    pull: dvui.Point = .{},
+
+    fn anyMoving(self: *const Touch) bool {
+        return self.seg_x.kind != .none or self.seg_y.kind != .none or self.seating;
+    }
+
+    fn settling(self: *const Touch) bool {
+        return self.seg_x.kind == .settle or self.seg_y.kind == .settle;
+    }
 };
 
-/// The spring back: critically damped at every motion level, at rest about 370 ms after a
-/// release 300 points past an end.
-pub const spring_back: Spring.Tune = .{ .hz = 5, .playful_damping = 1 };
+/// One axis's motion since a finger last let go: the closed form of the time since `start_ns`.
+const Segment = struct {
+    kind: enum { none, coast, settle } = .none,
+    start_ns: i128 = 0,
+    /// A coast: the viewport at its start. A settle: how far past the edge it starts.
+    origin: f32 = 0,
+    /// Points a second at the start.
+    vel: f32 = 0,
+    /// A coast's decay: `tuning.decay`, or the one that ends it on a notch.
+    decay: f32 = tuning.decay,
+    /// A settle: whether the edge it returns to is the end (`scrollMax`) and not the start.
+    end: bool = false,
+};
 
 /// The seat: a lift near a notch that starts no coast comes to rest on it, critically damped at
 /// every motion level, about 500 ms after a lift 30 points off.
@@ -99,41 +120,47 @@ pub fn init(src: std.builtin.SourceLocation, init_opts: dvui.ScrollAreaWidget.In
     // lint-allow(raw-scroll-area): Wrapper implementation delegates layout to dvui.
     const area = dvui.scrollArea(src, init_opts, opts);
     const c = &area.scroll.?;
+    var have_parent = false;
+    if (c.parentScroll) |parent| have_parent = parent.subwindowId == c.subwindowId;
     var self: ScrollArea = .{
+        .nested = have_parent,
         .area = area,
         .si = area.si,
         .touch = dvui.dataGetPtrDefault(null, c.data().id, "_touch", Touch, .{}),
+        .bands = !have_parent and c.init_opts.frame_viewport == null and !c.init_opts.lock_visible,
     };
 
     // Preserve the caller's pixel snapping during motion: glyphs need whole device pixels
     // to keep their weight stable. The viewport itself keeps its fractional coast position.
-    const was_coasting_x = self.touch.x.coasting;
-    const was_coasting_y = self.touch.y.coasting;
+    const was_coasting_x = self.touch.seg_x.kind == .coast;
+    const was_coasting_y = self.touch.seg_y.kind == .coast;
     const was_seating = self.touch.seating;
 
-    // A press while coasting or springing back only stops the motion: eat it so it doesn't also
-    // tap what is under it.
+    // A press while coasting or settling only stops the motion: eat it so it doesn't also tap
+    // what is under it.
     const t = self.touch;
     for (dvui.events()) |*e| {
         if (!dvui.eventMatch(e, .{ .id = c.data().id, .r = c.data().borderRectScale().r })) continue;
         if (e.evt != .mouse or e.evt.mouse.action != .press or !e.evt.mouse.button.touch()) continue;
         t.wheel_pending = .{};
-        if (!t.x.coasting and !t.y.coasting and !t.springing and !t.seating) continue;
+        if (!t.anyMoving()) continue;
         e.handle(@src(), c.data());
+        const caught = t.settling();
         t.x.cancel();
         t.y.cancel();
+        t.seg_x = .{};
+        t.seg_y = .{};
         t.seating = false;
-        if (t.springing) {
+        if (caught) {
             // Caught past an end, the content stays where it is and the finger drags it from
             // there: the press begins the drag its release ends.
-            t.springing = false;
             t.dragging = true;
             t.finger = e.evt.mouse.button;
             t.x.begin();
             t.y.begin();
-            t.excess = .{
-                .x = Fling.unrubber(t.over.x, Fling.rubber_band),
-                .y = Fling.unrubber(t.over.y, Fling.rubber_band),
+            t.pull = .{
+                .x = Fling.pullFor(t.over.x, self.si.viewport.w, tuning.edge),
+                .y = Fling.pullFor(t.over.y, self.si.viewport.h, tuning.edge),
             };
         }
     }
@@ -144,24 +171,19 @@ pub fn init(src: std.builtin.SourceLocation, init_opts: dvui.ScrollAreaWidget.In
     if (!t.dragging) {
         self.wheelStep();
         self.coast();
-        self.springBack();
         self.seatStep();
     }
     // A bounce ends its coast past an edge; only in-range axes settle onto pixels.
-    self.settle(was_coasting_x and !t.x.coasting and t.over.x == 0, (was_coasting_y and !t.y.coasting or was_seating and !t.seating) and t.over.y == 0);
-    self.si.viewport.x += t.over.x;
-    self.si.viewport.y += t.over.y;
-    if (c.init_opts.frame_viewport == null) c.frame_viewport = self.si.viewport.topLeft();
+    self.settle(was_coasting_x and t.seg_x.kind != .coast and t.over.x == 0, (was_coasting_y and t.seg_y.kind != .coast or was_seating and !t.seating) and t.over.y == 0);
+    if (c.init_opts.frame_viewport == null) c.frame_viewport = self.si.viewport.topLeft().plus(t.over);
     return self;
 }
 
-/// How far `si`'s content is drawn past its ends, as the area's content sees it during the
-/// frame: negative past the start, positive past the end. A header can stretch by it.
-pub fn overscroll(si: dvui.ScrollInfo) dvui.Point {
-    return .{
-        .x = si.viewport.x - std.math.clamp(si.viewport.x, 0, si.scrollMax(.horizontal)),
-        .y = si.viewport.y - std.math.clamp(si.viewport.y, 0, si.scrollMax(.vertical)),
-    };
+/// How far the content is drawn past its ends this frame, as the area's content sees it: negative
+/// past the start, positive past the end, zero along an axis in range. A header can stretch by it.
+/// `si.viewport` stays within its range whatever this is.
+pub fn overscroll(self: *const ScrollArea) dvui.Point {
+    return self.touch.over;
 }
 
 /// Places a touch scroll comes to rest on, in content points down from the top, for this frame
@@ -224,36 +246,24 @@ pub fn deinit(self: *ScrollArea) void {
         t.dragging = false;
         _ = t.x.releaseWindowedAt(tuning, window_s, release_ns);
         _ = t.y.releaseWindowedAt(tuning, window_s, release_ns);
-        t.coast_start_ns = dvui.frameTimeNS();
-        t.coast_origin = self.si.viewport.topLeft();
-        t.coast_velocity = .{ .x = t.x.vel, .y = t.y.vel };
-        t.excess = .{};
-        if (t.over.nonZero()) {
-            // Let go past an end: along that axis the content springs back instead of coasting.
-            if (t.over.x != 0) t.x.cancel();
-            if (t.over.y != 0) t.y.cancel();
-            t.springing = true;
-            t.back = .{ .pos = .{ .x = t.over.x, .y = t.over.y }, .placed = true };
-        }
-        t.coast_decay = .{ .x = tuning.decay, .y = tuning.decay };
+        t.pull = .{};
+        const now = dvui.frameTimeNS();
+        release(&t.x, &t.seg_x, self.si.viewport.x, &t.over.x, self.si.viewport.w, now);
+        release(&t.y, &t.seg_y, self.si.viewport.y, &t.over.y, self.si.viewport.h, now);
         if (t.over.y == 0) self.aimOrSeat();
-        // The release may contain no motion, so it must schedule the first coast, spring or seat frame itself.
-        if (t.x.coasting or t.y.coasting or t.springing or t.seating) dvui.refresh(null, @src(), self.data().id);
+        // The release may contain no motion, so it must schedule the first coast, settle or seat frame itself.
+        if (t.anyMoving()) dvui.refresh(null, @src(), self.data().id);
     }
-
-    // dvui's own deinit clamps and bounces a viewport out of range: hand it the edge.
-    self.si.viewport.x -= t.over.x;
-    self.si.viewport.y -= t.over.y;
 
     // A nested child's propagated motion sets this (parent) area's velocity through dvui's
     // `processMotionScroll`; clear it so dvui's coast never runs beside ours.
     self.si.velocity = .{};
     if (was_dragging) {
-        const moved = self.si.viewport.topLeft().diff(t.last_viewport);
+        const moved = self.si.viewport.topLeft().plus(t.over).diff(t.last_viewport);
         profile.scrollJump(moved.x, @abs(finger_delta.x) + 2);
         profile.scrollJump(moved.y, @abs(finger_delta.y) + 2);
     }
-    t.last_viewport = self.si.viewport.topLeft();
+    t.last_viewport = self.si.viewport.topLeft().plus(t.over);
     self.area.deinit();
 }
 
@@ -304,6 +314,8 @@ fn wheelEvent(self: *ScrollArea, e: *dvui.Event) void {
     e.handle(@src(), c.data());
     self.touch.x.cancel();
     self.touch.y.cancel();
+    if (self.touch.seg_x.kind == .coast) self.touch.seg_x = .{};
+    if (self.touch.seg_y.kind == .coast) self.touch.seg_y = .{};
     self.touch.seating = false;
     if (trackpad) {
         self.touch.wheel_pending = .{};
@@ -319,14 +331,16 @@ fn wheelEvent(self: *ScrollArea, e: *dvui.Event) void {
 }
 
 /// Scroll by one touch motion, as dvui's `processMotionScroll` does but without setting
-/// `si.velocity`. Returns how far this area's viewport moved (in viewport points) for the fling.
+/// `si.velocity`. Returns how far this area's content moved on screen (in viewport points,
+/// the band included) for the fling.
 fn processMotionScroll(self: *ScrollArea, motion: dvui.Point.Physical, scale: f32) dvui.Point {
     const c = &self.area.scroll.?;
     const si = self.si;
+    const t = self.touch;
+    const before = si.viewport.topLeft();
     var moved: dvui.Point = .{};
 
-    var have_parent = false;
-    if (c.parentScroll) |parent| have_parent = parent.subwindowId == c.subwindowId;
+    const have_parent = self.nested;
 
     // Propagate unless this area did the whole scroll in the main direction of movement.
     var propagate = false;
@@ -336,7 +350,7 @@ fn processMotionScroll(self: *ScrollArea, motion: dvui.Point.Physical, scale: f3
             (motion.y > 0 and si.viewport.y > 0) or
             (motion.y < 0 and si.viewport.y < si.scrollMax(.vertical)))
         {
-            moved.y = drag(&si.viewport.y, &self.touch.excess.y, &self.touch.over.y, si.scrollMax(.vertical), -motion.y / scale, !have_parent);
+            moved.y = drag(&si.viewport.y, &t.pull.y, &t.over.y, si.scrollMax(.vertical), si.viewport.h, -motion.y / scale, self.bands);
         } else if (@abs(motion.y) > @abs(motion.x)) {
             propagate = true;
         }
@@ -347,13 +361,14 @@ fn processMotionScroll(self: *ScrollArea, motion: dvui.Point.Physical, scale: f3
             (motion.x > 0 and si.viewport.x > 0) or
             (motion.x < 0 and si.viewport.x < si.scrollMax(.horizontal)))
         {
-            moved.x = drag(&si.viewport.x, &self.touch.excess.x, &self.touch.over.x, si.scrollMax(.horizontal), -motion.x / scale, !have_parent);
+            moved.x = drag(&si.viewport.x, &t.pull.x, &t.over.x, si.scrollMax(.horizontal), si.viewport.w, -motion.x / scale, self.bands);
         } else if (@abs(motion.x) > @abs(motion.y)) {
             propagate = true;
         }
     }
 
-    if (c.init_opts.user_scroll) |us| us.* = us.plus(moved);
+    // What the user scrolled is the in-range part; the band is not scrolling.
+    if (c.init_opts.user_scroll) |us| us.* = us.plus(si.viewport.topLeft().diff(before));
     if (moved.nonZero()) dvui.refresh(null, @src(), self.data().id);
 
     if (propagate) {
@@ -364,18 +379,34 @@ fn processMotionScroll(self: *ScrollArea, motion: dvui.Point.Physical, scale: f3
     return moved;
 }
 
-/// Move one axis of the drawn viewport `pos` (its in-range part plus `over`) for a finger that
-/// moved the content `by`, and return how far `pos` moved. The finger is at the in-range part
-/// plus `excess`; what lies past an end shows on the rubber band, or not at all where the area
-/// may not overscroll.
-fn drag(pos: *f32, excess: *f32, over: *f32, max: f32, by: f32, may_overscroll: bool) f32 {
-    const finger = pos.* - over.* + excess.* + by;
+/// Move one axis for a finger that moved the content `by`, and return how far the content moved on
+/// screen. The finger is at the viewport `pos` plus `pull`; what lies past an end is shown on the
+/// band (`over`), or not at all where the area may not band. `extent` is the viewport's length.
+fn drag(pos: *f32, pull: *f32, over: *f32, max: f32, extent: f32, by: f32, bands: bool) f32 {
+    const finger = pos.* + pull.* + by;
     const in_range = std.math.clamp(finger, 0, max);
-    excess.* = if (may_overscroll) finger - in_range else 0;
-    over.* = Fling.rubber(excess.*, Fling.rubber_band);
-    const before = pos.*;
-    pos.* = in_range + over.*;
-    return pos.* - before;
+    const before = pos.* + over.*;
+    pull.* = if (bands) finger - in_range else 0;
+    over.* = Fling.band(pull.*, extent, tuning.edge);
+    pos.* = in_range;
+    return pos.* + over.* - before;
+}
+
+/// A finger let go of one axis at `viewport`: past an end it settles back from the speed it
+/// had, and inside the range it coasts if it was fast enough.
+fn release(fling: *Fling, seg: *Segment, viewport: f32, over: *f32, extent: f32, now: i128) void {
+    const vel: f32 = if (fling.coasting) fling.vel else 0;
+    if (over.* != 0) {
+        fling.cancel();
+        if (glass.motion.off()) {
+            over.* = 0;
+            seg.* = .{};
+        } else {
+            seg.* = .{ .kind = .settle, .start_ns = now, .origin = over.*, .vel = settleVelocity(over.*, vel, extent), .end = over.* > 0 };
+        }
+        return;
+    }
+    seg.* = if (fling.coasting) .{ .kind = .coast, .start_ns = now, .origin = viewport, .vel = vel } else .{};
 }
 
 /// The most notches within the content's range a release looks at.
@@ -395,7 +426,7 @@ fn aimOrSeat(self: *ScrollArea) void {
         n += 1;
     }
     if (t.y.coasting) {
-        if (Fling.aim(y, t.y.vel, tuning, buf[0..n])) |a| t.coast_decay.y = a.decay;
+        if (Fling.aim(y, t.y.vel, tuning, buf[0..n])) |a| t.seg_y.decay = a.decay;
     } else if (Fling.nearest(y, buf[0..n])) |at| {
         // A lift with no coast is slow or paused: the seat starts from rest.
         t.seating = true;
@@ -419,71 +450,108 @@ fn seatStep(self: *ScrollArea) void {
     }
 }
 
-/// Advance the coast one frame (`processVelocityAfter`). Past an end the coast ends, and how far
-/// it went past and its speed there start the spring back: out once, and home.
+/// Advance each axis's coast or settle to the frame's time (`processVelocityAfter`).
 fn coast(self: *ScrollArea) void {
     const t = self.touch;
     const si = self.si;
-    var moved: dvui.Point = .{};
-    const elapsed = @as(f64, @floatFromInt(dvui.frameTimeNS() - t.coast_start_ns)) / std.time.ns_per_s;
-    if (t.x.coasting) moved.x = coastPosition(&t.x, t.coast_origin.x, t.coast_velocity.x, t.coast_decay.x, elapsed) - si.viewport.x;
-    if (t.y.coasting) moved.y = coastPosition(&t.y, t.coast_origin.y, t.coast_velocity.y, t.coast_decay.y, elapsed) - si.viewport.y;
+    const in_range = si.viewport.topLeft();
+    const before = in_range.plus(t.over);
+    self.advance(&t.x, &t.seg_x, &si.viewport.x, &t.over.x, si.scrollMax(.horizontal), si.viewport.w);
+    self.advance(&t.y, &t.seg_y, &si.viewport.y, &t.over.y, si.scrollMax(.vertical), si.viewport.h);
+    const moved = si.viewport.topLeft().plus(t.over).diff(before);
 
     if (t.last_coast.x != 0) profile.scrollJump(moved.x, @abs(t.last_coast.x) * 3);
     if (t.last_coast.y != 0) profile.scrollJump(moved.y, @abs(t.last_coast.y) * 3);
     t.last_coast = moved;
-    self.scrollBy(moved);
-    const past = overscroll(si.*);
-    if (t.x.coasting and past.x != 0) bounce(&t.x, &si.viewport.x, &t.over.x, &t.back.pos.x, &t.back.vel.x, past.x);
-    if (t.y.coasting and past.y != 0) bounce(&t.y, &si.viewport.y, &t.over.y, &t.back.pos.y, &t.back.vel.y, past.y);
-    if (t.x.coasting or t.y.coasting) dvui.refresh(null, @src(), self.data().id);
+    if (self.area.scroll.?.init_opts.user_scroll) |us| us.* = us.plus(si.viewport.topLeft().diff(in_range));
+    if (t.seg_x.kind != .none or t.seg_y.kind != .none) dvui.refresh(null, @src(), self.data().id);
 }
 
-/// How much of the band's limit a bounce's peak may reach: short of it, so the catch never clamps.
-const bounce_margin = 0.99;
-
-/// End one axis's coast at the end it went `past`, handing its speed to the spring back. A fast
-/// coast reaches an end with a long last step and a high speed, and the spring would swing out
-/// past the band's limit, where a finger could not catch it where it is (`Fling.unrubber` stops
-/// at the limit): both are scaled down, which scales the spring's whole path, until its peak
-/// fits.
-fn bounce(fling: *Fling, pos: *f32, over: *f32, spring_pos: *f32, spring_vel: *f32, past: f32) void {
-    // A critically damped spring from `a` going out at `v` peaks at (a + v/w)·e^(-v/(v + w·a)).
-    const w = 2 * std.math.pi * spring_back.hz * glass.motion.rate();
-    const a = @abs(past);
-    const v = @abs(fling.vel);
-    const peak = (a + v / w) * @exp(-v / (v + w * a));
-    const fit = @min(1, Fling.rubber_band.limit * bounce_margin / peak);
-    pos.* -= past;
-    over.* = past * fit;
-    spring_pos.* = past * fit;
-    spring_vel.* = fling.vel * fit;
-    fling.cancel();
+/// Move one axis to where its segment puts it at the frame's time. A coast that reaches an end
+/// hands over to a settle from the speed it had there, and a settle flicked back toward the
+/// content hands over to a coast from the edge, so the content goes out and returns once,
+/// whichever way it was moving. Each is a function of its start, never of the frames between.
+fn advance(self: *ScrollArea, fling: *Fling, seg: *Segment, pos: *f32, over: *f32, max: f32, extent: f32) void {
+    const now = dvui.frameTimeNS();
+    // A return can cross into a coast, then reach the other edge and return from zero.
+    // That final return cannot cross zero: at most two hand-offs, hence three evaluations.
+    const max_segment_evaluations = 3;
+    for (0..max_segment_evaluations) |_| switch (seg.kind) {
+        .none => return,
+        .coast => {
+            const elapsed = @as(f64, @floatFromInt(now - seg.start_ns)) / std.time.ns_per_s;
+            const edge: f32 = if (seg.vel > 0) max else 0;
+            if (Fling.edgeTime(seg.origin, seg.vel, edge, seg.decay, tuning.stop)) |hit| {
+                if (hit <= elapsed) {
+                    pos.* = edge;
+                    fling.cancel();
+                    if (!self.bands or glass.motion.off()) {
+                        seg.* = .{};
+                        return;
+                    }
+                    seg.* = .{
+                        .kind = .settle,
+                        .start_ns = seg.start_ns + @as(i128, @intFromFloat(hit * std.time.ns_per_s)),
+                        .vel = settleVelocity(0, seg.vel * @as(f32, @floatCast(@exp(-@as(f64, seg.decay) * hit))), extent),
+                        .end = seg.vel > 0,
+                    };
+                    continue;
+                }
+            }
+            pos.* = coastPosition(fling, seg.origin, seg.vel, seg.decay, elapsed);
+            if (!fling.coasting) seg.* = .{};
+            // Content that shrank under a coast ends it at the new edge.
+            if (pos.* < 0 or pos.* > max) {
+                pos.* = std.math.clamp(pos.*, 0, max);
+                fling.cancel();
+                seg.* = .{};
+            }
+            return;
+        },
+        .settle => {
+            pos.* = if (seg.end) max else 0;
+            const w = 2 * std.math.pi * @as(f64, tuning.edge.hz) * glass.motion.rate();
+            if (w <= 0) {
+                over.* = 0;
+                seg.* = .{};
+                return;
+            }
+            const elapsed = @as(f64, @floatFromInt(now - seg.start_ns)) / std.time.ns_per_s;
+            if (seg.origin * seg.vel < 0 and @abs(seg.vel) > w * @abs(seg.origin)) {
+                // Flicked back toward the content: it crosses the edge when x0 + (v0 + w·x0)·t = 0.
+                const cross = -@as(f64, seg.origin) / (seg.vel + w * seg.origin);
+                if (cross <= elapsed) {
+                    const at = Fling.settle(seg.origin, seg.vel, cross, w);
+                    over.* = 0;
+                    if (@abs(at.vel) <= tuning.stop) {
+                        seg.* = .{};
+                        return;
+                    }
+                    seg.* = .{ .kind = .coast, .start_ns = seg.start_ns + @as(i128, @intFromFloat(cross * std.time.ns_per_s)), .origin = pos.*, .vel = at.vel };
+                    fling.coasting = true;
+                    fling.vel = at.vel;
+                    continue;
+                }
+            }
+            const at = Fling.settle(seg.origin, seg.vel, elapsed, w);
+            if (@abs(at.pos) < 0.5 and @abs(at.vel) < tuning.stop) {
+                over.* = 0;
+                seg.* = .{};
+            } else {
+                over.* = at.pos;
+            }
+            return;
+        },
+    };
 }
 
-/// Carry the overscroll back to the edge, on the frame clock. A coast that just reached an end
-/// starts it too.
-fn springBack(self: *ScrollArea) void {
-    const t = self.touch;
-    if (!t.springing and !t.over.nonZero()) return;
-    t.springing = true;
-    t.back.placed = true;
-    const max_step_s = @as(f32, @floatFromInt(FrameClock.max_step_ns)) / std.time.ns_per_s;
-    const moving = t.back.step(.{}, @min(dvui.secondsSinceLastFrame(), max_step_s), spring_back);
-    // Critically damped, it comes home without crossing the edge; its small steps may graze it.
-    t.over = .{ .x = sameSide(t.back.pos.x, t.over.x), .y = sameSide(t.back.pos.y, t.over.y) };
-    if (moving) {
-        dvui.refresh(null, @src(), self.data().id);
-    } else {
-        t.springing = false;
-        t.over = .{};
-        t.back = .{};
-    }
-}
-
-/// `v`, kept on the side of the edge that `side` is on (zero when `side` is).
-fn sameSide(v: f32, side: f32) f32 {
-    return if (side < 0) @min(v, 0) else if (side > 0) @max(v, 0) else 0;
+/// Keep an outward return inside the inverse band's catchable range without moving its origin.
+fn settleVelocity(offset: f32, vel: f32, extent: f32) f32 {
+    if (offset * vel < 0) return vel;
+    const w = 2 * std.math.pi * tuning.edge.hz * glass.motion.rate();
+    // (1 + w·t)·exp(-w·t) <= 1, and t·exp(-w·t) peaks at 1/(w·e).
+    const limit = @max(0, extent * 0.999 - @abs(offset)) * w * std.math.e;
+    return std.math.clamp(vel, -limit, limit);
 }
 
 /// On the axes whose coast ended this frame (run out, or stopped by a press), move the content
@@ -506,7 +574,7 @@ fn settleBy(area_px: f32, viewport: f32, max: f32, scale: f32) f32 {
     // content's origin, not the viewport: the area itself may sit between pixels.
     const origin = area_px - viewport * scale;
     var by = (origin - @round(origin)) / scale;
-    // Past an edge dvui's bounce would pull it back off the pixel, so round the other way.
+    // Round the other way if snapping would put the viewport outside its scroll range.
     if (viewport + by < 0) by += 1 / scale;
     if (viewport + by > max) by -= 1 / scale;
     return by;
@@ -536,6 +604,8 @@ fn scrollBy(self: *ScrollArea, by: dvui.Point) void {
 
 var t_viewport_y: f32 = 0;
 var t_release_velocity: f32 = 0;
+/// Written by testFrame on the test thread from the release decision, before edge settling.
+var t_release_coasted: bool = false;
 /// Written by swipe on the test thread before it draws the release frame.
 var t_release_time: i128 = 0;
 var t_use_dvui: bool = false;
@@ -548,8 +618,14 @@ var t_draw_scale: f32 = 1;
 var t_snapping: bool = false;
 /// Written by testFrame on the test thread after motion advances.
 var t_moving: bool = false;
-/// The overscroll the area's content sees this frame.
+/// The overscroll the area's content sees this frame, whether a finger is dragging it, and
+/// whether the viewport ever left its range.
 var t_over_y: f32 = 0;
+var t_dragging: bool = false;
+var t_range_broken: bool = false;
+/// Set to place the viewport before the next frame's layout.
+var t_jump_to: ?f32 = null;
+var t_max_y: f32 = 0;
 /// Lay the area out as a column of `t_rows` rows, `t_top` points below the window's top, and
 /// record where each row is drawn.
 var t_column: bool = false;
@@ -571,13 +647,20 @@ fn testFrame() !dvui.App.Result {
     } else {
         var scroll = ScrollArea.init(@src(), .{ .horizontal = .none, .vertical_bar = .hide }, .{ .expand = .both, .margin = .{ .y = t_top } });
         scroll.notches(t_notches);
-        t_moving = scroll.touch.x.coasting or scroll.touch.y.coasting or scroll.touch.seating;
+        t_moving = scroll.touch.anyMoving();
         // Read the final viewport after the area's event handling and edge correction.
         const si = scroll.si;
-        defer t_viewport_y = si.viewport.y;
+        if (t_jump_to) |y| si.viewport.y = y;
+        t_jump_to = null;
+        defer {
+            t_viewport_y = si.viewport.y;
+            // dvui's bounce only runs for a viewport out of range: it must never be.
+            if (si.viewport.y < 0 or si.viewport.y > si.scrollMax(.vertical)) t_range_broken = true;
+        }
         defer {
             scroll.deinit();
             t_release_velocity = scroll.touch.y.last_debug.vel;
+            t_release_coasted = scroll.touch.y.last_debug.coasted;
         }
         if (t_column) {
             t_snapping = dvui.snapToPixels();
@@ -601,7 +684,9 @@ fn testFrame() !dvui.App.Result {
         t_draw_scale = child.rectScale().s;
         const y = child.rectScale().r.y;
         t_raw_y = y;
-        t_over_y = overscroll(si.*).y;
+        t_over_y = scroll.overscroll().y;
+        t_dragging = scroll.touch.dragging;
+        t_max_y = si.scrollMax(.vertical);
         t_drawn_y = if (t_snapping) @round(y) else y;
     }
     return .ok;
@@ -980,7 +1065,7 @@ fn lift() !void {
     _ = try dvui.currentWindow().addEventPointer(.{ .button = .touch0, .action = .release, .xynorm = .{ .x = 0.5, .y = 0.5 } });
 }
 
-test "releasing a held overscroll without a coast requests a spring frame" {
+test "releasing a held overscroll without a coast requests a settle frame" {
     var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
     defer t.deinit();
     t_use_dvui = false;
@@ -993,40 +1078,86 @@ test "releasing a held overscroll without a coast requests a spring frame" {
     // Discard input and layout requests so only the release can request the next frame.
     cw.extra_frames_needed = 0;
     _ = try testFrame();
-    try std.testing.expect(@abs(t_release_velocity) < tuning.min_start);
     try std.testing.expect(cw.extra_frames_needed > 0);
+    try std.testing.expect(!t_release_coasted);
 }
 
-test "a drag 300 points past the top shows the rubber band and springs back within 400 ms" {
+test "a drag 300 points past the top shows the band, and the viewport stays in range" {
     var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
     defer t.deinit();
     t_use_dvui = false;
+    t_range_broken = false;
     try dvui.testing.settle(testFrame);
     const rest_y = t_raw_y;
 
     try dragBy(300, 10, true, 10);
-    const band = Fling.rubber(300, Fling.rubber_band);
-    try std.testing.expectApproxEqAbs(-band, t_over_y, 0.01);
-    // The content is drawn that far down, and the area's own viewport is back at the edge.
-    try std.testing.expectApproxEqAbs(band * dvui.currentWindow().natural_scale, t_raw_y - rest_y, 0.01);
+    const shown = Fling.band(300, 400, tuning.edge);
+    try std.testing.expectApproxEqAbs(@as(f32, 116.8), shown, 0.5);
+    try std.testing.expectApproxEqAbs(-shown, t_over_y, 0.5);
+    // The content is drawn that far down, and the area's own viewport is at the edge.
+    try std.testing.expectApproxEqAbs(shown * dvui.currentWindow().natural_scale, t_raw_y - rest_y, 0.5);
     try std.testing.expectEqual(@as(f32, 0), t_viewport_y);
+    try std.testing.expect(!t_range_broken);
+}
 
+test "a drag 300 points past the bottom is symmetric" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    t_use_dvui = false;
+    t_range_broken = false;
+    try dvui.testing.settle(testFrame);
+    t_jump_to = t_max_y;
+    try dvui.testing.settle(testFrame);
+    const end = t_viewport_y;
+    try std.testing.expectEqual(t_max_y, end);
+    try std.testing.expect(end > 1000);
+
+    try dragBy(-300, 10, true, 10);
+    try std.testing.expectApproxEqAbs(Fling.band(300, 400, tuning.edge), t_over_y, 0.5);
+    try std.testing.expectEqual(end, t_viewport_y);
+    try std.testing.expect(!t_range_broken);
+}
+
+/// Hold a 300 point drag past the top for 100 ms, let go, and record how far past the top the
+/// content is drawn every 33 ms, the clock cut into frames by `gaps_ms` (summing to 33).
+fn settleTrace(gaps_ms: []const u64, out: *[13]f32) !void {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    t_use_dvui = false;
+    t_range_broken = false;
+    try dvui.testing.settle(testFrame);
+    try dragBy(300, 10, true, 0);
+    try frameAfter(100);
     try lift();
-    var ms: u64 = 0;
-    while (t_over_y != 0) : (ms += 16) {
-        try frameAfter(16);
-        // Critically damped: home without passing the edge.
-        try std.testing.expect(t_over_y <= 0);
-        try std.testing.expect(ms <= 400);
+    // Same alignment as `coastTrace`: each step's last frame is drawn at a whole multiple of 33 ms.
+    try frameAfter(gaps_ms[gaps_ms.len - 1]);
+    for (out) |*slot| {
+        for (gaps_ms) |g| try frameAfter(g);
+        slot.* = t_over_y;
     }
-    std.debug.print("overscroll: {d:.1} points settled {d} ms after release\n", .{ band, ms });
-    try std.testing.expectEqual(rest_y, t_raw_y);
+    try std.testing.expect(!t_range_broken);
+}
+
+test "a release settles within 400 ms without reversing, however the frames cut the time" {
+    var steady: [13]f32 = undefined;
+    var uneven: [13]f32 = undefined;
+    try settleTrace(&.{ 16, 17 }, &steady);
+    try settleTrace(&.{ 25, 8 }, &uneven);
+    var prev: f32 = -Fling.band(300, 400, tuning.edge);
+    for (steady, uneven) |a, b| {
+        try std.testing.expect(a >= prev and a <= 0);
+        prev = a;
+        try std.testing.expectApproxEqAbs(a, b, 0.01);
+    }
+    // 12 steps of 33 ms is 396 ms.
+    try std.testing.expectEqual(@as(f32, 0), steady[11]);
 }
 
 test "a fling into the top bounces once and settles" {
     var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
     defer t.deinit();
     t_use_dvui = false;
+    t_range_broken = false;
     try dvui.testing.settle(testFrame);
     // Scroll 300 points in and stop there, then flick back toward the top at about 1900 points/s.
     try dragBy(-300, 10, true, 10);
@@ -1041,7 +1172,8 @@ test "a fling into the top bounces once and settles" {
     var turns: usize = 0;
     var deepening = true;
     var prev: f32 = 0;
-    for (0..120) |_| {
+    var rest_ms: ?u64 = null;
+    for (0..120) |i| {
         try frameAfter(16);
         try std.testing.expect(t_over_y <= 0);
         if (t_over_y < deepest) {
@@ -1054,9 +1186,10 @@ test "a fling into the top bounces once and settles" {
         } else if (!deepening and t_over_y < prev) {
             turns += 1;
         }
+        if (rest_ms == null and deepest < 0 and t_over_y == 0) rest_ms = i * 16;
         prev = t_over_y;
     }
-    std.debug.print("bounce: {d:.1} points past the top\n", .{-deepest});
+    std.debug.print("bounce: {d:.1} points past the top, home after {?d} ms\n", .{ -deepest, rest_ms });
     // It carries on past the edge for a while, as the coast's speed would take it, and comes
     // back once.
     try std.testing.expect(deepest < -5);
@@ -1064,6 +1197,9 @@ test "a fling into the top bounces once and settles" {
     try std.testing.expectEqual(@as(usize, 1), turns);
     try std.testing.expectEqual(@as(f32, 0), t_over_y);
     try std.testing.expectEqual(@as(f32, 0), t_viewport_y);
+    try std.testing.expect(!t_range_broken);
+    // Sampled every 16 ms, the whole bounce fits in half a second.
+    try std.testing.expect(rest_ms.? <= 500);
 }
 
 test "the wheel at the top does not overscroll" {
@@ -1081,27 +1217,37 @@ test "the wheel at the top does not overscroll" {
     }
 }
 
-test "a finger catches the content springing back where it is" {
+test "a press during the return catches it where it is drawn" {
     var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
     defer t.deinit();
     t_use_dvui = false;
+    t_range_broken = false;
     try dvui.testing.settle(testFrame);
     try dragBy(300, 10, true, 10);
+    const held = t_over_y;
     try lift();
-    for (0..3) |_| try frameAfter(16);
+    for (0..6) |_| try frameAfter(16);
     const caught = t_over_y;
-    try std.testing.expect(caught < 0 and caught > -Fling.rubber(300, Fling.rubber_band));
+    try std.testing.expect(caught < 0 and caught > held);
 
-    // Held by a finger that barely moves, it stays put.
-    try dragBy(1, 1, true, 10);
+    const cw = dvui.currentWindow();
+    _ = try cw.addEventPointer(.{ .button = .touch0, .action = .press, .xynorm = .{ .x = 0.5, .y = 0.5 } });
+    try frameAfter(16);
+    // The area took the press, and the content did not move.
+    try std.testing.expect(t_dragging);
+    try std.testing.expectApproxEqAbs(caught, t_over_y, 0.5);
+
+    // Held by a finger that barely moves, it stays put until let go, and then returns.
+    try dragBy(1, 1, false, 10);
     try std.testing.expectApproxEqAbs(caught, t_over_y, 1);
     try lift();
     for (0..30) |_| try frameAfter(16);
     try std.testing.expectEqual(@as(f32, 0), t_over_y);
+    try std.testing.expect(!t_range_broken);
 }
 
-test "a finger catching the hardest bounce keeps it where it is, inside the band's limit" {
-    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+test "a finger catching the hardest bounce keeps it where it is" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 100 } });
     defer t.deinit();
     t_use_dvui = false;
     try dvui.testing.settle(testFrame);
@@ -1116,9 +1262,7 @@ test "a finger catching the hardest bounce keeps it where it is, inside the band
         try frameAfter(16);
         deepest = @min(deepest, t_over_y);
     }
-    // `unrubber` stops at the band's limit, so a bounce that passed it could not be caught where
-    // it is: it would jump back to the limit.
-    try std.testing.expect(deepest > -Fling.rubber_band.limit * 0.999);
+    try std.testing.expect(deepest > -100 * 0.999);
 
     // Catch it while it is still going out.
     try dragBy(-260, 130, true, 0);
@@ -1340,6 +1484,30 @@ test "a press stops a seat where it is drawn" {
     try std.testing.expect(t_moving);
     _ = try dvui.currentWindow().addEventPointer(.{ .button = .touch0, .action = .press, .xynorm = .{ .x = 0.5, .y = 0.5 } });
     try std.testing.expectApproxEqAbs(@as(f32, 0), try restJump(16), 0.001);
+}
+
+test "fast returns stay catchable in short panes at every motion rate" {
+    var t = try dvui.testing.init(.{});
+    defer t.deinit();
+    try dvui.testing.settle(testFrame);
+    for ([_]f32{ 0, 0.5, 1 }) |speed| {
+        glass.motion.publish(1, speed, false, false, 1);
+        const w = 2 * std.math.pi * tuning.edge.hz * glass.motion.rate();
+        for ([_]f32{ 50, 100, 150, 250 }) |extent| {
+            for ([_]f32{ -1, 1 }) |sign| {
+                for ([_]f32{ 0, 0.5, 0.99 }) |fraction| {
+                    const origin = sign * extent * fraction;
+                    const vel = settleVelocity(origin, sign * tuning.max, extent);
+                    for (0..1000) |ms| {
+                        const at = Fling.settle(origin, vel, @as(f64, @floatFromInt(ms)) / 1000, w);
+                        try std.testing.expect(@abs(at.pos) <= extent * 0.999);
+                        const caught = Fling.band(Fling.pullFor(at.pos, extent, tuning.edge), extent, tuning.edge);
+                        try std.testing.expectApproxEqAbs(at.pos, caught, 0.001);
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Script a web wheel event with its per-event kind, as the web backend does.
