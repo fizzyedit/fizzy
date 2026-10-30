@@ -13,7 +13,7 @@
 //! (a press stops the coast), `processMotionScroll` (drag and propagation to the parent) and
 //! `processVelocityAfter` (the coast). Names and order are kept so a diff reads cleanly.
 //!
-//! How it hooks in without touching dvui: `deinit` claims this area's touch motion events
+//! How it hooks in without touching dvui: this wrapper claims the area's touch motion events
 //! (`handle`, as dvui does) *before* the area's own `deinit`, which skips handled events, so
 //! `si.velocity` stays 0 and dvui's coast never runs. Web wheel events retain their input kind: notches glide and trackpad deltas apply directly.
 //! Keys and the bars are dvui's. A motion the area cannot take is passed to the enclosing scroll
@@ -48,6 +48,9 @@ bands: bool,
 nested: bool,
 /// The places of interest this frame (`notches`).
 notch_list: []const Fling.Notch = &.{},
+// Saved before children can advance or end dvui's drag on take-over.
+press_point: ?dvui.Point.Physical = null,
+finger_delta: dvui.Point = .{},
 
 /// Per-area state that outlives a frame: a fling per axis and whether a finger is dragging.
 const Touch = struct {
@@ -77,10 +80,6 @@ const Touch = struct {
 
     fn anyMoving(self: *const Touch) bool {
         return self.seg_x.kind != .none or self.seg_y.kind != .none or self.seating;
-    }
-
-    fn settling(self: *const Touch) bool {
-        return self.seg_x.kind == .settle or self.seg_y.kind == .settle;
     }
 };
 
@@ -130,6 +129,13 @@ pub fn init(src: std.builtin.SourceLocation, init_opts: dvui.ScrollAreaWidget.In
         .bands = !have_parent and c.init_opts.frame_viewport == null and !c.init_opts.lock_visible,
     };
 
+    const dragging = dvui.currentWindow().dragging;
+    if (dragging.state == .prestart) self.press_point = dragging.pt;
+    for (dvui.events()) |e| {
+        if (e.evt == .mouse and e.evt.mouse.action == .press and e.evt.mouse.button.touch())
+            self.press_point = e.evt.mouse.p;
+    }
+
     // Preserve the caller's pixel snapping during motion: glyphs need whole device pixels
     // to keep their weight stable. The viewport itself keeps its fractional coast position.
     const was_coasting_x = self.touch.seg_x.kind == .coast;
@@ -145,24 +151,26 @@ pub fn init(src: std.builtin.SourceLocation, init_opts: dvui.ScrollAreaWidget.In
         t.wheel_pending = .{};
         if (!t.anyMoving()) continue;
         e.handle(@src(), c.data());
-        const caught = t.settling();
+        dvui.captureMouse(c.data(), e.num);
         t.x.cancel();
         t.y.cancel();
         t.seg_x = .{};
         t.seg_y = .{};
         t.seating = false;
-        if (caught) {
-            // Caught past an end, the content stays where it is and the finger drags it from
-            // there: the press begins the drag its release ends.
-            t.dragging = true;
-            t.finger = e.evt.mouse.button;
-            t.x.begin();
-            t.y.begin();
-            t.pull = .{
-                .x = Fling.pullFor(t.over.x, self.si.viewport.w, tuning.edge),
-                .y = Fling.pullFor(t.over.y, self.si.viewport.h, tuning.edge),
-            };
-        }
+        // The press begins the drag at the drawn position, including a caught rubber band.
+        t.dragging = true;
+        t.finger = e.evt.mouse.button;
+        t.x.begin();
+        t.y.begin();
+        t.pull = .{
+            .x = Fling.pullFor(t.over.x, self.si.viewport.w, tuning.edge),
+            .y = Fling.pullFor(t.over.y, self.si.viewport.h, tuning.edge),
+        };
+    }
+
+    // Captured motion must reach the viewport before any child is laid out.
+    if (dvui.captured(c.data().id)) {
+        for (dvui.events()) |*e| self.touchMotion(e);
     }
 
     // The coast moves the content before it is laid out, so a frame draws where the clock is at
@@ -205,8 +213,6 @@ pub fn deinit(self: *ScrollArea) void {
     // Events match inside the clip, and the container's content clip is still set.
     dvui.clipSet(c.prevClip);
 
-    const rs = c.data().borderRectScale();
-    var finger_delta: dvui.Point = .{};
     const was_dragging = t.dragging;
     var released = false;
     var release_ns = glass.MotionClock.wallFrameNs();
@@ -219,25 +225,7 @@ pub fn deinit(self: *ScrollArea) void {
                 released = true;
                 release_ns = input_time.get(e.num);
             },
-            .motion => |motion| {
-                if (t.dragging and finger != t.finger) continue;
-                if (!dvui.eventMatch(e, .{ .id = c.data().id, .r = c.init_opts.event_rect orelse rs.r })) continue;
-                e.handle(@src(), c.data());
-                // The touch usually went down on a child that has since given up capture.
-                if (!dvui.captured(c.data().id)) dvui.captureMouse(c.data(), e.num);
-                if (!t.dragging) {
-                    t.dragging = true;
-                    t.finger = finger;
-                    t.last_coast = .{};
-                    t.x.begin();
-                    t.y.begin();
-                }
-                finger_delta = finger_delta.plus(motion.scale(1 / rs.s, dvui.Point));
-                const delta = self.processMotionScroll(motion, rs.s);
-                const time_ns = input_time.get(e.num);
-                t.x.sampleTimed(delta.x, time_ns);
-                t.y.sampleTimed(delta.y, time_ns);
-            },
+            .motion => self.touchMotion(e),
             else => {},
         }
     }
@@ -260,11 +248,41 @@ pub fn deinit(self: *ScrollArea) void {
     self.si.velocity = .{};
     if (was_dragging) {
         const moved = self.si.viewport.topLeft().plus(t.over).diff(t.last_viewport);
-        profile.scrollJump(moved.x, @abs(finger_delta.x) + 2);
-        profile.scrollJump(moved.y, @abs(finger_delta.y) + 2);
+        profile.scrollJump(moved.x, @abs(self.finger_delta.x) + 2);
+        profile.scrollJump(moved.y, @abs(self.finger_delta.y) + 2);
     }
     t.last_viewport = self.si.viewport.topLeft().plus(t.over);
     self.area.deinit();
+}
+
+// The late pass sees only motions children gave up; the early pass owns capture.
+fn touchMotion(self: *ScrollArea, e: *dvui.Event) void {
+    const c = &self.area.scroll.?;
+    const t = self.touch;
+    if (e.evt != .mouse or !e.evt.mouse.button.touch() or e.evt.mouse.action != .motion) return;
+    const me = e.evt.mouse;
+    if (t.dragging and me.button != t.finger) return;
+    const rs = c.data().borderRectScale();
+    if (!dvui.eventMatch(e, .{ .id = c.data().id, .r = c.init_opts.event_rect orelse rs.r })) return;
+    e.handle(@src(), c.data());
+    const taking_over = !dvui.captured(c.data().id);
+    if (taking_over) dvui.captureMouse(c.data(), e.num);
+    if (!t.dragging) {
+        t.dragging = true;
+        t.finger = me.button;
+        t.last_coast = .{};
+        t.x.begin();
+        t.y.begin();
+    }
+    const motion = me.action.motion;
+    const travel = if (taking_over and self.press_point != null) me.p.diff(self.press_point.?) else motion;
+    _ = self.processMotionScroll(travel, rs.s);
+    self.finger_delta = self.finger_delta.plus(travel.scale(1 / rs.s, dvui.Point));
+    // Catch-up changes position only: velocity measures the actual event's finger motion.
+    const delta = motion.scale(-1 / rs.s, dvui.Point);
+    const time_ns = input_time.get(e.num);
+    t.x.sampleTimed(delta.x, time_ns);
+    t.y.sampleTimed(delta.y, time_ns);
 }
 
 // A notch leaves 5% of its distance after 150 ms, independent of frame rate.
@@ -629,6 +647,8 @@ var t_max_y: f32 = 0;
 /// Lay the area out as a column of `t_rows` rows, `t_top` points below the window's top, and
 /// record where each row is drawn.
 var t_column: bool = false;
+/// Set by the drag regression tests on the test thread to let a text child take the press.
+var t_touch_text: bool = false;
 var t_top: f32 = 0;
 var t_rows: [400]dvui.Point.Physical = undefined;
 /// The notches the test area sets, and the highest viewport it reached while `restAfter` ran.
@@ -677,6 +697,14 @@ fn testFrame() !dvui.App.Result {
                 // Where the renderer puts a texture or a glyph run: rounded while snapping.
                 drawn.* = if (t_snapping) .{ .x = @round(r.x), .y = @round(r.y) } else .{ .x = r.x, .y = r.y };
             }
+            return .ok;
+        }
+        if (t_touch_text) {
+            var text = dvui.textLayout(@src(), .{}, .{ .min_size_content = .{ .w = 300, .h = 20000 } });
+            for (0..400) |_| text.addText("A text row to drag\n", .{});
+            t_draw_scale = text.data().rectScale().s;
+            t_raw_y = text.data().rectScale().r.y;
+            text.deinit();
             return .ok;
         }
         const child = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 100, .h = 20000 } });
@@ -1579,4 +1607,83 @@ test "mixed web wheel kinds keep each event's behavior in one frame" {
     try std.testing.expectApproxEqAbs(@as(f32, 10), t_viewport_y, 0.01);
     for (0..60) |_| try frameAfter(16);
     try std.testing.expectApproxEqAbs(@as(f32, 110), t_viewport_y, 0.01);
+}
+
+test "content drawn equals the finger every frame after the take-over, at 2 pt and 15 pt steps" {
+    for ([_]f32{ 2, 15 }) |step| {
+        for ([_]enum { text, background, coast, settle }{ .text, .background, .coast, .settle }) |kind| {
+            var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+            defer t.deinit();
+            t_use_dvui = false;
+            t_touch_text = kind == .text;
+            defer t_touch_text = false;
+            try dvui.testing.settle(testFrame);
+            if (kind == .coast) {
+                _ = try swipe();
+                try frameAfter(16);
+                try std.testing.expect(t_moving);
+            } else if (kind == .settle) {
+                // Settle toward an in-range notch so finger and content travel compare directly.
+                t_notches = &.{.{ .at = 70 }};
+                try dragIn(100, 6);
+                try lift();
+                try frameAfter(16);
+                try frameAfter(16);
+                try std.testing.expect(t_moving);
+            }
+            defer t_notches = &.{};
+            const cw = dvui.currentWindow();
+            const x: f32 = if (kind == .text) 0.1 else 0.5;
+            var y: f32 = 0.5;
+            _ = try cw.addEventPointer(.{ .button = .touch0, .action = .press, .xynorm = .{ .x = x, .y = y } });
+            try frameAfter(16);
+            const origin = t_raw_y / t_draw_scale;
+            var exempt: usize = 0;
+            for (1..9) |i| {
+                y -= step / 400;
+                _ = try cw.addEventTouchMotion(.touch0, x, y, 0, -step / 400);
+                try frameAfter(16);
+                const travel = step * @as(f32, @floatFromInt(i));
+                if (kind == .text and travel <= dvui.Dragging.threshold) {
+                    try std.testing.expectApproxEqAbs(origin, t_raw_y / t_draw_scale, 0.01);
+                } else if (kind == .text and exempt == 0) {
+                    try std.testing.expectApproxEqAbs(origin, t_raw_y / t_draw_scale, 0.01);
+                    exempt += 1;
+                } else {
+                    try std.testing.expectApproxEqAbs(origin - travel, t_raw_y / t_draw_scale, 0.01);
+                }
+            }
+            try std.testing.expectEqual(@as(usize, if (kind == .text) 1 else 0), exempt);
+            _ = try cw.addEventPointer(.{ .button = .touch0, .action = .release, .xynorm = .{ .x = x, .y = y } });
+            try frameAfter(16);
+        }
+    }
+}
+
+test "the take-over catch-up is not a velocity spike (a fling leaves at the finger's speed)" {
+    for ([_]f32{ 2, 15 }) |step| {
+        var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+        defer t.deinit();
+        t_use_dvui = false;
+        t_touch_text = true;
+        defer t_touch_text = false;
+        try dvui.testing.settle(testFrame);
+        const cw = dvui.currentWindow();
+        var y: f32 = 0.5;
+        _ = try cw.addEventPointer(.{ .button = .touch0, .action = .press, .xynorm = .{ .x = 0.1, .y = y } });
+        try frameAfter(16);
+        // Release while the catch-up is still inside the velocity sampling window.
+        for (0..4) |_| {
+            y -= step / 400;
+            _ = try cw.addEventTouchMotion(.touch0, 0.1, y, 0, -step / 400);
+            input_time.set(cw, cw.event_num, cw.frame_time_ns);
+            try frameAfter(16);
+        }
+        try std.testing.expectApproxEqAbs(step * 4, t_viewport_y, 0.01);
+        _ = try cw.addEventPointer(.{ .button = .touch0, .action = .release, .xynorm = .{ .x = 0.1, .y = y } });
+        input_time.set(cw, cw.event_num, cw.frame_time_ns);
+        try frameAfter(16);
+        try std.testing.expect(t_release_coasted);
+        try std.testing.expectApproxEqAbs(step / 0.016, t_release_velocity, 0.01);
+    }
 }
