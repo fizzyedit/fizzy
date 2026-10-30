@@ -122,6 +122,9 @@ pub const diff = @import("diff.zig");
 /// Std-only: where a new view goes by the shape of its room. See `placement.zig`.
 pub const placement = @import("placement.zig");
 
+/// Std-only card detail levels and visibility during size changes.
+pub const card_level = @import("card_level.zig");
+
 /// The project's file set: one cached, searchable view of what is on disk, owned by the host and
 /// shared by every plugin that cares about files. See `FileTable.zig`.
 pub const FileTable = @import("FileTable.zig");
