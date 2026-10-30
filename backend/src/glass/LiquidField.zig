@@ -37,7 +37,7 @@ const LiquidField = @This();
 pub const max_shapes = 16;
 
 /// Uniform vec4s before the shapes (`Uniforms`), and per shape.
-const header_vec4s = 9;
+const header_vec4s = 11;
 const shape_vec4s = 3;
 
 /// A piece of glass. Physical pixels, window coordinates.
@@ -99,11 +99,12 @@ surface: bool = false,
 /// It is a lens over a picture of the caller's own (`drawPicture`): its middle the picture as it
 /// is, only the band along its edge glass (`glass_look.forLens`).
 lens: bool = false,
-/// A drop's rim lit from the top right rather than the top left: lit along the other diagonal,
-/// top right and bottom left, and shaded across top left and bottom right. The glass program's
-/// only; the fallback without it (`liquid_glass`) keeps its light at the top left. For glass whose edges
-/// that show face that way, as a piece in a place's top-right corner does — its arc down and to
-/// the left, its cut up and to the right — where the usual light would leave both in shade.
+/// The look's light turned a quarter, to come from the top right rather than the top left at the
+/// default angle: lit along the other diagonal, top right and bottom left, and shaded across top
+/// left and bottom right. The glass program's only; the fallback without it (`liquid_glass`) keeps
+/// its light at the top left. For glass whose edges that show face that way, as a piece in a
+/// place's top-right corner does — its arc down and to the left, its cut up and to the right —
+/// where the usual light would leave both in shade.
 light_across: bool = false,
 /// The look it is drawn with (`glass_look.Looks`), where it is not what its `lens` and `text` say.
 role: ?glass_look.Role = null,
@@ -223,8 +224,16 @@ pub const Uniforms = extern struct {
     /// The look's brightness curves (`applyLook`): the wash at the shape's top and at its bottom,
     /// the sweep, the luminance ceiling. Identity: no wash, no sweep, a ceiling of 1.
     curves: [4]f32 = .{ 0, 0, 0, 1 },
-    /// How dark the window's hairline edge is; remaining lanes reserved.
+    /// How dark the window's hairline edge is; then the lit edge's line width, its glow's width
+    /// and the length of its falloff ramp (`rim_falloff` of `rim_extent`), physical pixels.
     widths: [4]f32 = .{ 0.85, 0, 0, 0 },
+    /// The light (`glass_look.Look.light_angle`): the unit vector toward it, physical pixels, y
+    /// down; its height; the far side's share of it. Packed on every look.
+    light: [4]f32 = .{ -0.70710678, -0.70710678, 0.5, 0 },
+    /// The lit edge: line, glow, shade, and how far the light runs along the outline from its lit
+    /// corners (`rim_extent`, physical pixels). All 0: the lit edge is off, and a drop's edge
+    /// reads only the light.
+    edge: [4]f32 = @splat(0),
     shapes: [max_shapes][shape_vec4s][4]f32,
 
     pub fn vec4s(self: *const Uniforms) [*]const [4]f32 {
@@ -269,6 +278,11 @@ pub fn pack(self: *const LiquidField, covered: dvui.Rect.Physical, has_sharp: bo
         .dither = .{ 1.0 / 255.0, 0, 0, 0 },
         .shapes = undefined,
     };
+    // The light of the default look: on every field, a look or none.
+    const lanes = self.edgeLanes(glass_look.inApp(1));
+    u.light = lanes.light;
+    u.edge = lanes.edge;
+    u.widths[1..4].* = lanes.widths;
     @memset(std.mem.asBytes(&u.shapes), 0);
     for (order, 0..) |i, slot| {
         const sh = self.shapes[i];
@@ -363,6 +377,24 @@ fn roleOf(self: *const LiquidField) glass_look.Role {
     return self.role orelse if (self.lens) .lens else if (self.text) .text else .drop;
 }
 
+/// The uniform lanes the light and the lit edge take from a look: `light`, `edge`, and `widths[1..]`.
+const EdgeLanes = struct {
+    light: [4]f32,
+    edge: [4]f32,
+    widths: [3]f32,
+};
+
+fn edgeLanes(self: *const LiquidField, l: glass_look.Look) EdgeLanes {
+    var toward = glass_look.lightVector(l.light_angle);
+    if (self.light_across) toward[0] = -toward[0];
+    const s = self.scale;
+    return .{
+        .light = .{ toward[0], toward[1], l.light_height, l.rim_back },
+        .edge = .{ l.rim_line, l.rim_glow, l.rim_shade, l.rim_extent * s },
+        .widths = .{ l.rim_width * s, l.glow_width * s, std.math.clamp(l.rim_falloff, 0, 1) * l.rim_extent * s },
+    };
+}
+
 /// `l` into what the program reads: the lens's own uniforms, and the tint, wash, clarity, rim
 /// light and frost the look sets in place of the field's own. The bend follows the field's
 /// `refraction` (2, the whole of it, where the look is published). Pure on the uniforms.
@@ -385,7 +417,10 @@ pub fn applyLook(self: *const LiquidField, u: *Uniforms, l: glass_look.Look) voi
         u.curves[2] = std.math.clamp(l.sweep, 0, 1);
     }
     u.curves[3] = std.math.clamp(l.ceiling, 0, 1);
-    u.widths = .{ l.edge_dark, 0, 0, 0 };
+    const lanes = self.edgeLanes(l);
+    u.widths = .{ l.edge_dark, lanes.widths[0], lanes.widths[1], lanes.widths[2] };
+    u.light = lanes.light;
+    u.edge = lanes.edge;
     for (u.shapes[0..self.len]) |*sh| sh[2][0] *= l.frost;
     if (self.edge != null) u.shapes[max_shapes - 1][2][0] *= l.frost;
 }
@@ -422,9 +457,7 @@ pub fn draw(self: *const LiquidField, frost: dvui.Texture, covered: dvui.Rect.Ph
     const groups = self.clusters();
     var u = self.pack(covered, sharp != null, groups.order[0..self.len]);
     // The window behind the glass, published for this frame.
-    // And the light turned (`light_across`): +2 on the same lane, so it holds on every look,
-    // published or not.
-    u.backdrop[0] = (if (opaqueWindow() or self.solid) @as(f32, 1) else 0) + (if (self.light_across) @as(f32, 2) else 0);
+    u.backdrop[0] = if (opaqueWindow() or self.solid) 1 else 0;
     // And the glass the app's look makes of it this frame (`core.material.publishLook`).
     if (publishedLooks()) |looks| self.applyLook(&u, looks.get(self.roleOf()));
     const textures = [_]?*anyopaque{programs.handle(sharp)};
@@ -525,10 +558,26 @@ pub const Sample = struct {
     blur: f32,
     lens: f32,
     light: f32,
+    /// A drop's light at the point (`diagonal`, with the reach of `rim_extent`), before `lens` and
+    /// the rim's strength: the program's `spec`.
+    edge_spec: f32,
+    /// The lit edge's line, glow and dark band at the point, 0 where `rim_line` is 0.
+    edge_line: f32,
+    edge_glow: f32,
+    edge_shade: f32,
 };
 
-/// `shaders/liquid_glass.fragment.hlsl`'s field, line for line, over every shape: for hit tests and tests.
+/// `sampleWith` the look the app published for this field's role, else the default.
 pub fn sample(self: *const LiquidField, p: dvui.Point.Physical) Sample {
+    const published = if (dvui.current_window != null) publishedLooks() else null;
+    const l = if (published) |looks| looks.get(self.roleOf()) else glass_look.inApp(1);
+    return self.sampleWith(p, l);
+}
+
+/// `shaders/liquid_glass.fragment.hlsl`'s field and its lit edge, line for line, over every
+/// shape, drawn with `l`: for hit tests and tests. Change one with the other.
+pub fn sampleWith(self: *const LiquidField, p: dvui.Point.Physical, l: glass_look.Look) Sample {
+    const lanes = self.edgeLanes(l);
     const big = std.math.floatMax(f32);
     var d1: f32 = big;
     var d2: f32 = big;
@@ -538,6 +587,8 @@ pub fn sample(self: *const LiquidField, p: dvui.Point.Physical) Sample {
     var f2: f32 = big;
     var o1: [2]f32 = @splat(0);
     var o2: [2]f32 = @splat(0);
+    var al1: [2]f32 = @splat(0);
+    var al2: [2]f32 = @splat(0);
     const rim = self.rimScale(liquid_glass.depthPx(self.look(), self.scale));
     const soft_k = liquid_glass.softness * rim;
     for (self.shapes[0..self.len]) |sh| {
@@ -548,14 +599,26 @@ pub fn sample(self: *const LiquidField, p: dvui.Point.Physical) Sample {
         const radii: [4]f32 = .{ @min(sh.radii[0], lim), @min(sh.radii[1], lim), @min(sh.radii[2], lim), @min(sh.radii[3], lim) };
         const d = roundBox(.{ p.x - c[0], p.y - c[1] }, half, radii, &g);
         const mat: [3]f32 = .{ sh.blur, sh.lens, sh.light };
+        var al: [2]f32 = .{ 0, 0 };
+        if (lanes.edge[3] > 0) {
+            const box: [4]f32 = .{ c[0], c[1], half[0], half[1] };
+            const toward: [2]f32 = .{ lanes.light[0], lanes.light[1] };
+            al = .{
+                alongEnd(.{ p.x, p.y }, box, radii, toward, lanes.edge[3], lanes.widths[2]),
+                alongEnd(.{ p.x, p.y }, box, radii, .{ -toward[0], -toward[1] }, lanes.edge[3], lanes.widths[2]),
+            };
+        }
         if (d < d1) {
             d2 = d1;
             m2 = m1;
+            al2 = al1;
             d1 = d;
             m1 = mat;
+            al1 = al;
         } else if (d < d2) {
             d2 = d;
             m2 = mat;
+            al2 = al;
         }
         var o: [2]f32 = g;
         const f = if (sh.round) d else softBox(.{ p.x, p.y }, c, half, soft_k, &o);
@@ -588,11 +651,14 @@ pub fn sample(self: *const LiquidField, p: dvui.Point.Physical) Sample {
         if (d < d1) {
             d2 = d1;
             m2 = m1;
+            al2 = al1;
             d1 = d;
             m1 = mat;
+            al1 = .{ 0, 0 };
         } else if (d < d2) {
             d2 = d;
             m2 = mat;
+            al2 = .{ 0, 0 };
         }
         const o: [2]f32 = .{ -place_out[0], -place_out[1] };
         if (d < f1) {
@@ -617,15 +683,70 @@ pub fn sample(self: *const LiquidField, p: dvui.Point.Physical) Sample {
         out = place_out;
     }
     const soft = @max(0, -f);
+    const lens = std.math.lerp(m1[1], m2[1], wm);
+    const reach = @min(@sqrt(out[0] * out[0] + out[1] * out[1]), 1);
+    const along: [2]f32 = .{ std.math.lerp(al1[0], al2[0], wm) * reach, std.math.lerp(al1[1], al2[1], wm) * reach };
+    const dist = @max(d, in_place);
+    // A drop's light, and the lit edge (the program's `spec` and `litEdge` block).
+    const af = @abs(out[0] * lanes.light[0] + out[1] * lanes.light[1]);
+    const edge_spec = l.diagonal * @max(smoothstep(0.75, 1, af), @max(along[0], along[1]));
+    var line: f32 = 0;
+    var glow: f32 = 0;
+    var shade: f32 = 0;
+    if (lanes.edge[0] > 0) {
+        const len2 = out[0] * out[0] + out[1] * out[1];
+        const n2: [2]f32 = if (len2 > 1e-8) .{ out[0] / @sqrt(len2), out[1] / @sqrt(len2) } else .{ 0, 0 };
+        const lf = n2[0] * lanes.light[0] + n2[1] * lanes.light[1];
+        const pw = std.math.lerp(8, 1, lanes.light[2]);
+        const back = lanes.light[3];
+        const lit = std.math.pow(f32, @max(lf, 0), pw) + back * std.math.pow(f32, @max(-lf, 0), pw);
+        const on = @min(lens, 1);
+        const px = rim_line_width * self.scale * 1.25;
+        line = lanes.edge[0] * @max(lit, @max(along[0], back * along[1])) * band(-dist, 0, lanes.widths[0]) * on;
+        glow = lanes.edge[1] * lit * band(-dist, lanes.widths[0], lanes.widths[1]) * on;
+        shade = lanes.edge[2] * (1 - @abs(lf)) * band(-dist, 0, 2 * px) * on;
+    }
     return .{
-        .d = @max(d, in_place),
+        .d = dist,
         .coverage = std.math.clamp(0.5 - @max(d, in_place), 0, 1),
         .out = .{ .x = out[0], .y = out[1] },
         .steep = @exp(-soft / liquid_glass.depthPx(self.look(), rim)),
         .blur = std.math.lerp(m1[0], m2[0], wm),
-        .lens = std.math.lerp(m1[1], m2[1], wm),
+        .lens = lens,
         .light = std.math.lerp(m1[2], m2[2], wm),
+        .edge_spec = edge_spec,
+        .edge_line = line,
+        .edge_glow = glow,
+        .edge_shade = shade,
     };
+}
+
+fn smoothstep(a: f32, b: f32, x: f32) f32 {
+    const t = std.math.clamp((x - a) / (b - a), 0, 1);
+    return t * t * (3 - 2 * t);
+}
+
+/// The program's `band`: a soft step in at `a`, then a fall over `w`.
+fn band(x: f32, a: f32, w: f32) f32 {
+    return smoothstep(a - 0.5, a + 0.5, x) * @exp(-@max(0, x - a) / @max(w, 1e-3));
+}
+
+/// The program's `alongEnd`: how far the light runs on from the place of a box (centre and half
+/// size in `box`, corner radii `rad`) that faces `toward`, the unit vector toward the light: 1
+/// there, a smoothstep to 0 at `ext`, over the last `ramp` (at least one pixel).
+fn alongEnd(p: [2]f32, box: [4]f32, rad: [4]f32, toward: [2]f32, ext: f32, ramp: f32) f32 {
+    const q: [2]f32 = .{ if (toward[0] < 0) -1 else 1, if (toward[1] < 0) -1 else 1 };
+    const r = if (q[0] < 0) (if (q[1] < 0) rad[0] else rad[3]) else (if (q[1] < 0) rad[1] else rad[2]);
+    const inner: [2]f32 = .{ @max(box[2] - r, 0), @max(box[3] - r, 0) };
+    var at: [2]f32 = undefined;
+    for (0..2) |i| {
+        at[i] = if (@abs(toward[i]) < 1e-3)
+            std.math.clamp(p[i], box[i] - inner[i], box[i] + inner[i]) + r * toward[i]
+        else
+            box[i] + q[i] * inner[i] + r * toward[i];
+    }
+    const dist = @sqrt((p[0] - at[0]) * (p[0] - at[0]) + (p[1] - at[1]) * (p[1] - at[1]));
+    return 1 - smoothstep(@max(ext - @max(ramp, 1), 0), ext, dist);
 }
 
 /// Whether `p` is on the glass.
@@ -673,4 +794,251 @@ pub fn smin(a: f32, b: f32, k: f32, m: *f32) f32 {
     m.* = h * h * 0.5;
     if (b < a) m.* = 1 - m.*;
     return @min(a, b) - h * h * k * 0.25;
+}
+
+// ── Tests ───────────────────────────────────────────────────────────────────────────────────────
+
+const testing = std.testing;
+const Point = dvui.Point.Physical;
+
+/// A round-edged 200 x 100 card at (100, 50), corner radius 20 (points), at `scale`: its outline
+/// follows the true normal, as a drop's does.
+fn testCard(scale: f32) LiquidField {
+    var f: LiquidField = .{ .scale = scale, .merge_px = 24 * scale };
+    var sh = Shape{ .rect = .{ .x = 0, .y = 0, .w = 200 * scale, .h = 100 * scale }, .radii = @splat(20 * scale) };
+    sh.round = true;
+    f.add(sh);
+    return f;
+}
+
+/// The point of the card's outline that faces `toward`, `inset` pixels inside it.
+fn litPlace(f: *const LiquidField, toward: [2]f32, inset: f32) Point {
+    const sh = f.shapes[0];
+    const r = sh.radii[0];
+    const qx: f32 = if (toward[0] < 0) -1 else 1;
+    const qy: f32 = if (toward[1] < 0) -1 else 1;
+    const cx = sh.rect.x + sh.rect.w / 2;
+    const cy = sh.rect.y + sh.rect.h / 2;
+    return .{
+        .x = cx + qx * (sh.rect.w / 2 - r) + (r - inset) * toward[0],
+        .y = cy + qy * (sh.rect.h / 2 - r) + (r - inset) * toward[1],
+    };
+}
+
+fn dropLook() glass_look.Look {
+    return glass_look.forDrops(glass_look.inApp(0.5));
+}
+
+test "the light packs on every look" {
+    var f: LiquidField = .{};
+    f.add(Shape.circle(.{ .x = 50, .y = 50 }, 40));
+    const order = [_]u8{0};
+    const area: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 100, .h = 100 };
+    var u = f.pack(area, false, &order);
+    try testing.expectApproxEqAbs(@as(f32, -0.707), u.light[0], 1e-3);
+    try testing.expectApproxEqAbs(@as(f32, -0.707), u.light[1], 1e-3);
+    try testing.expectEqual([4]f32{ 0, 0, 0, 0 }, u.edge);
+    f.light_across = true;
+    u = f.pack(area, false, &order);
+    try testing.expectApproxEqAbs(@as(f32, 0.707), u.light[0], 1e-3);
+    try testing.expectApproxEqAbs(@as(f32, -0.707), u.light[1], 1e-3);
+    var console = dropLook();
+    console.light_angle = 119.6;
+    f.applyLook(&u, console);
+    f.light_across = false;
+    var v = f.pack(area, false, &order);
+    f.applyLook(&v, console);
+    try testing.expectApproxEqAbs(@as(f32, 0.494), v.light[0], 1e-3);
+    try testing.expectApproxEqAbs(@as(f32, -0.870), v.light[1], 1e-3);
+}
+
+test "the lit edge is 0 inside a neck and rim_line at the outline" {
+    var f: LiquidField = .{ .merge_px = 24 };
+    for ([_]f32{ 0, 108 }) |x| {
+        var sh = Shape{ .rect = .{ .x = x, .y = 0, .w = 100, .h = 60 }, .radii = @splat(12) };
+        sh.round = true;
+        f.add(sh);
+    }
+    var l = dropLook();
+    l.rim_line = 0.8;
+    l.rim_width = 20;
+    l.rim_extent = 1e4;
+    l.light_angle = 90;
+    const neck = f.sampleWith(.{ .x = 104, .y = 30 }, l);
+    try testing.expectApproxEqAbs(@as(f32, 0), neck.edge_line, 1e-4);
+    // The top of the joined outline, half a pixel inside it, faces the light.
+    const top = f.sampleWith(.{ .x = 50, .y = 0.5 }, l);
+    try testing.expectApproxEqAbs(@as(f32, 0.8), top.edge_line, 0.05);
+}
+
+test "a symmetric neck's midline gives no NaN" {
+    var f: LiquidField = .{ .merge_px = 24 };
+    for ([_]f32{ 0, 108 }) |x| {
+        f.add(.{ .rect = .{ .x = x, .y = 0, .w = 100, .h = 60 }, .radii = @splat(12) });
+    }
+    var l = dropLook();
+    l.rim_line = 0.8;
+    l.rim_glow = 0.5;
+    l.glow_width = 6;
+    l.rim_shade = 0.4;
+    l.rim_extent = 30;
+    var y: f32 = 5;
+    while (y < 60) : (y += 11) {
+        const s = f.sampleWith(.{ .x = 104, .y = y }, l);
+        inline for (comptime std.meta.fieldNames(Sample)) |name| {
+            const v = @field(s, name);
+            switch (@typeInfo(@TypeOf(v))) {
+                .float => try testing.expect(std.math.isFinite(v)),
+                .@"struct" => {
+                    try testing.expect(std.math.isFinite(v.x));
+                    try testing.expect(std.math.isFinite(v.y));
+                },
+                else => unreachable,
+            }
+        }
+    }
+}
+
+test "the light side is brighter than the far side" {
+    const f = testCard(1);
+    var l = dropLook();
+    l.light_angle = 51.7;
+    l.rim_line = 0.8;
+    l.rim_glow = 0.5;
+    l.rim_width = 1;
+    l.glow_width = 20;
+    l.rim_back = 0.3;
+    const toward = glass_look.lightVector(51.7);
+    // The glow lies just inside the line, so a pixel and a half in.
+    const near = f.sampleWith(litPlace(&f, toward, 1.5), l);
+    const far = f.sampleWith(litPlace(&f, .{ -toward[0], -toward[1] }, 1.5), l);
+    try testing.expect(near.edge_line > far.edge_line);
+    try testing.expect(near.edge_glow > 0);
+    try testing.expectApproxEqAbs(@as(f32, 0.3), far.edge_glow / near.edge_glow, 0.05);
+}
+
+test "at 45 degrees the top-left and bottom-right corners are lit" {
+    const f = testCard(1);
+    var l = dropLook();
+    l.diagonal = 0.6;
+    l.rim_extent = 0;
+    const r: f32 = 1.0 / @sqrt(2.0);
+    const tl: [2]f32 = .{ -r, -r };
+    const tr: [2]f32 = .{ r, -r };
+    for ([_]f32{ 45, 135 }) |angle| {
+        l.light_angle = angle;
+        const lit_a: [2]f32 = if (angle == 45) tl else tr;
+        const lit_b: [2]f32 = .{ -lit_a[0], -lit_a[1] };
+        const dark_a: [2]f32 = if (angle == 45) tr else tl;
+        const dark_b: [2]f32 = .{ -dark_a[0], -dark_a[1] };
+        try testing.expectApproxEqAbs(@as(f32, 0.6), f.sampleWith(litPlace(&f, lit_a, 0), l).edge_spec, 0.02);
+        try testing.expectApproxEqAbs(@as(f32, 0.6), f.sampleWith(litPlace(&f, lit_b, 0), l).edge_spec, 0.02);
+        try testing.expect(f.sampleWith(litPlace(&f, dark_a, 0), l).edge_spec < 0.01);
+        try testing.expect(f.sampleWith(litPlace(&f, dark_b, 0), l).edge_spec < 0.01);
+    }
+    for ([_]f32{ 0, 45 }) |angle| {
+        l.light_angle = angle;
+        try testing.expectEqual(@as(f32, 0), f.sampleWith(.{ .x = 100, .y = 0 }, l).edge_spec);
+    }
+}
+
+/// The distance, in points, from the top left lit place of `f` to the top side's point at `x`.
+fn chordTo(f: *const LiquidField, x: f32) f32 {
+    const r: f32 = 1.0 / @sqrt(2.0);
+    const from = litPlace(f, .{ -r, -r }, 0);
+    return @sqrt((x - from.x) * (x - from.x) + from.y * from.y) / f.scale;
+}
+
+test "rim_extent runs the light along a straight side, and 1e4 lights it whole" {
+    for ([_]f32{ 1, 2 }) |scale| {
+        const f = testCard(scale);
+        var l = dropLook();
+        l.diagonal = 0.6;
+        l.light_angle = 45;
+        l.rim_extent = 1e4;
+        const middle = f.sampleWith(.{ .x = 100 * scale, .y = 0 }, l);
+        try testing.expectApproxEqAbs(@as(f32, 0.6), middle.edge_spec, 0.02);
+        // Past the corner's arc (which lights a drop on its own, 15.7 points on) only the reach
+        // is left: the first point under 0.01 is 24 points from the lit place.
+        l.rim_extent = 24;
+        var x: f32 = 20 * scale;
+        while (x < 100 * scale) : (x += 0.05 * scale) {
+            if (f.sampleWith(.{ .x = x, .y = 0 }, l).edge_spec < 0.01) break;
+        }
+        try testing.expectApproxEqAbs(@as(f32, 24), chordTo(&f, x), 1);
+    }
+}
+
+test "rim_extent 0 is today's edge" {
+    const joined = blk: {
+        var f: LiquidField = .{ .merge_px = 24 };
+        for ([_]f32{ 0, 108 }) |x| {
+            var sh = Shape{ .rect = .{ .x = x, .y = 0, .w = 100, .h = 60 }, .radii = @splat(12) };
+            sh.round = true;
+            f.add(sh);
+        }
+        break :blk f;
+    };
+    for ([_]LiquidField{ testCard(1), joined }) |base| {
+        for ([_]bool{ false, true }) |across| {
+            var f = base;
+            f.light_across = across;
+            var l = dropLook();
+            l.rim_extent = 0;
+            const light = glass_look.lightVector(l.light_angle);
+            const lx: f32 = if (across) -light[0] else light[0];
+            for (0..40) |i| {
+                for (0..20) |j| {
+                    const p: Point = .{ .x = @as(f32, @floatFromInt(i)) * 5.4 + 0.3, .y = @as(f32, @floatFromInt(j)) * 3 - 1 };
+                    const s = f.sampleWith(p, l);
+                    const af = @abs(s.out.x * lx + s.out.y * light[1]);
+                    try testing.expectApproxEqAbs(l.diagonal * smoothstep(0.75, 1, af), s.edge_spec, 1e-6);
+                }
+            }
+        }
+    }
+}
+
+test "rim_falloff shapes the fade, rim_extent ends it" {
+    const falloffs = [_]f32{ 0, 0.25, 0.5, 1 };
+    for ([_]f32{ 1, 2 }) |scale| {
+        const f = testCard(scale);
+        // For each falloff: the walk along the top side, in steps of a tenth of a point, from the
+        // arc's end, and where it first falls under full light.
+        var ramp_start: [falloffs.len]f32 = undefined;
+        var prev: [1200]f32 = @splat(1);
+        for (falloffs, 0..) |falloff, k| {
+            var l = dropLook();
+            l.diagonal = 0.6;
+            l.rim_extent = 24;
+            l.rim_falloff = falloff;
+            var last: f32 = 1;
+            var start: ?f32 = null;
+            var ended: ?f32 = null;
+            for (0..1200) |i| {
+                const x = (20 + @as(f32, @floatFromInt(i)) * 0.05) * scale;
+                const v = f.sampleWith(.{ .x = x, .y = 0 }, l).edge_spec;
+                try testing.expect(v <= last + 1e-6);
+                last = v;
+                // A larger falloff is never brighter.
+                try testing.expect(v <= prev[i] + 1e-6);
+                prev[i] = v;
+                const d = chordTo(&f, x);
+                if (start == null and v < 0.6 * 0.99) start = d;
+                if (ended == null and v < 0.001) ended = d;
+            }
+            try testing.expectApproxEqAbs(@as(f32, 24), ended.?, 1);
+            ramp_start[k] = start.?;
+            if (falloff == 0) try testing.expectApproxEqAbs(@as(f32, 23), start.?, 1);
+            if (k > 0) try testing.expect(ramp_start[k] <= ramp_start[k - 1] + 0.1);
+        }
+        // With no reach, every falloff is main's.
+        for (falloffs) |falloff| {
+            var l = dropLook();
+            l.rim_extent = 0;
+            l.rim_falloff = falloff;
+            const s = f.sampleWith(.{ .x = 60 * scale, .y = 0 }, l);
+            try testing.expectEqual(@as(f32, 0), s.edge_spec);
+        }
+    }
 }
