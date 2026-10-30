@@ -168,10 +168,8 @@ pub fn init(src: std.builtin.SourceLocation, init_opts: dvui.ScrollAreaWidget.In
         };
     }
 
-    // Captured motion must reach the viewport before any child is laid out.
-    if (dvui.captured(c.data().id)) {
-        for (dvui.events()) |*e| self.touchMotion(e);
-    }
+    // Captured and unclaimed motion reaches layout here; event matching preserves child capture.
+    for (dvui.events()) |*e| self.touchMotion(e);
 
     // The coast moves the content before it is laid out, so a frame draws where the clock is at
     // that frame. Moved after the children, it would draw where the clock was one gap ago, and
@@ -255,7 +253,7 @@ pub fn deinit(self: *ScrollArea) void {
     self.area.deinit();
 }
 
-// The late pass sees only motions children gave up; the early pass owns capture.
+// The late pass sees motions children gave up; the early pass handles owned or unclaimed motion.
 fn touchMotion(self: *ScrollArea, e: *dvui.Event) void {
     const c = &self.area.scroll.?;
     const t = self.touch;
