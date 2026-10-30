@@ -144,7 +144,6 @@ console.log("embed.test: ok");
 let earlyTextInputs = 0;
 let filterClears = 0;
 const filteredKeys = [];
-const workerMessages = [];
 let workerInstance;
 const { TextInput } = await import(pathToFileURL(path.join(dir, "web.js")).href);
 TextInput.prototype.clear = () => { filterClears++; };
@@ -153,6 +152,7 @@ TextInput.prototype.keydown = (ev) => { filteredKeys.push(ev.key); };
 Canvas.prototype.transferControlToOffscreen = function () { return {}; };
 globalThis.OffscreenCanvas = class {};
 globalThis.ResizeObserver = class { observe() {} };
+const workerMessages = [];
 globalThis.Worker = class {
   constructor() { workerInstance = this; }
   set onmessage(handler) {
