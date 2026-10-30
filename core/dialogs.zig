@@ -202,7 +202,7 @@ pub fn frostPaneKept(id: dvui.Id, rect: dvui.Rect.Physical, corners: dvui.Corner
 pub fn carriedGlass(id: dvui.Id, r: dvui.Rect.Physical, scale: f32) void {
     const corners = rounding.round(rounding.card);
     if (!frostPane(id, r, corners, scale)) {
-        r.fill(corners.scale(scale, dvui.CornerRect.Physical), .{ .color = .{ .color = dialogFill() }, .fade = 1 });
+        r.fill(corners.scale(scale, dvui.CornerRect.Physical), .{ .color = .{ .color = dialogFill() }, .fade = edgeFade(scale) });
     }
     glassShadow(r, corners, scale, surfaceShadow(), 1);
 }
@@ -387,11 +387,11 @@ pub fn glassBubbles(id: dvui.Id, bubbles: []const Bubble, scale: f32, opts: Bubb
         const physical = round.scale(scale, dvui.CornerRect.Physical);
         const piece = id.update(std.mem.asBytes(&i));
         const frosted = if (opts.witness) |w| frostPaneKept(piece, b.rect, round, scale, w) else frostPane(piece, b.rect, round, scale);
-        if (!frosted) b.rect.fill(physical, .{ .color = .{ .color = if (opts.tint) |t| t.opacity(opts.mix) else dialogFill() }, .fade = 1 });
+        if (!frosted) b.rect.fill(physical, .{ .color = .{ .color = if (opts.tint) |t| t.opacity(opts.mix) else dialogFill() }, .fade = edgeFade(scale) });
         if (b.light >= bubble_press) {
-            b.rect.fill(physical, .{ .color = .{ .color = rowPress() }, .fade = 1 });
+            b.rect.fill(physical, .{ .color = .{ .color = rowPress() }, .fade = edgeFade(scale) });
         } else if (b.light > 0) {
-            b.rect.fill(physical, .{ .color = .{ .color = rowHover() }, .fade = 1 });
+            b.rect.fill(physical, .{ .color = .{ .color = rowHover() }, .fade = edgeFade(scale) });
         }
     }
 }
@@ -417,7 +417,7 @@ pub fn dropSlot(r: dvui.Rect.Physical, scale: f32) void {
     const slot = r.insetAll(2 * scale);
     if (slot.w < 1 or slot.h < 1) return;
     const radius = @min(rounding.scaled(rounding.small) * scale, @min(slot.w, slot.h) / 2);
-    slot.fill(.round(radius), .{ .color = .{ .color = dvui.themeGet().color(.highlight, .fill).opacity(drop_slot_alpha) }, .fade = 1 });
+    slot.fill(.round(radius), .{ .color = .{ .color = dvui.themeGet().color(.highlight, .fill).opacity(drop_slot_alpha) }, .fade = edgeFade(scale) });
 }
 /// How much of the highlight a drop slot is: there without shouting over the tabs beside it.
 const drop_slot_alpha: f32 = 0.55;
@@ -560,7 +560,7 @@ fn tooltipGlass(wd: *dvui.WidgetData, r: dvui.Rect.Physical, scale: f32, t: f32,
     const f = dialogFrost() orelse {
         const prect = r.insetAll(scale * bs.shrink).offsetPoint(bs.offset.scale(scale, dvui.Point.Physical));
         prect.fill(phys_corners, .{ .color = .{ .color = bs.color.opacity(bs.alpha * p) }, .fade = scale * bs.fade });
-        r.fill(phys_corners, .{ .color = .{ .color = dialogFill().opacity(p) }, .fade = 1 });
+        r.fill(phys_corners, .{ .color = .{ .color = dialogFill().opacity(p) }, .fade = edgeFade(scale) });
         return;
     };
     // The shadow as a ring round the glass, after it (`glassShadow`), so the glass does not blur
@@ -698,6 +698,17 @@ pub fn rowPress() dvui.Color {
 
 /// The style a row inside a floating surface takes its colours from.
 pub const row_style: dvui.Theme.Style.Name = .control;
+
+/// The fade ring, in pixels, of a rounded fill at `scale`: wider at 1x, where one pixel steps.
+fn edgeFade(scale: f32) f32 {
+    return if (scale <= 1.25) 1.5 else 1;
+}
+
+test "a rounded fill's fade ring widens only on a 1x display" {
+    try std.testing.expectEqual(@as(f32, 1.5), edgeFade(1));
+    try std.testing.expectEqual(@as(f32, 1), edgeFade(1.5));
+    try std.testing.expectEqual(@as(f32, 1), edgeFade(2));
+}
 
 /// The fill a dialog paints when there is no frost to composite with: the chrome at the
 /// dialog's opacity, lifted the same amount.
