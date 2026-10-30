@@ -70,10 +70,15 @@ the PR, or close it and restart. [`REVIEW.md`](REVIEW.md) carries the detail.
 
 Nothing auto-merges (see Review).
 
-## Kickoff template (the issue body, 1,800 characters at most)
+## Kickoff template (the issue body: 1,800 characters before `Spec`, 12,000 in all)
 
 The issue's title says in plain words what changes for a person using fizzy, and its first
 field says what and why, with no jargon: a visitor who has never read the code understands both.
+
+The body is the whole spec. A worker is given the body; it does not hunt through comments or
+follow a link to learn what to build, so nothing it needs is in a comment. An issue is sized so a
+worker of any kind finishes it without asking: if the spec does not fit in 12,000 characters,
+split the issue.
 
 ```
 In plain words: <what changes for a person using fizzy, and why it matters; no jargon>
@@ -82,18 +87,24 @@ Task: <what a user or plugin author sees when it's done>
 Plan: <fizzyedit/plans#N step k, or none>
 Builds on: <PRs/branches, or main>
 Branch: <area>/<slug>
-Files/area: <paths to start in>
+In bounds: <every file the PR may change, by path, or a `rg` command whose hits are the list>
+Not in scope: <what this PR must not do: the later step, the second design, the files to leave alone>
+Acceptance: <the check that proves it, in backticks: a test by name and file that fails on main today, or a command and its expected output>
 Gates: scripts/check-fmt.sh; scripts/zb build, scripts/zb build test, scripts/zb build test-integration, scripts/zb build check-web, scripts/zb build test-sdk-version (read "N/N steps succeeded")
 Rules: docs/AGENT_WORK.md (the shared worker contract). PRs say "Part of fizzyedit/work#N".
 Done: draft PR on first push; gates pass; the PR page (docs/AGENT_WORK.md) says what was run and how verified.
 Notes: <only what code and plans don't say>
+Spec: <the rest of the spec, last: signatures, names, each test and its assertion; or "none: the fields above are the spec">
 ```
 
 Before assigning a worker, run `scripts/check-kickoff <file|issue-number>` (issue numbers
 are read from `fizzyedit/work` through `gh`). It reports every missing or empty template
-field, bodies over 1,800 characters, invalid branch names, a `zig` command wrapped in `scripts/zb` in Gates,
-Rules without a `fizzyedit/work#N` reference, and a Serves that links no anchor of `docs/VISION.md`. It accepts the template above and GitHub
-issue-form `### Field` headings. The template is the source of the required field list.
+field, more than 1,800 characters before `Spec` or 12,000 in all, invalid branch names, a `zig`
+command wrapped in `scripts/zb` in Gates, Rules without a `fizzyedit/work#N` reference, a Serves
+that links no anchor of `docs/VISION.md`, an In bounds that names no path or says "and callers"
+or "etc.", an Acceptance with no command or test in backticks, and a body that sends the worker to a
+comment for the spec. Everything after `Spec:` belongs to Spec. It accepts the template above and
+GitHub issue-form `### Field` headings. The template is the source of the required field list.
 Run `python3 scripts/test-check-kickoff.py` for the validator tests.
 
 ## The PR page
