@@ -13232,7 +13232,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try std.testing.expect(host.callCommand("dashboard.show", "", host.arena()) == .ok);
         for (0..4) |_| _ = try dvui.testing.step(headlessFrame);
         try std.testing.expectEqualStrings("dashboard.view", host.selectionFor(sdk.keywords.ide.sidebar) orelse "");
-        const cards = host.getServiceTyped(sdk.services.dashboard_cards.Api) orelse return error.TestUnexpectedResult;
+        const cards = @import("dashboard").View.provider(host);
         const before = try Reader.read(host);
         try std.testing.expectEqual(@as(usize, 3), before.count);
         try std.testing.expectEqual(@as(usize, 1), before.drawn);
