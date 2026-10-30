@@ -1,6 +1,7 @@
 //! A tiny `dashboard.cards` provider of three made-up cards, so the dashboard can be tried before
-//! an app has a provider of its own. The plugin registers it only when no other provider is there
-//! (`plugin.zig`). Answering a card (any action) drops it, as a real provider does.
+//! an app has a provider of its own. The view falls back to it when the host has none
+//! (`View.provider`); it is never registered as the service. Answering a card (any action) drops
+//! it, as a real provider does.
 const std = @import("std");
 const sdk = @import("fizzy_sdk");
 

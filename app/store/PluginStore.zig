@@ -1,4 +1,4 @@
-//! Fizzy built-in: the **Plugins** sidebar tab — discover / install / update / enable / disable
+//! Fizzy built-in: the **Plugins** sidebar tab - discover / install / update / enable / disable
 //! / uninstall plugins. Registered above Settings.
 //!
 //! Downloads run on a worker thread (`Job`); the actual live load happens on the main thread in
@@ -8,7 +8,7 @@
 //!
 //! The web build installs too. The catalog and READMEs load through the browser's `fetch`, and a
 //! plugin published for `web-wasm32` is fetched and linked by the page rather than downloaded to
-//! a directory (`queueInstall` → `installFromUrl`, `applyWebUpdate` → `updateFromUrl`); a plugin
+//! a directory (`queueInstall` -> `installFromUrl`, `applyWebUpdate` -> `updateFromUrl`); a plugin
 //! with no web build is simply not offered there. Two things stay desktop-only: the SHA-256 the
 //! registry publishes, which the page does not check, and the download queue below.
 const std = @import("std");
@@ -18,8 +18,8 @@ const sdk = @import("fizzy_sdk");
 const icons = @import("icons");
 const store = @import("registry/store.zig");
 // The real loader, not `app.store.Loader`: what this file wants from it are the *manifest
-// probe* helpers, which compile everywhere. Only the `LoadedLib` list — which carries a
-// `DynLib` — has to come from the wasm stub, and that arrives through `PluginManager`.
+// probe* helpers, which compile everywhere. Only the `LoadedLib` list - which carries a
+// `DynLib` - has to come from the wasm stub, and that arrives through `PluginManager`.
 const Page = @import("PluginPage.zig");
 const PluginLoader = @import("PluginLoader.zig");
 const PluginManager = @import("PluginManager.zig");
@@ -58,20 +58,20 @@ var installed_scroll_info: dvui.ScrollInfo = .{ .horizontal = .auto };
 /// Detail-page header: scrolls sideways below `detail_header_min_w` instead of crushing the
 /// info column (and wrapping the description into a skyscraper). Vertical is never owned here.
 var detail_header_scroll: dvui.ScrollInfo = .{ .horizontal = .auto, .vertical = .none };
-/// `hashId` of the entry whose header `detail_header_scroll` last showed — used to zero the
+/// `hashId` of the entry whose header `detail_header_scroll` last showed - used to zero the
 /// horizontal offset on page switches so a scrolled-over previous plugin doesn't leave you
 /// looking at the middle of the next one's header.
 var detail_header_scroll_entry: usize = 0;
 
 /// Floor under the detail header row (logo + info + install controls). The header *expands*
 /// with the pane above this; below it the scroll area takes over horizontally. Same role as
-/// `card_min_w` on the list cards — a stable content min, not a viewport-locked width.
+/// `card_min_w` on the list cards - a stable content min, not a viewport-locked width.
 const detail_header_min_w: f32 = 480;
 
 /// Applied as `max_size_content.w` on header text so labels/layouts don't report their full
 /// unwrapped width as min size (which would inflate the header past `detail_header_min_w` and
 /// make the horizontal scrollbar appear while the pane is still wider than the floor). Same
-/// trick as `card_text_no_floor` — see that comment. The widgets still *draw* at the info
+/// trick as `card_text_no_floor` - see that comment. The widgets still *draw* at the info
 /// column's real (expanded) width via `.expand = .horizontal`.
 const detail_header_text_no_floor: f32 = 1;
 
@@ -109,7 +109,7 @@ const Job = struct {
     refused: ?[]u8 = null,
     /// This job's download worker, as a cancelable `Io` task group rather than a detached
     /// `std.Thread`. The worker writes `err_buf`/`err_len`/`status` back into the `Job`, so the
-    /// `Job` must not be freed while it is alive — and a detached thread gave `freeJob` no way to
+    /// `Job` must not be freed while it is alive - and a detached thread gave `freeJob` no way to
     /// know. Nothing in the native download path sets a network timeout (the web's fetches
     /// have one, `web/fizzy.js`'s `fetchPluginBytes`), so a stalled or
     /// blackholed release host keeps that worker running arbitrarily long: quitting mid-download
@@ -120,7 +120,7 @@ const Job = struct {
     ///
     /// Same shape as `core/lsp/Client.zig`'s `tasks` and the store catalog's refresh worker. Not
     /// threadsafe against its own `await`/`cancel`, so every group operation stays on the UI
-    /// thread (`draw` → `startDownload`, `tick`, `deinit`).
+    /// thread (`draw` -> `startDownload`, `tick`, `deinit`).
     tasks: std.Io.Group = .init,
 };
 
@@ -139,15 +139,15 @@ const PendingAction = union(enum) {
 var pending_actions: std.ArrayList(PendingAction) = .empty;
 
 /// Last-known display name per plugin id (app-allocator owned). A sideloaded plugin only exposes
-/// its display name while loaded — once disabled it is unloaded and we'd otherwise fall back to the
-/// bare id, which changes the A→Z sort position (e.g. "Terminal" → "ghostty") every time it is
+/// its display name while loaded - once disabled it is unloaded and we'd otherwise fall back to the
+/// bare id, which changes the A->Z sort position (e.g. "Terminal" -> "ghostty") every time it is
 /// toggled. We remember the name the first time we see it (loaded plugin or registry row) and reuse
 /// it as the stable title for the disabled/failed states. (Session-scoped: a plugin disabled before
 /// it was ever loaded this session still shows its id until enabled once.)
 var name_cache: std.array_hash_map.String([]u8) = .empty;
 
 /// Last-known installed version per plugin id (app-allocator owned keys, plain values). Like
-/// `name_cache`, a sideloaded plugin only exposes its version while loaded — once disabled it is
+/// `name_cache`, a sideloaded plugin only exposes its version while loaded - once disabled it is
 /// unloaded, and a failed build's version is only known if the dylib could be probed. We remember
 /// the version the first time we see it (loaded plugin, failed-load probe, or on-disk probe) and
 /// reuse it as the "current version" for disabled/failed cards.
@@ -156,7 +156,7 @@ var version_cache: std.array_hash_map.String(std.SemanticVersion) = .empty;
 /// Disk-probed manifest fields per plugin id (app-allocator owned keys and values; an all-empty
 /// entry means "probed, genuinely has nothing" so it isn't re-probed every frame either). Backs
 /// the `PluginLoader.probeManifestInfo` fallback shared by `descriptionFor`/`tagsFor`/`authorFor`/
-/// `authorUrlFor` — registry and built-in values are already cheap and never touch this. One
+/// `authorUrlFor` - registry and built-in values are already cheap and never touch this. One
 /// cache rather than one per field, because a single `dlopen` + parse yields all of them at once.
 /// Cleared by `refreshDiskScan`.
 var manifest_cache: std.array_hash_map.String(PluginLoader.ProbedManifest) = .empty;
@@ -165,7 +165,7 @@ var manifest_cache: std.array_hash_map.String(PluginLoader.ProbedManifest) = .em
 /// `refreshDiskScan`. The installed pane's in-memory sources (loaded plugins, disabled ids,
 /// recorded load failures) each describe a *state* fizzy put a plugin into; this describes
 /// what is actually on disk, which is the only thing that guarantees a broken plugin always has
-/// a card to uninstall or reinstall from — even one that arrived in a state nothing recorded
+/// a card to uninstall or reinstall from - even one that arrived in a state nothing recorded
 /// (a half-finished install, a sideloaded directory, a build fizzy never tried to load).
 var disk_ids: std.ArrayList([]u8) = .empty;
 /// Set when the plugins directory may have changed (first draw, Refresh, and after any install /
@@ -176,7 +176,7 @@ var disk_scan_dirty = true;
 /// Ask `draw` to re-list the plugins directory (and re-probe names/versions) on its next pass.
 /// Exposed for `Editor.reconcileDiscoveredPlugins`: the watcher discovering a dropped-in build is
 /// exactly a "the plugins dir changed" event, and without this its card would draw from the stale
-/// scan — bare id, or missing entirely until the user hit Refresh.
+/// scan - bare id, or missing entirely until the user hit Refresh.
 pub fn markDiskScanDirty() void {
     disk_scan_dirty = true;
 }
@@ -188,7 +188,7 @@ pub const CatalogOffer = struct {
 
 /// Catalog plugins that are not installed here and have a build this host can install.
 /// Arena-backed; empty when the catalog has never loaded. `presentLocally` and the host key do
-/// the filtering on both targets — in a browser "installed" means linked into this page, and a
+/// the filtering on both targets - in a browser "installed" means linked into this page, and a
 /// plugin with no `web-wasm32` download is simply not offered.
 pub fn uninstalledCatalog(arena: std.mem.Allocator) []const CatalogOffer {
     const c = &(catalog orelse return &.{});
@@ -254,7 +254,7 @@ pub fn queueInstall(id: []const u8) void {
         // straight from its release URL, and the app registers it when it lands.
         // Marked *before* the call: `installFromUrl` can finish inside it (a build already
         // running under this id reports success straight away), and marking afterwards would
-        // set a flag the report had already cleared — a card spinning with nothing behind it.
+        // set a flag the report had already cleared - a card spinning with nothing behind it.
         markWebInFlight(id);
         app.installFromUrl(id, dl.url, dl.sha256) catch |err| {
             clearWebInFlight(id);
@@ -387,7 +387,7 @@ fn resolveTitle(id: []const u8, fallback: []const u8) []const u8 {
     return name_cache.get(id) orelse fallback;
 }
 
-/// The best-known display name for `id` — the live plugin's `display_name` when loaded,
+/// The best-known display name for `id` - the live plugin's `display_name` when loaded,
 /// otherwise whatever `resolveTitle` remembers (a disabled/failed plugin seen earlier this
 /// session), falling back to the bare id. Used by `PluginSettingsPane` to label a disabled
 /// plugin's Enabled-toggle-only row without duplicating this cache's lookup logic.
@@ -398,9 +398,9 @@ pub fn displayName(id: []const u8) []const u8 {
 
 /// Query the real display name + version of every on-disk plugin that isn't currently loaded,
 /// straight from its dylib (embedded `plugin.zig.zon` via `fizzy_plugin_manifest_zon`, falling
-/// back to the `fizzy_plugin_name`/version exports — no register, no on-disk sidecar), seeding
+/// back to the `fizzy_plugin_name`/version exports - no register, no on-disk sidecar), seeding
 /// `name_cache` and `version_cache`. Covers plugins disabled before they were loaded this session
-/// as well as builds that never loaded at all (wrong SDK, etc.) — a broken plugin still shows its
+/// as well as builds that never loaded at all (wrong SDK, etc.) - a broken plugin still shows its
 /// real name and version on its card. Cheap and bounded: only runs on first draw / Refresh, and
 /// only probes ids whose name or version we don't already know.
 fn probeOnDiskInfo() void {
@@ -409,7 +409,7 @@ fn probeOnDiskInfo() void {
     defer a.free(plugins_dir);
 
     for (disk_ids.items) |id| {
-        if (app.host.pluginById(id) != null) continue; // loaded → info comes from the live plugin
+        if (app.host.pluginById(id) != null) continue; // loaded -> info comes from the live plugin
         const have_name = name_cache.get(id) != null;
         const have_version = version_cache.get(id) != null;
         if (have_name and have_version) continue; // already known (registry / prior probe)
@@ -440,7 +440,7 @@ fn refreshLocalInfo() void {
 }
 
 /// The application hosting this store. Everything the store needs from its app goes through
-/// here — see `PluginManager.zig`.
+/// here - see `PluginManager.zig`.
 const app = &PluginManager.current;
 
 pub fn register(manager: PluginManager) !void {
@@ -453,7 +453,7 @@ pub fn register(manager: PluginManager) !void {
     const fp_hex = try manager.gpa.print("0x{x}", .{dylib.abi_fingerprint});
     defer manager.gpa.free(fp_hex);
     catalog = try store.Catalog.init(manager.gpa, dvui.io, url, fp_hex);
-    // The owner of `store://…` pages, and the mount they live on. Registered before the store's
+    // The owner of `store://...` pages, and the mount they live on. Registered before the store's
     // own surface so a layout restored with a page open finds its owner already there.
     try Page.register(host, .{
         .header = drawPageHeader,
@@ -512,13 +512,13 @@ fn drawDetailHeader(entry: StoreEntry) void {
     defer scroll.deinit();
 
     // Deliberately *not* keyed by `entry.id`, unlike the cards in the list: there is only ever
-    // one detail header, and a per-entry id made it a brand-new widget on every page switch —
+    // one detail header, and a per-entry id made it a brand-new widget on every page switch -
     // with no min size cached from the previous frame it laid out at zero height, which is the
     // one frame of headerless page users saw before it snapped. A stable id keeps the cache.
     //
     // Expand to fill the scroll viewport when wider than the floor; report a fixed min so the
     // scrollbar only appears once the pane is actually narrower than the content can go. Do
-    // *not* lock min=max to the viewport — that made wrap width track the resize every frame and
+    // *not* lock min=max to the viewport - that made wrap width track the resize every frame and
     // flashed the scrollbar whenever a long token briefly exceeded the shrinking column.
     var header_box = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .expand = .horizontal,
@@ -529,7 +529,7 @@ fn drawDetailHeader(entry: StoreEntry) void {
     });
     defer header_box.deinit();
 
-    // 1. Logo — same fetch-or-fallback chain the card list uses.
+    // 1. Logo - same fetch-or-fallback chain the card list uses.
     {
         var logo = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .gravity_y = 0.0,
@@ -537,7 +537,7 @@ fn drawDetailHeader(entry: StoreEntry) void {
         });
         defer logo.deinit();
         if (repoSource(entry)) |src| StoreIcon.request(entry.id, src.repo, src.subpath);
-        // 60 rather than the full 64 of `logo`'s box — just enough breathing room that the
+        // 60 rather than the full 64 of `logo`'s box - just enough breathing room that the
         // image doesn't touch the header's own edges, per the "less empty space" ask.
         const drew = StoreIcon.draw(entry.id, 60) or app.host.drawPluginIcon(entry.id);
         if (!drew) {
@@ -552,7 +552,7 @@ fn drawDetailHeader(entry: StoreEntry) void {
     }
 
     // 2. Toggles + install/update/uninstall controls. `drawDetailControls` right-justifies itself
-    // (its own `gravity_x = 1.0` box) — laid out before the expanding info column for the same
+    // (its own `gravity_x = 1.0` box) - laid out before the expanding info column for the same
     // reason `drawCard` does: an expand-horizontal sibling's reported min width is its full
     // unwrapped text, which would otherwise eat all the remaining space and starve these controls
     // to zero width (see `drawCard`'s comment on this exact ordering).
@@ -569,7 +569,7 @@ fn drawDetailHeader(entry: StoreEntry) void {
         defer info.deinit();
 
         const title_font = dvui.Font.theme(.body);
-        // Single-line ellipsize (LabelWidget default) — wrapping the display-size title to one
+        // Single-line ellipsize (LabelWidget default) - wrapping the display-size title to one
         // word per line was the resize hitch that made the scrollbar appear mid-drag.
         dvui.labelNoFmt(@src(), entry.title, .{}, .{
             .font = title_font.withSize(title_font.size * 3 - 1).withWeight(.bold),
@@ -594,7 +594,7 @@ fn drawDetailHeader(entry: StoreEntry) void {
                 // Cap reported min width; wrap still uses the real expanded column width.
                 .max_size_content = .{ .w = detail_header_text_no_floor, .h = std.math.floatMax(f32) },
                 .margin = dvui.Rect.all(0),
-                // `TextLayoutWidget`'s own default padding is `Rect.all(6)` — unlike the labels
+                // `TextLayoutWidget`'s own default padding is `Rect.all(6)` - unlike the labels
                 // above, which each override `.padding` down to just a bottom gap (`.{ .h = N }`,
                 // leaving left at 0). Left unset here, that default 6px left inset was the only
                 // thing pushing this line out of alignment with the other three.
@@ -608,27 +608,27 @@ fn drawDetailHeader(entry: StoreEntry) void {
 }
 
 /// Only ever hand a `http`/`https` URL to `dvui.openURL`. `author_url` is author-controlled text
-/// out of a `plugin.zig.zon`, and `openURL` ultimately reaches the OS URL handler — a `file:`,
+/// out of a `plugin.zig.zon`, and `openURL` ultimately reaches the OS URL handler - a `file:`,
 /// `smb:`, or custom-scheme URL there would let a plugin manifest launch an arbitrary registered
 /// handler on the user's machine just by being listed in the store.
 fn isSafeExternalUrl(url: []const u8) bool {
     return std.ascii.startsWithIgnoreCase(url, "https://") or std.ascii.startsWithIgnoreCase(url, "http://");
 }
 
-/// The credit line under the plugin id: `publisher · author`.
+/// The credit line under the plugin id: `publisher . author`.
 ///
 /// Two different kinds of claim, deliberately shown together rather than collapsed into one
 /// "author" string. `publisher` is derived from where the binary is actually published and is the
 /// half a user can rely on; `author` is a free string the plugin says about itself. Either may be
-/// absent — a sideloaded plugin has no publisher, and a plugin that never sets `.author` has no
-/// credit — in which case only the other is drawn, and the row is skipped entirely if neither
+/// absent - a sideloaded plugin has no publisher, and a plugin that never sets `.author` has no
+/// credit - in which case only the other is drawn, and the row is skipped entirely if neither
 /// exists. Each is a link only when there is somewhere meaningful to go.
 fn drawAuthorLine(entry: StoreEntry, muted: dvui.Color) void {
     const publisher = publisherFor(entry);
     const author = authorFor(entry);
     if (publisher == null and author == null) return;
 
-    // Expand the row (not the individual links) so credit names stay packed on the left —
+    // Expand the row (not the individual links) so credit names stay packed on the left -
     // `expand = .horizontal` on both publisher and author made them split the row and look
     // centered. Cap the row's reported min so long names can't inflate the header floor.
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
@@ -641,7 +641,7 @@ fn drawAuthorLine(entry: StoreEntry, muted: dvui.Color) void {
 
     if (publisher) |p| {
         // Publisher links to the account itself, built from the publisher name rather than from
-        // any URL the plugin supplied — the whole point of this half is that it isn't
+        // any URL the plugin supplied - the whole point of this half is that it isn't
         // author-controlled.
         const url = dvui.currentWindow().arena().print("https://github.com/{s}", .{p}) catch "";
         drawCreditLink(@src(), p, if (url.len > 0) url else null, muted);
@@ -664,10 +664,10 @@ fn drawAuthorLine(entry: StoreEntry, muted: dvui.Color) void {
     }
 }
 
-/// One name in the credit line — a plain dim label, or an underlined highlight-colored link when
+/// One name in the credit line - a plain dim label, or an underlined highlight-colored link when
 /// `url` is non-null. Styling matches the text plugin's hover-doc links (`TextEditor.zig`):
 /// `Font.withUnderline` + `color(.highlight, .fill)`, so every clickable bit of prose in the app
-/// reads the same way. A name with nowhere to go stays deliberately unstyled — underlining
+/// reads the same way. A name with nowhere to go stays deliberately unstyled - underlining
 /// something unclickable is worse than leaving it plain.
 fn drawCreditLink(src: std.lang.SourceLocation, text: []const u8, url: ?[]const u8, muted: dvui.Color) void {
     const body = dvui.Font.theme(.body);
@@ -695,13 +695,13 @@ fn drawCreditLink(src: std.lang.SourceLocation, text: []const u8, url: ?[]const 
 
 /// Simple two-tab strip: no fill of its own (reads as part of the pane behind it, not a
 /// separate bar), regular body text, and the selected tab marked by a `window`-text-colored
-/// underline rather than a filled pill. No drag/drop and no scroll area — there are only ever
+/// underline rather than a filled pill. No drag/drop and no scroll area - there are only ever
 /// two tabs here.
 fn tabButton(src: std.lang.SourceLocation, label: []const u8, id_extra: usize, selected: bool) bool {
     const theme = dvui.themeGet();
 
-    // Sized to the label's own width (no expand), so the underline drawn below — which does
-    // expand horizontally, but only within this column — lines up under the text exactly rather
+    // Sized to the label's own width (no expand), so the underline drawn below - which does
+    // expand horizontally, but only within this column - lines up under the text exactly rather
     // than spanning the whole strip.
     var col = dvui.box(@src(), .{ .dir = .vertical }, .{ .id_extra = id_extra, .margin = .{ .x = 2 } });
     defer col.deinit();
@@ -728,7 +728,7 @@ fn tabButton(src: std.lang.SourceLocation, label: []const u8, id_extra: usize, s
     return clicked;
 }
 
-/// CHANGELOG's content until real GitHub Releases fetching lands (tracked separately) — an
+/// CHANGELOG's content until real GitHub Releases fetching lands (tracked separately) - an
 /// empty-state hint rather than a blank pane, matching how the workbench's own empty states read.
 fn drawChangelogPlaceholder() void {
     var box = dvui.box(@src(), .{ .dir = .vertical }, .{
@@ -761,7 +761,7 @@ fn drawChangelogPlaceholder() void {
 }
 
 /// `FIZZY_PLUGIN_REGISTRY_URL` overrides the app's catalog *base* URL (used for local E2E
-/// testing) — `store.Catalog.init` appends `/summary.json` and `/<abi_fingerprint>/releases.json`
+/// testing) - `store.Catalog.init` appends `/summary.json` and `/<abi_fingerprint>/releases.json`
 /// to whatever this returns. Owned for the process lifetime (freed in `deinit`).
 fn resolveRegistryUrl() []const u8 {
     if (comptime builtin.target.cpu.arch == .wasm32) return app.registry_url;
@@ -831,8 +831,8 @@ pub fn deinit() void {
     }
 }
 
-/// Frees a job and everything it owns. Cancels and awaits its download worker first — see
-/// `Job.tasks` — so nothing can be writing into the `Job` as it goes away. No-op for a job whose
+/// Frees a job and everything it owns. Cancels and awaits its download worker first - see
+/// `Job.tasks` - so nothing can be writing into the `Job` as it goes away. No-op for a job whose
 /// worker never started or has already finished.
 fn freeJob(job: *Job) void {
     job.tasks.cancel(dvui.io);
@@ -859,7 +859,7 @@ pub const PendingUpdate = struct {
     ///
     /// Owned here rather than re-resolved from the catalog on click, for two reasons: registry
     /// strings are only valid while the catalog lock is held (the refresh worker frees the arena),
-    /// and the update window draws its cards *inside* that lock — so a click that reached back for
+    /// and the update window draws its cards *inside* that lock - so a click that reached back for
     /// the catalog would re-enter a non-reentrant mutex on the UI thread and hang the app.
     url: []u8,
     sha256: []u8,
@@ -870,9 +870,9 @@ pub const PendingUpdate = struct {
     /// fizzy upgrade, most often) and the store build for *this* host replaces it. Presented as a
     /// repair rather than an upgrade, since the version number often doesn't move.
     repair: bool,
-    /// An Update was clicked (or Update all) — the row shows progress instead of a button.
+    /// An Update was clicked (or Update all) - the row shows progress instead of a button.
     started: bool = false,
-    /// The last attempt failed (the download, not the load — see `tick`). The row stays on the
+    /// The last attempt failed (the download, not the load - see `tick`). The row stays on the
     /// offer with its button back, labelled Retry.
     failed: bool = false,
     /// Why the last web attempt failed, shown beside Retry (`webLoadFailed`); empty when unknown.
@@ -892,7 +892,7 @@ const AutoPhase = enum {
     idle,
     /// A catalog refresh is in flight purely for the update check.
     fetching,
-    /// The check ran (or was skipped, or the fetch failed). One attempt per session — the store
+    /// The check ran (or was skipped, or the fetch failed). One attempt per session - the store
     /// tab's own Refresh button is the manual retry.
     done,
 };
@@ -920,7 +920,7 @@ pub fn dismissPendingUpdates() void {
     clearPendingUpdates();
 }
 
-/// Take `id` off the offer — its newer build is now on disk, so there is nothing left to offer.
+/// Take `id` off the offer - its newer build is now on disk, so there is nothing left to offer.
 /// The window shows exactly the plugins that are still out of date, and closes itself once the
 /// last row goes (see `PluginUpdates.dialog`).
 fn dropPendingUpdate(id: []const u8) void {
@@ -940,7 +940,7 @@ fn dropPendingUpdate(id: []const u8) void {
 }
 
 /// Hand `id`'s row its button back after a failed attempt, so the offer can be retried by hand
-/// rather than sitting on a permanent "Updating…".
+/// rather than sitting on a permanent "Updating...".
 fn markPendingUpdateFailed(id: []const u8) void {
     const row = pendingRowFor(id) orelse return;
     row.started = false;
@@ -949,14 +949,14 @@ fn markPendingUpdateFailed(id: []const u8) void {
 
 /// Start the download for one offered update. Safe to call for a row already started (the job is
 /// simply replaced) and from inside the card list's own draw, since it touches no catalog state.
-/// Ids whose web load or update is in flight — the page is fetching and linking, and the host
+/// Ids whose web load or update is in flight - the page is fetching and linking, and the host
 /// has not yet accepted or refused the module. `app.gpa`-owned; one entry per id.
 var web_in_flight: std.array_hash_map.String(void) = .empty;
 
 /// The web's plugins directory: every id the page remembers a build for (it brings each back at
 /// startup) or that loaded this visit. `refreshDiskScan` lists the ones the page still remembers
-/// into `disk_ids`, so everything the desktop does with a plugin on disk — the Installed card,
-/// Uninstall and Reinstall, the update pass — applies here too. `app.gpa`-owned keys.
+/// into `disk_ids`, so everything the desktop does with a plugin on disk - the Installed card,
+/// Uninstall and Reinstall, the update pass - applies here too. `app.gpa`-owned keys.
 var web_known: std.array_hash_map.String(void) = .empty;
 /// Startup loads the page asked for that have not landed yet. The update pass waits for these:
 /// until a remembered build has been accepted or refused, the pass cannot tell a plugin that is
@@ -1020,7 +1020,7 @@ pub fn webLoadSucceeded(id: []const u8) void {
 }
 
 /// It did not: the fetch failed, the module was refused, or the plugin it would have replaced
-/// has unsaved documents. The offer stays, wearing Retry — the running plugin was never torn
+/// has unsaved documents. The offer stays, wearing Retry - the running plugin was never torn
 /// down, so there is something to go back to.
 pub fn webLoadFailed(id: []const u8, reason: []const u8) void {
     clearWebInFlight(id);
@@ -1039,11 +1039,11 @@ pub fn webLoadFailed(id: []const u8, reason: []const u8) void {
 
 /// The web's update: the new build is fetched and checked while the running one keeps working,
 /// and only takes the id over once it has passed (`Editor.updateWebPlugin`). The old module
-/// stays linked in the page — nothing can unlink it — but it owns nothing after the swap.
+/// stays linked in the page - nothing can unlink it - but it owns nothing after the swap.
 fn applyWebUpdate(id: []const u8, url: []const u8, sha256: []const u8) void {
     // Marked *before* the call, as `queueInstall` does: the load can report inside it (a build
-    // already in flight for this id, a refusal), and marking afterwards overwrote that report —
-    // the row stayed on "Update" (or on "Updating…" forever) with the work already done or
+    // already in flight for this id, a refusal), and marking afterwards overwrote that report -
+    // the row stayed on "Update" (or on "Updating..." forever) with the work already done or
     // already failed. Not dropped here either: the fetch has only *started*;
     // `webLoadSucceeded` retires the row.
     markWebInFlight(id);
@@ -1070,7 +1070,7 @@ pub fn applyPendingUpdate(id: []const u8) void {
         return;
     }
     // Whether this is an unload-and-reload or a fresh install is decided by what is *running*
-    // now, not by what the row said when it was built — the plugin may have been enabled or
+    // now, not by what the row said when it was built - the plugin may have been enabled or
     // disabled while the window sat open.
     startDownloadUrl(row.id, row.url, row.sha256, .{
         .is_update = app.host.pluginById(id) != null,
@@ -1092,7 +1092,7 @@ pub fn updateStatus(id: []const u8) ?[]const u8 {
         .failed => "Failed",
     };
     // A row that finished is gone from the list entirely (`dropPendingUpdate`), so anything still
-    // here with no job either hasn't started or failed — both want their button back.
+    // here with no job either hasn't started or failed - both want their button back.
     return null;
 }
 
@@ -1158,7 +1158,7 @@ fn drawUpdateCardControls(entry: StoreEntry) void {
         applyPendingUpdate(entry.id);
 }
 
-/// "v0.3.9 → v0.4.1", or what a repair actually is — the update window's equivalent of a store
+/// "v0.3.9 -> v0.4.1", or what a repair actually is - the update window's equivalent of a store
 /// card's `installed vX / store vY` line, in the same slot.
 fn updateInfoLine(buf: []u8, row: PendingUpdate) []const u8 {
     if (row.repair) {
@@ -1168,7 +1168,7 @@ fn updateInfoLine(buf: []u8, row: PendingUpdate) []const u8 {
     return std.mem.print(buf, "v{d}.{d}.{d} → v{s}", .{ from.major, from.minor, from.patch, row.to }) catch row.to;
 }
 
-/// The offered updates as store cards — the same shell the Plugins tab draws, so the two never
+/// The offered updates as store cards - the same shell the Plugins tab draws, so the two never
 /// drift apart. Cards here are inert apart from their Update button: clicking one must not swap
 /// the README center out from under a modal dialog, and the hover toggles belong to the store.
 pub fn drawPendingUpdateCards() void {
@@ -1189,7 +1189,7 @@ pub fn drawPendingUpdateCards() void {
     }
 }
 
-/// True while any offered update still has an Update button to press — the window's "Update all"
+/// True while any offered update still has an Update button to press - the window's "Update all"
 /// hides itself once there is nothing left to start.
 pub fn anyPendingUpdateUnstarted() bool {
     for (pending_updates.items) |u| {
@@ -1199,7 +1199,7 @@ pub fn anyPendingUpdateUnstarted() bool {
 }
 
 /// Drives the once-per-session update check from `tick`: kick one catalog refresh, then act on
-/// it when it lands. Deliberately *not* run before `Editor.loadUserPlugins` — that is a
+/// it when it lands. Deliberately *not* run before `Editor.loadUserPlugins` - that is a
 /// synchronous startup path and the fetch has no timeout, so gating startup on it would hang
 /// launch behind a captive portal or a dead registry host. Everything loads first; a plugin whose
 /// build this fizzy can't load is then repaired live, no restart needed.
@@ -1226,7 +1226,7 @@ fn autoUpdateTick() void {
             }
             // Plugins go *after* Fizzy itself. Store builds are made against one SDK
             // generation, so the plugin builds that match the Fizzy release we're about to
-            // install only become visible to us once we are running it — see
+            // install only become visible to us once we are running it - see
             // `PluginManager.AppUpdate`.
             // The web has no self-update to wait for: the page is whatever the site serves.
             if (comptime builtin.target.cpu.arch != .wasm32) switch (app.appUpdate()) {
@@ -1235,7 +1235,7 @@ fn autoUpdateTick() void {
                 .checking => return,
                 // A newer Fizzy exists. Say nothing about plugins yet, in either mode: the
                 // builds that pair with that Fizzy are in a shard we can't see from here, so
-                // anything we could offer now is the *older* build — or, without
+                // anything we could offer now is the *older* build - or, without
                 // `releaseSdkSatisfied`, one that wouldn't load at all. The user takes the app
                 // update when they choose; this pass runs again on the relaunch, against the
                 // new SDK's shard, and only then is there a plugin story worth telling.
@@ -1270,7 +1270,7 @@ fn autoUpdateTick() void {
     }
 }
 
-/// True if any plugin on disk is a candidate for the update check at all — installed, not
+/// True if any plugin on disk is a candidate for the update check at all - installed, not
 /// bundled, not disabled, and not opted out.
 fn anyUpdatableInstalled() bool {
     for (disk_ids.items) |id| {
@@ -1314,7 +1314,7 @@ fn collectPendingUpdates() void {
         if (repair) {
             // Enabled on record but not running: the build on disk was rejected. The store build
             // is the way back in even at the same version number (different fingerprint), but
-            // never *older* than what is already there — that would downgrade an author's own
+            // never *older* than what is already there - that would downgrade an author's own
             // newer local build the moment it failed to load once.
             if (installed) |known| {
                 if (rel_ver.order(known) == .lt) continue;
@@ -1330,7 +1330,7 @@ fn collectPendingUpdates() void {
 }
 
 /// Own copies of one row's strings and append it. Any allocation failure unwinds the ones already
-/// taken and drops the row — a plugin missing from the window is a far better outcome than a leak
+/// taken and drops the row - a plugin missing from the window is a far better outcome than a leak
 /// or a half-built entry.
 fn appendPendingUpdate(
     id: []const u8,
@@ -1374,8 +1374,8 @@ fn appendPendingUpdate(
 ///
 /// Repairs (`PendingUpdate.repair`) are the exception to `.prompt`: the plugin is enabled but not
 /// running, which after a Fizzy update is the normal state of every plugin built against the old
-/// SDK. Prompting there offers the user a choice they don't have — declining leaves the plugin
-/// dead rather than merely older — so repairs always go through silently, and the common case
+/// SDK. Prompting there offers the user a choice they don't have - declining leaves the plugin
+/// dead rather than merely older - so repairs always go through silently, and the common case
 /// (Fizzy updates, its plugins follow on the next launch) is seamless in both modes. Only genuine
 /// version upgrades of *working* plugins are worth asking about.
 fn offerPendingUpdates() void {
@@ -1421,7 +1421,7 @@ pub fn tick() void {
         if (catalog) |*c| c.pump(web_fetch);
         StoreIcon.pump();
         // Enable, Disable, Uninstall and the auto-update toggle all queue here and are applied
-        // nowhere else — without this the web store's buttons lit up and did nothing. The
+        // nowhere else - without this the web store's buttons lit up and did nothing. The
         // download queue below is the desktop's alone: on the web a plugin arrives through the
         // page's loader instead (`applyWebUpdate`, `queueInstall`).
         applyPendingActions();
@@ -1446,7 +1446,7 @@ pub fn tick() void {
                     markPendingUpdateFailed(job.id);
                     jobs.swapRemoveAt(i);
                     freeJob(job);
-                    continue; // do not advance i — swapRemove moved a new entry into slot i
+                    continue; // do not advance i - swapRemove moved a new entry into slot i
                 }
                 i += 1;
             },
@@ -1490,18 +1490,18 @@ pub fn tick() void {
                     continue;
                 };
                 // Installed + loaded: drop the job so the card shows normal installed state, and
-                // take the plugin off the update offer — it is no longer out of date.
+                // take the plugin off the update offer - it is no longer out of date.
                 dropPendingUpdate(job.id);
                 jobs.swapRemoveAt(i);
                 freeJob(job);
-                // do not advance i — swapRemove moved a new entry into slot i
+                // do not advance i - swapRemove moved a new entry into slot i
             },
         }
     }
 }
 
 /// Select `entry`, or clear the selection if it is already the selected card. Selection is a
-/// card highlight and which card's flyout is open — nothing more. The page is a document
+/// card highlight and which card's flyout is open - nothing more. The page is a document
 /// (`PluginPage`), opened deliberately from that flyout.
 fn toggleSelect(entry: StoreEntry) void {
     if (selectedId()) |sid| {
@@ -1551,7 +1551,7 @@ fn drawPageOtherTab(_: u8) void {
 }
 
 /// A store page's header, drawn into the page document (`PluginPage`). False when the store has
-/// never heard of this id — a page can outlive the plugin it is about.
+/// never heard of this id - a page can outlive the plugin it is about.
 fn drawPageHeader(id: []const u8) bool {
     const snap = if (catalog) |*c| c.acquire() else null;
     defer if (catalog) |*c| c.release();
@@ -1580,7 +1580,7 @@ fn pageSource(id: []const u8) ?Page.Source {
 }
 
 /// The `StoreEntry` for one id, in the same priority order the store list builds its entries in
-/// (see `draw`'s entry-building pass) — just for one id instead of the whole list. `snapshot` is
+/// (see `draw`'s entry-building pass) - just for one id instead of the whole list. `snapshot` is
 /// the caller's already-acquired catalog snapshot (or null when the catalog has never loaded);
 /// this makes no locking decisions of its own.
 fn entryFor(id: []const u8, snapshot: ?store.Catalog.Snapshot) ?StoreEntry {
@@ -1606,7 +1606,7 @@ fn entryFor(id: []const u8, snapshot: ?store.Catalog.Snapshot) ?StoreEntry {
 }
 
 /// `entry`'s on-disk manifest fields, probed once and memoised in `manifest_cache`. A dylib open
-/// + zon parse per call is far too costly to redo every frame — these resolvers run once per
+/// + zon parse per call is far too costly to redo every frame - these resolvers run once per
 /// *listed card* (see `drawCardShell`), not just for the selected detail header. Returns an
 /// all-empty `ProbedManifest` when the plugin has no readable dylib, which is cached too so a
 /// missing/unreadable file isn't retried every frame. `manifest_cache` is cleared by
@@ -1635,9 +1635,9 @@ fn probedManifestFor(id: []const u8) PluginLoader.ProbedManifest {
     return probed;
 }
 
-/// Best-known one-line description for `entry`: the registry's own (freshest — a published
+/// Best-known one-line description for `entry`: the registry's own (freshest - a published
 /// `summary.json` entry may know more than a locally built manifest), else the plugin's own
-/// manifest (`Editor.builtinManifest` for a built-in — no dylib to probe — or `probedManifestFor`
+/// manifest (`Editor.builtinManifest` for a built-in - no dylib to probe - or `probedManifestFor`
 /// against its on-disk dylib for anything else). Null when none of the three have one.
 fn descriptionFor(entry: StoreEntry) ?[]const u8 {
     if (entry.registry) |r| {
@@ -1650,7 +1650,7 @@ fn descriptionFor(entry: StoreEntry) ?[]const u8 {
     return if (probed.description.len > 0) probed.description else null;
 }
 
-/// Best-known tag list for `entry` — same three-tier fallback as `descriptionFor`. Empty slice,
+/// Best-known tag list for `entry` - same three-tier fallback as `descriptionFor`. Empty slice,
 /// never null, when none of the three have any: every call site only ever iterates the result.
 fn tagsFor(entry: StoreEntry) []const []const u8 {
     if (entry.registry) |r| {
@@ -1660,7 +1660,7 @@ fn tagsFor(entry: StoreEntry) []const []const u8 {
     return probedManifestFor(entry.id).tags;
 }
 
-/// Best-known **cosmetic** author credit for `entry` — self-asserted, never a trust signal (see
+/// Best-known **cosmetic** author credit for `entry` - self-asserted, never a trust signal (see
 /// `publisherFor` for the attestable half). Same three-tier fallback as `descriptionFor`: a
 /// registry entry's own `author` wins, since it's PR-reviewed and editable without a release.
 fn authorFor(entry: StoreEntry) ?[]const u8 {
@@ -1676,7 +1676,7 @@ fn authorFor(entry: StoreEntry) ?[]const u8 {
 
 /// Optional custom link for `authorFor`'s credit. Same three-tier fallback as the rest; the
 /// catalog carries it so an *uninstalled* store plugin's credit is still clickable, since there
-/// is no local dylib to probe until it's installed. Only ever `http`/`https` — see
+/// is no local dylib to probe until it's installed. Only ever `http`/`https` - see
 /// `drawAuthorLine`.
 fn authorUrlFor(entry: StoreEntry) ?[]const u8 {
     if (entry.registry) |r| {
@@ -1691,10 +1691,10 @@ fn authorUrlFor(entry: StoreEntry) ?[]const u8 {
 
 /// The **attestable** half of the credit line: who actually published the binary this host would
 /// install. Derived server-side at ingest from the release URL the plugin's `manifest.json` was
-/// fetched from — never self-asserted, so unlike `authorFor` it can't be spoofed by editing a
+/// fetched from - never self-asserted, so unlike `authorFor` it can't be spoofed by editing a
 /// `plugin.zig.zon`. Built-ins ship inside the fizzy binary itself, so they're attributed to the
 /// fizzy org directly rather than through the registry. Null when the store has no entry (a
-/// sideloaded or purely local plugin has no publisher at all — that's the point).
+/// sideloaded or purely local plugin has no publisher at all - that's the point).
 fn publisherFor(entry: StoreEntry) ?[]const u8 {
     if (isBundled(entry.id)) return fizzy_publisher;
     if (entry.registry) |r| {
@@ -1703,16 +1703,16 @@ fn publisherFor(entry: StoreEntry) ?[]const u8 {
     return null;
 }
 
-/// Owner of `fizzy_repo_url` — the publisher every bundled built-in is attributed to.
+/// Owner of `fizzy_repo_url` - the publisher every bundled built-in is attributed to.
 const fizzy_publisher = "fizzyedit";
 
 /// Runs in `job.tasks`. `io` is passed in rather than read from `dvui.io` here so the worker never
 /// races the UI thread writing that global (same reason `core/lsp/Client.zig` threads `io` through
 /// its task mains). A shutdown mid-download lands on `.failed` via `error.Canceled`, which nothing
-/// outlives — `freeJob` is what awaited us.
+/// outlives - `freeJob` is what awaited us.
 fn worker(job: *Job, io: std.Io) void {
     // Whatever happens below, the result is only ever *applied* by `tick` on the UI thread, so
-    // every exit path has to wake a sleeping app — see `Job.win`.
+    // every exit path has to wake a sleeping app - see `Job.win`.
     defer dvui.refresh(job.win, @src(), null);
     store.download.download(app.gpa, io, job.url, job.sha256, job.dest) catch |err| {
         const n = @min(@errorName(err).len, job.err_buf.len);
@@ -1742,7 +1742,7 @@ fn startDownload(id: []const u8, release: store.ShardRelease, opts: DownloadOpti
 /// Guarded at comptime like `startDownload`, and it has to be: this is the path that writes a
 /// dylib into the plugins directory, which a browser has neither the filesystem nor the `dlopen`
 /// for. `applyPendingUpdate` reaches here without passing through `startDownload`, so one guard
-/// upstream is not enough — and since the store became its own module, an unguarded path is a
+/// upstream is not enough - and since the store became its own module, an unguarded path is a
 /// wasm *compile* error rather than dead code.
 fn startDownloadUrl(id: []const u8, url: []const u8, sha256: []const u8, opts: DownloadOptions) void {
     if (comptime builtin.target.cpu.arch == .wasm32) return;
@@ -1750,7 +1750,7 @@ fn startDownloadUrl(id: []const u8, url: []const u8, sha256: []const u8, opts: D
     // Before anything is written into `plugins/<id>`: on macOS and Windows a case variant's
     // folder is that folder, and the download would overwrite the plugin installed there.
     // Refused, the job fails at once and says why: on its card, or as the update offer marked
-    // failed for the automatic pass (`tick`), never left "Installing…".
+    // failed for the automatic pass (`tick`), never left "Installing...".
     var why_buf: [512]u8 = undefined;
     if (refusal(&why_buf, id)) |why| {
         var refused = opts;
@@ -1862,7 +1862,7 @@ fn installedVersion(id: []const u8) ?std.SemanticVersion {
     return null;
 }
 
-/// The recorded load-failure for `id`, if any — asked of the app rather than read off a
+/// The recorded load-failure for `id`, if any - asked of the app rather than read off a
 /// `StoreEntry`, so it surfaces even when a registry row (which takes merge precedence over the
 /// local `.failed` row, see `draw`) shadows the same id.
 fn failedInfo(id: []const u8) ?PluginManager.Failure {
@@ -1872,7 +1872,7 @@ fn failedInfo(id: []const u8) ?PluginManager.Failure {
 /// The plugin's current on-disk version, regardless of whether it is loaded, disabled, or a
 /// rejected (failed) build: the live loaded version when running, else a failed build's probed
 /// version, else the last version we remembered (loaded earlier this session, or probed while
-/// disabled — see `probeOnDiskInfo`).
+/// disabled - see `probeOnDiskInfo`).
 fn currentVersion(id: []const u8) ?std.SemanticVersion {
     if (installedVersion(id)) |v| return v;
     if (failedInfo(id)) |f| {
@@ -1882,10 +1882,10 @@ fn currentVersion(id: []const u8) ?std.SemanticVersion {
 }
 
 /// The highest version published across *every* fingerprint of `entry`'s registry row, regardless
-/// of host compatibility — "what the author has shipped", shown on every card with a store
+/// of host compatibility - "what the author has shipped", shown on every card with a store
 /// presence (see `infoLine`). Distinct from `selectedRelease`, which only considers this host's
 /// release (from the fetched shard) and drives the Install/Update actions. Precomputed
-/// server-side into `summary.json`'s `latest_version` — the client only ever fetches its own
+/// server-side into `summary.json`'s `latest_version` - the client only ever fetches its own
 /// fingerprint's shard, so it can't itself see what other fingerprints have published.
 fn latestRegistryVersion(entry: StoreEntry) ?[]const u8 {
     const r = entry.registry orelse return null;
@@ -1894,7 +1894,7 @@ fn latestRegistryVersion(entry: StoreEntry) ?[]const u8 {
 
 /// Whether `id` is compiled into this executable. Asked of the build (`App.bundled_plugin_ids`)
 /// rather than answered from a list here: this was four hardcoded names, and the fifth bundled
-/// plugin — archive — was shown as a stray local build the user could uninstall, which is not a
+/// plugin - archive - was shown as a stray local build the user could uninstall, which is not a
 /// thing that can happen to something linked into the binary. An app built on fizzy bundles
 /// whatever it likes, so a list here could only ever be fizzy's own, and out of date.
 fn isBundled(id: []const u8) bool {
@@ -1907,21 +1907,21 @@ fn isBundled(id: []const u8) bool {
 /// One deterministic row in the store tree, merged from the registry index plus the local
 /// plugin/disabled/failed lists.
 ///
-/// **Lifetime:** every slice here is *borrowed* with one of three lifetimes — registry strings
+/// **Lifetime:** every slice here is *borrowed* with one of three lifetimes - registry strings
 /// are valid only while the catalog lock is held (the worker frees the arena on `refresh`),
 /// `plugin.display_name`/`plugin.id` live in dylib/static memory only while the plugin is
-/// loaded, and disabled ids are app-allocator-owned. The whole build → sort → draw pass runs
+/// loaded, and disabled ids are app-allocator-owned. The whole build -> sort -> draw pass runs
 /// inside a single `catalog.acquire()`/`release()` scope and the dvui frame arena, so none of
 /// these are retained past the lock release or across frames.
 const StoreEntry = struct {
     id: []const u8,
     title: []const u8,
     /// `on_disk` is the catch-all for a plugin directory that exists but is in none of the
-    /// fizzy's in-memory states (not loaded, not disabled, no recorded failure) — see `disk_ids`.
+    /// fizzy's in-memory states (not loaded, not disabled, no recorded failure) - see `disk_ids`.
     kind: enum { registry, local, disabled, failed, on_disk },
     registry: ?store.SummaryEntry = null,
     /// This host's release for `id`, if the fetched shard has one (already fingerprint-resolved
-    /// server-side — see `store.ShardRelease`). Still needs an arch check; see `selectedRelease`.
+    /// server-side - see `store.ShardRelease`). Still needs an arch check; see `selectedRelease`.
     release: ?store.ShardRelease = null,
     plugin: ?*sdk.Plugin = null,
     /// Fuzzy-match score against the current filter, assigned by `rankEntries`. Lower is better;
@@ -1942,7 +1942,7 @@ fn containsId(entries: []const StoreEntry, id: []const u8) bool {
     return false;
 }
 
-/// A→Z by display title (case-insensitive ASCII), tie-broken on id for stability.
+/// A->Z by display title (case-insensitive ASCII), tie-broken on id for stability.
 fn entryLess(_: void, lhs: StoreEntry, rhs: StoreEntry) bool {
     return switch (std.ascii.orderIgnoreCase(lhs.title, rhs.title)) {
         .lt => true,
@@ -1955,7 +1955,7 @@ fn entryLess(_: void, lhs: StoreEntry, rhs: StoreEntry) bool {
 ///
 /// Identity fields (id, title) and prose fields (description, author, tags) are scored separately
 /// and the prose side is penalised, so a plugin *named* "theme" always outranks one that merely
-/// mentions themes in its description — otherwise a long description full of common words can
+/// mentions themes in its description - otherwise a long description full of common words can
 /// score better than the name the user was actually typing.
 fn scoreEntry(entry: StoreEntry, query: *const fuzzy.Query) ?f64 {
     if (query.isEmpty()) return 0;
@@ -1973,7 +1973,7 @@ fn scoreEntry(entry: StoreEntry, query: *const fuzzy.Query) ?f64 {
     var best = fuzzy.scoreBest(identity[0..n], query, .{ .plain = true });
 
     // `descriptionFor`/`tagsFor` already fall back past the registry (built-in manifest, then a
-    // dylib probe), so a plugin with no registry entry yet still scores on its own prose — only
+    // dylib probe), so a plugin with no registry entry yet still scores on its own prose - only
     // `author` has no such fallback (it's registry-only, see `plans/PLUGIN_MANIFEST_PLAN.md`).
     const author = if (entry.registry) |r| r.author else "";
     var prose = fuzzy.scoreBest(&.{ descriptionFor(entry) orelse "", author }, query, .{ .plain = true });
@@ -1992,13 +1992,13 @@ fn scoreEntry(entry: StoreEntry, query: *const fuzzy.Query) ?f64 {
 /// Added to description/author/tag hits so they rank below any name/id hit.
 const prose_match_penalty: f64 = 2.0;
 
-/// Best-first, falling back to the A→Z order for equal scores.
+/// Best-first, falling back to the A->Z order for equal scores.
 fn entryScoreLess(_: void, lhs: StoreEntry, rhs: StoreEntry) bool {
     if (lhs.score != rhs.score) return lhs.score < rhs.score;
     return entryLess({}, lhs, rhs);
 }
 
-/// Drop non-matching entries and order what's left. With no query this is the plain A→Z list the
+/// Drop non-matching entries and order what's left. With no query this is the plain A->Z list the
 /// store has always shown; with one, the best match is the first card.
 fn rankEntries(entries: *std.ArrayList(StoreEntry), query: *const fuzzy.Query) void {
     if (query.isEmpty()) {
@@ -2021,7 +2021,7 @@ fn rankEntries(entries: *std.ArrayList(StoreEntry), query: *const fuzzy.Query) v
 fn draw(_: ?*anyopaque) anyerror!dvui.App.Result {
     // Unlike the old flat list, the tab now fills the full explorer viewport height
     // (`expand = .both`, not just `.horizontal`) so the section below the tab strip gets a
-    // genuinely bounded height — it then scrolls its own overflow (see
+    // genuinely bounded height - it then scrolls its own overflow (see
     // `drawStoreSection`/`drawInstalledSection`) rather than the whole tab growing forever and
     // leaning on the explorer's own scrollArea (`files.zig`'s tree still does that; we don't).
     var vbox = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
@@ -2037,7 +2037,7 @@ fn draw(_: ?*anyopaque) anyerror!dvui.App.Result {
 
     try drawHeader();
 
-    // Filter row — the app's one filter control, the same as the file tree's.
+    // Filter row - the app's one filter control, the same as the file tree's.
     const filter_text = core.widgets.filterRow(@src(), "Filter...", .{ .margin = .{ .y = 4 } });
     var query = fuzzy.Query.init(filter_text);
 
@@ -2047,7 +2047,7 @@ fn draw(_: ?*anyopaque) anyerror!dvui.App.Result {
 
     // Registry availability is a property of the *store* pane alone. The installed pane is built
     // entirely from local state (loaded plugins, disabled ids, load failures, the plugins
-    // directory) and needs no network at all, so it always draws immediately — offline, behind a
+    // directory) and needs no network at all, so it always draws immediately - offline, behind a
     // captive portal, or while the very first fetch is still in flight. Installed cards simply
     // render their local half until a snapshot arrives to enrich them (see `have_snapshot`).
     have_snapshot = maybe_snapshot != null;
@@ -2055,7 +2055,7 @@ fn draw(_: ?*anyopaque) anyerror!dvui.App.Result {
     const arena = dvui.currentWindow().arena();
 
     // Store entries (STORE tab): one row per registry plugin, independent of local install
-    // state — a pure "what does the store publish" list. See `drawStoreCard`.
+    // state - a pure "what does the store publish" list. See `drawStoreCard`.
     var store_entries: std.ArrayList(StoreEntry) = .empty;
     if (maybe_snapshot) |snap| {
         for (snap.summary.plugins) |entry| {
@@ -2071,8 +2071,8 @@ fn draw(_: ?*anyopaque) anyerror!dvui.App.Result {
     }
     rankEntries(&store_entries, &query);
 
-    // Installed entries (INSTALLED tab): everything genuinely present locally — loaded,
-    // disabled-on-disk, sideloaded, or a failed/rejected build — enriched with a matching
+    // Installed entries (INSTALLED tab): everything genuinely present locally - loaded,
+    // disabled-on-disk, sideloaded, or a failed/rejected build - enriched with a matching
     // registry row (for "store vX" / Update-availability) wherever the registry knows the id too.
     var installed_entries: std.ArrayList(StoreEntry) = .empty;
     for (app.host.plugins.items) |plugin| {
@@ -2091,7 +2091,7 @@ fn draw(_: ?*anyopaque) anyerror!dvui.App.Result {
         }) catch {};
     }
     // Disabled plugins are unloaded (not in `host.plugins`) but remain on disk; reuse the name +
-    // version we remembered while they were loaded so they keep their A→Z position and current
+    // version we remembered while they were loaded so they keep their A->Z position and current
     // version across enable/disable.
     for (app.disabledIds()) |id| {
         if (!std.unicode.utf8ValidateSlice(id)) continue;
@@ -2120,7 +2120,7 @@ fn draw(_: ?*anyopaque) anyerror!dvui.App.Result {
     }
     // Anything else sitting in the plugins directory. Nothing in fizzy's memory describes
     // these (a half-finished install, a sideloaded directory, a build from a previous session we
-    // never tried to load), but they are on disk, so they get a card — and therefore always an
+    // never tried to load), but they are on disk, so they get a card - and therefore always an
     // Uninstall, and a Reinstall when the store has a build for this host (see `drawCardControls`).
     for (disk_ids.items) |id| {
         if (isBundled(id)) continue;
@@ -2169,18 +2169,18 @@ fn drawPaneTabs(status: store.Status) void {
     }
 }
 
-/// True while the catalog holds a parsed snapshot — i.e. the registry half of every card is real
+/// True while the catalog holds a parsed snapshot - i.e. the registry half of every card is real
 /// rather than merely unknown-so-far. Set once per `draw` (under the catalog lock) and read by the
 /// card drawing helpers, which run inside that same pass.
 ///
 /// The distinction matters because "the store has no build for this host" and "we have not been
 /// able to ask the store" look identical from a null `entry.release`, and only the first is a
-/// genuine, user-actionable problem. Offline, the second is what's true — so the red
+/// genuine, user-actionable problem. Offline, the second is what's true - so the red
 /// "No compatible build in store" text is suppressed rather than accusing every installed plugin
 /// of being unpublished. See `drawCardControls`/`drawStoreCardControls`.
 var have_snapshot = false;
 
-/// Centered "Fetching store…" spinner, drawn inside the *store* pane only while the very first
+/// Centered "Fetching store..." spinner, drawn inside the *store* pane only while the very first
 /// catalog fetch is in flight. The installed pane above it is unaffected: it renders from local
 /// state and never waits on the network (see `draw`).
 fn drawFetchingPlaceholder() void {
@@ -2249,7 +2249,7 @@ fn drawUnreachablePlaceholder() void {
 }
 
 /// How many cards the entry animation staggers across before every later card shares the last
-/// card's delay — without a cap, a large store would spend seconds trickling cards in.
+/// card's delay - without a cap, a large store would spend seconds trickling cards in.
 const card_stagger_cap: usize = 10;
 
 /// Slide a card in from the left with a slight overshoot the first time its id is drawn,
@@ -2277,7 +2277,7 @@ fn cardAnimator(src: std.lang.SourceLocation, entry: StoreEntry, index: usize) *
 /// `explorer/Explorer.zig` uses, so a narrow pane or an overly-wide card still scrolls with the
 /// usual visual hint instead of clipping silently. Returns the shown count (unused).
 ///
-/// This pane — and only this pane — owns the registry's loading/offline states: the spinner while
+/// This pane - and only this pane - owns the registry's loading/offline states: the spinner while
 /// the first fetch is in flight, the unreachable empty state when it fails, and a small inline
 /// spinner beside the header while a refresh runs over already-shown cards.
 fn drawStoreSection(entries: []const StoreEntry, filter_text: []const u8, status: store.Status) usize {
@@ -2290,7 +2290,7 @@ fn drawStoreSection(entries: []const StoreEntry, filter_text: []const u8, status
         .vertical_bar = .auto_overlay,
     }, .{ .expand = .both, .background = false });
 
-    // `entries` is already filtered and ranked by `rankEntries` — best match first.
+    // `entries` is already filtered and ranked by `rankEntries` - best match first.
     var shown: usize = 0;
     for (entries) |entry| {
         var anim = cardAnimator(@src(), entry, shown);
@@ -2300,7 +2300,7 @@ fn drawStoreSection(entries: []const StoreEntry, filter_text: []const u8, status
     }
     if (shown == 0) {
         if (!have_snapshot) {
-            // Nothing cached yet, so the empty list says nothing about the store's contents —
+            // Nothing cached yet, so the empty list says nothing about the store's contents -
             // it's still loading, or we couldn't ask. `.idle` can only be a fetch about to start
             // (see `draw`'s `first_draw_done`), so it reads as loading too.
             switch (status) {
@@ -2327,7 +2327,7 @@ fn drawStoreSection(entries: []const StoreEntry, filter_text: []const u8, status
 
 /// INSTALLED tab: everything genuinely present locally, grouped under "Local" (sideloaded dylibs)
 /// and "Built-in" (bundled + static built-ins) headers. This is the *only* place enable/disable,
-/// update, uninstall, and failed-to-load detail show up — see `drawCard`. Returns the shown
+/// update, uninstall, and failed-to-load detail show up - see `drawCard`. Returns the shown
 /// count (unused).
 fn drawInstalledSection(entries: []const StoreEntry, filter_text: []const u8) usize {
     var pane_box = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .background = false });
@@ -2396,14 +2396,14 @@ fn isBuiltIn(id: []const u8) bool {
     return isBundled(id);
 }
 
-/// INSTALLED-tab card: full state — enabled checkbox, update/uninstall, failed-to-load detail —
+/// INSTALLED-tab card: full state - enabled checkbox, update/uninstall, failed-to-load detail -
 /// via `drawCardControls`/`infoLine` (which still shows "installed vX"). See `drawCardShell`.
 fn drawCard(entry: StoreEntry) void {
     var buf: [192]u8 = undefined;
     drawCardShell(entry, drawCardControls, infoLine(&buf, entry), .{ .show_failure = true, .selection_toggles = true, .compact = true });
 }
 
-/// STORE-tab card: browse-only — just an install button or a "no compatible build" message via
+/// STORE-tab card: browse-only - just an install button or a "no compatible build" message via
 /// `drawStoreCardControls`/`storeInfoLine` (never "installed vX": that's the INSTALLED tab's job,
 /// even for a store plugin the user happens to already have installed). See `drawCardShell`.
 fn drawStoreCard(entry: StoreEntry) void {
@@ -2413,7 +2413,7 @@ fn drawStoreCard(entry: StoreEntry) void {
 
 /// Static floor under a card's (and so the whole explorer tab's) width: below this, the
 /// scrollArea takes over horizontally rather than squeezing the card further. Deliberately a
-/// constant rather than content-derived (see `drawCardShell`) — roughly enough room for a short
+/// constant rather than content-derived (see `drawCardShell`) - roughly enough room for a short
 /// title, a few words of description, and the install/update controls without either crowding
 /// into the other. A fraction of the app width was the other option on the table, but that would
 /// mean plumbing the window size down to every card just to move a number that has no reason to
@@ -2421,17 +2421,17 @@ fn drawStoreCard(entry: StoreEntry) void {
 const card_min_w: f32 = 280;
 
 /// Applied as `max_size_content.w` to every card text line (title/description/author/row2) below.
-/// This is *not* a render-width cap — `max_size_content` only clamps a widget's *reported* min
+/// This is *not* a render-width cap - `max_size_content` only clamps a widget's *reported* min
 /// size (see `WidgetData.minSizeSetAndRefresh`), never the rect it actually gets handed to draw
 /// into. With `.expand = .horizontal`, that rect still comes from the card's real (fluid) width;
 /// `LabelWidget`'s default `ellipsize = true` then truncates the render to fit it. What this
-/// *does* do is stop a plain label's other behavior — reporting its full unwrapped text width as
-/// its min size — from ever reaching the card and inflating `card_min_w` into "however long the
+/// *does* do is stop a plain label's other behavior - reporting its full unwrapped text width as
+/// its min size - from ever reaching the card and inflating `card_min_w` into "however long the
 /// longest description happens to be", which is exactly what the scrollArea must not do.
 const card_text_no_floor: f32 = 1;
 
 /// The one card text line that does *not* get `card_text_no_floor`: the title. A card whose name
-/// has been squeezed away is unusable — you can't tell which plugin the controls belong to — so
+/// has been squeezed away is unusable - you can't tell which plugin the controls belong to - so
 /// the title reports up to this much width and the scrollArea grows a horizontal bar rather than
 /// eating into it. Bounded by construction (unlike a description, whose length is unbounded and
 /// author-controlled): a title longer than this still reports only this much and ellipsizes, so
@@ -2445,16 +2445,16 @@ const card_title_min_w: f32 = 96;
 /// the info column's own margin does the job, so the sides go to zero.
 const card_text_padding: dvui.Rect = .{ .x = 0, .y = 1, .w = 0, .h = 1 };
 
-/// Shared card shell: a clickable container (logo + info, and — for a card with
-/// `selection_toggles` — its controls in the panel beside it). Clicking anywhere
+/// Shared card shell: a clickable container (logo + info, and - for a card with
+/// `selection_toggles` - its controls in the panel beside it). Clicking anywhere
 /// outside the controls selects the plugin (its README shows in the center). The controls consume
 /// their own clicks so the card-level click never double-fires. `controls` draws the
 /// bottom-right state controls (differs between the store and installed cards, see
 /// `drawStoreCardControls`/`drawCardControls`); `row2_text` is the already-formatted dim
 /// monospace id/version line (differs likewise, see `storeInfoLine`/`infoLine`); `show_failure`
 /// gates the failed-to-load detail block, which only makes sense on an installed-pane card.
-/// The per-card switches. A struct rather than four positional bools — the list cards, the store
-/// cards and the update window each want a different combination, and `(…, true, false, true)`
+/// The per-card switches. A struct rather than four positional bools - the list cards, the store
+/// cards and the update window each want a different combination, and `(..., true, false, true)`
 /// says nothing at the call site.
 const CardOptions = struct {
     /// Surface a rejected build's load-failure detail under the info line.
@@ -2467,7 +2467,7 @@ const CardOptions = struct {
     ///
     /// The *store* pane keeps it: every card there is a registry row that has both, so reserving
     /// the lines costs nothing and keeps a long browse list on an even rhythm. Installed and
-    /// update cards don't — a sideloaded or locally built plugin often has neither — and there the
+    /// update cards don't - a sideloaded or locally built plugin often has neither - and there the
     /// reservation is just a hole between the title and the rest of the card.
     compact: bool = false,
 };
@@ -2528,11 +2528,11 @@ fn drawCardShell(entry: StoreEntry, controls: *const fn (StoreEntry) void, row2_
         }
 
         // 2. State controls, bottom-right. `gravity_y = 1.0` on this wrapper (rather than the
-        // shared `controls(entry)`'s own centered `gravity_y = 0.5` — that function is reused
+        // shared `controls(entry)`'s own centered `gravity_y = 0.5` - that function is reused
         // as-is by the detail header, where centered is right) bottom-anchors it within the
         // card row, reading as "underneath the text stack" without actually nesting inside the
         // (vertical) info column, which would put it after `bw.processEvents()` below and lose
-        // click priority — see the note there. Must still be laid out *before* the
+        // click priority - see the note there. Must still be laid out *before* the
         // (expand-horizontal) info column: a `gravity_x = 1.0` child reserves its natural width
         // from the right edge of whatever's left regardless of draw order, but an `expand`-ing
         // sibling's bottom-up min size would otherwise eat 100% of what's left and starve this
@@ -2547,7 +2547,7 @@ fn drawCardShell(entry: StoreEntry, controls: *const fn (StoreEntry) void, row2_
             });
             defer ctl_anchor.deinit();
             // A card with a flyout keeps its actions there, beside the toggles, so the body is
-            // pure content — which is what lets a rejected build's failure message wrap across
+            // pure content - which is what lets a rejected build's failure message wrap across
             // the whole card instead of squeezing into a column beside a row of buttons.
             if (!opts.selection_toggles) controls(entry);
         }
@@ -2557,12 +2557,12 @@ fn drawCardShell(entry: StoreEntry, controls: *const fn (StoreEntry) void, row2_
         // captures press/release for its own text-selection (see its `processEvent`) regardless
         // of whether anyone actually wants to select that text. If the info column ran first, it
         // would silently steal every click landing on the failure text (the only remaining
-        // `textLayout` below — everything else in the column is a plain label), so this has to
+        // `textLayout` below - everything else in the column is a plain label), so this has to
         // run after the (already-first) controls but before the (still-to-come) text.
         bw.processEvents();
 
-        // 3. Info column: title (largest, bold) — description (single line, ellipsized) —
-        // author — then the dim id/version line. Every line below is always drawn, even with an
+        // 3. Info column: title (largest, bold) - description (single line, ellipsized) -
+        // author - then the dim id/version line. Every line below is always drawn, even with an
         // empty string, so every card reserves the same four lines of height regardless of which
         // fields a given plugin actually has (see the "cards that are all the same size" ask).
         {
@@ -2594,7 +2594,7 @@ fn drawCardShell(entry: StoreEntry, controls: *const fn (StoreEntry) void, row2_
                 }
             }
 
-            // Single line, ellipsized (LabelWidget's default) rather than wrapped — a tooltip
+            // Single line, ellipsized (LabelWidget's default) rather than wrapped - a tooltip
             // picks up the full text only when it was actually truncated.
             const description: []const u8 = descriptionFor(entry) orelse "";
             if (!opts.compact or description.len > 0) {
@@ -2643,12 +2643,12 @@ fn drawCardShell(entry: StoreEntry, controls: *const fn (StoreEntry) void, row2_
             });
 
             // A local build that is on disk but rejected at load time (ABI/SDK mismatch, id
-            // collision, etc.) — this is the *only* place that surfaces it (there is no more
+            // collision, etc.) - this is the *only* place that surfaces it (there is no more
             // startup dialog), so it must carry every diagnostic detail we have. It wraps across
             // the card's full width: nothing shares this row any more, since every control moved
             // into the flyout beside the card. The zero-floor max (as on the labels above) keeps the wrapped
             // text from reporting its unwrapped width as the card's min size. Store (upper-pane)
-            // cards never show this — see `show_failure`.
+            // cards never show this - see `show_failure`.
             if (opts.show_failure) if (failedInfo(entry.id)) |f| {
                 var fail_wrap = dvui.box(@src(), .{ .dir = .vertical }, .{
                     .expand = .horizontal,
@@ -2684,7 +2684,7 @@ fn drawCardShell(entry: StoreEntry, controls: *const fn (StoreEntry) void, row2_
     }
 
     // The info column's failure-detail text layout sets an ibeam cursor on hover (for its own
-    // text selection) regardless of whether the card claimed its clicks above — restore the
+    // text selection) regardless of whether the card claimed its clicks above - restore the
     // plain card cursor now that it's had its turn this frame ("last cursorSet call wins" for
     // the frame).
     if (bw.hover) dvui.cursorSet(.arrow);
@@ -2736,7 +2736,7 @@ fn flyoutClear() void {
 /// controls in a row without squeezing the title and description into nothing. Putting them
 /// beside the card the user has chosen keeps the resting card readable and costs one tap.
 ///
-/// Selection rather than hover, because a hover-only control does not exist on a touch screen —
+/// Selection rather than hover, because a hover-only control does not exist on a touch screen -
 /// and the web build is the one most likely to be used from a phone. Selection is the same
 /// gesture on both: a click or a tap.
 fn drawSelectionToggles(
@@ -2757,7 +2757,7 @@ fn drawSelectionToggles(
     const scale = dvui.windowNaturalScale();
     // Anchor to the card's right edge *or* the visible edge of the list, whichever comes first.
     // A card is wider than a narrow sidebar (`card_min_w` + horizontal scroll), so its own right
-    // edge is often somewhere out under the center pane — anchoring there would leave the panel
+    // edge is often somewhere out under the center pane - anchoring there would leave the panel
     // floating in the middle of the editor, detached from the row it belongs to. Clipping is also
     // what the user sees: only the drawn part of the card can be clicked.
     const clip = dvui.clipGet();
@@ -2770,8 +2770,8 @@ fn drawSelectionToggles(
     };
 
     // The same frosted panel the account flyout and every dialog use (`core.widgets.Popover`):
-    // one definition of what a floating surface in fizzy looks like — the blur behind it, the
-    // fill, the corners, the shadow — rather than this one hand-rolling a translucent box that
+    // one definition of what a floating surface in fizzy looks like - the blur behind it, the
+    // fill, the corners, the shadow - rather than this one hand-rolling a translucent box that
     // only resembled them.
     //
     // Centred on the card's middle, and grown out of it.
@@ -2799,7 +2799,7 @@ fn drawSelectionToggles(
     }
 
     // The page, first: it is what the card is *about*, and the one row that is the same on every
-    // card in both panes. It opens as a preview tab like any other document — keeping one is the
+    // card in both panes. It opens as a preview tab like any other document - keeping one is the
     // tab's own menu, not a row here.
     {
         var r = core.widgets.Popover.row(@src(), .{});
@@ -2807,20 +2807,20 @@ fn drawSelectionToggles(
         r.deinit();
         if (r.clicked) {
             // Grouping 0: the pane the user is in. The workbench's own default
-            // (`open_workspace_grouping`), which is what "open this where I am" means — the store
+            // (`open_workspace_grouping`), which is what "open this where I am" means - the store
             // has no business choosing a pane, and "open to the side" is the tab strip's job.
             Page.open(app.host, entry.id, 0) catch |err|
                 reportError("could not open the page for '{s}': {s}", .{ entry.id, @errorName(err) });
         }
     }
     drawToggleControls(entry, .compact);
-    // Whichever controls this card's pane owns — the installed pane's full set, the store pane's
-    // Install/Uninstall — so both panes' cards are the same object: content in the body, every
+    // Whichever controls this card's pane owns - the installed pane's full set, the store pane's
+    // Install/Uninstall - so both panes' cards are the same object: content in the body, every
     // control in the panel beside the selected one.
     //
     // Wrapped in a normally-packed row of its own: those functions' boxes set `gravity_y = 0.5`
     // (right for the detail header, where it centres against the header), and a gravity-in-(0,1)
-    // *direct* child of a vertical box is treated as positioned/overlay by `BoxWidget.rectFor` —
+    // *direct* child of a vertical box is treated as positioned/overlay by `BoxWidget.rectFor` -
     // it would be drawn on top of the toggles above instead of under them.
     {
         var actions = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .y = 2 } });
@@ -2851,7 +2851,7 @@ fn drawToggleControls(entry: StoreEntry, size: ToggleSize) void {
     const failed = entry.kind == .failed or app.isFailed(entry.id);
     const untracked = !loaded and !disabled and !failed and (entry.kind == .on_disk or isOnDisk(entry.id));
 
-    // A *failed* build is the one case with nothing to toggle — it already tried and lost, and
+    // A *failed* build is the one case with nothing to toggle - it already tried and lost, and
     // gets the Retry/Reinstall buttons on the card instead.
     // Each control gets its own normally-packed row: these are drawn into *vertical* parents (the
     // card flyout, the detail header's toggle column), where a `gravity_y = 0.5` direct child is
@@ -2874,7 +2874,7 @@ fn drawToggleControls(entry: StoreEntry, size: ToggleSize) void {
     }
 }
 
-/// Detail-page header controls: the same actions a card carries, plus the two toggles inline —
+/// Detail-page header controls: the same actions a card carries, plus the two toggles inline -
 /// the header has the width for them, and there is no card to hover there.
 fn drawDetailControls(entry: StoreEntry) void {
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_x = 1.0, .gravity_y = 0.5 });
@@ -2887,7 +2887,7 @@ fn drawDetailControls(entry: StoreEntry) void {
     drawCardControls(entry);
 }
 
-/// True when `entry` is genuinely present on disk in some form — loaded, disabled-on-disk,
+/// True when `entry` is genuinely present on disk in some form - loaded, disabled-on-disk,
 /// sideloaded local, a failed/rejected build, or a protected bundled built-in. Mirrors the
 /// "present on disk" condition `drawCardControls` uses to decide whether to show
 /// enable/uninstall controls at all; `infoLine` reuses it so a plugin that was *never*
@@ -2910,12 +2910,12 @@ fn releaseDate(entry: StoreEntry) ?[]const u8 {
     return if (rel.published.len > 0) rel.published else null;
 }
 
-/// Compose the dim `id · store v{latest} · installed v{current}` line into `buf`, skipping
+/// Compose the dim `id . store v{latest} . installed v{current}` line into `buf`, skipping
 /// parts we don't have:
-///   * `store v{latest}` — the highest version published in the registry, shown for *any*
+///   * `store v{latest}` - the highest version published in the registry, shown for *any*
 ///     plugin with a store presence, independent of whether it is installed or host-compatible.
-///   * `installed v{current}` — the plugin's own current version, shown only when `entry` is
-///     genuinely installed (see `isInstalled`) — never for a plugin the user hasn't installed.
+///   * `installed v{current}` - the plugin's own current version, shown only when `entry` is
+///     genuinely installed (see `isInstalled`) - never for a plugin the user hasn't installed.
 fn infoLine(buf: []u8, entry: StoreEntry) []const u8 {
     var latest_buf: [40]u8 = undefined;
     const latest: ?[]const u8 = if (latestRegistryVersion(entry)) |lv|
@@ -2945,7 +2945,7 @@ fn infoLine(buf: []u8, entry: StoreEntry) []const u8 {
         n += 1;
     }
     // A build that is present but has never been run reads as installed-and-working otherwise;
-    // say so, so the Load button beside it has a reason. Only for the never-decided case — a
+    // say so, so the Load button beside it has a reason. Only for the never-decided case - a
     // plugin the user switched off deliberately doesn't need telling.
     if (!isBundled(entry.id) and app.host.pluginById(entry.id) == null and
         app.isUndecided(entry.id))
@@ -2956,8 +2956,8 @@ fn infoLine(buf: []u8, entry: StoreEntry) []const u8 {
     return joinParts(buf, parts[0..n]);
 }
 
-/// Compose the dim `id · store v{latest}` line for a store (upper-pane) card into `buf`. Unlike
-/// `infoLine`, this never shows install state — the STORE tab is a pure "what does the store
+/// Compose the dim `id . store v{latest}` line for a store (upper-pane) card into `buf`. Unlike
+/// `infoLine`, this never shows install state - the STORE tab is a pure "what does the store
 /// publish" list, even for a plugin the user happens to already have installed (see `drawCard`).
 fn storeInfoLine(buf: []u8, entry: StoreEntry) []const u8 {
     var latest_buf: [40]u8 = undefined;
@@ -2986,8 +2986,8 @@ const store_optimize_class = "fast";
 
 /// False when this Fizzy is a `Debug`/`ReleaseSafe` build. Such a host folds the `"safe"`
 /// optimize class into its `abi_fingerprint` (see `dylib.optimize_safety_class`), so it fetches a
-/// shard URL the store never publishes under, and *every* plugin — including ones whose SDK
-/// version matches this host exactly — reads "No compatible build in store". That message points
+/// shard URL the store never publishes under, and *every* plugin - including ones whose SDK
+/// version matches this host exactly - reads "No compatible build in store". That message points
 /// at the store, but the cause is entirely local and comptime-known, so say so instead. Same
 /// condition the local load path reports as `error.AbiOptimizeMismatch`.
 const host_optimize_matches_store = std.mem.eql(u8, dylib.optimize_safety_class, store_optimize_class);
@@ -2996,12 +2996,12 @@ const host_optimize_matches_store = std.mem.eql(u8, dylib.optimize_safety_class,
 /// `card_text_no_floor`, just with a usable floor instead of ~0). The message sits in the controls
 /// column, which is *not* expand-horizontal: whatever it reports, it takes out of the info column
 /// beside it. Left uncapped, a long message plus the icon reserved so much of a narrowed card that
-/// the title/description — all of which report ~0 and yield — collapsed to nothing while the error
+/// the title/description - all of which report ~0 and yield - collapsed to nothing while the error
 /// text alone stayed fully drawn. Capped, it ellipsizes (its tooltip carries the full text either
 /// way) and the title keeps its own floor below.
 const no_build_msg_max_w: f32 = 110;
 
-/// The "nothing here to install" message, shown wherever no host-compatible release resolved —
+/// The "nothing here to install" message, shown wherever no host-compatible release resolved -
 /// identical in both panes (store card, installed card, detail header) so a card never changes
 /// width just by which list it's in. Out-of-class hosts (see `host_optimize_matches_store`) get
 /// the optimize-mode wording plus the same alert icon a failed local load carries; the tooltip
@@ -3036,10 +3036,10 @@ fn drawNoStoreBuild(entry: StoreEntry, opts: dvui.Options) void {
     // Web included: it once had no plugin binaries at all, which made the "Needs release"
     // wording a lie there, but a web build installs wasm side modules now and a `ReleaseSafe`
     // one is out of class exactly like a native `ReleaseSafe` one. Exempting wasm only hid the
-    // reason — a ReleaseSafe web app reported "No store build" against every plugin in a healthy
+    // reason - a ReleaseSafe web app reported "No store build" against every plugin in a healthy
     // registry, which reads as the store being empty rather than as this build being unservable.
     const optimize_mismatch = !host_optimize_matches_store;
-    // The store *does* have this host's build — it just needs a newer Fizzy. Nothing about the
+    // The store *does* have this host's build - it just needs a newer Fizzy. Nothing about the
     // plugin is wrong, so point at the app update instead of at a missing build.
     const needs_newer_fizzy = !optimize_mismatch and releaseNeedsNewerFizzy(entry);
 
@@ -3114,7 +3114,7 @@ fn drawNoStoreBuild(entry: StoreEntry, opts: dvui.Options) void {
     }
 }
 
-/// Join `parts` with " · ", truncating (rather than overflowing) if `buf` is too small.
+/// Join `parts` with " . ", truncating (rather than overflowing) if `buf` is too small.
 fn joinParts(buf: []u8, parts: []const []const u8) []const u8 {
     var len: usize = 0;
     for (parts, 0..) |p, i| {
@@ -3131,7 +3131,7 @@ fn joinParts(buf: []u8, parts: []const []const u8) []const u8 {
     return buf[0..len];
 }
 
-/// True when this host's SDK satisfies `rel`'s `min_sdk_version` — i.e. `PluginLoader` will
+/// True when this host's SDK satisfies `rel`'s `min_sdk_version` - i.e. `PluginLoader` will
 /// actually accept the build rather than rejecting it with `error.SdkVersionMismatch`.
 ///
 /// Being in this host's fingerprint shard is not sufficient. `sdk_version` bumps for every
@@ -3139,7 +3139,7 @@ fn joinParts(buf: []u8, parts: []const []const u8) []const u8 {
 /// the SDK types, so an SDK release that adds a host function (or tightens a behavior contract)
 /// leaves the fingerprint alone. A plugin rebuilt against that SDK therefore lands in the exact
 /// shard an older Fizzy fetches, looks like a plain version bump, and fails to load once
-/// downloaded. `min_sdk_version` is the field that carries the difference — this is where it is
+/// downloaded. `min_sdk_version` is the field that carries the difference - this is where it is
 /// checked, so an out-of-date Fizzy is never offered a build it cannot run.
 fn releaseSdkSatisfied(rel: store.ShardRelease) bool {
     const min = rel.minSdk() orelse return true;
@@ -3165,7 +3165,7 @@ fn releaseNeedsNewerFizzy(entry: StoreEntry) bool {
     return !releaseSdkSatisfied(r);
 }
 
-/// The compatible registry release when it is a *newer* version than the one currently loaded —
+/// The compatible registry release when it is a *newer* version than the one currently loaded -
 /// i.e. an update is available. Returns null when the plugin isn't loaded (we only know a live
 /// plugin's version), has no host-compatible release, or is already up to date.
 fn updateRelease(entry: StoreEntry) ?store.ShardRelease {
@@ -3176,10 +3176,10 @@ fn updateRelease(entry: StoreEntry) ?store.ShardRelease {
 }
 
 /// Right-justified controls whose shape depends on install state (see plan Phase 1R-c):
-///   * available in store → a single install button (down-to-line arrow);
-///   * installed → an Enabled checkbox + an Uninstall button;
-///   * protected bundled fallback (workbench/text/markdown) → no controls;
-///   * bundled built-in → not store-manageable (no uninstall).
+///   * available in store -> a single install button (down-to-line arrow);
+///   * installed -> an Enabled checkbox + an Uninstall button;
+///   * protected bundled fallback (workbench/text/markdown) -> no controls;
+///   * bundled built-in -> not store-manageable (no uninstall).
 fn drawCardControls(entry: StoreEntry) void {
     const theme = dvui.themeGet();
     const muted = theme.color(.window, .fill).lerp(theme.color(.window, .text), 0.7);
@@ -3217,21 +3217,21 @@ fn drawCardControls(entry: StoreEntry) void {
     const loaded = app.host.pluginById(entry.id) != null;
     const disabled = app.isDisabled(entry.id);
     const failed = entry.kind == .failed or app.isFailed(entry.id);
-    // On disk, never loaded, and nothing in memory describes it — a build dropped into
+    // On disk, never loaded, and nothing in memory describes it - a build dropped into
     // `plugins/<id>/` that fizzy has not classified yet (no `.plugins.<id>.enabled` on record, no
     // load attempt, no failure). `Editor.reconcileDiscoveredPlugins` normally promotes these to
     // `.disabled` (which carries the Enabled checkbox), but it runs off the watcher, so a card can
-    // still be drawn in this state — it must offer a way *in*, not just Uninstall.
+    // still be drawn in this state - it must offer a way *in*, not just Uninstall.
     const untracked = !loaded and !disabled and !failed and (entry.kind == .on_disk or isOnDisk(entry.id));
     // A build sitting in the plugins dir that isn't running: it failed to load (ABI/SDK mismatch,
     // etc.), or it is simply there with nothing in memory describing it. Either way it is on disk
     // like any installed plugin, so it must stay actionable (reinstall / uninstall) rather than
-    // dead-ending at a bare "Failed" label — or, worse, at no card at all.
+    // dead-ending at a bare "Failed" label - or, worse, at no card at all.
     const broken = failed or untracked;
     // On disk, never run, and nobody has decided about it: a local `zig build install` or a
     // hand-dropped build. `untracked` is the same situation a frame or two earlier, before the
     // watcher (or Refresh) classified it. This is an *offer*, not a fault, so it gets one primary
-    // "Load" button instead of the broken-build repair controls — and loading it goes through the
+    // "Load" button instead of the broken-build repair controls - and loading it goes through the
     // same first-load path a store install does, file-association prompt included
     // (`Editor.setPluginEnabled`).
     const undecided = !loaded and !failed and (app.isUndecided(entry.id) or untracked);
@@ -3240,16 +3240,16 @@ fn drawCardControls(entry: StoreEntry) void {
     if (loaded or disabled or entry.kind == .local or entry.kind == .disabled or broken) {
         // Enabled / Auto-update are not here: on a list card they live in the flyout at the
         // card's right edge (`drawSelectionToggles`), and on the detail page they sit beside these
-        // buttons (`drawDetailControls`). Only actions — update, repair, uninstall — are inline
+        // buttons (`drawDetailControls`). Only actions - update, repair, uninstall - are inline
         // on a card, so a row of four controls can't crowd the text out of a narrow sidebar.
         // Replace with a host-compatible registry build, just before uninstall:
-        //   * loaded & strictly newer → in-place Update (unload + reload);
-        //   * broken/not loaded       → Reinstall: download this host's build fresh over the one
+        //   * loaded & strictly newer -> in-place Update (unload + reload);
+        //   * broken/not loaded       -> Reinstall: download this host's build fresh over the one
         //     on disk and load it. Nothing is loaded to unload, so route through the install path
-        //     (is_update = false → `installAndLoadPlugin`, which re-enables the plugin, loads the
+        //     (is_update = false -> `installAndLoadPlugin`, which re-enables the plugin, loads the
         //     freshly downloaded file and clears the failure record). This is the way out of a
         //     wrong-SDK build: `selectedRelease` only ever hands back a release this Fizzy's ABI
-        //     fingerprint, os-arch and SDK version can all load — even when it carries the same
+        //     fingerprint, os-arch and SDK version can all load - even when it carries the same
         //     version number as the broken one already on disk.
         if (loaded) {
             if (comptime builtin.target.cpu.arch == .wasm32) {
@@ -3264,7 +3264,7 @@ fn drawCardControls(entry: StoreEntry) void {
                     startDownload(entry.id, rel, .{ .is_update = true });
             }
             // The store lists a newer version, but not one this Fizzy can take: say why, rather
-            // than show "store v0.1.32 · installed v0.1.31" and no Update button with no reason.
+            // than show "store v0.1.32 . installed v0.1.31" and no Update button with no reason.
             if (updateRelease(entry) == null) drawUpdateBlocked(entry);
         } else if (undecided) {
             if (dvui.button(@src(), "Load", .{}, .{ .gravity_y = 0.5, .margin = .{ .x = 4 } }))
@@ -3282,13 +3282,13 @@ fn drawCardControls(entry: StoreEntry) void {
                     startDownload(entry.id, rel, .{ .is_update = false });
             } else if (!have_snapshot or untracked) {
                 // No catalog yet (offline, or the first fetch is still running), so we genuinely
-                // don't know whether a build exists — say nothing rather than claim there is none.
+                // don't know whether a build exists - say nothing rather than claim there is none.
                 // Uninstall below still works; the card gains a Reinstall once a snapshot lands.
                 // An untracked build stays quiet too: its Enabled checkbox is the action here, and
                 // "no store build" is irrelevant noise for something never installed from the store.
             } else {
                 // No build for this host in the fetched shard, so there is nothing to reinstall
-                // *from*. Say why (short form — this card also carries the wrapped failure text,
+                // *from*. Say why (short form - this card also carries the wrapped failure text,
                 // and the controls row shares its width with it) instead of leaving a lone trash
                 // icon next to an unexplained "Failed to load".
                 drawNoStoreBuild(entry, .{ .margin = .{ .x = 4 } });
@@ -3312,12 +3312,12 @@ fn drawCardControls(entry: StoreEntry) void {
         return;
     }
 
-    // Same "we couldn't ask" caveat as the broken branch above — an unfetched catalog is not
+    // Same "we couldn't ask" caveat as the broken branch above - an unfetched catalog is not
     // evidence of a missing build.
     if (!have_snapshot) return;
 
     // Registry row with no host-compatible release and nothing on disk: the *store* hasn't
-    // published a build for this exact Fizzy version/arch yet — nothing the user can fix
+    // published a build for this exact Fizzy version/arch yet - nothing the user can fix
     // locally (unlike a failed local build, handled above), so the wording and the tooltip
     // both point at "the store doesn't have one" rather than "rebuild your plugin".
     drawNoStoreBuild(entry, .{});
@@ -3325,7 +3325,7 @@ fn drawCardControls(entry: StoreEntry) void {
 
 /// Upper-pane (store) card controls: an in-flight job status, Install, Uninstall for something
 /// already here, or a "no compatible build" message. Enable/disable and update stay the installed
-/// pane's job (`drawCardControls`) — those are settings for a plugin you have, and this pane is
+/// pane's job (`drawCardControls`) - those are settings for a plugin you have, and this pane is
 /// for deciding whether to have it.
 ///
 /// Never Install beside something already installed: that would re-fetch a build the app is
@@ -3353,8 +3353,8 @@ fn drawStoreCardControls(entry: StoreEntry) void {
         .downloaded => {}, // about to complete in tick(); fall through
     };
 
-    // The web has no download queue — its install is the page fetching and linking a module
-    // (`queueInstall` → `installFromUrl`) — so the in-flight state lives in `web_in_flight`
+    // The web has no download queue - its install is the page fetching and linking a module
+    // (`queueInstall` -> `installFromUrl`) - so the in-flight state lives in `web_in_flight`
     // rather than in `jobs`, and asking `isInstalling` is what covers both. Without this the
     // button simply sat there during a web install, which reads as a button that does nothing.
     if (isInstalling(entry.id)) {
@@ -3377,7 +3377,7 @@ fn drawStoreCardControls(entry: StoreEntry) void {
     if (selectedRelease(entry) != null) {
         // A word, not an arrow: this is the one control on the card that commits to something,
         // and "Install" is the only label it could carry. (The icon it replaced was a
-        // down-to-line arrow, which read as "download" — a file landing somewhere — when what
+        // down-to-line arrow, which read as "download" - a file landing somewhere - when what
         // happens is a plugin arriving in the app.) `queueInstall` rather than `startDownload`
         // so the web takes its own path, which has no download queue at all.
         if (dvui.button(@src(), "Install", .{}, .{ .gravity_y = 0.5 }))
@@ -3411,7 +3411,7 @@ const RepoSource = struct {
     subpath: []const u8 = "",
 };
 
-/// The fizzy monorepo — source of truth for the bundled built-ins (workbench, text, markdown), whose
+/// The fizzy monorepo - source of truth for the bundled built-ins (workbench, text, markdown), whose
 /// `README.md` / `ICON.png` live at `plugins/<id>/` rather than at a repo root.
 const fizzy_repo_url = "https://github.com/fizzyedit/fizzy";
 
@@ -3436,7 +3436,7 @@ fn readmeSource(entry: StoreEntry) ?RepoSource {
 }
 
 /// Where a bundled built-in's source sits in the fizzy repo: `plugins/<id>`, which is the shape
-/// every one of them has (`plugins/text/`, `plugins/archive/`, …).
+/// every one of them has (`plugins/text/`, `plugins/archive/`, ...).
 ///
 /// Derived from the id, never a list: `isBundled` asks the build, so any plugin it says yes to
 /// must resolve here too.
@@ -3466,7 +3466,7 @@ fn drawHeader() !void {
         .{ .gravity_x = 1.0, .corners = .all(1000000) },
     )) {
         if (catalog) |*c| c.refresh();
-        // Classify anything that appeared in the plugins dir since the last pass — same call the
+        // Classify anything that appeared in the plugins dir since the last pass - same call the
         // file watcher makes, so Refresh is a manual stand-in for it on a platform (or a mount)
         // where the watcher never fired. It deliberately only *offers* a discovered build (it
         // becomes an undecided "Load" card); Refresh never loads or executes a plugin.
@@ -3517,7 +3517,7 @@ pub fn queueSetEnabled(id: []const u8, enabled: bool) void {
 }
 
 /// Queue an auto-update opt in/out for `id`. Deliberately does **not** clear other queued actions
-/// for the same id (see `removePendingForId`) — it changes nothing about the plugin's load state.
+/// for the same id (see `removePendingForId`) - it changes nothing about the plugin's load state.
 fn queueSetAutoUpdate(id: []const u8, on: bool) void {
     const dup = app.gpa.dupe(u8, id) catch {
         reportError("'{s}' could not be queued", .{id});

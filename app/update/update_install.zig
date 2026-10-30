@@ -1,16 +1,16 @@
 //! Background install of a Velopack update.
 //!
 //! `vpkc_download_updates` and `vpkc_wait_exit_then_apply_updates` are both blocking
-//! calls — running them on the GUI thread freezes the window for the full download
+//! calls - running them on the GUI thread freezes the window for the full download
 //! window. This module owns a worker thread (one at a time, latched on a module-level
-//! singleton) that runs both steps off-thread and publishes phase + 0–100 progress
+//! singleton) that runs both steps off-thread and publishes phase + 0-100 progress
 //! back through atomics so the dialog can render a status line and a progress bar.
 //!
 //! The worker only downloads. Once the update is on disk the job latches
 //! `.downloaded` and the app restarts the way it always does (`restart`): unsaved
 //! documents are asked about first, and at teardown `applyAtExit` hands the waiting
 //! update to Velopack, which swaps the install once this process has exited and
-//! starts the new version. A restart called off leaves it downloaded — Velopack
+//! starts the new version. A restart called off leaves it downloaded - Velopack
 //! applies it on the next launch on its own. On failure the job latches `.failed`
 //! with an error code; callers wipe the singleton when the user dismisses the dialog.
 
@@ -37,9 +37,9 @@ window: *dvui.Window,
 io: std.Io,
 
 phase: std.atomic.Value(u8) = .init(@backingInt(Phase.queued)),
-/// 0–100 from Velopack's download callback. Stays at 0 outside `.downloading`.
+/// 0-100 from Velopack's download callback. Stays at 0 outside `.downloading`.
 progress: std.atomic.Value(u8) = .init(0),
-/// Worker → main publish flag.
+/// Worker -> main publish flag.
 done: std.atomic.Value(bool) = .init(false),
 /// Set on `.failed`. Read only after `phase == .failed`.
 err: ?auto_update.UpdateInstallError = null,
@@ -53,7 +53,7 @@ update_info: ?*anyopaque = null,
 downloaded_unseen: std.atomic.Value(bool) = .init(false),
 
 // ----------------------------------------------------------------------------
-// Singleton — one in-flight install at a time. Both the About dialog and the
+// Singleton - one in-flight install at a time. Both the About dialog and the
 // launch toast share this so they can't kick concurrent downloads.
 // ----------------------------------------------------------------------------
 
@@ -64,7 +64,7 @@ pub fn currentJob() ?*UpdateJob {
 }
 
 /// Returns the singleton if a worker is already running; otherwise spawns one and
-/// returns the new job. Caller does not own the pointer — call `clear()` when the
+/// returns the new job. Caller does not own the pointer - call `clear()` when the
 /// user dismisses the UI to free it.
 pub fn startOrGet(allocator: std.mem.Allocator, io: std.Io) !*UpdateJob {
     if (current) |j| return j;
@@ -87,7 +87,7 @@ pub fn startOrGet(allocator: std.mem.Allocator, io: std.Io) !*UpdateJob {
 }
 
 /// Drop the singleton if the worker has published `done`. No-op while the worker
-/// is still running, and for a downloaded update — that one waits for `applyAtExit`.
+/// is still running, and for a downloaded update - that one waits for `applyAtExit`.
 /// Safe to call repeatedly.
 pub fn clearIfFinished() void {
     const j = current orelse return;
@@ -97,7 +97,7 @@ pub fn clearIfFinished() void {
     j.allocator.destroy(j);
 }
 
-/// True once, on the GUI thread, when an update the user asked for has finished downloading —
+/// True once, on the GUI thread, when an update the user asked for has finished downloading -
 /// the cue to restart into it (`restart.tick`).
 pub fn takeDownloaded() bool {
     const j = current orelse return false;
@@ -112,7 +112,7 @@ pub fn downloaded() bool {
 
 /// At teardown, on a restart: hand a downloaded update to Velopack, which waits for this process
 /// to exit, swaps the install and starts the new version. False when there is none, or Velopack
-/// would not take it — the app then starts itself again as it is.
+/// would not take it - the app then starts itself again as it is.
 pub fn applyAtExit() bool {
     if (!auto_update.impl) return false;
     if (!downloaded()) return false;
@@ -125,7 +125,7 @@ pub fn applyAtExit() bool {
         j.manager = null;
         j.update_info = null;
     }
-    // silent=false allows the elevation prompt — /Applications is root-owned, so the bundle swap
+    // silent=false allows the elevation prompt - /Applications is root-owned, so the bundle swap
     // needs admin rights; restart=true starts the new version once it is in place.
     if (!Vpk.vpkc_wait_exit_then_apply_updates(mgr, info.TargetFullRelease, false, true, null, 0)) {
         auto_update.logVpkError("fizzy autoupdate: wait_exit_then_apply_updates failed");
@@ -148,8 +148,8 @@ pub fn phaseLabel(p: Phase) []const u8 {
         // `.queued` is only ever visible for the brief window between
         // `startOrGet` returning and the worker actually transitioning to
         // `.downloading`. Both callers (toast + About dialog) have already
-        // confirmed an update is available, so we say "Downloading…" here
-        // too instead of leaking a "Checking…" / "Preparing…" state that
+        // confirmed an update is available, so we say "Downloading..." here
+        // too instead of leaking a "Checking..." / "Preparing..." state that
         // would contradict the prior step.
         .queued, .downloading => "Downloading update…",
         .downloaded => "Restarting to update…",

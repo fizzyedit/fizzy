@@ -8,7 +8,7 @@
 //! The bounds and suggested choices a number declares are the palette's hints, never checked by
 //! `Command.Params`, so they go in its description, not its schema, where a generated client would
 //! refuse values the server takes. A command's result has no declared type yet, so its 200 response
-//! is any JSON value; the seam for typing it is a result type beside `Command.Params(…)` that
+//! is any JSON value; the seam for typing it is a result type beside `Command.Params(...)` that
 //! `commandPath` would read.
 const std = @import("std");
 const sdk = @import("fizzy_sdk");

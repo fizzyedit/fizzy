@@ -3,10 +3,10 @@
 //!
 //! The app declares the shape — rail, sidebar, main, panel — and until now that was the only way a
 //! region could exist, so everything the framework grew around regions (the corner button and its
-//! picker, its tab strip, assignments persisted by name, the settings table, keyword claiming) stopped
-//! at the surface a plugin draws. Inside it a plugin had to invent its own subdivision, which is
-//! exactly what the workbench did with workspaces and tab strips: a second implementation of the
-//! same idea, addressable by nothing.
+//! picker, its tab strip, assignments persisted by name, the settings table, keyword claiming)
+//! stopped at the surface a plugin draws. Inside it a plugin had to invent its own subdivision,
+//! which is exactly what the workbench did with workspaces and tab strips: a second implementation
+//! of the same idea, addressable by nothing.
 //!
 //! A plugin's region is not a hole in that design, because it is not a new place in the app's
 //! vocabulary: its keywords are **qualified by the region it is declared inside**

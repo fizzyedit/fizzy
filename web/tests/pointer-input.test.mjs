@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 
 // Exercise the page's actual input adapter without loading the wasm/browser runtime.
 const source = readFileSync(new URL('../fizzy.js', import.meta.url), 'utf8');
-const adapter = source.slice(source.indexOf('export function pointerInput'), source.indexOf('import { Dvui'));
+const adapter = source.slice(source.indexOf('export function pointerInput'), source.indexOf('// The on-screen keyboard'));
 const { pointerInput } = runInNewContext(adapter.replace('export function', 'function') + '\n({ pointerInput })');
 const listeners = {};
 const sent = [];

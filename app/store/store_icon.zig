@@ -2,7 +2,7 @@
 //!
 //! Fetches each plugin's `ICON.png` from its repository over HTTPS on a worker thread (same
 //! repo/subpath convention as `readme.zig`), caches decoded `dvui.ImageSource`s by plugin id,
-//! and draws them on store cards — including before the plugin is installed.
+//! and draws them on store cards - including before the plugin is installed.
 const std = @import("std");
 const builtin = @import("builtin");
 const dvui = @import("dvui");
@@ -51,7 +51,7 @@ const IconEntry = struct {
 // Stores *pointers* to heap-allocated entries, not entries by value: a worker thread holds a
 // raw `*IconEntry` for the lifetime of its fetch, and `request()` for a *different* id can grow
 // the map (rehashing the backing array) at any time. If entries lived in the map by value, that
-// rehash would move/invalidate the struct a still-running worker is writing into — the pointer
+// rehash would move/invalidate the struct a still-running worker is writing into - the pointer
 // stored here is stable across rehashes even though the map's own storage isn't.
 var icons: std.StringHashMapUnmanaged(*IconEntry) = .empty;
 
@@ -64,7 +64,7 @@ fn freeImage(source: dvui.ImageSource) void {
 }
 
 /// Begin fetching `ICON.png` for `id` from `repo` (optionally under `subpath`) if not already
-/// requested. Idempotent — safe to call every frame from each store card.
+/// requested. Idempotent - safe to call every frame from each store card.
 pub fn request(id: []const u8, repo: []const u8, subpath: []const u8) void {
     if (repo.len == 0) return;
     const gpa = repo_asset.gpa();

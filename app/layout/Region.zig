@@ -1,22 +1,22 @@
 //! A declared region: an area that accepts keywords and draws the surfaces matching them.
 //!
-//! Note this is **not** docking in the draggable-panel sense — a region's place is fixed by the
+//! Note this is **not** docking in the draggable-panel sense - a region's place is fixed by the
 //! shape that declares it. Real docking (dvui has dockable panels now) would be a layer *above*
 //! this that lets the user move regions at runtime, and is the natural basis for a
 //! Premiere-style shape. Named seam, not built.
 //!
 //! `init` + `deinit`, like any dvui widget, with the verb form on the namespace above it:
-//! `f.region(@src(), .{ … }, .{ … })` in a shape, which is `Layout.region` re-exporting this
+//! `f.region(@src(), .{ ... }, .{ ... })` in a shape, which is `Layout.region` re-exporting this
 //! file's `init`. Same arrangement as `dvui.box` over `BoxWidget.init`, and `core.widgets.split`
 //! over `Split.init`.
 //!
-//! `region` draws the region's own contents — its chrome, if it declared any, and the active
-//! matching surface — and leaves the caller positioned in the *remaining* space, so whatever the
+//! `region` draws the region's own contents - its chrome, if it declared any, and the active
+//! matching surface - and leaves the caller positioned in the *remaining* space, so whatever the
 //! layout writes next lands there. That is what removes the `showFirst`/`showSecond` pairs from
 //! shapes.
 //!
 //! The third argument is `dvui.Options` and goes to the region's box, the way
-//! `dvui.box` takes them. Fill, corners, margin, padding — those are the app's.
+//! `dvui.box` takes them. Fill, corners, margin, padding - those are the app's.
 //! The framework does not paint a card. Fizzy's explorer is a region with
 //! `background = false`; a shape that wants a rounded tray sets that itself.
 const std = @import("std");
@@ -31,7 +31,7 @@ const ViewDrag = @import("ViewDrag.zig");
 
 const Region = @This();
 
-/// The human-facing name the shape gave this region — "Sidebar", "Main", "Panel". What a user
+/// The human-facing name the shape gave this region - "Sidebar", "Main", "Panel". What a user
 /// picks from when moving a surface somewhere else, so it is worth a real word.
 name: []const u8 = "",
 /// What kinds of surface this region accepts, as its shape declared them.
@@ -40,14 +40,14 @@ keywords: []const []const u8 = &.{},
 owns_selection: bool = false,
 /// This region's widget id, stable across frames from the shape's `@src()`.
 id: dvui.Id = .zero,
-/// How far this region reaches along its parent's axis when it has never been dragged — the
+/// How far this region reaches along its parent's axis when it has never been dragged - the
 /// width under a horizontal parent, the height under a vertical one, in points. One number,
 /// because a region only ever divides its parent one way; the other axis is the parent's.
 default_extent: f32 = 0,
 /// Clip set while the region is open, restored on `deinit`.
 prev_clip: ?dvui.Rect.Physical = null,
 /// The box this region is. A region **is** a `dvui.box`: same layout mechanics, same
-/// options, same lifetime rules — so an app author who has written any dvui already knows
+/// options, same lifetime rules - so an app author who has written any dvui already knows
 /// how this behaves, and a split is a separator between two of them.
 box: ?*dvui.BoxWidget = null,
 layout: ?*Layout = null,
@@ -63,7 +63,7 @@ kind_slot: bool = false,
 pane_cards: bool = false,
 /// A tray the next split should keep targeting. Center and grouping boxes are not.
 resize: bool = false,
-/// An empty closed tray can disappear — a runtime split, an endless edge.
+/// An empty closed tray can disappear - a runtime split, an endless edge.
 forget_when_empty: bool = false,
 /// How this place lays its children.
 dir: dvui.enums.Direction = .vertical,
@@ -72,7 +72,7 @@ dir: dvui.enums.Direction = .vertical,
 size: dvui.Size = .{},
 /// This frame's border in physical pixels, for hit-testing a view drag.
 bounds: dvui.Rect.Physical = .{},
-/// What a view dropped here does, for a plugin's region — `sdk.RegionSpec.on_drop`.
+/// What a view dropped here does, for a plugin's region - `sdk.RegionSpec.on_drop`.
 on_drop: ?*const fn (ctx: ?*anyopaque, drop: sdk.RegionSpec.Drop) bool = null,
 drop_ctx: ?*anyopaque = null,
 /// Which window it is drawn in: 0 the main window, `n` the `n`th float from the bottom
@@ -80,11 +80,11 @@ drop_ctx: ?*anyopaque = null,
 /// layer under the pointer.
 layer: u16 = 0,
 
-/// The key this region's selection lives under in the host — see `Layout.selectedIn`.
+/// The key this region's selection lives under in the host - see `Layout.selectedIn`.
 ///
 /// A by-name place keeps its selection under its name alone. A place split into others is known
-/// by that name twice — the branch that holds the split (keyed to `slot`) and the leaf left
-/// showing its views (keyed to its own keywords) — and a key folding in the keywords gave the
+/// by that name twice - the branch that holds the split (keyed to `slot`) and the leaf left
+/// showing its views (keyed to its own keywords) - and a key folding in the keywords gave the
 /// two different selections: a drag out of the place read the branch's and carried a view the
 /// place was not showing.
 pub fn selectionKey(self: *const Region) u64 {
@@ -99,7 +99,7 @@ pub fn namedSelectionKey(name: []const u8) u64 {
 
 pub fn deinit(self: *Region) void {
     // Plugin panes skip the corner button, so their drop zones are drawn
-    // here — still clipped — after their own chrome has drawn.
+    // here - still clipped - after their own chrome has drawn.
     if (self.kind_slot) {
         if (self.layout) |l| {
             if (self.box) |b| ViewDrag.drawZones(l, self.name, b.data().id);
@@ -115,7 +115,7 @@ pub fn deinit(self: *Region) void {
             // A tray the next split should keep targeting is `resize`. Center and grouping
             // boxes are not: after they close, the following split sizes the region after
             // it. Clearing only for empty-keyword groups left Center holding the last top
-            // tray, so the Center–bottom split grew the top instead of the bottom.
+            // tray, so the Center-bottom split grew the top instead of the bottom.
             if (!self.resize and l.depth > 0) {
                 l.containers[l.depth - 1].last_resizable = null;
             }
@@ -124,14 +124,14 @@ pub fn deinit(self: *Region) void {
     }
 }
 
-// Opening and shutting from outside the layout — a rail button, a command, a keybind. These
+// Opening and shutting from outside the layout - a rail button, a command, a keybind. These
 // work on the copy `Editor.regionFor` hands back as well as on a live one, which is why they
 // touch only `id` and `default_extent`: everything they need is a persisted extent under an id,
 // never a widget pointer.
 
 pub fn isClosed(self: Region) bool {
-    // Absence is not zero: a region that was never sized — a stretchy one that takes what is
-    // left, now that every region registers — has no stored extent and is not shut.
+    // Absence is not zero: a region that was never sized - a stretchy one that takes what is
+    // left, now that every region registers - has no stored extent and is not shut.
     const stored = dvui.dataGet(null, self.id, "_size", f32) orelse return false;
     return stored <= 0;
 }
@@ -150,14 +150,14 @@ pub fn open(self: Region) void {
 }
 
 /// Auto-collapse is a *default*, not a lock: a `collapsible` region folds itself away when the
-/// container runs out of room, unless the user has said otherwise since — by tapping its rail
+/// container runs out of room, unless the user has said otherwise since - by tapping its rail
 /// icon, or by dragging its split back out. That answer is the peek, and it lives under the
 /// region's id beside `_size`.
 ///
 /// Without it, the collapse ran every frame and won every argument: on a mobile-width window the
 /// explorer shut itself the instant it was opened, and a drag moved the split for exactly as
 /// long as the button was held. The peek is forgotten again when the region is shut, or when the
-/// window grows back past `collapse_below` — so making the window small again collapses it, as
+/// window grows back past `collapse_below` - so making the window small again collapses it, as
 /// it should.
 fn collapseTarget(id: dvui.Id, chosen: f32, available: f32) f32 {
     const narrow = available > 0 and available < InitOptions.collapse_below;
@@ -180,7 +180,7 @@ fn collapseTarget(id: dvui.Id, chosen: f32, available: f32) f32 {
         peek = true;
         dvui.dataSet(null, id, "_peek", true);
     }
-    // Shut — dragged closed, or closed from a button. Re-arm.
+    // Shut - dragged closed, or closed from a button. Re-arm.
     if (chosen <= 0 and peek) {
         peek = false;
         dvui.dataSet(null, id, "_peek", false);
@@ -190,7 +190,7 @@ fn collapseTarget(id: dvui.Id, chosen: f32, available: f32) f32 {
 
 /// Whether this region is folded away by the auto-collapse: the container is too narrow for it
 /// and the user has not asked for it since. Distinct from `isClosed`, which asks whether the
-/// user *shut* it — a folded region keeps the extent it was left at, so widening the window puts
+/// user *shut* it - a folded region keeps the extent it was left at, so widening the window puts
 /// it back where it was, and `isClosed` is false the whole time it is invisible.
 ///
 /// A rail button that toggles a region has to ask this one. Reading `isClosed` there makes the
@@ -201,7 +201,7 @@ pub fn isFolded(self: Region) bool {
 }
 
 /// Whether this region is only open because the user asked for it on a container too narrow to
-/// hold it — the state a mobile-width layout draws a "close this" button for, and the one where a
+/// hold it - the state a mobile-width layout draws a "close this" button for, and the one where a
 /// shape may want to shut its other regions to make room.
 ///
 /// False on a window with room for the region: there the answer is just "open", and nothing
@@ -214,7 +214,7 @@ pub fn isPeeking(self: Region) bool {
 
 /// How a region draws its own contents.
 ///
-/// Null means "draw the selected matching surface" — the "this region IS x" form. A function
+/// Null means "draw the selected matching surface" - the "this region IS x" form. A function
 /// means the region has chrome of its own: a tab strip above its content, a titled scroll pane,
 /// a splittable panel. It is handed the region's keywords and returns when the region is full.
 ///
@@ -222,17 +222,17 @@ pub fn isPeeking(self: Region) bool {
 /// `panel_chrome`) named *fizzy's own* furniture from inside the generic layer. That is the
 /// case AGENTS.md calls a bug in `Layout` rather than a special case: a shape is supposed to be
 /// ordinary code over this API, and an app copying `src/editor/layout.zig` could not have written those two
-/// values itself. As a function pointer it is just `explorerPane` in `src/editor/layout.zig` —
+/// values itself. As a function pointer it is just `explorerPane` in `src/editor/layout.zig` -
 /// app code, passed in, replaceable by the app's own loop over `matching` / `selected` / `draw`,
 /// which is the governing test for everything here. (The bottom panel had one too, until
 /// a place's own strip, drawn whenever it holds more than one view, did the same job generically.)
 ///
 /// It also retired the two values nothing used (`.tabs`, `.icons`); `Layout.tabbed` is the
-/// first of those as a plain function, and the icon rail was never this shape to begin with —
+/// first of those as a plain function, and the icon rail was never this shape to begin with -
 /// it sits *beside* the region it chooses for, so fizzy's `layout.zig` calls it directly and reads the
 /// action it returns.
 pub const Content = struct {
-    /// Whatever the shape needs to draw its chrome — for fizzy's own shapes, the application.
+    /// Whatever the shape needs to draw its chrome - for fizzy's own shapes, the application.
     /// A `Layout` deliberately does not carry it: the layout mechanism knows about surfaces,
     /// regions and splits, and nothing about whose furniture is being drawn. Same `ctx` idiom
     /// as `Surface.draw`, for the same reason.
@@ -251,9 +251,9 @@ pub const Error = error{
     Failed,
 };
 
-/// What a region *is*, as opposed to how it is laid out — which is `dvui.Options`, unchanged.
+/// What a region *is*, as opposed to how it is laid out - which is `dvui.Options`, unchanged.
 pub const InitOptions = struct {
-    /// Below this container extent, a `collapsible` region folds itself away — the width at
+    /// Below this container extent, a `collapsible` region folds itself away - the width at
     /// which a sidebar beside a document stops being a layout and starts being two slivers. A
     /// number rather than a policy an app configures: it is about how small a pane can be before
     /// it is useless, not about what the app is for.
@@ -264,8 +264,8 @@ pub const InitOptions = struct {
     /// What kinds of surface this region accepts. Empty means it hosts nothing itself and is
     /// purely a container for other regions.
     keywords: []const []const u8 = &.{},
-    /// The region chooses among what it holds itself — a plugin's own tab strip
-    /// (`sdk.RegionSpec.owns_selection`) — so the app draws no strip for it. Otherwise a region
+    /// The region chooses among what it holds itself - a plugin's own tab strip
+    /// (`sdk.RegionSpec.owns_selection`) - so the app draws no strip for it. Otherwise a region
     /// holding two or more views gets the app's strip above them (`Layout.tabbedIn`), and one
     /// holding one shows just that view. A region with `content` draws its own chrome, so the
     /// strip is that function's to draw or not.
@@ -301,23 +301,23 @@ pub const InitOptions = struct {
     /// Drop this region from persisted extents when it is closed and has no assigned surface.
     /// An empty tray dragged shut disappears; one the user filled can close and reopen.
     forget_when_empty: bool = false,
-    /// Tree-internal edge that already has a sash — the leaf does not draw a create-handle there.
+    /// Tree-internal edge that already has a sash - the leaf does not draw a create-handle there.
     omit_edge: ?SplitTree.Side = null,
     /// Start shut when the window has no room to show this region beside everything else.
     ///
     /// Closing itself needs no flag: a region slides continuously from its full size to nothing,
     /// because a pinned box is exactly the size it is pinned to and a region clips what it holds.
-    /// There is no threshold and nothing snaps — a split that jumps the last stretch is a split
+    /// There is no threshold and nothing snaps - a split that jumps the last stretch is a split
     /// that fights you.
     collapsible: bool = false,
     /// When the view in this region lays itself out as panes of its own (`Host.region`: the
-    /// workbench's document panes), each pane wears this region's card — its fill, corners and
-    /// padding from the `dvui.Options` — and the region wears none: the gap between two panes then
+    /// workbench's document panes), each pane wears this region's card - its fill, corners and
+    /// padding from the `dvui.Options` - and the region wears none: the gap between two panes then
     /// shows what is behind the region, as the gap between two places does, and the split there
     /// reads as one. A region showing one pane, or none, keeps its card. Decided from the last
     /// frame's panes, so a second pane opening wears its card a frame after it appears.
     pane_cards: bool = false,
-    /// Wear the layout's card (`Layout.card`) — under whatever of its fill, corners and padding
+    /// Wear the layout's card (`Layout.card`) - under whatever of its fill, corners and padding
     /// the region's own `dvui.Options` set. A float's place asks for it; so can a place the shape
     /// draws, rather than spelling the card out. The places a split makes of it wear it too, and
     /// with `pane_cards` the panes its view opens.
@@ -327,10 +327,10 @@ pub const InitOptions = struct {
 /// Declare a region: an area that hosts matching surfaces, holds other regions, or both.
 ///
 /// It is a `dvui.box`. The second argument says what the region *is*; the third is dvui's own
-/// `Options` and is passed to that box — `expand`, `min_size_content`, `padding`,
+/// `Options` and is passed to that box - `expand`, `min_size_content`, `padding`,
 /// `margin`, `background`, `corners`, `gravity`, all of it. A rounded fill is an
 /// Option the shape sets. A sash gap is a packed split (`handle_size` child),
-/// not a margin on the card — plugin surfaces fill this box's content rect.
+/// not a margin on the card - plugin surfaces fill this box's content rect.
 ///
 /// Scope it and `deinit` it the way you would any box:
 ///
@@ -349,21 +349,21 @@ pub fn init(self: *Layout, src: std.lang.SourceLocation, init_opts: InitOptions,
         return .{};
     }
 
-    // The container this region lands in, if any — the layout's own stack, read directly
+    // The container this region lands in, if any - the layout's own stack, read directly
     // rather than through an accessor, so nothing about it appears on the app-facing API.
     const parent: ?*Layout.Container = if (self.depth == 0) null else &self.containers[self.depth - 1];
     const axis: dvui.enums.Direction = if (parent) |p| p.dir else .horizontal;
     const id = dvui.parentGet().extendId(src, opts.idExtra());
 
     // Declared inside another region, this one's keywords name a place *within* it: `{"document"}`
-    // inside the main area accepts `main.document`. The shape writes the short word — a sub-region
-    // should not have to know, or repeat, what it is nested in — and a plugin still reaches it by
+    // inside the main area accepts `main.document`. The shape writes the short word - a sub-region
+    // should not have to know, or repeat, what it is nested in - and a plugin still reaches it by
     // kind alone. See `Layout.Container.prefix` and `sdk.keywords.Fit`.
     //
     // A leftover origin sits inside the split grouping box. That box already
     // qualified under the shape's parent and registered as this name. Doing
     // it again under the box prefix made `main.main`, the grouping box kept
-    // the exact claim, and Split → Vertical drew two empty sides.
+    // the exact claim, and Split -> Vertical drew two empty sides.
     const keywords = blk: {
         if (init_opts.omit_edge != null and init_opts.name.len > 0 and self.state.splits.root(init_opts.name) != null) {
             var i = self.state.regions_building.items.len;
@@ -387,13 +387,13 @@ pub fn init(self: *Layout, src: std.lang.SourceLocation, init_opts: InitOptions,
     // Stored, not the drag preview: a swap onto Main poses this place as an
     // empty hole (or as a view that does not match these keywords), and
     // collapsing then lets Main eat the column until the pointer comes back.
-    // `hide_when_empty` is "nothing belongs here when idle" — the picker
-    // emptied it, every panel view is toggled off — not the view sitting
+    // `hide_when_empty` is "nothing belongs here when idle" - the picker
+    // emptied it, every panel view is toggled off - not the view sitting
     // on the pointer. Shape places stay; only a drop commits the hole.
     const matches = self.matchingIn(&probe);
     // Cleared through the picker is not "nothing belongs here": the user asked for an empty
     // place and expects to see it, hatch and all, until they put something back. Only a
-    // place nothing *chose* — every view toggled off, no assignment — folds away.
+    // place nothing *chose* - every view toggled off, no assignment - folds away.
     const cleared = if (self.state.assignment(init_opts.name)) |a| a.len == 0 else false;
     if (init_opts.hide_when_empty and keywords.len > 0 and matches.len == 0 and !cleared) {
         // A boundary with nothing on one side is not a boundary.
@@ -423,7 +423,7 @@ pub fn init(self: *Layout, src: std.lang.SourceLocation, init_opts: InitOptions,
         }
     }
     // The split declared before this region divides it from the one before: drawn now, with
-    // this region known — so a split never precedes a region that is not there.
+    // this region known - so a split never precedes a region that is not there.
     if (init_opts.resize) self.drawPendingSplit(id) else self.drawPendingSplit(null);
 
     // A resizable region's extent along its parent's axis is whatever the user last dragged it
@@ -444,7 +444,7 @@ pub fn init(self: *Layout, src: std.lang.SourceLocation, init_opts: InitOptions,
             .vertical => given.h,
         } + alongAxis(opts.paddingGet(), axis) + alongAxis(opts.borderGet(), axis);
         default_extent = default;
-        // Seeded from what the user last left this region at, by name — so a layout persists
+        // Seeded from what the user last left this region at, by name - so a layout persists
         // across restarts without the framework knowing which regions an app has.
         if (dvui.dataGet(null, id, "_size", f32) == null) {
             dvui.dataSet(null, id, "_size", self.state.extent(init_opts.name, default));
@@ -469,16 +469,16 @@ pub fn init(self: *Layout, src: std.lang.SourceLocation, init_opts: InitOptions,
         if (dvui.dataGet(null, id, "_fold", bool) orelse false) target = 0;
         const turned = dvui.dataGet(null, id, "_turned", bool) orelse false;
 
-        // Ease toward the target when it moved for a reason other than a drag — the collapse
+        // Ease toward the target when it moved for a reason other than a drag - the collapse
         // when the window runs out of room, and the restore when it comes back.
         //
         // A drag is exempt, and stays exempt without a flag: the split writes `_shown` alongside
-        // `_size`, so the two agree and nothing kicks off. Easing a drag would be wrong anyway —
+        // `_size`, so the two agree and nothing kicks off. Easing a drag would be wrong anyway -
         // a split should sit under the pointer, not lag behind it on a curve.
         //
         // `Split.eased` rather than a curve of its own: a region and a document pane sliding at
         // different speeds is the kind of wrongness nobody can name but everybody feels. It also
-        // carries the asymmetry — out with a little overshoot, in without any (`core.anim.slide`).
+        // carries the asymmetry - out with a little overshoot, in without any (`core.anim.slide`).
         extent = Split.eased(id, target);
         // The ease starts from the last shown extent, which a drag or a wider window may have
         // left above the cap: bound what is drawn, so motion stays within it.
@@ -491,10 +491,10 @@ pub fn init(self: *Layout, src: std.lang.SourceLocation, init_opts: InitOptions,
         // wider than the size the user dragged it to simply stays wider, and the split appears to
         // stop responding once it reaches that content's natural width. Pinning the maximum too
         // makes the stored size exact and stops a plugin's content dictating the app's
-        // proportions — the hazard `layout.zig` names in its sizing notes.
+        // proportions - the hazard `layout.zig` names in its sizing notes.
         //
-        // The extent is the region's whole reach — its border edge to border edge, what a split
-        // measures from the fixed edge to the pointer — so its own padding and border come out of
+        // The extent is the region's whole reach - its border edge to border edge, what a split
+        // measures from the fixed edge to the pointer - so its own padding and border come out of
         // it before it becomes a content size. Taken as the content size, a place card's padding
         // was added on top: a split grabbed at rest jumped by the card's padding either side.
         box_opts.padding = foldedPadding(box_opts.paddingGet(), extent, axis);
@@ -520,7 +520,7 @@ pub fn init(self: *Layout, src: std.lang.SourceLocation, init_opts: InitOptions,
         // dvui clamps a widget's reported min size with `max_size_content`, so capping it along
         // the parent's axis stops the plugin inside from reserving space the app never granted.
         // Without this the bottom panel cannot be dragged open past whatever the editor above it
-        // wants to be — the neighbour's content, not the layout, decides how far a split travels.
+        // wants to be - the neighbour's content, not the layout, decides how far a split travels.
         // The region clips anyway, so nothing escapes; it just stops pushing back.
         //
         // An explicit `max_size_content` from the shape wins: that is the app deciding, which is
@@ -548,12 +548,12 @@ pub fn init(self: *Layout, src: std.lang.SourceLocation, init_opts: InitOptions,
         }
     }
 
-    // Findable from outside the layout by the keywords it accepts — a rail button or a command
+    // Findable from outside the layout by the keywords it accepts - a rail button or a command
     // opening and shutting it, the settings pane listing where a panel can go. Every region that
-    // hosts surfaces registers, resizable or not — a stretchy region like the main area must be
+    // hosts surfaces registers, resizable or not - a stretchy region like the main area must be
     // in the registry too, or the picker never offers it and its surfaces read as unplaced.
     // A leftover leaf that kept a minted name must not overwrite the pinned
-    // subtree registered under that name — the parent sash still targets it.
+    // subtree registered under that name - the parent sash still targets it.
     const leftover_leaf = init_opts.omit_edge != null and !init_opts.resize;
     if (keywords.len > 0 and !tree_origin and !leftover_leaf) self.state.registerRegion(self.gpa, .{
         .name = init_opts.name,
@@ -614,11 +614,11 @@ pub fn init(self: *Layout, src: std.lang.SourceLocation, init_opts: InitOptions,
 
     // A region clips what it holds. Contents draw at their own natural size, so without this a
     // region squeezed narrower than its contents simply spills them over its neighbour instead
-    // of getting smaller — which is what a half-closed sidebar looked like.
+    // of getting smaller - which is what a half-closed sidebar looked like.
     const clip_to = box.data().contentRectScale().r;
     const prev_clip = dvui.clip(clip_to);
 
-    // A plugin region (`manual_contents`) draws its own chrome — workspace
+    // A plugin region (`manual_contents`) draws its own chrome - workspace
     // tabs, the fileless welcome. The place picker lives on the shape region
     // that hosts the plugin (Main), not on every document pane inside it.
     // An empty workspace pane was otherwise treated as a vacant slot: the
@@ -630,11 +630,11 @@ pub fn init(self: *Layout, src: std.lang.SourceLocation, init_opts: InitOptions,
 
     // Drawn at every size except none. Skipping content at *zero* is just not doing work nobody
     // can see; skipping it below a threshold would be a policy, and it would also break the
-    // layered form later — a tray blurring what is behind it needs the region underneath to have
+    // layered form later - a tray blurring what is behind it needs the region underneath to have
     // drawn, at every size the tray takes.
     //
     // Photographed, when the drag needs the card's picture, from this very
-    // draw and no other — see `drawContentsPhotographed`.
+    // draw and no other - see `drawContentsPhotographed`.
     if (!shut_now and keywords.len > 0 and !init_opts.manual_contents) {
         // The place keeps drawing its view while the card of it rides the pointer: the app
         // under a drag does not change, the drop zones lie over it (`cornerButton`).
@@ -673,15 +673,15 @@ const corner_quarter_depth: f32 = 12;
 /// the glass read as a lighter material than the drop zones'), and its shadow's strength.
 const corner_orb_light: f32 = 0.05;
 const corner_orb_shadow: f32 = 0.3;
-/// The one glyph, in points across — one size at rest and grown: it moves into the button, it
-/// does not grow — and how far its resting grey is from the window's colour toward white (black in
+/// The one glyph, in points across - one size at rest and grown: it moves into the button, it
+/// does not grow - and how far its resting grey is from the window's colour toward white (black in
 /// a light theme).
 const corner_glyph_size: f32 = 7;
 const corner_glyph_grey: f32 = 0.22;
 /// The grown orb's radius, in points: a circle on the place's corner point, the same on every
 /// place, which its outline cuts to the corner's quarter (further into it, the rounder the place).
 const corner_grown_radius: f32 = 30;
-/// How much of what a rounded place's curve cuts off its grown circle gets back, 0…1: none keeps
+/// How much of what a rounded place's curve cuts off its grown circle gets back, 0...1: none keeps
 /// one radius everywhere, all of it one depth.
 const corner_curve_reach: f32 = 0.5;
 /// A finger's target for the corner, in points: a square centred on the card's outer corner, so
@@ -699,7 +699,7 @@ const corner_touch_ms: i32 = 3000;
 /// an event to the first widget that runs and paints the last one on top, and a corner button
 /// under a scroll area needs both to be it.
 ///
-/// An empty region shows the button always — there is nothing else to find it behind. A filled
+/// An empty region shows the button always - there is nothing else to find it behind. A filled
 /// one shows a drop of glass coming out of its card's top-right edge (`LiquidField.edge`): mostly
 /// outside the place and cut by it, so only its swell shows, joined to the edge by a neck. Only
 /// the corner brings the button up, and only from outside the view's content (the card's padding
@@ -726,12 +726,12 @@ fn cornerButton(self: *Layout, opts: InitOptions, keywords: []const []const u8, 
     const carded = box.data().options.backgroundGet();
     const piece = cornerPiece(rs, corners, carded);
     // Where the button stands while it is up, physical: the pointer anywhere on it keeps it up. Its
-    // corner's orb grown where it is, under the pointer that brought it up — an empty place's too,
+    // corner's orb grown where it is, under the pointer that brought it up - an empty place's too,
     // whose orb is always out.
     const crs = box.data().contentRectScale();
     const button_r = piece.button;
     // The corner brings the button up only from outside the view's content (the card's padding
-    // and its curve), so reaching for a control in the view's top right never does — and from the
+    // and its curve), so reaching for a control in the view's top right never does - and from the
     // corner's quarter, which reaches a little into the content on a round card, and
     // round it: pointing at the glyph always brings the button up. A place with no padding (the
     // explorer) has nothing outside its content, and the glyph's square is its whole target.
@@ -776,7 +776,7 @@ fn cornerButton(self: *Layout, opts: InitOptions, keywords: []const []const u8, 
     const pressing = dvui.dataGet(null, id, "_chooser_press", bool) orelse false;
     if (self.state.view_drag.active()) ViewDrag.tick(self);
     // Not while a view is carried: the button is the way to pick or lift a view, and over a drag
-    // it came and went with every place the pointer crossed. (It still runs below — it is the
+    // it came and went with every place the pointer crossed. (It still runs below - it is the
     // handle the drag of this place is held by.)
     const available = !self.state.view_drag.active() and (!filled or picker_here or hovered or tapped or pressing);
     const alpha = chooserFade(id, if (available) 1 else 0);
@@ -790,7 +790,7 @@ fn cornerButton(self: *Layout, opts: InitOptions, keywords: []const []const u8, 
     ftb.init();
     defer ftb.deinit();
 
-    // `corners` (above) are the box fill's — `finalize(theme)` turns `.all(r)` into the theme's
+    // `corners` (above) are the box fill's - `finalize(theme)` turns `.all(r)` into the theme's
     // kind, and fizzy's theme is square, so the ring was a second square outline sitting on the
     // rounded card.
     const theme = dvui.themeGet();
@@ -799,11 +799,11 @@ fn cornerButton(self: *Layout, opts: InitOptions, keywords: []const []const u8, 
     ViewDrag.drawZones(self, opts.name, box.data().id);
     // The ring says which place the chooser is for, so it has a fade of its own, driven only by
     // what asks that: the pointer at the corner, the picker open here, the button held. It
-    // shared the button's, which a drag raises while it is over the place (`drop_here`) — and
+    // shared the button's, which a drag raises while it is over the place (`drop_here`) - and
     // at the release the ring, held off only by the drag, came on at the button's full alpha
     // for the frames that fade took to run down: a stroke flashed round the place a view landed in.
     // Held for the whole of a drag out of this place, so the place being carried from stays
-    // marked — the only place a drag lights, and it goes out as the drag ends.
+    // marked - the only place a drag lights, and it goes out as the drag ends.
     // Not round a float that is a ghost of itself for the drag (`Floats`): nothing of the live
     // float shows, and the ring is drawn past the clip that hides the rest. Firm again, under the
     // view aimed back at it, it is marked as any place carried from is.
@@ -862,7 +862,7 @@ fn cornerButton(self: *Layout, opts: InitOptions, keywords: []const []const u8, 
     if (ring_alpha > 0.01) {
         // Under the region's own border rect, not the content clip `cornerButton` runs inside:
         // the ring is on the border, in the padding, so a region with padding (every card but
-        // the explorer's) clipped it away entirely — only the explorer ever showed which place
+        // the explorer's) clipped it away entirely - only the explorer ever showed which place
         // its chooser was for. And inset by half its width, so all of it is inside that rect.
         const prev_clip = dvui.clipGet();
         dvui.clipSet(rs.r);
@@ -879,7 +879,7 @@ fn cornerButton(self: *Layout, opts: InitOptions, keywords: []const []const u8, 
     dvui.clipSet(rs.r);
     defer dvui.clipSet(bw_clip);
     var bw: dvui.ButtonWidget = undefined;
-    // `touch_drag`: this button is a handle — dragging it is how a view is moved. Without it
+    // `touch_drag`: this button is a handle - dragging it is how a view is moved. Without it
     // dvui takes a finger dragging past the threshold for a scroll, drops the capture and ends
     // the drag, so the chooser only ever moved under a mouse.
     bw.init(@src(), .{ .draw_focus = false, .touch_drag = true }, .{
@@ -935,7 +935,7 @@ fn cornerButton(self: *Layout, opts: InitOptions, keywords: []const []const u8, 
             dvui.dataRemove(null, box.data().id, "_chooser_press");
             dvui.captureMouse(null, e.num);
             dvui.dragEnd();
-            // Whatever the release did — landed, or nothing (its own middle, off every place) —
+            // Whatever the release did - landed, or nothing (its own middle, off every place) -
             // the frame after it is different: the card is gone and the zones start to go. A
             // drag held still asks for no frames of its own, so this one has to be asked for.
             dvui.refresh(null, @src(), null);
@@ -1016,7 +1016,7 @@ fn cornerShape(piece: CornerPiece, t: f32) core.widgets.orb.Shape {
     return core.orb_geometry.lerp(rest, grown, t);
 }
 
-/// The corner's orb, lit `lit` under the pointer (0…1, past 1 held): the orb's material, the same at
+/// The corner's orb, lit `lit` under the pointer (0...1, past 1 held): the orb's material, the same at
 /// every stage of growing (only its shape changes, `cornerShape`).
 fn cornerLook(piece: CornerPiece, lit: f32) core.widgets.orb.Options {
     return .{
@@ -1039,8 +1039,8 @@ fn cornerGlyphAt(piece: CornerPiece, t: f32) dvui.Point.Physical {
 /// The corner's glyph: the button's grid, drawn as its own squares centred on `c` (physical), the
 /// grid's corner on whole pixels (on fractional ones the cells came out of different sizes).
 ///
-/// `t` (0…1) is how far open it is. Closed, three cells in an L — top left, bottom left, bottom
-/// right — the empty quarter where the place's corner curves. Opening, one after another: the
+/// `t` (0...1) is how far open it is. Closed, three cells in an L - top left, bottom left, bottom
+/// right - the empty quarter where the place's corner curves. Opening, one after another: the
 /// top-left cell slides right into the top right (`glyph_slide`), the bottom-left slides up into
 /// the room it left (`glyph_lift`), and the bottom-right grows left into the room that one left
 /// (`glyph_grow`), a bar the grid's width: a layout, two panes over one. Closing is the same played
@@ -1077,7 +1077,7 @@ fn drawCornerGlyph(c: dvui.Point.Physical, scale: f32, size: f32, color: dvui.Co
     bar.w += step * widen;
     bar.fill(corner, .{ .color = .{ .color = color }, .fade = 0 });
 }
-/// Where in the glyph's opening (0…1) the top-left cell slides right, the bottom-left slides up
+/// Where in the glyph's opening (0...1) the top-left cell slides right, the bottom-left slides up
 /// into the room it left, and the bottom-right grows left into the room that one left: each a
 /// little after the one before, so they follow one another round.
 const glyph_slide = [2]f32{ 0, 0.5 };
@@ -1132,7 +1132,7 @@ fn cornerSpring(t: f32) f32 {
 /// How hard the corner's orb carries past its size: about a tenth of it at the peak.
 const corner_overshoot: f32 = 1.7;
 
-/// How formed the corner's glass is, 0…1, linear in time: up over `corner_form_ms` (longer than its
+/// How formed the corner's glass is, 0...1, linear in time: up over `corner_form_ms` (longer than its
 /// growing, so its edge is still settling once its shape has stopped), and straight back to 0
 /// when it goes, so it forms anew each time it comes out.
 fn cornerForm(id: dvui.Id, want: f32) f32 {
@@ -1243,7 +1243,7 @@ fn drawContentsPhotographed(
 fn persistExtent(self: *Layout, opts: InitOptions, id: dvui.Id, chosen: f32, shown: f32) bool {
     _ = shown;
     // A live drag writes a zero on the way through closed; forgetting here removes the
-    // region and the next frame recreates a sentinel under the pointer — the pop.
+    // region and the next frame recreates a sentinel under the pointer - the pop.
     const dragging = dvui.dataGet(null, id, "_drag", bool) orelse false;
     if (opts.forget_when_empty and !dragging and chosen <= 0) forget: {
         // A place split again is every place in it (`SplitTree.Forest.collapse`): kept while any
@@ -1588,7 +1588,7 @@ fn packTreeSplit(self: *Layout, src: std.lang.SourceLocation, branch: SplitTree.
 ///
 /// Full width nearly always: a place dragged shut keeps its sash, because that is the handle you
 /// drag it back out by, and several shut places in a row read as the several handles they are.
-/// A place on its way *out* is the exception — emptied, its extent sent to zero, waiting for the
+/// A place on its way *out* is the exception - emptied, its extent sent to zero, waiting for the
 /// curve to finish before the leaf is dropped. Its sash is 10pt that the pair keeps until the
 /// drop and loses in a single frame at the end, which is the step the eye reads as a pop after
 /// an otherwise smooth close. Following the place down costs nothing to grab, because in a
@@ -1608,7 +1608,7 @@ fn sashWidth(self: *Layout, name: []const u8, target: dvui.Id) f32 {
 /// A card's padding, folded away over the last stretch of a close.
 ///
 /// Padding is room the place takes up, so a card closed to nothing is still as wide as its own
-/// inset — 16pt of stripe that sits there until something removes the place, and then goes in
+/// inset - 16pt of stripe that sits there until something removes the place, and then goes in
 /// one frame. Once the extent is under the inset the place is narrower than the gap it wants to
 /// keep inside itself, which is the point at which the inset stops meaning anything; from there
 /// it comes in proportionally, so nothing reaches nothing.
@@ -1686,7 +1686,7 @@ fn drawTreeNode(
                     o.resize = false;
                     o.omit_edge = omit;
                     o.by_name = true;
-                    // A leftover Panel must still draw — hiding it leaves a
+                    // A leftover Panel must still draw - hiding it leaves a
                     // hole with no sash, no card, and no corner control.
                     o.hide_when_empty = false;
                 }
@@ -1802,7 +1802,7 @@ fn placePrefix(keywords: []const []const u8, parent_prefix: []const u8) []const 
     return keywords[0];
 }
 
-/// Draw a region into an already-open box — `init` minus geometry. Keyword qualification,
+/// Draw a region into an already-open box - `init` minus geometry. Keyword qualification,
 /// registry, corner button, contents. The box is the caller's (a dockspace leaf cell).
 pub fn fillInBox(self: *Layout, init_opts: InitOptions, box: *dvui.BoxWidget) !void {
     const parent: ?*Layout.Container = if (self.depth == 0) null else &self.containers[self.depth - 1];
@@ -1844,7 +1844,7 @@ pub fn fillInBox(self: *Layout, init_opts: InitOptions, box: *dvui.BoxWidget) !v
 }
 
 /// Divide `name` on `axis`, keeping its view and opening an empty place beside
-/// it on the trailing side. `axis` is the layout direction — `.horizontal` is a
+/// it on the trailing side. `axis` is the layout direction - `.horizontal` is a
 /// vertical divider (side by side): the menu's Split Right (`layout.place.splitRight`).
 pub fn splitNamed(self: *Layout, name: []const u8, axis: dvui.enums.Direction) void {
     const side: SplitTree.Side = switch (axis) {
@@ -1866,8 +1866,8 @@ pub fn splitOn(self: *Layout, name: []const u8, side: SplitTree.Side) ?[]const u
     return splitOnSized(self, name, side, ViewDrag.placeSize(self.state, name) orelse return null, 0.5);
 }
 
-/// `splitOn` for a place of `size` that need not have been drawn yet — a split of a half another
-/// split made this frame, as a saved arrangement is rebuilt — with `share` of it for the new half.
+/// `splitOn` for a place of `size` that need not have been drawn yet - a split of a half another
+/// split made this frame, as a saved arrangement is rebuilt - with `share` of it for the new half.
 /// Only the split forest's: a seed's dock tree splits its own drawn leaves (`splitOn`).
 pub fn splitOnSized(self: *Layout, name: []const u8, side: SplitTree.Side, size: dvui.Size, share: f32) ?[]const u8 {
     const span = switch (SplitTree.axisOf(side)) {
@@ -1882,8 +1882,8 @@ pub fn splitOnSized(self: *Layout, name: []const u8, side: SplitTree.Side, size:
         }
     };
     intern.state = self.state;
-    // Halved the way the preview halves it — the sash out of the middle, both
-    // sides the same — so what slid open is the size that lands.
+    // Halved the way the preview halves it - the sash out of the middle, both
+    // sides the same - so what slid open is the size that lands.
     const want = @max(1, (span - Split.handle_size) * std.math.clamp(share, 0, 1));
     const new = self.state.splits.split(self.gpa, intern.go, name, side, want, null) orelse return null;
     if (self.state.setExtent(self.gpa, new, want)) self.extents_changed = true;

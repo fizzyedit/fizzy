@@ -91,7 +91,8 @@ pub const Api = struct {
 
     pub const VTable = struct {
         play: *const fn (ctx: *anyopaque, bytes: []const u8) Play,
-        /// `play`, the tape acting for `author` (`Host.act`): an agent's pointer tape is the agent's.
+        /// `play`, the tape acting for `author` (`Host.act`): an agent's pointer tape is the
+        /// agent's.
         playAs: *const fn (ctx: *anyopaque, bytes: []const u8, author: Author) Play,
         stop: *const fn (ctx: *anyopaque, ticket: Ticket) void,
         outcome: *const fn (ctx: *anyopaque, ticket: Ticket) Outcome,

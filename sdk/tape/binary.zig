@@ -29,13 +29,13 @@
 //! a recording that is shared — its effects are mostly runs of the same few bytes. Reading
 //! inflates it into the one copy, exactly that long, then reads as ever.
 //!
-//! **Versions.** `version` is bumped for any change a reader of the old one would misread; a
-//! reader refuses a version it does not know (`error.UnsupportedVersion`) rather than guess, and
-//! reads every older one it does. 2 gave a `command` op its arguments, in the record's second
-//! string; a version-1 command has none. 3 added steps, files' owner and format, the blob table
-//! and the deflated form. 4 added the `skip` op. A keyframe once had a layout byte (ahead of three of
-//! padding), which nothing read and is now four bytes of padding: older tapes read the same, and
-//! an older reader reads a newer tape's zero as `keep`, the only layout that ever did anything.
+//! **Versions.** `version` is bumped for any change a reader of the old one would misread; a reader
+//! refuses a version it does not know (`error.UnsupportedVersion`) rather than guess, and reads
+//! every older one it does. 2 gave a `command` op its arguments, in the record's second string; a
+//! version-1 command has none. 3 added steps, files' owner and format, the blob table and the
+//! deflated form. 4 added the `skip` op. A keyframe once had a layout byte (ahead of three of
+//! padding), which nothing read and is now four bytes of padding: older tapes read the same, and an
+//! older reader reads a newer tape's zero as `keep`, the only layout that ever did anything.
 const std = @import("std");
 const flate = std.compress.flate;
 const Tape = @import("Tape.zig");

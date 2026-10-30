@@ -1,4 +1,4 @@
-//! Watches `<config>/` (recursive) for external changes while fizzy is running — see
+//! Watches `<config>/` (recursive) for external changes while fizzy is running - see
 //! plans/PLUGIN_MANIFEST_PLAN.md R11/R12.
 //!
 //! Thin adapter over [`neurocyte/nightwatch`](https://github.com/neurocyte/nightwatch): one
@@ -9,7 +9,7 @@
 //! `dvui.io` / a shared allocator from the callback) and a ~200ms coalesce on the main thread
 //! via `tick`.
 //!
-//! `have_impl` is false on wasm and any unsupported OS — the watcher is simply not started
+//! `have_impl` is false on wasm and any unsupported OS - the watcher is simply not started
 //! there (same "no filesystem" degrade-gracefully spirit as every other native-only guard in
 //! this codebase), not a hard error.
 const builtin = @import("builtin");
@@ -35,13 +35,13 @@ pub const have_impl = switch (builtin.target.os.tag) {
 gpa: Allocator,
 /// Owned copy of the watched config folder path.
 config_folder: []const u8,
-/// Nightwatch handler + instance — only meaningful when `have_impl`. Stored as opaque
+/// Nightwatch handler + instance - only meaningful when `have_impl`. Stored as opaque
 /// optional so this file still type-checks on wasm (where nightwatch isn't linked).
 impl: if (have_impl) Impl else void = if (have_impl) .{} else {},
 /// Set by nightwatch's handler thread; consumed/extended by `tick` on the main thread.
 raw_dirty: std.atomic.Value(bool) = .init(false),
 /// A plugin binary arrived whole (`isPluginBinary`): reconciled on the next tick, with no
-/// coalesce — the install renamed a finished file into place, so there is nothing to wait for,
+/// coalesce - the install renamed a finished file into place, so there is nothing to wait for,
 /// and the 200 ms was most of how long a rebuilt plugin took to be noticed.
 binary_dirty: std.atomic.Value(bool) = .init(false),
 /// Main-thread coalesce deadline (`perf.nanoTimestamp()`); 0 = nothing pending.
@@ -49,12 +49,12 @@ coalesce_deadline_ns: i128 = 0,
 
 const Impl = if (have_impl) struct {
     const nightwatch = @import("nightwatch");
-    /// `Default.Handler` — nightwatch's root module doesn't re-export `types.Handler` directly.
+    /// `Default.Handler` - nightwatch's root module doesn't re-export `types.Handler` directly.
     const Handler = nightwatch.Default.Handler;
 
     handler: Handler = .{ .vtable = &vtable },
     nw: ?nightwatch.Default = null,
-    /// Set in `start` once `SettingsWatcher` is at its final address — avoids a
+    /// Set in `start` once `SettingsWatcher` is at its final address - avoids a
     /// `@fieldParentPtr` alignment dance from the nested `impl` field.
     raw_dirty: ?*std.atomic.Value(bool) = null,
     binary_dirty: ?*std.atomic.Value(bool) = null,
@@ -96,8 +96,8 @@ const Kind = enum { binary, ignored, other };
 /// `.so`, `.dll`) is complete when its event arrives: the plugin SDK's install writes
 /// `<file>.part` and renames it into place (`plugin_sdk.zig`, `DevInstall`), and the store does the
 /// same. The `.part` itself, and fizzy's own load copies (`.load-copy/`, `.load-tmp/`, written when
-/// it loads a plugin), say nothing new. Everything else — `settings.zon` above all, which an editor
-/// may write in several bursts — waits for the coalesce.
+/// it loads a plugin), say nothing new. Everything else - `settings.zon` above all, which an editor
+/// may write in several bursts - waits for the coalesce.
 fn classify(config_folder: []const u8, path: []const u8) Kind {
     if (std.mem.find(u8, path, ".load-copy") != null or std.mem.find(u8, path, ".load-tmp") != null) return .ignored;
     // The app's own state beside its settings, written while it runs: a crash checkpoint every few
@@ -162,7 +162,7 @@ test classify {
     try std.testing.expectEqual(Kind.binary, classify("/cfg", "/cfg/plugins/checkpoint/checkpoint" ++ ext));
 }
 
-/// Sets up bookkeeping but does **not** start nightwatch yet — see `start`'s doc comment.
+/// Sets up bookkeeping but does **not** start nightwatch yet - see `start`'s doc comment.
 /// `config_folder` is copied; caller retains ownership of the passed slice.
 pub fn init(gpa: Allocator, config_folder: []const u8) !SettingsWatcher {
     if (comptime !have_impl) return error.Unsupported;
@@ -175,10 +175,10 @@ pub fn init(gpa: Allocator, config_folder: []const u8) !SettingsWatcher {
 }
 
 /// Starts nightwatch and registers a recursive watch on `config_folder`. Must be called only
-/// once `self` is at its **final** address — nightwatch retains `&self.impl.handler` for the
+/// once `self` is at its **final** address - nightwatch retains `&self.impl.handler` for the
 /// watcher's lifetime, so calling this before `self` is copied into `editor.settings_watcher`
 /// would leave it pointing at stack memory. Mirrors why `Editor.postInit` exists separately
-/// from `Editor.init` — call this from `postInit`, not `init`.
+/// from `Editor.init` - call this from `postInit`, not `init`.
 pub fn start(self: *SettingsWatcher) !void {
     if (comptime have_impl) {
         const nightwatch = @import("nightwatch");
@@ -209,8 +209,8 @@ pub fn stop(self: *SettingsWatcher) void {
 /// What the application reconciles when this tree settles.
 ///
 /// One callback, not four: the watcher knows that something under the config folder changed and
-/// nothing more. Which passes that implies — re-read the settings file, notice a rebuilt plugin
-/// dylib, notice a newly dropped-in one — is the application's business, and fizzy's order
+/// nothing more. Which passes that implies - re-read the settings file, notice a rebuilt plugin
+/// dylib, notice a newly dropped-in one - is the application's business, and fizzy's order
 /// between them is fizzy's reasoning (see `Editor.configChanged`).
 pub const Sink = struct {
     ctx: *anyopaque,
@@ -218,7 +218,7 @@ pub const Sink = struct {
 };
 
 /// Call once per frame. Cheap no-op unless the watcher thread actually saw a change. Coalesces
-/// a burst of raw events (~200ms) on the main thread before reconciling — except a plugin binary
+/// a burst of raw events (~200ms) on the main thread before reconciling - except a plugin binary
 /// arriving whole, which reconciles on this tick unless a coalesce is already under way.
 pub fn tick(self: *SettingsWatcher, sink: Sink) void {
     const now = core.perf.nanoTimestamp();

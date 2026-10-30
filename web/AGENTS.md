@@ -10,8 +10,8 @@ The page and its JavaScript (`index.html`, the app's `fizzy.js`, workers). The Z
 - **`fizzy.js` is the app on a page,** `index.html` only the page it runs on.
   `new Fizzy(opts).run()` runs the editor on `opts.canvas`, through dvui's `Dvui` (`web.js`), with
   the wasm's `fizzy` and `env` imports, plus any of the caller's own (`opts.imports`, which keep it
-  on the page's thread). `Fizzy` never reads the URL or the page's other elements: `index.html`
-  turns its query (`?storage=`, `?persist=`, `?worker=`, `?form=`, `?plugin=`, ...) into options
+  on the page's thread). `Fizzy` reads the viewport meta for keyboard policy, never the URL:
+  `index.html` turns its query (`?storage=`, `?persist=`, `?worker=`, `?form=`, `?plugin=`, ...) into options
   and shows `onReady`/`onError` itself, and an app built on fizzy passes its own. Nothing wraps
   `WebAssembly.instantiateStreaming`.
 - **Several copies share a page.** `fizzy.js` keeps no per-page state but the compiled wasm (shared by
@@ -45,6 +45,16 @@ The page and its JavaScript (`index.html`, the app's `fizzy.js`, workers). The Z
   whenever the measurement changes: on a device that shows the wrong shape, that line says which
   number failed the rule (`coarse` = `(pointer: coarse)`, `hover` = `(hover: hover)`; w/h are
   `screen.*`). The main-thread loop (Firefox, Safari, `?worker=0`) sends the same message.
+- **The keyboard is an inset, never a resize.** `keyboardInset` (`fizzy.js`) posts `{type: "inset"}`
+  from `virtualKeyboard.geometrychange` (when the page requests
+  `interactive-widget=overlays-content`, or without a visual viewport) or the
+  `visualViewport` (including Android `resizes-content` pages). Both execution paths write
+  `core.platform.keyboard_inset`, and the root lays out above it (`core.keyboard`). A page that
+  sets `interactive-widget=resizes-content` makes the browser resize the canvas for the keyboard:
+  the focused copy preserves its CSS height until
+  the keyboard closes. Prefer leaving that directive out. Do not combine VK geometry with a
+  resizing viewport: their origins can differ and count the keyboard twice. Set `overlaysContent`
+  only when the page requests `interactive-widget=overlays-content`.
 - **The heap never shrinks.** The wasm allocator rounds blocks over 64 KB up to a power-of-two
   class and reuses a freed block only within its class, so a large image can step memory from
   tens to hundreds of MB. Before blaming memory for a failed open, read the logged error.

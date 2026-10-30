@@ -1,5 +1,5 @@
 //! A `ViewHost` whose surface is on the other side of the control socket: a view a remote client
-//! (an adapter in Blender, Unreal, …) asked for. Like a pop-out it is a window the app lays out
+//! (an adapter in Blender, Unreal, ...) asked for. Like a pop-out it is a window the app lays out
 //! and draws into the one frame, but the OS never shows it; the client does, from the frames it
 //! asks for. Input the client sends waits here as dvui events until the frame injects it.
 //!

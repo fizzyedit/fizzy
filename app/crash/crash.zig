@@ -55,7 +55,7 @@ pub const Module = struct {
 /// What crashed, as the first line of a report says it.
 pub const What = union(enum) {
     panic: []const u8,
-    /// `code` is the signal's `si_code` (why it was sent: no mapping, no permission, …).
+    /// `code` is the signal's `si_code` (why it was sent: no mapping, no permission, ...).
     signal: struct { name: []const u8, address: ?usize = null, code: ?i32 = null },
 };
 

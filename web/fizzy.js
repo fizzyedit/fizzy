@@ -7,6 +7,60 @@
 // Stamped by the build (`build/web.zig`): the hash of what it loads, and the storage name
 // (`-Dweb-storage`).
 
+// Normalize wheel axes without browser side effects. The returned state retains the
+// smallest deltas; the caller resets lowestBatch after a second without wheel input.
+export function wheelTicks(ev, state) {
+  const lowest = [...state.lowest];
+  const lowestBatch = [...state.lowestBatch];
+  const events = [];
+  for (const [i, delta, shiftSizes] of [[0, ev.deltaX, [9, 40]], [1, ev.deltaY, []]]) {
+    if (delta === 0) continue;
+    lowest[i] = Math.min(Math.abs(delta), lowest[i]);
+    lowestBatch[i] = Math.min(Math.abs(delta), lowestBatch[i]);
+    let ticks = -delta;
+    let trackpad = 0;
+    const low = lowestBatch[i];
+    const touchpadAdj = 0.025;
+    if (ev.deltaMode !== 0) {
+      ticks /= low;
+    } else if (i === 1 && ev.wheelDeltaY === -3 * delta) {
+      // macOS trackpads can produce multiples of 120 during a fast flick too.
+      trackpad = 1;
+      ticks = ticks / lowest[i] * touchpadAdj;
+    } else if (i === 1 && ev.wheelDeltaY && ev.wheelDeltaY % 120 === 0) {
+      // Chromium scales deltaY with Windows display scaling, but a notch stays 120.
+      ticks = ev.wheelDeltaY / 120;
+    } else if (low >= 100 || low === 16 || shiftSizes.includes(low) || low === 4.000244140625) {
+      ticks /= low;
+      if (low === 4.000244140625) ticks *= touchpadAdj;
+    } else {
+      trackpad = 1;
+      ticks = ticks / lowest[i] * touchpadAdj;
+    }
+    events.push({ axis: i, ticks, trackpad });
+  }
+  return { events, state: { lowest, lowestBatch } };
+}
+
+// One wheel reader per canvas, for the worker path and the page's own loop. The classifier's
+// batch minima reset after a second without wheel input: the user may have switched devices.
+// A trackpad pinch is the pinch listener's.
+export function wheelInput(canvas, send, now = () => Date.now()) {
+  let state = { lowest: [99999, 99999], lowestBatch: [99999, 99999] };
+  let lastMs = now();
+  canvas.addEventListener("wheel", (ev) => {
+    if (ev.ctrlKey && ev.deltaMode === 0) return;
+    ev.preventDefault();
+    ev.stopImmediatePropagation();
+    const ms = now();
+    if (ms - lastMs > 1000) state.lowestBatch = [99999, 99999];
+    lastMs = ms;
+    const result = wheelTicks(ev, state);
+    state = result.state;
+    for (const { axis, trackpad, ticks } of result.events) send(axis, trackpad, ticks);
+  }, { capture: true, passive: false });
+}
+
 // Pointer input is batched before crossing the worker boundary. Times are absolute
 // performance-clock milliseconds; subtracting the receiver's origin preserves latency.
 export function pointerInput(canvas, send, clockOrigin = performance.timeOrigin, done = () => {}) {
@@ -55,6 +109,65 @@ export function pointerInput(canvas, send, clockOrigin = performance.timeOrigin,
   for (const name of ["touchstart", "touchend"]) {
     canvas.addEventListener(name, (ev) => ev.preventDefault(), { capture: true, passive: false });
   }
+}
+
+// The on-screen keyboard's height over the page's bottom edge, posted as `{type: "inset", bottom}`
+// and never as a `size`: the canvas keeps its size, so nothing clears or re-lays out, and the app
+// lays out above the keyboard itself. Chrome on Android (a secure context) has the VirtualKeyboard
+// API: with `overlaysContent` the browser neither resizes nor pans for the keyboard. Elsewhere
+// (iOS Safari) the visual viewport says how much of the layout viewport the keyboard covers.
+// Returns the current inset reader for the hidden input to stay above.
+export function keyboardInset(win, send, canvas = null, owns = () => true) {
+  let bottom = 0;
+  let rest = null;
+  let savedHeight = null;
+  const rect = () => canvas?.getBoundingClientRect() ?? { bottom: win.innerHeight, height: win.innerHeight };
+  const post = (next) => {
+    next = owns() ? Math.max(0, Math.round(next)) : 0;
+    if (next === bottom) return;
+    bottom = next;
+    send({ type: "inset", bottom });
+  };
+  const vv = win.visualViewport;
+  const viewport = win.document?.querySelector('meta[name="viewport"]')?.content ?? "";
+  const overlays = /(?:^|[,;])\s*interactive-widget\s*=\s*overlays-content\s*(?:[,;]|$)/i.test(viewport);
+  // A resizing viewport and VK geometry can use different origins. Measure only the
+  // visual viewport unless the page explicitly requests an overlay (or has no VV API).
+  const vk = overlays || !vv ? win.navigator?.virtualKeyboard : null;
+  const update = () => {
+    const current = rect();
+    const base = rest ?? current;
+    const edge = vk ? (vk.boundingRect.height ? vk.boundingRect.y ?? win.innerHeight - vk.boundingRect.height : Infinity)
+      : vv ? vv.height + vv.offsetTop : win.innerHeight;
+    const next = owns() ? Math.max(0, base.bottom - edge) : 0;
+    // resizes-content pages shrink the CSS canvas as well. Keep the focused canvas's layout
+    // height until the keyboard closes, so both dvui loops see the same backing-store size.
+    if (canvas && next > 0 && current.height < base.height) {
+      if (savedHeight === null) savedHeight = canvas.style.height ?? "";
+      canvas.style.height = `${base.height}px`;
+    } else if (savedHeight !== null && next === 0) {
+      canvas.style.height = savedHeight;
+      savedHeight = null;
+    }
+    const closed = bottom > 0 && next === 0;
+    post(next);
+    if (closed) rest = null;
+  };
+  win.addEventListener?.("focusin", () => {
+    if (owns() && bottom === 0) rest = rect();
+    update();
+  });
+  win.addEventListener?.("focusout", () => win.setTimeout?.(update, 0));
+  win.addEventListener?.("resize", update);
+  win.addEventListener?.("orientationchange", () => { rest = null; update(); });
+  if (vk) {
+    if (overlays) vk.overlaysContent = true;
+    vk.addEventListener("geometrychange", update);
+  } else if (vv) {
+    vv.addEventListener("resize", update);
+    vv.addEventListener("scroll", update);
+  }
+  return () => bottom;
 }
 
 import { Dvui, TextInput } from "./web.js?cache-buster=TEMPLATE_HASH_WITH_PADDING__ITS_64_BYTES_LONG_THE_SAME_AS_SHA256";
@@ -148,6 +261,12 @@ export class Fizzy {
   run() {
     const opts = this.opts;
     const storageName = this.storageName;
+    let focusEpoch = 0;
+    window.addEventListener("focus", () => {
+      focusEpoch++;
+      if (dvuiApp) dvuiApp.requestRender();
+    });
+    const fileKey = (path) => path === "fizzyedit.person" ? path : storageName + ".file:" + path;
     const persists = opts.persist !== false;
     const onReady = opts.onReady ?? (() => {});
     const onError = opts.onError ?? (() => {});
@@ -360,8 +479,9 @@ export class Fizzy {
         },
         // `core.fs` on the web: the app's own small files (settings.zon, recents.zon,
         // keybinds.zon) live in localStorage, keyed by the path the app would have used.
+        fizzy_web_focus_epoch() { return focusEpoch; },
         fizzy_web_storage_get(keyPtr, keyLen, bufPtr, bufLen) {
-          const key = storageName + ".file:" + utf8.decode(new Uint8Array(wasmInstance.exports.memory.buffer, keyPtr, keyLen));
+          const key = fileKey(utf8.decode(new Uint8Array(wasmInstance.exports.memory.buffer, keyPtr, keyLen)));
           let value = null;
           try { value = store.getItem(key); } catch (_) {}
           if (value === null) return 0xffffffff;
@@ -371,12 +491,12 @@ export class Fizzy {
         },
         fizzy_web_storage_set(keyPtr, keyLen, valPtr, valLen) {
           const mem = wasmInstance.exports.memory.buffer;
-          const key = storageName + ".file:" + utf8.decode(new Uint8Array(mem, keyPtr, keyLen));
+          const key = fileKey(utf8.decode(new Uint8Array(mem, keyPtr, keyLen)));
           const value = utf8.decode(new Uint8Array(mem, valPtr, valLen));
           try { store.setItem(key, value); } catch (err) { console.warn("fizzy: could not store", key, err); }
         },
         fizzy_web_storage_remove(keyPtr, keyLen) {
-          const key = storageName + ".file:" + utf8.decode(new Uint8Array(wasmInstance.exports.memory.buffer, keyPtr, keyLen));
+          const key = fileKey(utf8.decode(new Uint8Array(wasmInstance.exports.memory.buffer, keyPtr, keyLen)));
           try { store.removeItem(key); } catch (_) {}
         },
         // What the page remembers for an id, so the host can load it again after a disable
@@ -851,8 +971,8 @@ export class Fizzy {
     // (every modern browser synthesizes this). Two things to do here in the capture phase,
     // before dvui's bubble-phase listener on the canvas:
     //   1. preventDefault + stopImmediatePropagation — keeps the browser from page-zooming
-    //      and keeps dvui's wheel handler from folding the tiny pinch delta into its
-    //      `scroll_lowest` minimum (an all-time min that never resets and otherwise
+    //      and keeps the wheel reader from folding the tiny pinch delta into its
+    //      `lowest` minimum (an all-time min that never resets and otherwise
     //      poisons trackpad scroll sensitivity for the rest of the session).
     //   2. Forward the magnification into the wasm trackpad accumulator
     //      (`FizzyWebTrackpadMagnification`). The canvas widget drains it each frame and
@@ -997,10 +1117,13 @@ export class Fizzy {
         reduce: media("(prefers-reduced-motion: reduce)"),
       });
       const storage = {};
+      window.addEventListener("focus", () => {
+        try { post({ type: "personFocus", value: store.getItem("fizzyedit.person") }); } catch (_) {}
+      });
       try {
         for (let i = 0; i < store.length; i++) {
           const key = store.key(i);
-          if (key && key.startsWith(storageName + ".")) storage[key] = store.getItem(key);
+          if (key && (key === "fizzyedit.person" || key.startsWith(storageName + "."))) storage[key] = store.getItem(key);
         }
       } catch (_) {}
 
@@ -1029,11 +1152,14 @@ export class Fizzy {
         }
         const rect = canvas.getBoundingClientRect();
         const left = window.scrollX + rect.left + textInputRect[0];
-        const top = window.scrollY + rect.top + textInputRect[1];
+        // Above the keyboard: the browser scrolls the page to keep a focused element visible, and
+        // an input at the caret under the keyboard is what made the page jump.
+        const above = Math.max(0, canvas.clientHeight - insetBottom() - textInputRect[3]);
+        const top = window.scrollY + rect.top + Math.min(textInputRect[1], above);
         hidden.style.left = left + "px";
         hidden.style.top = top + "px";
-        hidden.style.width = Math.max(0, Math.min(textInputRect[2], canvas.clientWidth - left)) + "px";
-        hidden.style.height = Math.max(0, Math.min(textInputRect[2], canvas.clientHeight - top)) + "px";
+        hidden.style.width = Math.max(0, Math.min(textInputRect[2], canvas.clientWidth - textInputRect[0])) + "px";
+        hidden.style.height = Math.max(0, Math.min(textInputRect[3], canvas.clientHeight - Math.min(textInputRect[1], above))) + "px";
         focusQuietly(hidden);
       }
 
@@ -1056,8 +1182,20 @@ export class Fizzy {
         baseURI: document.baseURI,
       }, [offscreen]));
 
-      new ResizeObserver(() => post({ type: "size", size: size() })).observe(canvas);
-      window.addEventListener("resize", () => post({ type: "size", size: size() }));
+      const insetBottom = keyboardInset(window, (m) => {
+        post(m);
+        if (ownsKey({ target: document.activeElement })) oskCheck();
+      }, canvas,
+        () => ownsKey({ target: document.activeElement }));
+      let lastSize = size();
+      const resize = () => {
+        const next = size();
+        if (next.w === lastSize.w && next.h === lastSize.h && next.dpr === lastSize.dpr) return;
+        lastSize = next;
+        post({ type: "size", size: next });
+      };
+      new ResizeObserver(resize).observe(canvas);
+      window.addEventListener("resize", resize);
       window.addEventListener("orientationchange", () => post({ type: "size", size: size() }));
       for (const q of ["(pointer: coarse)", "(hover: none)"]) {
         window.matchMedia(q).addEventListener("change", () => post({ type: "size", size: size() }));
@@ -1203,35 +1341,7 @@ export class Fizzy {
       canvas.addEventListener("contextmenu", (ev) => ev.preventDefault());
       pointerInput(canvas, post, performance.timeOrigin, oskCheck);
 
-      const scrollLowest = [99999, 99999];
-      let scrollLowestBatch = [99999, 99999];
-      let scrollLastMs = Date.now();
-      canvas.addEventListener("wheel", (ev) => {
-        ev.preventDefault();
-        if (Date.now() - scrollLastMs > 1000) scrollLowestBatch = [99999, 99999];
-        scrollLastMs = Date.now();
-        const touchpadAdj = 0.025;
-        const axis = (i, delta, shiftSizes) => {
-          if (delta === 0) return;
-          scrollLowest[i] = Math.min(Math.abs(delta), scrollLowest[i]);
-          scrollLowestBatch[i] = Math.min(Math.abs(delta), scrollLowestBatch[i]);
-          let ticks = -delta;
-          let trackpad = 0;
-          const low = scrollLowestBatch[i];
-          if (ev.deltaMode !== 0) {
-            ticks /= low;
-          } else if (low >= 100 || low === 16 || shiftSizes.includes(low) || low === 4.000244140625) {
-            ticks /= low;
-            if (low === 4.000244140625) ticks *= touchpadAdj;
-          } else {
-            trackpad = 1;
-            ticks = ticks / scrollLowest[i] * touchpadAdj;
-          }
-          event(4, i, trackpad, ticks, 0);
-        };
-        axis(0, ev.deltaX, [9, 40]);
-        axis(1, ev.deltaY, []);
-      }, { passive: false });
+      wheelInput(canvas, (axis, trackpad, ticks) => event(4, axis, trackpad, ticks, 0));
 
       canvas.addEventListener("pointerdown", () => inputFilter.clear());
       const keydown = (ev) => {
@@ -1305,6 +1415,19 @@ export class Fizzy {
           // Late-bind the app reference so the capture-phase wheel listener above can
           // forward pinch deltas into the trackpad accumulator and kick a render.
           dvuiApp = app;
+          const insetBottom = keyboardInset(window, (m) => {
+            app.instance.exports.FizzyWebSetKeyboardInset?.(m.bottom);
+            app.requestRender();
+            if (ownsKey({ target: document.activeElement })) app.oskCheck();
+          }, dvuiCanvas, () => ownsKey({ target: document.activeElement }));
+          const oskCheck = app.oskCheck.bind(app);
+          app.oskCheck = () => {
+            const r = app.textInputRect;
+            if (!r?.length) return oskCheck();
+            const y = r[1];
+            r[1] = Math.min(y, Math.max(0, dvuiCanvas.clientHeight - insetBottom() - r[3]));
+            try { oskCheck(); } finally { r[1] = y; }
+          };
           // Registered before the stoppers below: a stopper on the same element and phase would
           // end propagation to pointerInput's touch listeners, which cancel the touch's default.
           pointerInput(dvuiCanvas, (m) => {
@@ -1314,6 +1437,10 @@ export class Fizzy {
             }
             app.requestRender();
           }, performance.timeOrigin, () => app.oskCheck());
+          wheelInput(dvuiCanvas, (axis, trackpad, ticks) => {
+            app.instance.exports.add_event(4, axis, trackpad, ticks, 0);
+            app.requestRender();
+          });
           for (const name of ["touchstart", "touchmove", "touchend", "touchcancel", "mousedown", "mousemove", "mouseup"]) {
             dvuiCanvas.addEventListener(name, (ev) => ev.stopImmediatePropagation(), { capture: true });
           }

@@ -114,7 +114,7 @@ pub fn dialog(id: dvui.Id) fizzy.core.dialogs.Error!bool {
 
     const placeholder = if (current_kind == .export_to) "filename" else "filename.fiz";
     const te = dvui.textEntry(@src(), .{ .placeholder = placeholder }, .{ .expand = .horizontal });
-    defer te.deinit();
+    defer fizzy.core.widgets.textEntryDeinit(te);
     _ = fizzy.core.widgets.textEntryMenu(te);
 
     if (dvui.firstFrame(te.data().id)) {

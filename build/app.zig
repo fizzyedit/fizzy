@@ -33,7 +33,14 @@ pub const WebPluginDir = struct {
 /// The type of `Chrome.sidebar_edge`, for the build option.
 const ChromeEdge = enum { left, right };
 
+/// Initial presentation preferences, used until the person makes a shared choice.
+pub const Look = struct {
+    /// Motion level from 0 (off) to 1 (playful). The OS reduced-motion request wins.
+    motion: ?f32 = null,
+};
+
 pub const Options = struct {
+    look: Look = .{},
     /// Every plugin the application links, fizzy's own among them, each in the executables its
     /// `targets` names — see `build.zig`'s `buildApp`.
     app_plugins: []const @import("sdk.zig").BundledPlugin = &@import("plugins.zig").entries.all,
@@ -490,6 +497,7 @@ pub fn readConfig(b: *std.Build, target: std.Build.ResolvedTarget, opts: Options
     build_opts.addOption(bool, "app_repo_url_set", app_repo_url_set);
     build_opts.addOption([]const u8, "app_issues_url", app_issues_url);
     build_opts.addOption(bool, "velopack_enabled", velopack_enabled);
+    build_opts.addOption(?f32, "look_motion", opts.look.motion);
     // Off, the app runs only the plugins it links (`buildApp`'s list): no plugin dylib is built,
     // and nothing loads at runtime — not fizzy's own dylibs, not the user plugins directory, not
     // the store, not a web page's `?plugin=`. Comptime, so none of it is checked per frame.
@@ -807,6 +815,7 @@ fn native(
         pack_opts.addOption(bool, "app_repo_url_set", cfg.app_repo_url_set);
         pack_opts.addOption([]const u8, "app_issues_url", cfg.app_issues_url);
         pack_opts.addOption(bool, "velopack_enabled", true);
+        pack_opts.addOption(?f32, "look_motion", opts.look.motion);
         pack_opts.addOption(bool, "static_workbench", static_workbench);
         pack_opts.addOption(bool, "static_text", static_text);
         pack_opts.addOption(bool, "static_image", static_image);
@@ -1098,6 +1107,7 @@ fn addTests(
         // Hold / slop / tap rules of touch selection. std-only (see TouchHold.zig) — the dvui
         // half is widgets/SelectableText.zig.
         .{ "fizzy-touch-hold-tests", "core/TouchHold.zig" },
+        .{ "fizzy-person-tests", "core/person.zig" },
         // A motion's clock stepped by its frames, a long one held to a step. std-only (see
         // FrameClock.zig); the floats' landing and ghost run on it.
         .{ "fizzy-frame-clock-tests", "backend/src/glass/FrameClock.zig" },
@@ -1124,6 +1134,10 @@ fn addTests(
         // Where a new view goes by the shape of the room, and which way an adaptive split runs.
         // std-only (see placement.zig); the workbench and the docking widget ask it.
         .{ "fizzy-placement-tests", "core/placement.zig" },
+        // Std-only card level hysteresis and visibility during shell size changes.
+        .{ "fizzy-card-level-tests", "core/card_level.zig" },
+        // Keyed layout motion and release arithmetic, independent of drawing.
+        .{ "fizzy-rearrange-tests", "core/rearrange.zig" },
         // A document state as the bytes that differ from another: how a track's checkpoints
         // stay small. std-only (see state_delta.zig); `Tracks` keeps its checkpoints with it.
         .{ "fizzy-state-delta-tests", "app/state_delta.zig" },
@@ -1203,7 +1217,7 @@ fn addTests(
     tour_tests.root_module.addImport("tape", b.createModule(.{
         .target = target,
         .optimize = optimize,
-        .root_source_file = b.path("sdk/tape/root.zig"),
+        .root_source_file = b.dependency("fizzy_sdk", .{}).path("tape/root.zig"),
     }));
     try unit_test_artifacts.append(b.allocator, tour_tests);
 
@@ -1262,7 +1276,7 @@ fn addTests(
         keymap_module.addImport("tape", b.createModule(.{
             .target = target,
             .optimize = optimize,
-            .root_source_file = b.path("sdk/tape/root.zig"),
+            .root_source_file = b.dependency("fizzy_sdk", .{}).path("tape/root.zig"),
         }));
         try unit_test_artifacts.append(b.allocator, b.addTest(.{
             .name = "fizzy-keymap-tests",
@@ -1344,7 +1358,7 @@ fn addTests(
             .root_module = b.createModule(.{
                 .target = target,
                 .optimize = optimize,
-                .root_source_file = b.path("sdk/remote/fake_fizzy.zig"),
+                .root_source_file = b.dependency("fizzy_sdk", .{}).path("remote/fake_fizzy.zig"),
             }),
         });
         const fake_options = b.addOptions();
@@ -1354,7 +1368,7 @@ fn addTests(
             .root_module = b.createModule(.{
                 .target = target,
                 .optimize = optimize,
-                .root_source_file = b.path("sdk/remote/root.zig"),
+                .root_source_file = b.dependency("fizzy_sdk", .{}).path("remote/root.zig"),
                 .imports = &.{.{ .name = "fake_fizzy_options", .module = fake_options.createModule() }},
             }),
             .filters = test_filters,
@@ -1463,13 +1477,13 @@ fn addTests(
         const replay_only = b.createModule(.{
             .target = target,
             .optimize = optimize,
-            .root_source_file = b.path("sdk/replay/root.zig"),
+            .root_source_file = b.dependency("fizzy_sdk", .{}).path("replay/root.zig"),
         });
         replay_only.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
         replay_only.addImport("tape", b.createModule(.{
             .target = target,
             .optimize = optimize,
-            .root_source_file = b.path("sdk/tape/root.zig"),
+            .root_source_file = b.dependency("fizzy_sdk", .{}).path("tape/root.zig"),
         }));
         const replay_tests = b.addTest(.{
             .name = "fizzy-replay-tests",
@@ -1686,6 +1700,7 @@ fn addTests(
     // And the workbench's panes: whether a float lies over one is a reading of the window's
     // subwindows, which a headless frame with a float in it has.
     integration_module.addImport("workbench", workbench_module_test);
+    integration_module.addImport("dashboard", dashboard_module_test);
     integration_module.addAnonymousImport("markdown_sample", .{ .root_source_file = b.path("docs/PLUGINS.md") });
     // The synthetic document with the 48KB table of wrapping cells — the case table-row culling
     // exists for, and the one it could get wrong. Generated by `markdown_sample_tables.py` beside
@@ -2055,7 +2070,7 @@ fn addTests(
         bench_module.addImport("tape", b.createModule(.{
             .target = target,
             .optimize = optimize,
-            .root_source_file = b.path("sdk/tape/root.zig"),
+            .root_source_file = b.dependency("fizzy_sdk", .{}).path("tape/root.zig"),
         }));
         const bench_tape = b.addTest(.{ .name = "fizzy-bench-tape", .root_module = bench_module });
 

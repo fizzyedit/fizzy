@@ -11,7 +11,7 @@
 //!
 //! **The app under a drag does not change.** The dragged surface is
 //! photographed once, at lift, and a card of it rides the pointer; its place
-//! goes on drawing it, and no place poses it as a preview of landing there —
+//! goes on drawing it, and no place poses it as a preview of landing there -
 //! one view shown in two places at once was harder to read than a card over
 //! a window that stays put. The layout moves after the drop, with the
 //! animations every split and swap already has.
@@ -19,10 +19,10 @@
 //! **The place under the pointer shows its drop zones** (`drawZones`,
 //! `core.widgets.DropZones`), all five of its options at once; the one under
 //! the pointer is the one a release takes. Moving to another place, its zones
-//! clear as the new place's come in — the window is never covered in targets,
+//! clear as the new place's come in - the window is never covered in targets,
 //! and the one change on screen is where the pointer is. The middle of the
 //! other half of a split is a join, which its middle bubble says with its icon
-//! (`DropZones.Center.join`) — no other drop previews what it leaves, so neither does this.
+//! (`DropZones.Center.join`) - no other drop previews what it leaves, so neither does this.
 const std = @import("std");
 const dvui = @import("dvui");
 const core = @import("core");
@@ -39,15 +39,15 @@ const DropZones = core.widgets.DropZones;
 
 const ViewDrag = @This();
 
-/// The pointer while a view is carried, from the press that lifts it — a tab, a place's corner
-/// button, a picker card (each passes it to `dvui.dragPreStart`) — to the release: the same
+/// The pointer while a view is carried, from the press that lifts it - a tab, a place's corner
+/// button, a picker card (each passes it to `dvui.dragPreStart`) - to the release: the same
 /// whatever is under it. dvui has no closed "grabbing" hand; this is its hand.
 pub const cursor: dvui.enums.Cursor = .hand;
 
 /// Interned name of the place the view was lifted from. Empty when idle, so
 /// `active()` is the one question everything else asks first.
 name: []const u8 = "",
-/// Physical size of the source when the drag began — the card shrinks from it.
+/// Physical size of the source when the drag began - the card shrinks from it.
 from: dvui.Size.Physical = .{},
 /// The lifted surface as it last drew. The floating card is this texture.
 texture: ?dvui.Texture = null,
@@ -57,8 +57,8 @@ texture_rect: dvui.Rect.Physical = .{},
 /// fits its picture to it (`drawDrop`).
 photo_box: dvui.Rect = .{ .x = 0, .y = 0, .w = 1, .h = 1 },
 /// Its pixels, premultiplied RGBA rows of `photo_size`, kept where the app shows the picture under
-/// the OS's glass (`core.dialogs.carry_windows`) — handed over once, as an image (`photo_gen` new
-/// with each picture) — and freed with the drag (`discard`), both given the one allocator the layout
+/// the OS's glass (`core.dialogs.carry_windows`) - handed over once, as an image (`photo_gen` new
+/// with each picture) - and freed with the drag (`discard`), both given the one allocator the layout
 /// owns it with. Null elsewhere.
 photo_pixels: ?[]dvui.Color.PMA = null,
 photo_size: [2]u32 = .{ 0, 0 },
@@ -76,7 +76,7 @@ moved_id: []const u8 = "",
 /// The place it was lifted from held other views beside it (`begin`): the trash takes just this
 /// one (`removable`), rather than leaving a place the shape declared empty.
 from_several: bool = false,
-/// Everything lifted together with it (`beginLooseMany`) — a selection out of a file tree — in the
+/// Everything lifted together with it (`beginLooseMany`) - a selection out of a file tree - in the
 /// order it was, the one in hand first: carried in the one glass, which shows them all, and landing
 /// together (`sdk.RegionSpec.Drop.others`). Empty for one view carried alone. Ids and labels are
 /// interned (`State.internName`).
@@ -95,8 +95,8 @@ lifting: bool = false,
 /// and a card or a tab after it hangs from the pointer's corner (`drawFloat`).
 been_drop: bool = false,
 /// The carried shape as last drawn, whatever it was drawn as: its rect and corner radius,
-/// physical. A change of what the view is carried as grows the new shape out of this one —
-/// position, size and corners — so the lift from what was grabbed, the tab over a strip and the
+/// physical. A change of what the view is carried as grows the new shape out of this one -
+/// position, size and corners - so the lift from what was grabbed, the tab over a strip and the
 /// drop of glass off one are one shape changing, never one swapped for another.
 shape_rect: dvui.Rect.Physical = .{},
 shape_radius: f32 = 0,
@@ -105,22 +105,22 @@ morph_rect: dvui.Rect.Physical = .{},
 morph_radius: f32 = 0,
 card_start_ns: i128 = 0,
 /// A loose drag's hold on what it lifted: the middle of what was grabbed, from the pointer, when it
-/// was lifted (`beginLoose`). The card keeps it while it is under the pointer — the face of a row
-/// lifted out of a list stays where it was in the row — and is brought in under the pointer where
+/// was lifted (`beginLoose`). The card keeps it while it is under the pointer - the face of a row
+/// lifted out of a list stays where it was in the row - and is brought in under the pointer where
 /// it is not (`drawFloat`). dvui's own drag offset is the list's, from a press the lift may have
 /// come long after, and of a rect the card is not.
 grab: dvui.Point.Physical = .{},
 /// Where the hand holds the drop (`holdHand`): the pointer, kept still through a tremble of it.
 /// What the drop rides off and aims with, while it is carried as one; null when it is not.
 hand: ?dvui.Point.Physical = null,
-/// The middle of the bubble the drop is drawn toward (`drop_pull`) — moving onto a bubble newly
+/// The middle of the bubble the drop is drawn toward (`drop_pull`) - moving onto a bubble newly
 /// aimed at from `aim_from` to `aim_to`, `aim_move` of the way there (`pour`), by time, not by the
 /// hand; null once it is joined to none.
 aim_at: ?dvui.Point.Physical = null,
 aim_from: dvui.Point.Physical = .{},
 aim_to: ?dvui.Point.Physical = null,
 aim_move: f32 = 1,
-/// How far the drop is drawn into the bubble it is aimed at, 0…1 and past 1 as it pours in
+/// How far the drop is drawn into the bubble it is aimed at, 0...1 and past 1 as it pours in
 /// (`drop_pull` of the way at 1): from `pull_from` toward `pull_to`, `pull_move` of the way there.
 pull: f32 = 0,
 pull_from: f32 = 0,
@@ -138,14 +138,14 @@ drop_n: usize = 0,
 drop_radius: f32 = 0,
 /// Carried by a finger: the drop rides up and left of it, where the finger does not cover it.
 drop_touch: bool = false,
-/// How far the drop is joined to the bubble it is aimed at, 0…1, eased: its photograph fades by
+/// How far the drop is joined to the bubble it is aimed at, 0...1, eased: its photograph fades by
 /// `aim_fade` of it (`drawDrop`).
 drop_aim: f32 = 0,
 
 /// The places this drag can land on, and where they were, frozen at lift.
 targets: [max_targets]Target = undefined,
 target_count: usize = 0,
-/// Choosers a view can be dropped into — a rail, a tab strip — as they offered themselves while
+/// Choosers a view can be dropped into - a rail, a tab strip - as they offered themselves while
 /// drawing (`offerChooser`): this frame's, and last frame's for a release handled before this
 /// frame's choosers have drawn.
 offers: [max_offers]Offer = undefined,
@@ -165,7 +165,7 @@ last_pending_count: usize = 0,
 occluders: [Floats.max]Occluder = undefined,
 occluder_count: usize = 0,
 /// Whether the float the view is carried out of is firm (`settleGhost`): itself, covering what it
-/// lies over, rather than its ghost. It starts firm — the drag lifts out of it — and stays so
+/// lies over, rather than its ghost. It starts firm - the drag lifts out of it - and stays so
 /// until the view is aimed off it.
 ghost_firm: bool = true,
 /// Where and when the view came to rest over the ghost (`settleGhost`), while a drop beneath lies
@@ -174,7 +174,7 @@ ghost_rest_at: dvui.Point.Physical = .{},
 ghost_rest_ns: i128 = 0,
 
 /// What the carried view is drawn as. `drop` where the glass program draws and the pointer is off
-/// every list, `tab` over a list (a tab strip, a rail), `preview` — a card of its photograph — off
+/// every list, `tab` over a list (a tab strip, a rail), `preview` - a card of its photograph - off
 /// lists with no glass program.
 pub const Mode = enum {
     preview,
@@ -189,7 +189,7 @@ pub const Mode = enum {
 };
 
 /// A place's drop, queued while the place draws and drawn over everything once they all have
-/// (`drawOverlay`) — over the card riding the pointer too, which would otherwise sit on the
+/// (`drawOverlay`) - over the card riding the pointer too, which would otherwise sit on the
 /// drop it is being aimed at.
 pub const PendingDrop = struct {
     key: dvui.Id,
@@ -198,7 +198,7 @@ pub const PendingDrop = struct {
     clip: dvui.Rect.Physical,
 };
 
-/// A chooser a carried view is over: a place's tab strip, a rail. Chrome, not content — the
+/// A chooser a carried view is over: a place's tab strip, a rail. Chrome, not content - the
 /// place's drop zones and the card's preview stay off it (`interiorBounds`, `drawFloat`).
 pub const Offer = struct {
     /// Interned place name.
@@ -209,7 +209,7 @@ pub const Offer = struct {
     /// The window it is drawn in (`Region.layer`).
     layer: u16 = 0,
     /// Where along it the view goes in, for a chooser the app draws (`Chooser`): a release puts it
-    /// there in its place's list (`insertInto`) — back on the chooser it came off, a reorder. Null
+    /// there in its place's list (`insertInto`) - back on the chooser it came off, a reorder. Null
     /// for a plugin's chooser, which says where along it itself, from the release's point
     /// (`RegionSpec.Drop.on_chooser`).
     at: ?Insert = null,
@@ -244,7 +244,7 @@ pub const Occluder = struct {
     /// The float the view is carried out of (`carriedOutOf`). It covers only while it is firm.
     source: bool = false,
     /// A float in an OS window of its own: `bounds` and `header` are where that window lies over
-    /// the main window's frame, and these where the float is drawn in the window's band — the
+    /// the main window's frame, and these where the float is drawn in the window's band - the
     /// pointer is read in one or the other (`SDLBackend.heldPoint`), by whether the window lets it
     /// through to the main window (a ghost does).
     band_bounds: ?dvui.Rect.Physical = null,
@@ -263,11 +263,11 @@ pub const Occluder = struct {
 };
 
 /// What lies under a point, as far as which window: the topmost float there (0, the main window,
-/// when none is), and whether the point is on that float's header — its handle, never a drop.
+/// when none is), and whether the point is on that float's header - its handle, never a drop.
 const Under = struct { layer: u16 = 0, header: bool = false };
 
 /// What lies under `p`: the topmost float there, the one the view is carried out of only while it
-/// is firm (`settleGhost`) — a ghost covers nothing.
+/// is firm (`settleGhost`) - a ghost covers nothing.
 fn under(state: *const Layout.State, p: dvui.Point.Physical) Under {
     const d = &state.view_drag;
     var out: Under = .{};
@@ -280,7 +280,7 @@ fn under(state: *const Layout.State, p: dvui.Point.Physical) Under {
 }
 
 /// Whether `p`, aimed with a drop of radius `r`, is on the drop of the place under it in window
-/// `layer` (`zoneBounds`) — under the ghost of the float the view is carried out of, the one place it
+/// `layer` (`zoneBounds`) - under the ghost of the float the view is carried out of, the one place it
 /// can be under a float and still be aimed at.
 fn onDropBeneath(state: *const Layout.State, layer: u16, p: dvui.Point.Physical, r: f32) bool {
     const d = &state.view_drag;
@@ -305,7 +305,7 @@ fn sourceOccluder(d: *const ViewDrag) ?Occluder {
 }
 
 /// How long the view must rest over the ghost of the float it is carried out of before it firms
-/// up, while a drop beneath lies under it (`settleGhost`), in milliseconds as they pass — not
+/// up, while a drop beneath lies under it (`settleGhost`), in milliseconds as they pass - not
 /// motion, which can be off: it is the user saying they mean the float, not an animation.
 pub const ghost_rest_ms: i128 = 240;
 /// Points the view may drift and still be resting.
@@ -319,12 +319,12 @@ const ghost_rest_slop: f32 = 10;
 /// the view is off it: what it lies over shows through, and covers nothing (`under`). The drops of the places it
 /// lies over sit clear of it where there is room for them (`zoneBounds`), the same firm or ghost,
 /// so a drop never moves as the ghost comes and goes. With every drop clear of it, aimed back over
-/// it, it firms up at once — the float again, with its own places' drops — and stays firm until the
+/// it, it firms up at once - the float again, with its own places' drops - and stays firm until the
 /// view is aimed off it, so its own middle and edges can be reached wherever they are.
 ///
 /// A drop with too little room clear of it sits under the ghost instead, reached through it: the
 /// view over that drop is aimed at it, not the float. And while one does, the ghost firms only for
-/// a rest over it, off such a drop or on its header (`ghost_rest_ms`) — at once, it would firm as
+/// a rest over it, off such a drop or on its header (`ghost_rest_ms`) - at once, it would firm as
 /// the view was carried across it to the drop, and that drop could never be reached.
 pub fn settleGhost(state: *Layout.State) bool {
     const d = &state.view_drag;
@@ -337,7 +337,7 @@ pub fn settleGhost(state: *Layout.State) bool {
     // Over the float by the pointer, not the drop it carries, which rides off to one side of it:
     // lifted from the float's corner button, the drop started out past the float's edge, and the
     // float went toward its ghost, firmed as the drop crossed back over it on the way out, and went
-    // again — a hitch in the middle of every drag out of a float.
+    // again - a hitch in the middle of every drag out of a float.
     if (!g.covers(mouse)) {
         d.ghost_firm = false;
         d.ghost_rest_ns = 0;
@@ -349,7 +349,7 @@ pub fn settleGhost(state: *Layout.State) bool {
     for (d.occluders[0..d.occluder_count]) |o| {
         if (!o.source and o.covers(a.p) and o.layer > below) below = o.layer;
     }
-    // On a drop beneath it the view is aimed at that drop, lit as one — never the float — except
+    // On a drop beneath it the view is aimed at that drop, lit as one - never the float - except
     // over the ghost's header, its handle: a drop under a ghost is its whole size, and over a small
     // ghost it can leave nowhere else to rest.
     const on_header = g.onHeader(mouse);
@@ -423,7 +423,7 @@ pub fn active(self: ViewDrag) bool {
 
 /// The source of a view lifted out of the picker rather than out of a place.
 /// No shape declares a place by this name, so every question the gesture
-/// asks of its source — its bounds, its assignment, whether it may shut —
+/// asks of its source - its bounds, its assignment, whether it may shut -
 /// answers "none", which is exactly what a view in nobody's hands has.
 pub const loose_source = "\x00picker";
 
@@ -433,8 +433,8 @@ pub fn loose(self: ViewDrag) bool {
 }
 
 /// A chooser, drawing during a drag, offering itself as somewhere the view can go: into place
-/// `name`, as one of its views — at `at` in its list, when the chooser knows where along it the
-/// pointer is. Its place may sit elsewhere — a rail beside a sidebar — or the chooser inside it;
+/// `name`, as one of its views - at `at` in its list, when the chooser knows where along it the
+/// pointer is. Its place may sit elsewhere - a rail beside a sidebar - or the chooser inside it;
 /// either way over the chooser the drop is into the place, not a split of it.
 pub fn offerChooser(l: *Layout, name: []const u8, bounds: dvui.Rect.Physical, into: bool, at: ?Insert) void {
     const d = &l.state.view_drag;
@@ -457,8 +457,8 @@ pub fn offerChooser(l: *Layout, name: []const u8, bounds: dvui.Rect.Physical, in
 }
 
 /// The chooser under `p` that could take what is carried, if one offered itself this frame or
-/// the last. A strip whose place cannot take it — a document pane's tabs under a view that is no
-/// document — is no chooser for this drag: read as one, it hid every place's zones and turned the
+/// the last. A strip whose place cannot take it - a document pane's tabs under a view that is no
+/// document - is no chooser for this drag: read as one, it hid every place's zones and turned the
 /// card into a tab over a strip it could never go into, so a split document area, a strip on every
 /// pane, was a maze to aim a view across. The strip of the place the view came out of always is.
 /// A strip a float covers is none either: only the topmost window under `p` is read (`under`).
@@ -529,7 +529,7 @@ fn forgetPixels(self: *ViewDrag, gpa: std.mem.Allocator) void {
 
 /// The carried view's picture under the OS's glass (`ViewDrag.photo_under`): where its head is in
 /// the frame, its corners, how much of it shows, and where the whole picture lies (`photoFit`),
-/// physical — past the head, cut off there.
+/// physical - past the head, cut off there.
 pub const PhotoUnder = struct {
     rect: dvui.Rect.Physical,
     radius: f32,
@@ -538,7 +538,7 @@ pub const PhotoUnder = struct {
 };
 
 /// Where in the captured view what it shows is, as shares of the picture's width and height: the
-/// box round everything it drew, read once from the capture's pixels at lift — a capture of the
+/// box round everything it drew, read once from the capture's pixels at lift - a capture of the
 /// view alone is clear wherever it draws nothing. A drop showed the middle of its picture, and
 /// Files, whose rows are at its top, showed nothing (the user). The whole where nothing could be
 /// read.
@@ -579,9 +579,9 @@ const photo_zoom_least: f32 = 0.6;
 
 /// What of the carried view's picture its drop shows (`photoFit`), as shares of the picture: what
 /// the view shows (`box`, `contentBox`), where that is narrow enough to read shrunk into the square
-/// inside the round drop (`side`, physical) — and where it is not, the square of it that reads at
+/// inside the round drop (`side`, physical) - and where it is not, the square of it that reads at
 /// `photo_zoom_least` with the most drawn in it: of those with nearly the most, the highest and
-/// then the furthest left, as a view reads — its heading and first rows, an editor's first lines,
+/// then the furthest left, as a view reads - its heading and first rows, an editor's first lines,
 /// the middle of a canvas, rather than the whole of it too small to make out. Graded once, at
 /// lift, on a coarse grid of how much each part of the picture draws.
 fn focusBox(arena: std.mem.Allocator, px: []const dvui.Color.PMA, w_: u32, h_: u32, box: dvui.Rect, side: f32) dvui.Rect {
@@ -638,7 +638,7 @@ fn focusBox(arena: std.mem.Allocator, px: []const dvui.Color.PMA, w_: u32, h_: u
 
 /// Where the whole of the carried view's picture lies for a drop's head `r` (physical): what it
 /// shows (`photo_box`) as wide as the square inside the round head, its top at that square's top
-/// and its middle on the head's — Files' rows across the head from its top rather than a strip of
+/// and its middle on the head's - Files' rows across the head from its top rather than a strip of
 /// them lost in its middle (the user). Never larger than it was taken. Past the head, it is cut
 /// off there.
 fn photoFit(d: ViewDrag, r: dvui.Rect.Physical) dvui.Rect.Physical {
@@ -656,8 +656,8 @@ fn photoFit(d: ViewDrag, r: dvui.Rect.Physical) dvui.Rect.Physical {
 ///
 /// A photograph is taken *from the place's own draw*, never from a second
 /// one. Drawing a subtree twice in a frame gives every widget inside it a
-/// duplicate id — dvui paints the lot red and the two copies fight over the
-/// same stored state — and the subtree under a place is the whole editor.
+/// duplicate id - dvui paints the lot red and the two copies fight over the
+/// same stored state - and the subtree under a place is the whole editor.
 pub const Shot = struct {
     /// The lifted view, for the floating card. Taken once, at lift.
     card: bool = false,
@@ -675,14 +675,14 @@ pub fn shotWanted(l: *Layout, is_source: bool) Shot {
 }
 
 /// Keep what the source's draw recorded as the card's picture, and put it on the screen the
-/// draw was taken from — the place goes on showing its view under the drag.
+/// draw was taken from - the place goes on showing its view under the drag.
 pub fn keepShot(l: *Layout, shot: Shot, pic: *dvui.Picture) void {
     const d = &l.state.view_drag;
     if (shot.card) {
         d.takePicture(l.gpa, pic);
         if (d.texture) |tex| {
             // Over what the frame already has under the place, as its draw would have gone: the
-            // capture is clear where the place draws nothing — the window's base shows there — and
+            // capture is clear where the place draws nothing - the window's base shows there - and
             // put back as a dissolve (`blit`) it replaced that base with nothing, the window
             // see-through under the place for the frame it was lifted on.
             core.anim.blitOpaque(tex, null, d.texture_rect, 0, 1);
@@ -695,7 +695,7 @@ pub fn keepShot(l: *Layout, shot: Shot, pic: *dvui.Picture) void {
     pic.stop();
 }
 
-/// The card's picture from the frame as last drawn — what the place showed a moment ago — rather
+/// The card's picture from the frame as last drawn - what the place showed a moment ago - rather
 /// than from a capture of this frame's draw. Inside a capture a frosted pane has nothing behind
 /// it to frost and draws dark, and that copy is what `keepShot` puts back on the screen: the
 /// place flashed dark for the frame it was lifted on. False where there is no last frame to copy
@@ -752,8 +752,8 @@ pub fn begin(l: *Layout, name: []const u8, from: dvui.Rect.Physical, grabbed: dv
     d.from = from.size();
     d.start_ns = dvui.currentWindow().frame_time_ns;
     d.ghost_firm = true;
-    // The carried glass grows out of what was grabbed — the place's grid button, its tab or rail
-    // icon — with its photograph growing in it: not glass the size of the whole place shrinking
+    // The carried glass grows out of what was grabbed - the place's grid button, its tab or rail
+    // icon - with its photograph growing in it: not glass the size of the whole place shrinking
     // into it, which drew the view whole for a moment before it was carried.
     liftShape(d, grabbed);
     if (visibleId(l, name)) |id| d.moved_id = id;
@@ -764,7 +764,7 @@ pub fn begin(l: *Layout, name: []const u8, from: dvui.Rect.Physical, grabbed: dv
     Floats.liftedFrom(l, name, d.moved_id);
 }
 
-/// The carried shape starts at `from` — what was grabbed: a tab, a card, a place's grid button —
+/// The carried shape starts at `from` - what was grabbed: a tab, a card, a place's grid button -
 /// and grows from there into whatever it is first carried as.
 fn liftShape(d: *ViewDrag, from: dvui.Rect.Physical) void {
     const radius = core.corners.scaled(core.corners.card) * dvui.currentWindow().natural_scale;
@@ -780,7 +780,7 @@ fn liftShape(d: *ViewDrag, from: dvui.Rect.Physical) void {
 }
 
 /// Begin carrying surface `id` from the picker, or from a plugin's own list (`Host.beginViewDrag`):
-/// a tab off its strip, a file out of a tree — which may be a document not open yet, carried by
+/// a tab off its strip, a file out of a tree - which may be a document not open yet, carried by
 /// the id it will have (`unopened`). There is no source place, so nothing is photographed: the
 /// float starts at the card that was grabbed and shows the picture the card showed, which the
 /// caller hands over (`State.stealSnapshot`) and the drag destroys.
@@ -792,9 +792,9 @@ pub fn beginLoose(l: *Layout, id: []const u8, from: dvui.Rect.Physical, texture:
 }
 
 /// Begin carrying several things lifted together out of a plugin's own list
-/// (`Host.beginViewDragMany`) — a selection out of a file tree — the first the one in hand: a
+/// (`Host.beginViewDragMany`) - a selection out of a file tree - the first the one in hand: a
 /// loose drag of it (`beginLoose`), carrying the rest with it (`with`). With anything among them no
-/// place takes — a folder, by no id — it is carried by `held_id` and lands nowhere (`held`).
+/// place takes - a folder, by no id - it is carried by `held_id` and lands nowhere (`held`).
 pub fn beginLooseMany(l: *Layout, items: []const sdk.EditorAPI.Carried, from: dvui.Rect.Physical) void {
     if (items.len == 0) return;
     var held = false;
@@ -838,22 +838,22 @@ fn beginLooseAs(l: *Layout, moved: []const u8, from: dvui.Rect.Physical, texture
     mapTargets(l, d);
 }
 
-// ── What is under the pointer ───────────────────────────────────────────────────────────────────
+// -- What is under the pointer -------------------------------------------------------------------
 
 /// Photograph the places, the way the card photographs the view.
 ///
 /// **A drag must not change the map it is being read against.** Places can
-/// move under a drag — a split easing shut, a window resized — and a hit-test
+/// move under a drag - a split easing shut, a window resized - and a hit-test
 /// read against the live layout would chase them. Frozen at lift, it is a pure function of where the pointer is,
 /// and the drag is as steady as your hand.
 fn mapTargets(l: *Layout, d: *ViewDrag) void {
     d.target_count = 0;
     defer mapOccluders(l, d);
-    // Carried by an id no place knows (`held`): no place takes it — not even a shape place, which
-    // takes any view — so none shows its zones.
+    // Carried by an id no place knows (`held`): no place takes it - not even a shape place, which
+    // takes any view - so none shows its zones.
     if (std.mem.eql(u8, d.moved_id, held_id)) return;
     const surface_kw = draggedKeywords(l);
-    // A tab's content goes to a slot made for it, never into a plain place (`Layout.slotted`) —
+    // A tab's content goes to a slot made for it, never into a plain place (`Layout.slotted`) -
     // only beside one, where the application gives it a home (`State.documents`).
     const slotted = slottedId(l, d.moved_id) and l.state.documents == null;
     // Last frame's registry: complete, where this frame's is still being
@@ -890,7 +890,7 @@ fn mapOccluders(l: *Layout, d: *ViewDrag) void {
         // In an OS window of its own: where that window lies over the main window's places, and
         // where the float is drawn in its band besides (`Occluder.band_bounds`).
         // Under the main window in the OS's stacking (`Floats.Viewport.under_main`), it covers
-        // nothing of it: read there it is the main window's places, whole — where its window
+        // nothing of it: read there it is the main window's places, whole - where its window
         // still shows, past the main window's edge, it is read in its band as ever. Taken as over
         // it, a float clicked behind the main window cut its places' drops down to the strip
         // beside it (the user).
@@ -905,10 +905,10 @@ fn mapOccluders(l: *Layout, d: *ViewDrag) void {
     }
 }
 
-/// Whether the live drag is carrying a view out of float `name` — out of its place, or a place a
-/// split of it made. The float is a ghost of itself meanwhile while the view is aimed off it — it
+/// Whether the live drag is carrying a view out of float `name` - out of its place, or a place a
+/// split of it made. The float is a ghost of itself meanwhile while the view is aimed off it - it
 /// fades to a faint, blurred picture of itself (`Floats.draw`) and covers nothing (`under`), so
-/// what it lies over, usually where the view is going, can be seen and aimed at — and firms up
+/// what it lies over, usually where the view is going, can be seen and aimed at - and firms up
 /// again when the view is aimed back over it, to be dropped into. When the drag ends it comes back:
 /// as it was if the view is let go over nothing, without the view if it landed elsewhere, and not
 /// at all if that left it empty.
@@ -936,9 +936,9 @@ fn kindAt(l: *Layout, dest: []const u8, a: Aim, scale: f32) ?Drop.Kind {
     return Drop.kindAtDisc(dest_b, a.p, a.r, scale, removable(l));
 }
 
-/// What the carried view aims with: the middle and radius of the drop it is carried as — the
+/// What the carried view aims with: the middle and radius of the drop it is carried as - the
 /// drop is what is aimed, and it rides off the pointer (up and left of a finger) so it can be
-/// seen, so it is its overlap with a bubble that chooses, not where the finger is — or the
+/// seen, so it is its overlap with a bubble that chooses, not where the finger is - or the
 /// pointer itself, for a card or a tab.
 pub const Aim = struct { p: dvui.Point.Physical, r: f32 = 0 };
 
@@ -946,7 +946,7 @@ pub fn aim(l: *Layout) Aim {
     return aimFor(l, dvui.currentWindow().mouse_pt);
 }
 
-/// `aim` for the pointer at `mouse` — a release's own point.
+/// `aim` for the pointer at `mouse` - a release's own point.
 pub fn aimFor(l: *Layout, mouse: dvui.Point.Physical) Aim {
     const d = &l.state.view_drag;
     if (d.active() and carriedAsDrop(l.state, mouse)) _ = holdHand(d, mouse);
@@ -969,7 +969,7 @@ const hand_still: f32 = 3;
 /// Where the hand holds the drop, the pointer at `mouse`: where it was, until the pointer is more
 /// than `hand_still` from it, and then dragged along behind the pointer at that distance. A hand
 /// holding a press still trembles, and the drop moved with each tremble: joined to a bubble, the
-/// OS re-formed the join each frame, and it shimmered (the user). Nothing eases or swings — it
+/// OS re-formed the join each frame, and it shimmered (the user). Nothing eases or swings - it
 /// moves only as far as the hand does, and at once. Called as often as a frame likes: the same
 /// pointer leaves it where it is.
 fn holdHand(d: *ViewDrag, mouse: dvui.Point.Physical) dvui.Point.Physical {
@@ -991,8 +991,8 @@ fn holdHand(d: *ViewDrag, mouse: dvui.Point.Physical) dvui.Point.Physical {
 /// a photograph to show in it, and not over a list (where it is a tab).
 fn carriedAsDrop(state: *const Layout.State, mouse: dvui.Point.Physical) bool {
     const d = &state.view_drag;
-    // A bubble only round a photograph. With none — a file not open yet, a document open in no pane
-    // — it is carried as its tab in glass, its icon and its name (`drawTabFace`): a bubble with an
+    // A bubble only round a photograph. With none - a file not open yet, a document open in no pane
+    // - it is carried as its tab in glass, its icon and its name (`drawTabFace`): a bubble with an
     // icon in it read as a thing of its own rather than the tab it is.
     return core.LiquidField.ready() and d.texture != null and chooserAt(state, mouse) == null;
 }
@@ -1007,7 +1007,7 @@ fn dropCenter(mouse: dvui.Point.Physical, r: f32, touch: bool) dvui.Point.Physic
 /// (`State.userSplitPart`) the trash takes what is carried, and the half, emptied, closes into the
 /// other; out of a place holding others beside it (the sidebar, the bottom panel) it takes just
 /// that view, back to the picker. A place the shape declared, holding only the view carried and
-/// never split, offers none — the trash would only leave it empty. A view carried out of the
+/// never split, offers none - the trash would only leave it empty. A view carried out of the
 /// picker is in no place to leave.
 pub fn removable(l: *Layout) bool {
     return removableIn(l.state);
@@ -1017,13 +1017,13 @@ fn removableIn(state: *const Layout.State) bool {
     const d = state.view_drag;
     if (!d.active() or d.loose()) return false;
     // Out of a float, as out of a split the user made: the view leaves it, and a float its last
-    // view leaves closes — the view, claimed by no place then, back where its keywords put it.
+    // view leaves closes - the view, claimed by no place then, back where its keywords put it.
     if (state.floatRoot(d.name) != null) return true;
     if (state.userSplitPart(d.name)) return true;
     return d.from_several and regionNamed(state, d.name) != null;
 }
 
-/// The part of place `name` a carried view's zones cover: the place less its own chooser — a tab
+/// The part of place `name` a carried view's zones cover: the place less its own chooser - a tab
 /// strip across its top or foot, which offered itself while the drag was on (`offerChooser`).
 /// The strip is chrome: over it the view goes into the place's list, not onto a zone, so the
 /// zones, the edge the pointer is read against and a split's halves are all cut from the rest.
@@ -1055,7 +1055,7 @@ pub fn interiorBounds(state: *const Layout.State, name: []const u8) ?dvui.Rect.P
 }
 
 /// The part of place `name` its drop sits in: its interior (`interiorBounds`) less every float over
-/// it — a float drawn in a window above the place's, as the drag mapped them (`mapOccluders`). A
+/// it - a float drawn in a window above the place's, as the drag mapped them (`mapOccluders`). A
 /// drop under a float could not be aimed at, so it goes where it can be: the middle of the part
 /// left clear, fitted there as a wheel or a strip as anywhere (`DropZones.uncovered`). A float's
 /// own places are in its window, so theirs are inside it. Null when floats cover all of it: that
@@ -1068,8 +1068,8 @@ pub fn interiorBounds(state: *const Layout.State, name: []const u8) ?dvui.Rect.P
 /// it is the same rect, so no drop moves or changes size as the ghost comes and goes; firm, the
 /// float takes the pointer over it, so a drop under it is not aimed at until it fades again.
 ///
-/// Everything that reads or draws a place's drop reads this — its zones (`drawZones`), the release
-/// (`kindAt`), the self-split (`targetAtAim`) — so what shows is what a release takes.
+/// Everything that reads or draws a place's drop reads this - its zones (`drawZones`), the release
+/// (`kindAt`), the self-split (`targetAtAim`) - so what shows is what a release takes.
 pub fn zoneBounds(state: *const Layout.State, name: []const u8) ?dvui.Rect.Physical {
     if (!state.view_drag.active()) return interiorBounds(state, name);
     const clear = zoneBoundsAs(state, name, true);
@@ -1086,7 +1086,7 @@ pub fn zoneBounds(state: *const Layout.State, name: []const u8) ?dvui.Rect.Physi
 /// The least share of the size it would have with no ghost there that a drop shrinks to, to stay
 /// clear of the ghost of the float the view is carried out of (`zoneBounds`); any smaller, and it
 /// keeps that size, under the ghost. Two thirds or so: the drop's bubbles rest apart now, and the
-/// wider wheel shrinks further to fit beside a ghost — at three quarters, chosen for the narrower
+/// wider wheel shrinks further to fit beside a ghost - at three quarters, chosen for the narrower
 /// one, it sat under the ghost where it had fitted beside it.
 pub const ghost_min_share: f32 = 0.65;
 
@@ -1128,11 +1128,11 @@ pub fn targetAtAim(l: *Layout, a: Aim, source: []const u8) ?[]const u8 {
     // reached through it, and a float's header is its handle, no drop.
     const u = under(state, mouse);
     if (u.header) return null;
-    // Over a chooser, its place — as one of its views, never a split — or nowhere, over the
+    // Over a chooser, its place - as one of its views, never a split - or nowhere, over the
     // app's own strip of the place the view came out of.
     if (chooserAt(state, mouse)) |o| return if (o.into) o.name else null;
     // The source's own edge is a self-split, and it outranks any pane nested
-    // inside it — otherwise a document filling the place always wins on area
+    // inside it - otherwise a document filling the place always wins on area
     // and its own edges become unreachable.
     if (layerOf(state, source) == u.layer) {
         if (interiorBounds(state, source)) |bounds| {
@@ -1156,7 +1156,7 @@ pub fn targetAtAim(l: *Layout, a: Aim, source: []const u8) ?[]const u8 {
     return best;
 }
 
-/// The window place `name` is drawn in (`Region.layer`), as the drag mapped it — or as it last
+/// The window place `name` is drawn in (`Region.layer`), as the drag mapped it - or as it last
 /// registered, for a place the drag did not map.
 fn layerOf(state: *const Layout.State, name: []const u8) u16 {
     if (frozen(state, name)) |t| return t.layer;
@@ -1166,7 +1166,7 @@ fn layerOf(state: *const Layout.State, name: []const u8) u16 {
 
 /// What the view being carried is, for deciding which places will take it.
 /// The surface lifted at the start, not whatever the source place happens to
-/// be showing — mid-swap it is showing the *other* view, and reading that
+/// be showing - mid-swap it is showing the *other* view, and reading that
 /// would change which places accept the drop halfway through it.
 fn draggedKeywords(l: *Layout) []const []const u8 {
     const id = l.state.view_drag.moved_id;
@@ -1214,7 +1214,7 @@ pub fn accepts(r: Region, surface_kw: []const []const u8) bool {
 }
 
 pub fn placeBounds(state: *const Layout.State, name: []const u8) ?dvui.Rect.Physical {
-    // Mid-drag, a place is where it was when the drag began — see
+    // Mid-drag, a place is where it was when the drag began - see
     // `mapTargets`. Everything the gesture measures reads this, so the zones,
     // the edge the pointer is tested against and the split a drop settles are
     // all cut from the same rect.
@@ -1247,7 +1247,7 @@ pub fn regionNamed(state: *const Layout.State, name: []const u8) ?*const Region 
     return null;
 }
 
-/// The surface a place is showing — the selected one, not its whole
+/// The surface a place is showing - the selected one, not its whole
 /// assignment. A multi place drags the tab you can see, not all of them.
 pub fn visibleId(l: *Layout, name: []const u8) ?[]const u8 {
     if (regionNamed(l.state, name)) |r| {
@@ -1257,7 +1257,7 @@ pub fn visibleId(l: *Layout, name: []const u8) ?[]const u8 {
     return if (ids.len > 0) ids[0] else null;
 }
 
-// ── The live drag ───────────────────────────────────────────────────────────────────────────────
+// -- The live drag -------------------------------------------------------------------------------
 
 /// Keep a live drag moving: its view named, and frames coming while it rides the pointer.
 /// Called from every place that draws during a drag; idempotent within a frame.
@@ -1270,7 +1270,7 @@ pub fn tick(l: *Layout) void {
     }
 }
 
-// ── Painting ────────────────────────────────────────────────────────────────────────────────────
+// -- Painting ------------------------------------------------------------------------------------
 
 /// Whether the pointer is over `name` as the place a release would land on.
 fn aimedAt(l: *Layout, name: []const u8) bool {
@@ -1286,20 +1286,20 @@ fn aimedAt(l: *Layout, name: []const u8) bool {
 /// over them. `key` is any id stable for the place.
 pub fn drawZones(l: *Layout, name: []const u8, key: dvui.Id) void {
     // Only the place under the pointer: its zones come in as the pointer arrives and clear as it
-    // leaves for another, whose come in over it — for as long as they are still showing, so a
+    // leaves for another, whose come in over it - for as long as they are still showing, so a
     // place left mid-fade finishes going.
     // Over a chooser the drop is into its place, shown by the chooser (`Chooser`); the places'
     // own zones step back.
     // With the drag over, a drop still going is `drawOverlay`'s to finish where it was: the place
     // it was over may be renamed, moved or gone now, and looking it up again forgot the drop
-    // mid-way — it vanished instead of running back together.
+    // mid-way - it vanished instead of running back together.
     if (!l.state.view_drag.active()) return;
     const over_chooser = chooserAt(l.state, dvui.currentWindow().mouse_pt) != null;
     const aimed = aimedAt(l, name) and !over_chooser;
     const target = aimed and isTarget(l, name);
     if (!target and !DropZones.showing(key)) return;
     // Over the place less its own strip (`interiorBounds`): the strip takes the view into the
-    // place's list, and the zones are for its content — the part of it no float lies over
+    // place's list, and the zones are for its content - the part of it no float lies over
     // (`zoneBounds`). All of it under floats, it has no drop: one still going finishes where it was.
     const whole = interiorBounds(l.state, name) orelse {
         DropZones.forget(key);
@@ -1362,14 +1362,14 @@ pub fn drawZones(l: *Layout, name: []const u8, key: dvui.Id) void {
 }
 
 /// What a view drag draws over every place at once, after they have all drawn: the drops they
-/// queued (`drawZones`), and over them the card riding the pointer — in a layer of its own over the
+/// queued (`drawZones`), and over them the card riding the pointer - in a layer of its own over the
 /// window and every float on it.
 pub fn drawOverlay(l: *Layout) void {
     const d = &l.state.view_drag;
     const now = dvui.currentWindow().frame_time_ns;
     if (d.active()) followAcross(d, dvui.currentWindow().mouse_pt);
     const queued = if (d.pending_frame == now) d.pending[0..d.pending_count] else d.pending[0..0];
-    // This frame's drops, and any from last frame still going that no place asked for this time —
+    // This frame's drops, and any from last frame still going that no place asked for this time -
     // the place a drop just landed on can be gone or changed by now, and its drop still has to run
     // back together and shrink away rather than vanish mid-way.
     // Whether the float the view is carried out of is firm, kept for the frames after this one
@@ -1403,17 +1403,17 @@ pub fn drawOverlay(l: *Layout) void {
     defer layer.deinit();
     // On every screen (`core.screens`): a place in a float popped out into its own window has
     // its drop drawn here, at that window's part of the frame, and so does the carried view
-    // when the pointer is there — clipped to the main window, both were dropped as they were
+    // when the pointer is there - clipped to the main window, both were dropped as they were
     // drawn, and the app copies this layer into every such window as well as the main one.
     core.screens.markEverywhere(layer.data().id);
-    // The drops, then the card over them: one layer, so their order is the order drawn — the
+    // The drops, then the card over them: one layer, so their order is the order drawn - the
     // card's glass showing the drop it is aimed at blurred through it, its top left just off the
     // pointer so the bubble under the pointer stays in view.
     const scale = dvui.currentWindow().natural_scale;
     const prev_clip = dvui.clipGet();
     const mouse = dvui.currentWindow().mouse_pt;
     // The view as a drop, run together with the drop it is over: reaching a bubble, it bridges
-    // into it — which bubble a release takes, said by the glass itself.
+    // into it - which bubble a release takes, said by the glass itself.
     const carried = if (d.active()) dropShapes(l, drops[0..n]) else d.drop_shapes[0..0];
     var taken = false;
     var clips: [max_offers]dvui.Rect.Physical = undefined;
@@ -1425,7 +1425,7 @@ pub fn drawOverlay(l: *Layout) void {
         if (!taken and over and !core.dialogs.carry_windows) look.carried = carried;
         // The icons go over the carried view, which is laid on the drop after it: the bubble it
         // is about to be dropped in says what it does through it. Where the OS draws the glass,
-        // over its glass too — after the drag as well, while the drops go (below).
+        // over its glass too - after the drag as well, while the drops go (below).
         if (d.active() or core.native_glass.on()) look.icons = .later;
         // Carrying the view, the drop is not held to its place: the carried drop reaches past it.
         clips[i] = if (look.carried.len > 0) prev_clip else p.clip;
@@ -1454,9 +1454,9 @@ pub fn drawOverlay(l: *Layout) void {
 }
 
 /// A layer of the drag's over every float, drawn on every screen (`core.screens.allPixels`). A
-/// floating widget stays just above the window it was made in — this one the app's own, which every
+/// floating widget stays just above the window it was made in - this one the app's own, which every
 /// float is over, so the drops on a float's place and the view carried over a float were drawn under
-/// its glass — and is re-added as a window of its own and raised, as the demo overlay's layers are
+/// its glass - and is re-added as a window of its own and raised, as the demo overlay's layers are
 /// (`automation/overlay.zig`). It takes no pointer events: what is under it still takes them, the
 /// drag's hold on the pointer included.
 fn layerOver(layer: *dvui.FloatingWidget, src: std.lang.SourceLocation) void {
@@ -1468,10 +1468,10 @@ fn layerOver(layer: *dvui.FloatingWidget, src: std.lang.SourceLocation) void {
 }
 
 /// Where carried things are windows of their own (`core.dialogs.carry_windows`: fizzy's carry
-/// window), what is carried — a card, a tab, a drop — is drawn in a layer of its own that only its
+/// window), what is carried - a card, a tab, a drop - is drawn in a layer of its own that only its
 /// window draws (`core.screens.markCarried`): the window is all of it, the OS's material its
-/// glass, and nothing in the app's own windows follows it. A copy there — its glass, a drop's tail,
-/// the drop it ran into — was drawn at another moment than the window server moved the window, and
+/// glass, and nothing in the app's own windows follows it. A copy there - its glass, a drop's tail,
+/// the drop it ran into - was drawn at another moment than the window server moved the window, and
 /// trailed behind it. Whether it is; the layer is the caller's to `deinit` then.
 fn ownWindowLayer(layer: *dvui.FloatingWidget, src: std.lang.SourceLocation) bool {
     if (!core.dialogs.carry_windows) return false;
@@ -1480,9 +1480,9 @@ fn ownWindowLayer(layer: *dvui.FloatingWidget, src: std.lang.SourceLocation) boo
     return true;
 }
 
-/// A drop coming in where another is going — the place the view is aimed at now lying under the
+/// A drop coming in where another is going - the place the view is aimed at now lying under the
 /// one it was, as a float's place does under the place beneath it when the float firms up from its
-/// ghost — takes over the going one's glass and changes into itself (`DropZones.handOff`), rather
+/// ghost - takes over the going one's glass and changes into itself (`DropZones.handOff`), rather
 /// than coming in over it as it goes: both in one spot read as the drop opening and shutting twice.
 /// Returns how many of `drops` are left, the ones handed off taken out.
 fn handOffDrops(drops: []PendingDrop) usize {
@@ -1510,7 +1510,7 @@ fn handOffDrops(drops: []PendingDrop) usize {
     return n;
 }
 
-/// Points: the radius of the view carried as a drop — near the drop zones' middle bubble's (a
+/// Points: the radius of the view carried as a drop - near the drop zones' middle bubble's (a
 /// quarter under it), so what is carried reads about as big as where it goes, and is still seen
 /// beside a finger.
 const drop_r: f32 = 52;
@@ -1519,20 +1519,20 @@ const drop_r: f32 = 52;
 const drop_pull: f32 = 0.55;
 
 /// Before it is aimed at one, the drop leans toward the nearest bubble of the place under the
-/// pointer as it comes within `lean_reach` points of it, edge to edge — up to `drop_lean` of the
-/// way there as they touch — so it is drawn in from a little way off rather than only once it is
+/// pointer as it comes within `lean_reach` points of it, edge to edge - up to `drop_lean` of the
+/// way there as they touch - so it is drawn in from a little way off rather than only once it is
 /// on the bubble (the user: more attraction near the bubbles). Where the hand holds it decides it
 /// (`holdHand`), nothing else: nothing eases or swings.
 const drop_lean: f32 = 0.22;
 const lean_reach: f32 = 56;
 
 /// The farthest the pointer moves in a frame within one window's part of the frame, physical
-/// pixels: past it, it went from one window to another — a float out of the main window is drawn
+/// pixels: past it, it went from one window to another - a float out of the main window is drawn
 /// in a band 100000 pixels on (`Floats.Viewport`).
 const across_jump: f32 = 30000;
 
-/// The pointer gone from one window's part of the frame to another's in one frame — out of a
-/// float's window over the main window, or back — the carried view goes with it as it is: where
+/// The pointer gone from one window's part of the frame to another's in one frame - out of a
+/// float's window over the main window, or back - the carried view goes with it as it is: where
 /// the hand holds it and the shape it is changing from move by the same jump. Left, they swept back across
 /// the band and the view showed for a frame or two in the window it had left.
 fn followAcross(d: *ViewDrag, mouse: dvui.Point.Physical) void {
@@ -1564,7 +1564,7 @@ fn followAcross(d: *ViewDrag, mouse: dvui.Point.Physical) void {
     d.shape_rect.y += dy;
 }
 
-/// The view carried as a drop this frame, where the hand holds it (`holdHand`) — or none
+/// The view carried as a drop this frame, where the hand holds it (`holdHand`) - or none
 /// where it is carried as a card (`drawFloat`): no glass program, no photograph, or over a list.
 fn dropShapes(l: *Layout, drops: []const PendingDrop) []const core.LiquidField.Shape {
     const d = &l.state.view_drag;
@@ -1597,12 +1597,12 @@ fn dropShapes(l: *Layout, drops: []const PendingDrop) []const core.LiquidField.S
         },
         else => {},
     };
-    // Off where the hand holds it (`holdHand`), so the bubble under the pointer stays in view —
+    // Off where the hand holds it (`holdHand`), so the bubble under the pointer stays in view -
     // below and right of a mouse; up and left of a finger, the finger at the drop's bottom-right
     // corner, where the hand holding it covers none of it.
     const at = dropCenter(holdHand(d, mouse), R, d.drop_touch);
     // And drawn toward the bubble it is aimed at, far enough that the two run together: by time,
-    // never by the hand — joined, it moves only as the hand does. A bubble newly aimed at is eased
+    // never by the hand - joined, it moves only as the hand does. A bubble newly aimed at is eased
     // onto, without swinging past it.
     var aimed: ?dvui.Point.Physical = null;
     for (drops) |p| {
@@ -1612,8 +1612,8 @@ fn dropShapes(l: *Layout, drops: []const PendingDrop) []const core.LiquidField.S
     }
     const ease = std.math.clamp(dt / aim_s, 0, 1);
     var moving = false;
-    // Drawn into a bubble newly aimed at, and over to another, as one motion from where it was —
-    // past the bubble and back where motion is playful, as it pours in (`pour`) — and let go
+    // Drawn into a bubble newly aimed at, and over to another, as one motion from where it was -
+    // past the bubble and back where motion is playful, as it pours in (`pour`) - and let go
     // smoothly: by time, so a hand held still sets nothing going (the user: as strong and snappy
     // as the app's own glass).
     const pull_want: f32 = if (aimed != null) 1 else 0;
@@ -1681,8 +1681,8 @@ fn dropShapes(l: *Layout, drops: []const PendingDrop) []const core.LiquidField.S
     const pull = drop_pull * d.pull;
     if (d.aim_at) |a| centre = .{ .x = centre.x + (a.x - centre.x) * pull, .y = centre.y + (a.y - centre.y) * pull };
 
-    // From the shape it was last drawn as — what was grabbed at the lift, the tab it was over a
-    // strip — to the drop, on the card's own curve: that rounded rect closing into a circle.
+    // From the shape it was last drawn as - what was grabbed at the lift, the tab it was over a
+    // strip - to the drop, on the card's own curve: that rounded rect closing into a circle.
     const t = morphProgress(d.*, now);
     const grown = std.math.clamp(t, 0, 1);
     const to: dvui.Rect.Physical = .{ .x = centre.x - R, .y = centre.y - R, .w = 2 * R, .h = 2 * R };
@@ -1703,8 +1703,8 @@ fn modeAt(l: *Layout, mouse: dvui.Point.Physical) Mode {
 
 /// A change of what the view is carried as: the new shape sets out from the one last drawn.
 ///
-/// The first, at the lift, is from what was grabbed, which already shows what it is carried as —
-/// a tab lifted along a strip is carried as the tab it was — so it grows into its shape with its
+/// The first, at the lift, is from what was grabbed, which already shows what it is carried as -
+/// a tab lifted along a strip is carried as the tab it was - so it grows into its shape with its
 /// face whole, rather than fading its own face back in.
 fn noteMode(d: *ViewDrag, mode: Mode, now: i128) void {
     const first = d.lifting;
@@ -1738,8 +1738,8 @@ fn morphProgress(d: ViewDrag, now: i128) f32 {
     return if (dur <= 0) 1 else core.motion.enter(@floatCast(std.math.clamp(elapsed / dur, 0, 1)));
 }
 
-/// The view carried as a drop: its glass — run in with the drop it is over when that took it
-/// (`taken`), its own otherwise — and its photograph inside the head, cropped to fill it.
+/// The view carried as a drop: its glass - run in with the drop it is over when that took it
+/// (`taken`), its own otherwise - and its photograph inside the head, cropped to fill it.
 fn drawDrop(l: *Layout, taken: bool) void {
     const d = &l.state.view_drag;
     const scale = dvui.currentWindow().natural_scale;
@@ -1756,7 +1756,7 @@ fn drawDrop(l: *Layout, taken: bool) void {
     }
     if (!taken and (!own_window or !core.dialogs.carry_material)) {
         // At the merge it is drawn at inside a place's drop (`DropZones.merge`): drawn alone at a
-        // wider one, between two places — over the sash between them — the drop grew by some 8% of
+        // wider one, between two places - over the sash between them - the drop grew by some 8% of
         // its radius, and shrank back as the pointer reached either side.
         var field: core.LiquidField = .{ .merge_px = DropZones.merge * scale };
         for (d.drop_shapes[0..d.drop_n]) |sh| field.add(sh);
@@ -1781,7 +1781,7 @@ fn drawDrop(l: *Layout, taken: bool) void {
     }
     const shown = contentIn(d.*, morphProgress(d.*, dvui.currentWindow().frame_time_ns));
     // On the OS's glass, where the app hands it over (`core.native_glass.under`) and has its pixels
-    // to: what the view shows, fitted to it (`photoFit`), over the drop's frost — clear what is
+    // to: what the view shows, fitted to it (`photoFit`), over the drop's frost - clear what is
     // carried, and the drop the bubbles' glass (the user).
     if (own_window and core.native_glass.on() and core.native_glass.under() and d.photo_pixels != null) {
         d.photo_under = .{ .rect = head, .radius = d.drop_radius, .alpha = shown * (1 - aim_fade_under * d.drop_aim), .image = photoFit(d.*, head) };
@@ -1817,7 +1817,7 @@ fn drawDropLabel(l: *Layout, head: dvui.Rect.Physical, shown: f32) void {
     const title_raw = dropTitle(l, d.*) orelse return;
     if (title_raw.len == 0 or shown <= 0.01) return;
     const hn = head.toNatural();
-    // As the explorer's headings are (`Chooser.label`): uppercase, in the heading font — in the
+    // As the explorer's headings are (`Chooser.label`): uppercase, in the heading font - in the
     // window's text colour, not the heading's highlight (the user).
     var upper: [128]u8 = undefined;
     const title = if (title_raw.len <= upper.len) std.ascii.upperString(&upper, title_raw) else title_raw;
@@ -1854,7 +1854,7 @@ fn drawDropLabel(l: *Layout, head: dvui.Rect.Physical, shown: f32) void {
 }
 
 /// Whether dropping the view lifted from `source` in the middle of `dest` joins them: the two
-/// halves of one split (`State.joinable`), with the view the last thing `source` shows — a
+/// halves of one split (`State.joinable`), with the view the last thing `source` shows - a
 /// place of one, or a place of tabs down to this one. Carried out of a place that keeps other
 /// views, it is only moving, and the middle means what it means anywhere else.
 fn joins(l: *Layout, source: []const u8, dest: []const u8) bool {
@@ -1864,7 +1864,7 @@ fn joins(l: *Layout, source: []const u8, dest: []const u8) bool {
     return holding(l, source).len <= 1;
 }
 
-/// Whether `name` is somewhere the dragged view could land — one of the places mapped at lift
+/// Whether `name` is somewhere the dragged view could land - one of the places mapped at lift
 /// (`mapTargets`), or the place it came from.
 fn isTarget(l: *Layout, name: []const u8) bool {
     const d = l.state.view_drag;
@@ -1874,7 +1874,7 @@ fn isTarget(l: *Layout, name: []const u8) bool {
     return false;
 }
 
-/// Whether `key`'s zones are on screen — the place the drag is over, or fading out after it.
+/// Whether `key`'s zones are on screen - the place the drag is over, or fading out after it.
 pub fn zonesShowing(l: *Layout, name: []const u8, key: dvui.Id) bool {
     return (isTarget(l, name) and aimedAt(l, name)) or DropZones.showing(key);
 }
@@ -1896,7 +1896,7 @@ pub fn drawFloat(l: *Layout, taken: bool) void {
     }
     const mouse = dvui.currentWindow().mouse_pt;
     const now = dvui.currentWindow().frame_time_ns;
-    // Over a chooser — a tab strip, a rail — the view is going into a list, and the card is a
+    // Over a chooser - a tab strip, a rail - the view is going into a list, and the card is a
     // tab: the preview of a place is for the places' insides. What it is carried as was settled
     // this frame (`dropShapes`, `noteMode`); each change grows from the shape it was, the way a
     // dialog grows open.
@@ -1917,18 +1917,18 @@ pub fn drawFloat(l: *Layout, taken: bool) void {
     const off = dvui.dragOffset();
     // The pointer keeps its place on the card: the card's top left stays where it was from the
     // pointer when it was grabbed, and the card grows right and down from there into what it
-    // shows — so what the tab was held by is still under the pointer, and the card grows away
+    // shows - so what the tab was held by is still under the pointer, and the card grows away
     // from the place it is aimed at rather than over it. Pulled in only as far as keeps the
     // pointer on the card: a place grabbed far from its corner shrinks to a card far smaller.
     // Once it has been a drop, the grab point is long gone: the card hangs down and right from the
-    // pointer, just inside its top left, as the drop did — kept at the grab point, a place grabbed
+    // pointer, just inside its top left, as the drop did - kept at the grab point, a place grabbed
     // far from its corner hung up and left of the pointer, anchored at its bottom right (the user).
     const inset = 8 * scale;
     const tl: dvui.Point.Physical = if (d.been_drop) .{ .x = mouse.x - inset, .y = mouse.y - inset } else if (d.loose()) blk: {
-        // Lifted out of a list — a row of a file tree, a card of the picker — it keeps its middle
+        // Lifted out of a list - a row of a file tree, a card of the picker - it keeps its middle
         // where the middle of what was grabbed was, so a row's name stays where it was in the row
-        // as the row narrows to it. Grabbed off what it shows — out along the row past its name,
-        // rows lifted together far from the one under the pointer — it is brought in under the
+        // as the row narrows to it. Grabbed off what it shows - out along the row past its name,
+        // rows lifted together far from the one under the pointer - it is brought in under the
         // pointer as it grows into itself (`morphProgress`), the pointer kept off its very end: a
         // pill's, the middle of its round end.
         const keep_x = if (show_photo) inset else @min(target.h, target.w) / 2;
@@ -1979,8 +1979,8 @@ pub fn drawFloat(l: *Layout, taken: bool) void {
     const shown = contentIn(d.*, t);
     if (if (show_photo) d.texture else null) |tex| {
         // The photograph (backed by the content fill, `backed`), inset in the glass, its corners
-        // following the card's: at `photo_opacity`, so the glass — and what is under the card,
-        // through it — shows as the card moves.
+        // following the card's: at `photo_opacity`, so the glass - and what is under the card,
+        // through it - shows as the card moves.
         const inner = dvui.CornerRect.round(@max(0, radius / scale - card_padding));
         dvui.renderTexture(tex, fw.data().contentRectScale(), .{ .corners = inner, .colormod = dvui.Color.white.opacity(photo_opacity * shown) }) catch {};
     } else {
@@ -1998,12 +1998,12 @@ const card_padding: f32 = 6;
 /// How opaque the card's photograph is over its glass.
 const photo_opacity: f32 = 0.8;
 /// How much of the drop's photograph goes while it is joined to the bubble it is aimed at: nearly
-/// opaque over the bubble it read as a disc under it, not glass running into glass (the user) — the
+/// opaque over the bubble it read as a disc under it, not glass running into glass (the user) - the
 /// bubble lights itself (`DropZones`).
 const aim_fade: f32 = 0.75;
 /// How much of the drop's photograph goes as it joins a bubble where it lies under the OS's glass:
-/// little — the bubble's glass bends and blurs it where the drop runs into it, and it reads through
-/// that (the user) — only enough that the bubble's icon reads over it.
+/// little - the bubble's glass bends and blurs it where the drop runs into it, and it reads through
+/// that (the user) - only enough that the bubble's icon reads over it.
 const aim_fade_under: f32 = 0.3;
 /// Seconds the drop's photograph takes to fade as it joins a bubble, and to come back.
 const aim_s: f32 = 0.09;
@@ -2019,7 +2019,7 @@ fn joinStep(dt: f32) f32 {
 }
 
 /// How far through being drawn into a bubble the drop is at `u` of `join_ms`: quick, then past it
-/// and back, as water pours in, as far past as motion is playful (`core.motion`) — none at the low
+/// and back, as water pours in, as far past as motion is playful (`core.motion`) - none at the low
 /// end, an ease out only. Time alone moves it.
 fn pour(u: f32) f32 {
     const play = std.math.clamp((core.motion.level() - 0.5) * 2, 0, 1);
@@ -2033,8 +2033,8 @@ fn smooth(u: f32) f32 {
     return x * x * (3 - 2 * x);
 }
 
-/// Points: the tab face on a card with no photograph — a file icon, the title and, when there
-/// are unsaved changes, the dirty dot — and the gaps between them.
+/// Points: the tab face on a card with no photograph - a file icon, the title and, when there
+/// are unsaved changes, the dirty dot - and the gaps between them.
 const face_icon: f32 = 16;
 const face_gap: f32 = 6;
 const face_dot: f32 = 7;
@@ -2070,7 +2070,7 @@ fn pillSize(l: *Layout, d: ViewDrag, title: []const u8, scale: f32) dvui.Size.Ph
 fn drawTabFace(l: *Layout, d: ViewDrag, title: []const u8) void {
     // As the strip draws the tab it was (`Workspace`'s tab row): the icon in the control colour,
     // in the file tree's glyph slot, a plain file glyph where no plugin draws one; the title as a
-    // selected tab's — it is the tab in hand. The face drawn before the tab became glass is the
+    // selected tab's - it is the tab in hand. The face drawn before the tab became glass is the
     // strip's own, so anything else here changed on the way back.
     const theme = dvui.themeGet();
     const icon_color = core.widgets.treeGlyphColor(theme);
@@ -2103,7 +2103,7 @@ fn drawTabFace(l: *Layout, d: ViewDrag, title: []const u8) void {
     };
 }
 
-/// What the carried thing is called on its glass: the view's title, a document's file name — or
+/// What the carried thing is called on its glass: the view's title, a document's file name - or
 /// what the first of several lifted together, or something no place takes, was lifted as.
 fn carriedTitle(l: *Layout, d: ViewDrag) []const u8 {
     if (d.with_n > 0) return itemTitle(l, d.with[0]);
@@ -2116,7 +2116,7 @@ fn itemTitle(l: *Layout, it: Carried) []const u8 {
 }
 
 /// Carried as the rows it was lifted as rather than one tab's face: several lifted together, or
-/// something no place takes — a folder, by its name and a folder's icon.
+/// something no place takes - a folder, by its name and a folder's icon.
 fn asRows(d: ViewDrag) bool {
     return d.with_n > 1 or d.held;
 }
@@ -2209,7 +2209,7 @@ fn floatTarget(from: dvui.Size.Physical, scale: f32) dvui.Size.Physical {
     return .{ .w = w, .h = h };
 }
 
-// ── The landing ─────────────────────────────────────────────────────────────────────────────────
+// -- The landing ---------------------------------------------------------------------------------
 
 /// Release at `mouse`. Does nothing unless the pointer is somewhere a drop
 /// means something, so letting go over the window frame cancels.
@@ -2217,22 +2217,22 @@ pub fn apply(l: *Layout, source: []const u8, mouse: dvui.Point.Physical) void {
     // Nothing lands what no place takes: the plugin that lifted it has read the release itself.
     if (l.state.view_drag.held) return;
     // Let go over no window of the app's, where floats are OS windows of their own: a float opens
-    // there, in a window of its own, with the view in it — as a tab torn off onto the desktop opens
+    // there, in a window of its own, with the view in it - as a tab torn off onto the desktop opens
     // a window where it lands.
     if (l.state.floats_windowed and overNoWindow(mouse)) return floatAway(l, source, mouse);
     if (chooserAt(l.state, mouse)) |o| {
         if (!o.into) return;
         if (dropOnPluginChooser(l, source, o.name, mouse)) return;
-        // Where along it the chooser said: in the place's list there — on the chooser it came
+        // Where along it the chooser said: in the place's list there - on the chooser it came
         // off, moved along it.
         if (o.at) |at| return insertInto(l, source, o.name, at);
-        // Its own place's chooser, saying nothing of where along it: no move. Never a float —
+        // Its own place's chooser, saying nothing of where along it: no move. Never a float -
         // that is the middle of the place, not its list.
         if (std.mem.eql(u8, o.name, source)) return;
         place(l, source, o.name, .swap);
         return;
     }
-    // Where the carried view aims — the drop's middle where it is carried as one — not where the
+    // Where the carried view aims - the drop's middle where it is carried as one - not where the
     // pointer is, so the release lands where the glass showed it would.
     const a = aimFor(l, mouse);
     const dest = targetAtAim(l, a, source) orelse return;
@@ -2243,7 +2243,7 @@ pub fn apply(l: *Layout, source: []const u8, mouse: dvui.Point.Physical) void {
 }
 
 /// A release over a plugin region's own chooser: straight to the plugin's `on_drop`, as into the
-/// region with where along its strip — even for the region the view came out of, whose strip
+/// region with where along its strip - even for the region the view came out of, whose strip
 /// reorders it, which `place` would refuse as no move. False when `dest` is not a plugin region
 /// with a drop and a chooser of its own (`owns_selection`), for `place` to handle: the strip over
 /// a region that leaves choosing to the app is the app's (`insertInto`).
@@ -2260,17 +2260,17 @@ fn dropOnPluginChooser(l: *Layout, source: []const u8, dest: []const u8, mouse: 
     return true;
 }
 
-/// Put the view carried out of `source` into place `dest`'s list at `at`, and show it there — let
+/// Put the view carried out of `source` into place `dest`'s list at `at`, and show it there - let
 /// go over a chooser the app drew (`Chooser`), where along it. Into the place it came out of, it
 /// moves along the list: the place's order, kept as its assignment when it has one, else as an
-/// order (`State.setOrder`) — never as a new assignment, which would freeze a place its keywords
+/// order (`State.setOrder`) - never as a new assignment, which would freeze a place its keywords
 /// fill against views registered later. Into another place, it leaves the one it was in, as any
 /// drop into a place's middle does, and the list it goes into is written down.
 pub fn insertInto(l: *Layout, source: []const u8, dest: []const u8, at: Insert) void {
     const moved = ownId(l.arena, movedFrom(l, source) orelse return) orelse return;
     const r = regionNamed(l.state, dest) orelse return;
     if (!accepts(r.*, keywordsOf(l, moved))) return;
-    // A document — open, or a file out of the tree — along a plain place's chooser goes in there
+    // A document - open, or a file out of the tree - along a plain place's chooser goes in there
     // inside a new view holding it (`house`).
     if (!r.kind_slot and slottedId(l, moved)) {
         if (l.state.documents == null) return;
@@ -2282,7 +2282,7 @@ pub fn insertInto(l: *Layout, source: []const u8, dest: []const u8, at: Insert) 
     const held = holding(l, dest);
     const along = containsId(held, moved);
     // The whole list it goes into: the assignment, ids of plugins not loaded now included so they
-    // keep their slots; or what the place shows by keyword, then — moving along an order —
+    // keep their slots; or what the place shows by keyword, then - moving along an order -
     // whatever an earlier order named that is not showing now.
     var base: std.ArrayList([]const u8) = .empty;
     base.appendSlice(l.arena, held) catch return;
@@ -2352,7 +2352,7 @@ pub fn place(l: *Layout, source: []const u8, dest: []const u8, kind: Drop.Kind) 
     // Split onto its own place, a view stays where it is (the empty leaf opens beside it) only
     // when it is all the place holds. Beside others it goes to the leaf under the pointer and they
     // stay: left in the origin, the view and the others kept the place between them and the leaf
-    // opened empty on the far side — a tab dragged to the top of its own strip's place moved the
+    // opened empty on the far side - a tab dragged to the top of its own strip's place moved the
     // tabs left behind to the bottom, as though another view had been carried.
     const same = std.mem.eql(u8, source, dest);
     // A document dropped on its own slot's middle floats, in a view holding it (`floatsDocument`).
@@ -2365,7 +2365,7 @@ pub fn place(l: *Layout, source: []const u8, dest: []const u8, kind: Drop.Kind) 
     // The trash is about what is carried, not where it was let go.
     if (plan == .remove) return remove(l, source);
     const moved = ownId(l.arena, movedFrom(l, source) orelse return) orelse return;
-    // Out of its own place into a window of its own: the framework's to do, not the place's —
+    // Out of its own place into a window of its own: the framework's to do, not the place's -
     // a plugin region's own drop is never asked.
     if (plan == .float) {
         floatOut(l, source, moved, null);
@@ -2429,7 +2429,7 @@ pub fn place(l: *Layout, source: []const u8, dest: []const u8, kind: Drop.Kind) 
 
 /// A document carried onto a plain place, which only a slot made for it takes: it lands there
 /// inside a new view of the application's that holds it, and what was carried with it
-/// (`State.documents`), as a view carried there would land — an edge splits the place and the
+/// (`State.documents`), as a view carried there would land - an edge splits the place and the
 /// new half holds it; the middle adds it beside what the place holds. Where the document came from is the slot's plugin's to tidy: its tab moves, as a drop
 /// into another slot moves it.
 fn house(l: *Layout, dest: []const u8, plan: Drop.Plan, moved: []const u8) void {
@@ -2453,7 +2453,7 @@ fn house(l: *Layout, dest: []const u8, plan: Drop.Plan, moved: []const u8) void 
 /// The view a document carried alone carries with it (`State.Documents.alone`), and the place it
 /// is in: the only tab of its workspace takes the workspace along, so the drop moves that, as
 /// a drag of the workspace itself would, rather than making a new one round the document and
-/// leaving the old to close — a round trip that drew the document anew twice, and blinked.
+/// leaving the old to close - a round trip that drew the document anew twice, and blinked.
 fn carriedView(l: *Layout, moved: []const u8) ?struct { view: []const u8, from: []const u8 } {
     const docs = l.state.documents orelse return null;
     if (l.state.view_drag.with_n > 1) return null;
@@ -2462,7 +2462,7 @@ fn carriedView(l: *Layout, moved: []const u8) ?struct { view: []const u8, from: 
     return .{ .view = view, .from = from };
 }
 
-/// Land view `view`, shown in place `from`, on `dest` as `plan` says — what `place` does with a
+/// Land view `view`, shown in place `from`, on `dest` as `plan` says - what `place` does with a
 /// view carried out of its place, for one a document carried along (`carriedView`).
 fn landView(l: *Layout, from: []const u8, dest: []const u8, plan: Drop.Plan, view: []const u8) void {
     switch (plan) {
@@ -2498,10 +2498,10 @@ fn houseView(l: *Layout, moved: []const u8) ?[]const u8 {
 }
 
 /// Whether the view carried out of `source` floats when it is dropped on the middle of `source`
-/// (`float_rules.canFloat`): not out of the picker, not a document — its place is the slot a
-/// plugin made for it — and not a view already alone in a float nobody split.
+/// (`float_rules.canFloat`): not out of the picker, not a document - its place is the slot a
+/// plugin made for it - and not a view already alone in a float nobody split.
 /// Over no window of the app's: past the main window, and on no screen a float's window shows
-/// (`core.screens`) — the pointer is read in the main window's frame there (`SDLBackend.heldPoint`).
+/// (`core.screens`) - the pointer is read in the main window's frame there (`SDLBackend.heldPoint`).
 fn overNoWindow(mouse: dvui.Point.Physical) bool {
     if (dvui.windowRectPixels().contains(mouse)) return false;
     const s = dvui.windowNaturalScale();
@@ -2510,7 +2510,7 @@ fn overNoWindow(mouse: dvui.Point.Physical) bool {
 
 /// The view carried out of `source`, let go over no window of the app's (`apply`): a float of its
 /// own opens round where it was let go (`floatOut`), which the application puts in an OS window of
-/// its own. Any view that may float — a view alone in a float's window too: its window closes, and
+/// its own. Any view that may float - a view alone in a float's window too: its window closes, and
 /// one opens where it was let go.
 fn floatAway(l: *Layout, source: []const u8, mouse: dvui.Point.Physical) void {
     // Out of the picker too (a loose drag): the view it carries, wherever it is now.
@@ -2537,7 +2537,7 @@ fn canFloat(l: *Layout, source: []const u8) bool {
 }
 
 /// Whether the document carried loose floats when it is dropped on the middle of `dest`: the
-/// slot it is a tab of — its own workspace's, in fizzy — where the application gives documents
+/// slot it is a tab of - its own workspace's, in fizzy - where the application gives documents
 /// views of their own (`State.documents`), as a view dropped on its own place's middle floats.
 /// Not when the view it would float in is already alone in a float nobody split.
 fn floatsDocument(l: *Layout, dest: []const u8) bool {
@@ -2567,7 +2567,7 @@ fn floatDocument(l: *Layout, moved: []const u8, at: ?dvui.Point.Physical) void {
 }
 
 /// Float `moved` out of `source`: a new float (`Floats`) holding just it, where `float_rules`
-/// opens one — out of another float, a step down and right of that one — growing out of the glass
+/// opens one - out of another float, a step down and right of that one - growing out of the glass
 /// it was carried in, with the photograph the drag took of it. The source loses the view; a place
 /// of several keeps the rest.
 fn floatOut(l: *Layout, source: []const u8, moved: []const u8, at: ?dvui.Point.Physical) void {
@@ -2577,11 +2577,11 @@ fn floatOut(l: *Layout, source: []const u8, moved: []const u8, at: ?dvui.Point.P
     var buf: [32]u8 = undefined;
     const name = state.internName(l.gpa, float_rules.nextName(&buf, state.floats.names(l.arena)));
     const window = Floats.toRules(dvui.windowRect());
-    // Carried out of the picker (a loose drag), it floats out of whichever place holds it now —
-    // its home when the float closes — or, held nowhere, out of none: its keywords take it home.
+    // Carried out of the picker (a loose drag), it floats out of whichever place holds it now -
+    // its home when the float closes - or, held nowhere, out of none: its keywords take it home.
     const holder: ?[]const u8 = if (std.mem.eql(u8, source, loose_source)) holderOf(l, moved) else source;
     const d = &state.view_drag;
-    // Held nowhere — a document's new view (`floatDocument`) — it comes out of the pane its
+    // Held nowhere - a document's new view (`floatDocument`) - it comes out of the pane its
     // photograph was taken in.
     const photo_rect: ?dvui.Rect.Physical = if (d.active() and d.texture != null) d.texture_rect else null;
     const src = (if (holder) |h| placeBounds(state, h) else null) orelse photo_rect orelse dvui.windowRectPixels();
@@ -2590,7 +2590,7 @@ fn floatOut(l: *Layout, source: []const u8, moved: []const u8, at: ?dvui.Point.P
         float_rules.nudged(Floats.toRules(state.floats.items.items[i].rect), window)
     else
         float_rules.initialRect(Floats.toRules(src.toNatural()), window);
-    // The glass it was carried in, when a drag let go of it here — a loose one too, the document
+    // The glass it was carried in, when a drag let go of it here - a loose one too, the document
     // in it floating in a view it carried (`floatDocument`); the place itself, when nothing was
     // carried (the picker, a test).
     const carried = d.active() and (std.mem.eql(u8, d.name, source) or d.loose()) and d.shape_rect.w > 0;
@@ -2599,8 +2599,8 @@ fn floatOut(l: *Layout, source: []const u8, moved: []const u8, at: ?dvui.Point.P
     // The window the place's size, its view inside it below its header (the user: a window no
     // larger than the place it came out of).
     if (carried and d.texture != null and out_of == null) rect = float_rules.asTaken(Floats.toRules(src.toNatural()), window);
-    // Let go over no window of the app's (`floatAway`): its size, out there — not held on the main
-    // window — its top left where the carried glass's was, which rode below and right of the
+    // Let go over no window of the app's (`floatAway`): its size, out there - not held on the main
+    // window - its top left where the carried glass's was, which rode below and right of the
     // pointer: the glass grows into it right and down from where it was let go, rather than out
     // round the pointer. With nothing carried, round where it was let go.
     if (at) |p| {
@@ -2655,12 +2655,12 @@ pub fn holderOf(l: *Layout, id: []const u8) ?[]const u8 {
 /// (`float_rules.goHome`): into the list of `home`, the place the float came out of, when the user
 /// had arranged it; let go where their keywords show them, which for a place its keywords fill is
 /// home again; and any other view into home's list all the same, or another place where home
-/// cannot take it — a view merged into the float from elsewhere may have keywords no place
+/// cannot take it - a view merged into the float from elsewhere may have keywords no place
 /// answers, and let go it would be shown nowhere. Each is selected where it lands, so the view
 /// the user had in front of them is in front of them again.
 pub fn sendHome(l: *Layout, leaves: []const []const u8, home: []const u8) void {
     const state = l.state;
-    // No home (a saved float whose home was lost). Not looked up — an unnamed place would answer
+    // No home (a saved float whose home was lost). Not looked up - an unnamed place would answer
     // to "".
     const r = if (home.len > 0) regionNamed(state, home) else null;
     // Every view out of the float's places first, so what a place's keywords show is read with
@@ -2721,7 +2721,7 @@ fn mainPlaceFor(l: *Layout, id: []const u8) ?*const Region {
     return null;
 }
 
-/// An empty place carried somewhere — the place itself is what moves, there being nothing in it.
+/// An empty place carried somewhere - the place itself is what moves, there being nothing in it.
 /// The trash or another place's middle: it goes, closing into the half beside it (an empty place
 /// dropped on an empty one leaves one empty place). Another place's edge: it goes from where it
 /// was and opens there instead, an empty half of that place. Onto itself, nothing. Only a half of
@@ -2743,8 +2743,8 @@ fn placeEmpty(l: *Layout, source: []const u8, dest: []const u8, kind: Drop.Kind)
     dvui.refresh(null, @src(), null);
 }
 
-/// What the trash does with the view carried out of `source`: a document closes — the ordinary
-/// close, which asks about unsaved changes — and any other view leaves its place, back to the
+/// What the trash does with the view carried out of `source`: a document closes - the ordinary
+/// close, which asks about unsaved changes - and any other view leaves its place, back to the
 /// picker it can be placed from again.
 fn remove(l: *Layout, source: []const u8) void {
     const moved = ownId(l.arena, movedFrom(l, source) orelse return) orelse return;
@@ -2765,22 +2765,22 @@ fn remove(l: *Layout, source: []const u8) void {
 
 /// The surface a drop from `source` lands: the one the live drag lifted when
 /// it is this drag's source (a picker drag carries a view its source may not
-/// be showing — or, loose, has no source at all), else what the place shows.
+/// be showing - or, loose, has no source at all), else what the place shows.
 fn movedFrom(l: *Layout, source: []const u8) ?[]const u8 {
     const d = l.state.view_drag;
     if (d.active() and d.moved_id.len > 0 and std.mem.eql(u8, d.name, source)) return d.moved_id;
     return visibleId(l, source);
 }
 
-/// Land the view. A place takes it beside what it holds — as a tab, once it holds more than one
-/// — and the source simply loses it. Only a name no place answers to trades: the view there
+/// Land the view. A place takes it beside what it holds - as a tab, once it holds more than one
+/// - and the source simply loses it. Only a name no place answers to trades: the view there
 /// goes back where the new one came from, because nowhere else is anywhere.
 fn swap(l: *Layout, source: []const u8, dest: []const u8, moved: []const u8) void {
     const other_raw = visibleId(l, dest);
     const other = if (other_raw) |o| ownId(l.arena, o) else null;
 
     // Dropped on a place that already holds it (a tab dropped back into its own strip's place):
-    // it is already there, so show it and leave the list alone — claiming it would shrink the
+    // it is already there, so show it and leave the list alone - claiming it would shrink the
     // place to it.
     const declared = regionNamed(l.state, dest) != null;
     if (declared) {
@@ -2843,8 +2843,8 @@ fn containsId(ids: []const []const u8, id: []const u8) bool {
 
 /// What a place is holding: the list it was given, or the one its keywords
 /// attract when it has never been given one. A place usually has no
-/// list of its own — the sidebar's tabs are every plugin that asked for the
-/// sidebar — and reading only the assignment there says "nothing", so a drop
+/// list of its own - the sidebar's tabs are every plugin that asked for the
+/// sidebar - and reading only the assignment there says "nothing", so a drop
 /// onto the rail would leave it holding one lone view.
 fn holding(l: *Layout, name: []const u8) []const []const u8 {
     if (l.state.assignment(name)) |ids| return ids;
@@ -2882,7 +2882,7 @@ fn takeOut(l: *Layout, name: []const u8, moved: []const u8, give: ?[]const u8) v
 ///
 /// The selection is remembered per place and only *read* against what the
 /// place shows, so a chooser that has already dropped the icon can sit beside
-/// a body still drawing what that icon used to choose — which is what dragging
+/// a body still drawing what that icon used to choose - which is what dragging
 /// Files out of the sidebar looked like until you clicked another icon.
 fn reselect(l: *Layout, name: []const u8, gone: []const u8, kept: []const []const u8) void {
     const key = if (regionNamed(l.state, name)) |r| r.selectionKey() else slotKey(name);
@@ -2916,7 +2916,7 @@ fn selectNamed(l: *Layout, name: []const u8, id: []const u8) void {
 /// minted leaf is not furniture: it was a container for the view that has
 /// just been carried out of it, and leaving a blank rectangle behind makes
 /// the user tidy up after their own drag. `State.isMinted` is exactly that
-/// distinction — a place the tree is allowed to drop.
+/// distinction - a place the tree is allowed to drop.
 ///
 /// The leaf a split *mints* is empty on purpose and is never passed here: it
 /// is the room being made, not room left over.
@@ -2961,8 +2961,8 @@ fn closable(l: *Layout, name: []const u8) bool {
 pub const Merged = struct { gone: []const u8, into: []const u8 };
 
 /// Close the emptied place `name`, one half of a split the user made, into the other half. A
-/// minted half closes outright (`closeMinted`). The half that was split keeps its name — it is
-/// the shape's place, or the name its own parent split knows it by — so it takes the other half's
+/// minted half closes outright (`closeMinted`). The half that was split keeps its name - it is
+/// the shape's place, or the name its own parent split knows it by - so it takes the other half's
 /// views and that half closes instead: the same one place either way, under the name the layout
 /// knows. A minted half split again is that case too: closed outright it would take its whole
 /// split with it. Returns that merge, when it was one. A place no user split made, or whose other
@@ -2989,7 +2989,7 @@ pub fn closeEmptied(l: *Layout, name: []const u8) ?Merged {
     return .{ .gone = sibling, .into = into };
 }
 
-/// Close a minted place, whatever it holds — sliding its split shut where it was drawn.
+/// Close a minted place, whatever it holds - sliding its split shut where it was drawn.
 fn closeMinted(l: *Layout, name: []const u8) void {
     if (!l.state.isMinted(name)) return;
     // A seed's dock tree closes its own leaves, easing the split shut over it. A float's splits
@@ -3005,7 +3005,7 @@ fn closeMinted(l: *Layout, name: []const u8) void {
         l.extents_changed = true;
         return;
     };
-    // Never drawn at a size — or not drawn at all yet, made this frame — so there is nothing to
+    // Never drawn at a size - or not drawn at all yet, made this frame - so there is nothing to
     // slide: drop it outright.
     if (l.state.splits.collapse(l.gpa, name)) {
         if (l.state.clearExtent(l.gpa, name)) l.extents_changed = true;
