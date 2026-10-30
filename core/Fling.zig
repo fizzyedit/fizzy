@@ -29,31 +29,55 @@ pub const Tuning = struct {
     max: f32 = 50.0,
     /// If the pointer was still longer than this before release (s), don't coast.
     idle_s: f32 = 0.08,
+    /// How the content behaves past either end of its range.
+    edge: Edge = .{},
 };
 
-/// How far content follows a finger dragged past its end: the farther past, the less it moves.
-pub const Rubber = struct {
-    /// How much of the finger's travel shows at the edge itself.
-    c: f32,
-    /// The overscroll the drag approaches but never reaches (units).
-    limit: f32,
+/// How a scroll edge feels: the platform value a target picks.
+pub const Edge = struct {
+    /// iOS's rubber-band constant: the share of the finger's travel the content follows at the edge.
+    resistance: f32 = 0.55,
+    /// Hertz of the critically damped return (no overshoot). 3.5 settles 117 points in about 350 ms.
+    hz: f32 = 3.5,
 };
 
-/// iOS's rubber band in points: about a third of the finger's travel shows at 120 points past.
-/// Android stretches or glows instead; when it is done, its value sits beside this one.
-pub const rubber_band: Rubber = .{ .c = 0.55, .limit = 101.5 };
-
-/// The overscroll shown for a finger `excess` past the end (either sign).
-pub fn rubber(excess: f32, r: Rubber) f32 {
-    const x = @abs(excess);
-    return std.math.copysign(r.c * x * r.limit / (r.c * x + r.limit), excess);
+/// How far content shows past the edge for a finger `pull` points past it (sign kept); `extent`
+/// is the viewport's length. The farther past, the less it moves, and it never reaches `extent`.
+/// An unmeasured or empty viewport has no band.
+pub fn band(pull: f32, extent: f32, e: Edge) f32 {
+    if (extent <= 0) return 0;
+    const x = @abs(pull);
+    return std.math.copysign((1 - 1 / (x * e.resistance / extent + 1)) * extent, pull);
 }
 
-/// The finger travel past the end that `rubber` shows as `overscroll`: where a drag that
-/// catches a springing area takes over from.
-pub fn unrubber(overscroll: f32, r: Rubber) f32 {
-    const o = @min(@abs(overscroll), r.limit * 0.999);
-    return std.math.copysign(o * r.limit / (r.c * (r.limit - o)), overscroll);
+/// The inverse of `band`: the pull that shows `shown` past the edge, where a finger that catches
+/// a moving band takes over from. A `shown` at or beyond `extent` is held just inside it.
+/// An unmeasured or empty viewport has no pull.
+pub fn pullFor(shown: f32, extent: f32, e: Edge) f32 {
+    if (extent <= 0) return 0;
+    const b = @min(@abs(shown), extent * 0.999);
+    return std.math.copysign(extent / e.resistance * b / (extent - b), shown);
+}
+
+/// A critically damped return to 0 from `offset` moving at `vel`, `t` seconds later, with
+/// angular frequency `w`: position and velocity. Never crosses 0 unless `vel` carries it across.
+pub fn settle(offset: f32, vel: f32, t: f64, w: f64) struct { pos: f32, vel: f32 } {
+    const x0: f64 = offset;
+    const v0: f64 = vel;
+    const k = v0 + w * x0;
+    const keep = @exp(-w * t);
+    return .{ .pos = @floatCast((x0 + k * t) * keep), .vel = @floatCast((v0 - w * k * t) * keep) };
+}
+
+/// Seconds after a coast's start when it reaches `edge`, or null if it stops first. The coast is
+/// `coastPosition`'s: `origin + velocity / decay * (1 - e^(-decay t))`, ending at speed `stop`.
+pub fn edgeTime(origin: f32, velocity: f32, edge: f32, decay: f32, stop: f32) ?f64 {
+    if (velocity == 0) return null;
+    const keep: f64 = 1 - @as(f64, edge - origin) * decay / velocity;
+    if (keep <= 0 or keep > 1) return null;
+    // The coast ends once its speed is `stop`: keep = stop / |velocity|.
+    if (keep < @as(f64, stop) / @abs(velocity)) return null;
+    return -@log(keep) / decay;
 }
 
 /// A place of interest in a scroll area, in the area's own units.
@@ -246,13 +270,60 @@ pub fn cancel(self: *Fling) void {
     self.vel = 0.0;
 }
 
-test "the rubber band shows a third of the travel at 120 points and never reaches its limit" {
-    try std.testing.expectApproxEqAbs(@as(f32, 1.0 / 3.0), rubber(120, rubber_band) / 120, 0.01);
-    try std.testing.expectEqual(@as(f32, -rubber(300, rubber_band)), rubber(-300, rubber_band));
-    try std.testing.expect(rubber(1e6, rubber_band) < rubber_band.limit);
-    for ([_]f32{ -250, -3, 0, 40, 300 }) |x| {
-        try std.testing.expectApproxEqAbs(x, unrubber(rubber(x, rubber_band), rubber_band), 0.01);
+test "empty viewports have no band or pull" {
+    for ([_]f32{ 0, -1 }) |extent| {
+        for ([_]f32{ -120, 0, 120 }) |distance| {
+            try std.testing.expectEqual(@as(f32, 0), band(distance, extent, .{}));
+            try std.testing.expectEqual(@as(f32, 0), pullFor(distance, extent, .{}));
+        }
     }
+    try std.testing.expectEqual(@as(f32, 0), band(0, 400, .{}));
+    try std.testing.expectEqual(@as(f32, 0), pullFor(0, 400, .{}));
+}
+
+test "band and pullFor are inverses, and the band stays inside the viewport" {
+    for ([_]f32{ 1, 50, 300 }) |b| {
+        try std.testing.expectApproxEqAbs(b, band(pullFor(b, 400, .{}), 400, .{}), 1e-3);
+        try std.testing.expectApproxEqAbs(-b, band(pullFor(-b, 400, .{}), 400, .{}), 1e-3);
+    }
+    try std.testing.expectApproxEqAbs(@as(f32, 116.8), band(300, 400, .{}), 0.05);
+    try std.testing.expect(band(1e6, 400, .{}) < 400);
+    try std.testing.expect(pullFor(1e6, 400, .{}) < 1e6);
+}
+
+test "edgeTime is where the coast reaches the edge" {
+    const decay: f32 = 2;
+    const stop: f32 = 20;
+    for ([_]f32{ 600, 3000, -3000 }) |v| {
+        const edge: f32 = if (v > 0) 150 else -150;
+        const t = edgeTime(0, v, edge, decay, stop) orelse return error.TestUnexpectedResult;
+        const at: f64 = v / decay * (1 - @exp(-decay * t));
+        try std.testing.expectApproxEqAbs(edge, @as(f32, @floatCast(at)), 0.01);
+    }
+    // Slow enough to stop short, headed away, or at the edge already.
+    try std.testing.expectEqual(@as(?f64, null), edgeTime(0, 200, 150, decay, stop));
+    try std.testing.expectEqual(@as(?f64, null), edgeTime(0, 3000, -150, decay, stop));
+    try std.testing.expectEqual(@as(?f64, 0), edgeTime(150, 3000, 150, decay, stop));
+}
+
+test "settle from 117 points is home by 350 ms and never crosses" {
+    const w: f64 = 2 * std.math.pi * 3.5;
+    try std.testing.expect(settle(117, 0, 0.35, w).pos < 0.5);
+    var t: f64 = 0;
+    while (t < 1) : (t += 0.001) {
+        const s = settle(117, 0, t, w);
+        try std.testing.expect(s.pos > 0);
+        try std.testing.expect(s.vel <= 0);
+    }
+    // Out at 3000 points/s from the edge, it peaks and returns once.
+    var peak: f32 = 0;
+    t = 0;
+    while (t < 1) : (t += 0.001) {
+        const s = settle(0, 3000, t, w);
+        try std.testing.expect(s.pos >= 0);
+        peak = @max(peak, s.pos);
+    }
+    try std.testing.expectApproxEqAbs(@as(f32, @floatCast(3000 / (w * std.math.e))), peak, 0.5);
 }
 
 test "a sample stamped before the previous one is held at the previous time" {

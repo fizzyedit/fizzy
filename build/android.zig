@@ -1,6 +1,7 @@
 //! `zig build apk -Dandroid-sdk=<dir>`: the Android hello (`android/`), an SDL3 window with dvui
 //! drawing, packaged as an APK with the Android SDK's own tools. See `android/README.md`.
 const std = @import("std");
+const builtin = @import("builtin");
 const sdk = @import("sdk.zig");
 
 pub fn add(b: *std.Build) void {
@@ -38,7 +39,17 @@ pub fn add(b: *std.Build) void {
         .x86_64 => "x86_64",
     };
     const triple = b.fmt("{s}-linux-android", .{@tagName(arch)});
-    const sysroot = b.pathJoin(&.{ sdk_dir, "ndk", ndk_version, "toolchains/llvm/prebuilt/linux-x86_64/sysroot" });
+    // The NDK ships x86_64 host tools; Darwin's tools also run on Apple Silicon.
+    const host_tag = switch (builtin.os.tag) {
+        .linux => "linux-x86_64",
+        .macos => "darwin-x86_64",
+        .windows => "windows-x86_64",
+        else => {
+            apk_step.dependOn(&b.addFail("Android NDK tools are unavailable for this host OS").step);
+            return;
+        },
+    };
+    const sysroot = b.pathJoin(&.{ sdk_dir, "ndk", ndk_version, "toolchains/llvm/prebuilt", host_tag, "sysroot" });
 
     const dvui_dep = sdk.dvuiDependency(b, .{
         .target = target,
@@ -60,12 +71,9 @@ pub fn add(b: *std.Build) void {
     hello.bundle_ubsan_rt = true;
     hello.bundle_compiler_rt = true; // ubsan_rt needs __extendxftf2, which the NDK lacks
 
-    // dvui builds its SDL3 only once its lazy `sdl3` dependency is fetched, which is after the first
-    // configure pass; `dvui_dep.artifact("SDL3")` panics on that pass instead of waiting.
-    const sdl3 = for (dvui_dep.builder.install_tls.step.dependencies.items) |dep| {
-        const install = dep.cast(std.Build.Step.InstallArtifact) orelse continue;
-        if (std.mem.eql(u8, install.artifact.name, "SDL3")) break install.artifact;
-    } else return;
+    // Artifact publication waits for lazy dependencies; Zig retries configuration after fetching.
+    if (b.graph.needed_lazy_dependencies.count() != 0) return;
+    const sdl3 = dvui_dep.artifact("SDL3");
 
     // Zig ships no Android libc, so the NDK's clang links. SDL finds its JNI entry points and
     // `SDL_main` by name at runtime, so both archives link whole.
@@ -90,22 +98,8 @@ pub fn add(b: *std.Build) void {
 
     // SDL's Java side (the same source the native side is built from), dexed with FizzyActivity,
     // beside the manifest and the library.
-    const package = b.addSystemCommand(&.{
-        "sh",      "-ec",
-        \\so=$1 manifest=$2 activity=$3 sdl_java=$4 jar=$5 out=$6 bt=$7 abi=$8 keystore=$9 app_id=${10}
-        \\bt=$(cd "$bt" && pwd) # absolute: aapt runs from the staging directory
-        \\stage=$(mktemp -d); trap 'rm -rf "$stage"' EXIT
-        \\mkdir -p "$stage/classes" "$stage/lib/$abi"
-        \\javac --release 17 -cp "$jar" -d "$stage/classes" "$sdl_java"/org/libsdl/app/*.java "$activity"
-        \\"$bt/d8" --lib "$jar" --min-api 24 --output "$stage" $(find "$stage/classes" -name '*.class')
-        \\"$bt/aapt2" link -o "$stage/base.apk" --manifest "$manifest" -I "$jar" --min-sdk-version 24 --target-sdk-version 35 --rename-manifest-package "$app_id"
-        \\cp "$so" "$stage/lib/$abi/libfizzy_hello.so"
-        \\(cd "$stage" && "$bt/aapt" add base.apk classes.dex "lib/$abi/libfizzy_hello.so" >/dev/null)
-        \\"$bt/zipalign" -f -P 16 4 "$stage/base.apk" "$out"
-        \\"$bt/apksigner" sign --ks "$keystore" --ks-pass pass:android "$out"
-        ,
-        "package",
-    });
+    const package = b.addSystemCommand(&.{"sh"});
+    package.addFileArg(b.path("android/package.sh"));
     package.addFileArg(so);
     package.addFileArg(b.path("android/AndroidManifest.xml"));
     package.addFileArg(b.path("android/src/FizzyActivity.java"));
