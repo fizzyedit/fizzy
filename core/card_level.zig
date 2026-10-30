@@ -200,3 +200,21 @@ test "card_level: progress follows width when shrinking a wide shell" {
     try std.testing.expectEqual(@as(f32, 1), progress(from, to, .{ .w = 100, .h = 200 }, 0));
     try std.testing.expectEqual(@as(f32, 0), progress(from, to, .{ .w = 500, .h = 150 }, 0));
 }
+
+test "card_level: a single level stays selected for every previous level" {
+    const levels = [_]Size{.{ .w = 0, .h = 0 }};
+    try std.testing.expectEqual(@as(u8, 0), pick(&levels, .{ .w = 0, .h = 0 }, null));
+    try std.testing.expectEqual(@as(u8, 0), pick(&levels, .{ .w = 500, .h = 500 }, 3));
+}
+
+test "card_level: equal minima choose the highest eligible level" {
+    const levels = [_]Size{
+        .{ .w = 0, .h = 0 },
+        .{ .w = 200, .h = 150 },
+        .{ .w = 200, .h = 150 },
+    };
+    try std.testing.expectEqual(@as(u8, 2), pick(&levels, .{ .w = 200, .h = 150 }, null));
+    try std.testing.expectEqual(@as(u8, 0), pick(&levels, .{ .w = 223, .h = 174 }, 0));
+    try std.testing.expectEqual(@as(u8, 2), pick(&levels, .{ .w = 224, .h = 174 }, 0));
+    try std.testing.expectEqual(@as(u8, 0), pick(&levels, .{ .w = 199, .h = 174 }, 2));
+}
