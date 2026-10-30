@@ -9,7 +9,7 @@ import time
 
 mode = sys.argv[1]
 prompt = sys.stdin.read()
-out = Path(prompt.split('Output directory: ', 1)[1].splitlines()[0])
+out = Path(prompt.split('Output directory: ', 1)[1].splitlines()[0]) if 'Output directory: ' in prompt else None
 if mode == 'not-signed-in':
     sys.exit(64)
 if mode == 'crash':
@@ -25,7 +25,7 @@ elif mode.startswith('review-'):
     finding = dict(id='F1', severity='major', file='hello.txt', line=1, added=True, text='Fix this.')
     value = dict(verdict='changes' if mode == 'review-changes' else 'clean',
                  findings=[finding] if mode == 'review-changes' else [], follow_ups=[])
-    (out / 'review.json').write_text('bad json' if mode == 'review-bad-json' else json.dumps(value))
+    Path(prompt.split('Review path: ', 1)[1].splitlines()[0]).write_text('bad json' if mode == 'review-bad-json' else json.dumps(value))
 elif mode != 'no-change':
     name = 'outside.txt' if mode == 'write-oob' else 'hello.txt'
     Path(name).write_text('hello from agent\n' * (600 if mode == 'write-huge' else 1))

@@ -117,8 +117,9 @@ class SlotRunTests(unittest.TestCase):
                          "    assert path.is_absolute() and path.parent == Path.cwd()\n"
                          "    path.write_text(text)\n"
                          "if prompt.startswith('Review'):\n"
-                         "    out = Path(prompt.split('Output directory: ', 1)[1].splitlines()[0])\n"
-                         "    (out / 'review.json').write_text(json.dumps(dict(verdict='clean', findings=[], follow_ups=[])))\n"
+                         "    path = Path(prompt.split('Review path: ', 1)[1].splitlines()[0])\n"
+                         "    assert path.is_absolute() and path.parent == Path.cwd()\n"
+                         "    path.write_text(json.dumps(dict(verdict='clean', findings=[], follow_ups=[])))\n"
                          "else:\n"
                          "    Path('hello.txt').write_text('improved\\n')\n")
         for kind in ('write', 'rework', 'review'):
@@ -133,7 +134,11 @@ class SlotRunTests(unittest.TestCase):
                 if kind != 'review':
                     self.assertEqual(result['pr_body'], '## In plain words\nA useful change.')
                     self.assertEqual(result['changed']['files'], 1)
+                if kind == 'review':
+                    self.assertEqual(result['review']['verdict'], 'clean')
+                    self.assertTrue((self.out / 'agent/review.json').is_file())
                 work = self.root / 'home/work' / self.job['id']
+                self.assertFalse((work / 'review.json').exists())
                 self.assertFalse((work / 'pr-body.md').exists())
                 self.assertFalse((work / 'report.md').exists())
 
