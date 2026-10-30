@@ -516,7 +516,15 @@ fn testFrame() !dvui.App.Result {
         if (t_column) {
             t_snapping = dvui.snapToPixels();
             for (&t_rows, 0..) |*drawn, i| {
-                const r = dvui.spacer(@src(), .{ .id_extra = i, .min_size_content = .{ .w = 100, .h = 30 } }).rectScale().r;
+                var label: dvui.LabelWidget = undefined;
+                label.init(@src(), "Row {d}", .{i}, .{}, .{
+                    .id_extra = i,
+                    .min_size_content = .{ .w = 100, .h = 30 },
+                    .padding = .{},
+                });
+                defer label.deinit();
+                label.draw();
+                const r = label.wd.rectScale().r;
                 // Where the renderer puts a texture or a glyph run: rounded while snapping.
                 drawn.* = if (t_snapping) .{ .x = @round(r.x), .y = @round(r.y) } else .{ .x = r.x, .y = r.y };
             }
@@ -769,10 +777,12 @@ test "the end of a coast draws where the rest frames do" {
     try std.testing.expectApproxEqAbs(@as(f32, 0), jump, 0.001);
 }
 
-test "a press that stops a coast leaves the rows where they were drawn" {
+test "a press that stops a coast leaves text rows where they were drawn at 3x" {
     var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
     defer t.deinit();
     t_use_dvui = false;
+    // Phone density: one device pixel is a third of a point.
+    t.backend.size_pixels = .{ .w = 900, .h = 1200 };
     t_column = true;
     defer t_column = false;
     t_top = 0.5;
@@ -780,6 +790,7 @@ test "a press that stops a coast leaves the rows where they were drawn" {
     _ = try swipe();
     for (0..7) |_| try frameAfter(16);
     try std.testing.expect(t_moving);
+    try std.testing.expect(t_snapping);
     _ = try dvui.currentWindow().addEventPointer(.{ .button = .touch0, .action = .press, .xynorm = .{ .x = 0.5, .y = 0.5 } });
     const jump = try restJump(16);
     try std.testing.expectApproxEqAbs(@as(f32, 0), jump, 0.001);
@@ -1230,6 +1241,8 @@ test "a press stops an aimed coast where it is drawn" {
     var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
     defer t.deinit();
     t_use_dvui = false;
+    // Phone density: one device pixel is a third of a point.
+    t.backend.size_pixels = .{ .w = 900, .h = 1200 };
     t_column = true;
     defer t_column = false;
     t_top = 0.5;
@@ -1247,6 +1260,8 @@ test "a press stops a seat where it is drawn" {
     var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
     defer t.deinit();
     t_use_dvui = false;
+    // Phone density: one device pixel is a third of a point.
+    t.backend.size_pixels = .{ .w = 900, .h = 1200 };
     t_column = true;
     defer t_column = false;
     t_top = 0.5;
