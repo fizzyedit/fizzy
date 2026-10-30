@@ -1382,19 +1382,32 @@ fn addTests(
         .accesskit = accesskit,
     });
 
+    // Shared `core` module for the test build (dvui testing backend variant).
+    const core_module_test = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("core/core.zig"),
+    });
+    const icons_test = core_mod.addImports(
+        b,
+        core_module_test,
+        dvui_testing_dep.module("dvui_testing"),
+        b.dependency("fizzy_sdk", .{}).builder,
+        target,
+        optimize,
+        null,
+        null,
+    );
+
     // The liquid field's packing and edge-light arithmetic needs dvui's geometry types,
     // but no Window or native backend. Keep it in `test`, apart from the glass window tests.
     const liquid_field_module = b.createModule(.{
         .target = target,
         .optimize = optimize,
-        .root_source_file = b.path("backend/src/glass/LiquidField.zig"),
+        .root_source_file = b.path("backend/src/glass/liquid_field_tests.zig"),
     });
     liquid_field_module.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
-    liquid_field_module.addImport("glass_look", b.createModule(.{
-        .target = target,
-        .optimize = optimize,
-        .root_source_file = b.path("backend/src/glass_look.zig"),
-    }));
+    liquid_field_module.addImport("glass_look", core_module_test.import_table.get("glass_look").?);
     try unit_test_artifacts.append(b.allocator, b.addTest(.{
         .name = "fizzy-liquid-field-tests",
         .root_module = liquid_field_module,
@@ -1470,22 +1483,6 @@ fn addTests(
     fizzy_test_module.addImport("app_icon", app_icon_module);
     fizzy_test_module.addImport("build_opts", sdk.buildOptsModule(build_opts));
 
-    // Shared `core` module for the test build (dvui testing backend variant).
-    const core_module_test = b.createModule(.{
-        .target = target,
-        .optimize = optimize,
-        .root_source_file = b.path("core/core.zig"),
-    });
-    const icons_test = core_mod.addImports(
-        b,
-        core_module_test,
-        dvui_testing_dep.module("dvui_testing"),
-        b.dependency("fizzy_sdk", .{}).builder,
-        target,
-        optimize,
-        null,
-        null,
-    );
     fizzy_test_module.addImport("core", core_module_test);
     if (icons_test) |icons| fizzy_test_module.addImport("icons", icons);
 
