@@ -2,8 +2,8 @@
 //! `Host.callCommand` as ZON, and its ZON result goes back out as JSON. The one place the two
 //! meet, so the plugin boundary never sees JSON (plans/CONTROL_SERVER_PLAN.md).
 //!
-//! The mapping is the obvious one both ways — objects and structs, arrays and tuples, strings,
-//! numbers, booleans, null — with one thing JSON cannot say: an enum. Going in, a string is an
+//! The mapping is the obvious one both ways - objects and structs, arrays and tuples, strings,
+//! numbers, booleans, null - with one thing JSON cannot say: an enum. Going in, a string is an
 //! enum literal where the command's parameter is an enumeration (`enum_keys`); everywhere else it
 //! is a string. Going out, an enum literal is its name as a string. A caller who needs an enum
 //! deeper than a top-level argument sends ZON instead (`Content-Type: application/zon`).
@@ -13,7 +13,7 @@ const std = @import("std");
 
 pub const Error = error{ OutOfMemory, NotJson, NotAnObject, NotZon, NotUtf8 };
 
-/// `json`, an object of arguments, as a ZON struct literal: `{"line": 12}` → `.{.line=12}`. A
+/// `json`, an object of arguments, as a ZON struct literal: `{"line": 12}` -> `.{.line=12}`. A
 /// top-level string whose key is in `enum_keys` becomes an enum literal. An empty body is no
 /// arguments, `""`.
 pub fn zonFromJson(arena: std.mem.Allocator, json: []const u8, enum_keys: []const []const u8) Error![]u8 {

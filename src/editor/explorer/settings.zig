@@ -12,6 +12,7 @@
 //! by `PluginSettingsPane` (see `SettingsTree`), so a plugin's controls look identical to these.
 const builtin = @import("builtin");
 const std = @import("std");
+const build_opts = @import("build_opts");
 
 const fizzy = @import("../../fizzy.zig");
 const icons = @import("icons");
@@ -558,14 +559,24 @@ fn drawCornerRoundness() void {
 }
 
 fn drawMotion() void {
-    const settings = &fizzy.editor().app.settings;
+    const editor = fizzy.editor();
+    var level = fizzy.core.person.motionLevel(editor.person, build_opts.look_motion);
+    if (editor.person.motion == null) dvui.label(@src(), "System default ({d:0.01})", .{level}, .{});
+    dvui.labelNoFmt(@src(), "Applies to every fizzy app.", .{}, .{});
+    if (editor.person.motion != null and dvui.button(@src(), "Reset to system default", .{}, .{})) {
+        editor.person.motion = null;
+        level = fizzy.core.person.motionLevel(editor.person, build_opts.look_motion);
+        editor.savePerson();
+        dvui.refresh(null, @src(), null);
+    }
     if (dvui.sliderEntry(@src(), "{d:0.01}", .{
-        .value = &settings.motion,
+        .value = &level,
         .interval = 0.01,
         .max = 1.0,
         .min = 0.0,
     }, .{ .expand = .horizontal })) {
-        fizzy.editor().markSettingsDirty();
+        editor.person.motion = level;
+        editor.markPersonDirty();
         dvui.refresh(null, @src(), null);
     }
     // The three names along the slider's length, the one it is nearest lit.
@@ -574,7 +585,7 @@ fn drawMotion() void {
     const names = [_][]const u8{ "Off", "Minimal", "Playful" };
     const at = [_]f32{ 0, 0.5, 1 };
     const system_off = dvui.currentWindow().backend.prefersReducedMotion();
-    const v: f32 = if (system_off) 0 else settings.motion;
+    const v: f32 = if (system_off) 0 else level;
     var nearest: usize = 0;
     for (at, 0..) |a, i| {
         if (@abs(v - a) < @abs(v - at[nearest])) nearest = i;

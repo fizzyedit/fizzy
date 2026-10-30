@@ -1,6 +1,6 @@
 //! Place settings: what one region shows, and how it shows it.
 //!
-//! Opened by name from anywhere — the settings table, a region's own corner button — through
+//! Opened by name from anywhere - the settings table, a region's own corner button - through
 //! `State.openPicker`, and drawn once per frame by the application through `draw` so it floats
 //! above whatever opened it. One at a time.
 //!
@@ -8,16 +8,16 @@
 //! (`Layout.tabbedIn`). A card toggles its view in or out of the place.
 //!
 //! Cards assign a surface here. That is how a sidebar view stays in the
-//! sidebar, and how a plugin readme lands in the center — keywords are the
+//! sidebar, and how a plugin readme lands in the center - keywords are the
 //! default guess, an assignment is the answer. Reset undoes it.
 //! The cards are listed under the place holding them, or else the place their
-//! keywords are for — this place first, then each other place by its name, then
-//! "Other" — so a view made for the panel reads as one, wherever the picker was
+//! keywords are for - this place first, then each other place by its name, then
+//! "Other" - so a view made for the panel reads as one, wherever the picker was
 //! opened, and a view the user moved reads under where it went.
 //!
 //! A card is also a handle. Dragged out of the popup it becomes the same
 //! floating view the corner button lifts out of a place (`ViewDrag`), and
-//! lands the same way — swapped onto a place, or split off one of its edges —
+//! lands the same way - swapped onto a place, or split off one of its edges -
 //! with the popup gone and the drag previewing on the places themselves. The
 //! picker keeps driving that drag until the button comes up, because the
 //! card that started it went away with the popup.
@@ -29,7 +29,7 @@
 //! while it does), clear, reset to the layout's default, delete (in red). A **pinned**
 //! place (Sidebar, Main, Panel, Center) can be cleared or reset to its keywords;
 //! it cannot be deleted. A **created** place (`Main/r1`) can. A split keeps this
-//! place's view beside the new empty one — see `SPLITS.md`.
+//! place's view beside the new empty one - see `SPLITS.md`.
 const std = @import("std");
 const dvui = @import("dvui");
 const core = @import("core");
@@ -111,7 +111,7 @@ pub fn ask(self: *Picker, action: Action, name: []const u8) bool {
     return true;
 }
 
-/// Whether `action` applies to place `region`: `allows`, and Clear only while it shows something —
+/// Whether `action` applies to place `region`: `allows`, and Clear only while it shows something -
 /// which takes the live layout to know. The one rule the menu's buttons and the requests both
 /// follow.
 fn applies(f: *Layout, region: *const Layout.Region, action: Action) bool {
@@ -129,7 +129,7 @@ pub fn allows(state: *State, name: []const u8, action: Action) bool {
         .adaptive => state.adaptiveOf(name) != null,
         .clear => !created,
         .reset => !created and state.assignment(name) != null,
-        // On the tree, any leaf with a sibling can go — a declared place's pin moves to the
+        // On the tree, any leaf with a sibling can go - a declared place's pin moves to the
         // sibling. Off it, only a minted leaf can. A float can always go: it closes, and what it
         // holds goes home. A minted half split again goes by merging its other half into it
         // (`ViewDrag.closeEmptied`); with that half split too there is nothing to merge, and
@@ -187,7 +187,7 @@ fn applyRequest(self: *Picker, f: *Layout, req: *const Request) void {
 const preview: dvui.Size = .{ .w = 150, .h = 100 };
 const columns: usize = 2;
 const list_height: f32 = 420;
-/// Points of the popup around its contents, top and bottom — its 8pt padding each side — with
+/// Points of the popup around its contents, top and bottom - its 8pt padding each side - with
 /// a little to spare so rounding never tips it into scrolling.
 const popup_chrome_h: f32 = 2 * 8 + 10;
 
@@ -205,8 +205,8 @@ pub fn close(self: *Picker, gpa: std.mem.Allocator) void {
     self.is_open = false;
 }
 
-/// Draw the popup if it is open. Call once per frame after the shape has run. Closing —
-/// by the user or because the region vanished — also discards the snapshots.
+/// Draw the popup if it is open. Call once per frame after the shape has run. Closing -
+/// by the user or because the region vanished - also discards the snapshots.
 pub fn draw(self: *Picker, f: *Layout) void {
     self.applyRequests(f);
     if (self.lifted) return self.drawLifted(f);
@@ -229,7 +229,7 @@ pub fn draw(self: *Picker, f: *Layout) void {
 
     // A float's place opens its picker in the float's window: a popup shuts itself the moment the
     // window it was opened from is not the focused one, and the press on the corner button that
-    // opened it focused the float — opened from the app's own window, it shut as it opened.
+    // opened it focused the float - opened from the app's own window, it shut as it opened.
     const float_win: ?dvui.Id = if (state.floatRoot(region.name)) |root| win: {
         const i = state.floats.find(root) orelse break :win null;
         const id = state.floats.items.items[i].win_id;
@@ -241,7 +241,7 @@ pub fn draw(self: *Picker, f: *Layout) void {
     };
 
     // The one floating surface (`core.dialogs`): frosted, the dialogs' fill, corners and shadow
-    // — what the command palette, the dialogs and every menu wear. It had its own card (an
+    // - what the command palette, the dialogs and every menu wear. It had its own card (an
     // opaque-ish content fill, no blur), so it read as a different kind of thing from them.
     var popup = core.widgets.popup(@src(), .{
         .open_flag = &self.is_open,
@@ -260,7 +260,7 @@ pub fn draw(self: *Picker, f: *Layout) void {
 
     // The title, the controls and the filter stay put; only the views under them scroll. The
     // popup scrolls whatever does not fit the window, so the list takes only the room left
-    // under this — measured as it last laid out — and the popup never has anything to scroll.
+    // under this - measured as it last laid out - and the popup never has anything to scroll.
     const filter_text, const head_h = head: {
         var box = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal });
         defer box.deinit();
@@ -382,8 +382,8 @@ pub fn draw(self: *Picker, f: *Layout) void {
     if (state.store_catalog) |store| drawStoreSection(f, &region, store, &row, &col, &query);
 }
 
-/// The surfaces this region's picker offers — what the region may show at all (`Layout.offers`:
-/// no document in a plain place, only documents in a document pane) — that match `query`, best
+/// The surfaces this region's picker offers - what the region may show at all (`Layout.offers`:
+/// no document in a plain place, only documents in a document pane) - that match `query`, best
 /// first. In registry order while the query is empty. Indices into `host.surfaces`.
 fn offered(f: *Layout, region: *const Layout.Region, query: *const core.fuzzy.Query) []core.fuzzy.Ranked(usize) {
     var out: std.ArrayList(core.fuzzy.Ranked(usize)) = .empty;
@@ -406,7 +406,7 @@ const Place = struct {
 };
 
 /// The places the picker sorts cards under: `region` itself first, then each other place the
-/// shape declared, in its order — never a document pane, which offers only documents. Places
+/// shape declared, in its order - never a document pane, which offers only documents. Places
 /// resolved by keywords are one per keyword group (the icon rail and the explorer it chooses for
 /// are one place); a place resolved by name (a split's leaf, a float) is its own.
 fn placesFor(f: *Layout, region: *const Layout.Region) []const Place {
@@ -496,7 +496,7 @@ test "a view a place holds is listed under that place, whatever its keywords" {
 }
 
 /// The place being edited, when no card falls under it: its header still leads, so the popup
-/// says which place it fills — a split's new leaf accepts no view's keywords until one is put in.
+/// says which place it fills - a split's new leaf accepts no view's keywords until one is put in.
 fn emptyHome(region: *const Layout.Region, query: *const core.fuzzy.Query) void {
     var box = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal });
     defer box.deinit();
@@ -508,7 +508,7 @@ fn emptyHome(region: *const Layout.Region, query: *const core.fuzzy.Query) void 
     });
 }
 
-/// A heading over a run of cards — a place's name, or the store.
+/// A heading over a run of cards - a place's name, or the store.
 fn sectionHeader(title: []const u8, id_extra: usize) void {
     dvui.labelNoFmt(@src(), title, .{}, .{
         .id_extra = id_extra,
@@ -519,7 +519,7 @@ fn sectionHeader(title: []const u8, id_extra: usize) void {
 }
 
 /// Where a view comes from, as its card says it: the plugin's name, or "Built-in" for one the app
-/// itself registered (Output, Settings). Not the app's own name — this picker is the framework's,
+/// itself registered (Output, Settings). Not the app's own name - this picker is the framework's,
 /// and an app built on it is not fizzy.
 fn ownerName(s: *const sdk.Surface) []const u8 {
     return if (s.owner) |p| p.display_name else "Built-in";
@@ -542,7 +542,7 @@ fn searchText(f: *Layout, s: *const sdk.Surface) []const u8 {
     return text.items;
 }
 
-/// How long a finger holds still on a card before it lifts rather than scrolls the list — the
+/// How long a finger holds still on a card before it lifts rather than scrolls the list - the
 /// same hold as every other draggable thing in a scrolling list.
 const hold_to_lift_ns = core.widgets.Tabs.touch_hold_ns;
 
@@ -607,7 +607,7 @@ fn card(f: *Layout, s: *const sdk.Surface, on: bool, id_extra: usize) Hit {
     // A finger on a card is also how the list under it scrolls, so a finger has to hold still
     // for a moment before the card lifts; moving sooner scrolls, as it does anywhere else in the
     // list. A mouse lifts on any drag. Read ahead of the button's own events, because the button
-    // gives the pointer up the moment a finger moves past dvui's threshold — it takes every touch
+    // gives the pointer up the moment a finger moves past dvui's threshold - it takes every touch
     // drag for a scroll, and with it went the only drag a card could start.
     const armed = armedTouch(id);
     var lifted: ?Hit = null;
@@ -750,7 +750,7 @@ fn drawLifted(self: *Picker, f: *Layout) void {
     const cm = looseCapture();
     // Not `captureMouseMaintain`: that walks the subwindow stack and drops
     // the capture on meeting a modal subwindow above the current one, and
-    // the popup this drag came out of — modal — stays on the stack for one
+    // the popup this drag came out of - modal - stays on the stack for one
     // frame after it stops being drawn. Re-asserting the capture from the
     // last event on keeps it without retargeting anything already routed.
     dvui.captureMouseCustom(cm, dvui.currentWindow().event_num);
@@ -780,7 +780,7 @@ fn drawLifted(self: *Picker, f: *Layout) void {
 }
 
 /// One of the header's controls: an icon, a tooltip naming it, and its command run when pressed.
-/// Published as `region.menu.<action>:<place>` while it can be pressed — a dimmed one swallows the
+/// Published as `region.menu.<action>:<place>` while it can be pressed - a dimmed one swallows the
 /// click, and a driver waiting for the name should wait for the action, not for the button.
 /// Delete wears the theme's error colour, a toggle that is on (`lit`) the highlight's. Disabled,
 /// it keeps its place (dimmed, no hover).

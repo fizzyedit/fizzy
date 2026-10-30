@@ -182,38 +182,64 @@ pub const VTable = struct {
     loadDocument: ?*const fn (state: *anyopaque, path: []const u8, out_doc: *anyopaque) anyerror!void = null,
     /// `loadDocument`, but from in-memory bytes (browser file picker). `path` is used
     /// for extension detection + display name. Synchronous (web has no load worker).
-    loadDocumentFromBytes: ?*const fn (state: *anyopaque, path: []const u8, bytes: []const u8, out_doc: *anyopaque) anyerror!void = null,
+    loadDocumentFromBytes: ?*const fn (
+        state: *anyopaque,
+        path: []const u8,
+        bytes: []const u8,
+        out_doc: *anyopaque,
+    ) anyerror!void = null,
     /// Open `bytes` as an untitled document named `title` (`untitled-1`), as `createDocument`
     /// would have made it with these contents: never saved, and dirty. `bytes` are what
     /// `documentBytes` encoded for it under `bytes_path` (`bytesPath`: the name Save As offers,
     /// `untitled.pixi`), which says their format. How a crash or a restart brings back a document
     /// that was never saved; without it, one comes back only as far as its state restores
     /// into an empty document. Synchronous.
-    loadUntitledDocument: ?*const fn (state: *anyopaque, title: []const u8, bytes_path: []const u8, bytes: []const u8, out_doc: *anyopaque) anyerror!void = null,
+    loadUntitledDocument: ?*const fn (
+        state: *anyopaque,
+        title: []const u8,
+        bytes_path: []const u8,
+        bytes: []const u8,
+        out_doc: *anyopaque,
+    ) anyerror!void = null,
     /// Size of the plugin's document type for stack/heap staging buffers (`loadDocument`, etc.).
     documentStackSize: ?*const fn (state: *anyopaque) usize = null,
     documentStackAlign: ?*const fn (state: *anyopaque) usize = null,
     documentIdFromBuffer: ?*const fn (state: *anyopaque, doc: *anyopaque) u64 = null,
     deinitDocumentBuffer: ?*const fn (state: *anyopaque, doc: *anyopaque) void = null,
     setDocumentGroupingOnBuffer: ?*const fn (state: *anyopaque, doc: *anyopaque, grouping: u64) void = null,
-    createDocument: ?*const fn (state: *anyopaque, path: []const u8, grid: EditorAPI.NewDocGrid, out_doc: *anyopaque) anyerror!void = null,
+    createDocument: ?*const fn (
+        state: *anyopaque,
+        path: []const u8,
+        grid: EditorAPI.NewDocGrid,
+        out_doc: *anyopaque,
+    ) anyerror!void = null,
     saveDocument: ?*const fn (state: *anyopaque, doc: DocHandle) anyerror!void = null,
-    /// Saving, in two halves, so the UI thread does only the first (plans/PLUGIN_INTERACTION_PLAN.md,
-    /// "Every save is a snapshot then an encode"). fizzy writes the bytes wherever the document
-    /// lives (the disk, a mounted drive, a zip, the browser's download), so an owner never knows
-    /// what a `gdrive://` path is. `saveDocument` stays the disk-only path for an owner that writes
-    /// its files itself.
+    /// Saving, in two halves, so the UI thread does only the first
+    /// (plans/PLUGIN_INTERACTION_PLAN.md, "Every save is a snapshot then an encode"). fizzy writes
+    /// the bytes wherever the document lives (the disk, a mounted drive, a zip, the browser's
+    /// download), so an owner never knows what a `gdrive://` path is. `saveDocument` stays the
+    /// disk-only path for an owner that writes its files itself.
     ///
     /// On the UI thread, as a save of `doc` to `path` starts: take what the save needs and nothing
     /// more (a text buffer's copy, a canvas's layers, a composite read back from the GPU), quickly:
     /// the person is waiting on this frame. Remember which edit it stands for, so
     /// `documentWritten` cleans the document up to that edit and not past it. `path` is where it
     /// is going: a Save As may change the format. Owned by the plugin until `releaseSnapshot`.
-    documentSnapshot: ?*const fn (state: *anyopaque, doc: DocHandle, path: []const u8, allocator: std.mem.Allocator) anyerror!*anyopaque = null,
+    documentSnapshot: ?*const fn (
+        state: *anyopaque,
+        doc: DocHandle,
+        path: []const u8,
+        allocator: std.mem.Allocator,
+    ) anyerror!*anyopaque = null,
     /// On a fizzy worker thread: `snapshot` encoded as `path`'s format (its extension says which).
     /// Touches nothing but the snapshot: no dvui, no GPU, no document, no plugin state another
     /// thread changes. The bytes are allocated with `allocator` and owned by the caller.
-    encodeSnapshot: ?*const fn (state: *anyopaque, snapshot: *anyopaque, path: []const u8, allocator: std.mem.Allocator) anyerror![]u8 = null,
+    encodeSnapshot: ?*const fn (
+        state: *anyopaque,
+        snapshot: *anyopaque,
+        path: []const u8,
+        allocator: std.mem.Allocator,
+    ) anyerror![]u8 = null,
     /// On the UI thread, once the encode is done or the save abandoned: free a snapshot.
     releaseSnapshot: ?*const fn (state: *anyopaque, snapshot: *anyopaque) void = null,
     /// fizzy wrote a snapshot's bytes to `path`. Clean the document up to the edit that snapshot
@@ -228,7 +254,12 @@ pub const VTable = struct {
     /// nothing the person sees change. Owned by the caller, allocated with `allocator`. Absent =
     /// fizzy takes the save's two halves instead (`documentSnapshot` + `encodeSnapshot`), and
     /// whatever those do to the document happens on every checkpoint too.
-    documentBytes: ?*const fn (state: *anyopaque, doc: DocHandle, path: []const u8, allocator: std.mem.Allocator) anyerror![]u8 = null,
+    documentBytes: ?*const fn (
+        state: *anyopaque,
+        doc: DocHandle,
+        path: []const u8,
+        allocator: std.mem.Allocator,
+    ) anyerror![]u8 = null,
     closeDocument: ?*const fn (state: *anyopaque, doc: DocHandle) void = null,
     /// Reload `doc` from its on-disk path, replacing in-memory contents and clearing dirty
     /// state / undo history as appropriate. Called by fizzy's document watcher when a
@@ -244,7 +275,11 @@ pub const VTable = struct {
     /// the next: start them with a version the next build checks (`restoreDocumentState`).
     /// Absent = a demo cannot snapshot a moment with this document open, and a reload of this
     /// plugin refuses while the document has unsaved changes.
-    captureDocumentState: ?*const fn (state: *anyopaque, doc: DocHandle, allocator: std.mem.Allocator) anyerror![]u8 = null,
+    captureDocumentState: ?*const fn (
+        state: *anyopaque,
+        doc: DocHandle,
+        allocator: std.mem.Allocator,
+    ) anyerror![]u8 = null,
     /// Put `doc` back to what `captureDocumentState` returned for it, in place: the same
     /// document in the same pane, its contents, caret and scroll as they were, dirty or clean
     /// as it was. Undo history may be dropped. `bytes` is only valid for the call, and may come
@@ -280,7 +315,13 @@ pub const VTable = struct {
     /// to be shown being made over that long (a replay at pace); 0 lands it at once (a seek). A
     /// step that does not fit what `doc` holds is an error, and `doc` is left as it was. Absent =
     /// tapes of this owner's documents cannot be played.
-    applyStep: ?*const fn (state: *anyopaque, doc: DocHandle, effect: []const u8, motion: []const u8, ms: u32) anyerror!void = null,
+    applyStep: ?*const fn (
+        state: *anyopaque,
+        doc: DocHandle,
+        effect: []const u8,
+        motion: []const u8,
+        ms: u32,
+    ) anyerror!void = null,
     /// Put `doc`'s history back as its track recorded it (`RestoredHistory`), in place of what it
     /// holds: a document opened again picks up the history it had. `doc` already stands where
     /// the history leaves it; nothing in it changes, and it is not dirty for it. Each entry keeps
@@ -301,8 +342,15 @@ pub const VTable = struct {
     /// Drop the registry entry after `closeDocument` has torn down resources.
     unregisterDocument: ?*const fn (state: *anyopaque, id: u64) void = null,
 
-    /// Bind a document to a workbench pane before `drawDocument` (canvas id, workspace handle, center flag).
-    bindDocumentToPane: ?*const fn (state: *anyopaque, doc: DocHandle, canvas_id: dvui.Id, workspace_handle: *anyopaque, center: bool) void = null,
+    /// Bind a document to a workbench pane before `drawDocument` (canvas id, workspace handle,
+    /// center flag).
+    bindDocumentToPane: ?*const fn (
+        state: *anyopaque,
+        doc: DocHandle,
+        canvas_id: dvui.Id,
+        workspace_handle: *anyopaque,
+        center: bool,
+    ) void = null,
     documentGrouping: ?*const fn (state: *anyopaque, doc: DocHandle) u64 = null,
     setDocumentGrouping: ?*const fn (state: *anyopaque, doc: DocHandle, grouping: u64) void = null,
     documentPath: ?*const fn (state: *anyopaque, doc: DocHandle) []const u8 = null,
@@ -310,7 +358,11 @@ pub const VTable = struct {
     documentHasNativeExtension: ?*const fn (state: *anyopaque, doc: DocHandle) bool = null,
     /// True when `saveDocument` can write the document without Save As (e.g. `.fiz` or flat image).
     documentHasRecognizedSaveExtension: ?*const fn (state: *anyopaque, doc: DocHandle) bool = null,
-    documentDefaultSaveAsFilename: ?*const fn (state: *anyopaque, doc: DocHandle, allocator: std.mem.Allocator) anyerror![]const u8 = null,
+    documentDefaultSaveAsFilename: ?*const fn (
+        state: *anyopaque,
+        doc: DocHandle,
+        allocator: std.mem.Allocator,
+    ) anyerror![]const u8 = null,
     // ---- render hooks (the plugin draws its own dvui UI into the host window) ----
     // Sidebar/explorer panes and bottom-panel tabs are NOT vtable hooks — plugins
     // contribute them as named, owned `Surface`s via `Host.registerSurface`, and the app's
@@ -394,7 +446,12 @@ pub const VTable = struct {
     /// straight away. Strings in `allocator` (the frame's arena), copied by fizzy. fizzy asks it,
     /// shows the saving and its end, and once the person has said to go ahead it does not ask
     /// again while the document stays open. The owner never drives a save itself.
-    saveQuestion: ?*const fn (state: *anyopaque, doc: DocHandle, path: []const u8, allocator: std.mem.Allocator) ?SaveQuestion = null,
+    saveQuestion: ?*const fn (
+        state: *anyopaque,
+        doc: DocHandle,
+        path: []const u8,
+        allocator: std.mem.Allocator,
+    ) ?SaveQuestion = null,
 
     // ---- settings ----
     /// [requested] This plugin's persisted settings blob changed while the plugin is loaded —
@@ -435,7 +492,9 @@ pub fn assertEditorVTable(comptime vt: VTable) void {
         // without this hook opens every document in the pane the user was already in and "Open to
         // the side" appears to do nothing. The image plugin shipped that way, and nothing —
         // not a log line, not a failed load — said so.
-        if (vt.setDocumentGroupingOnBuffer == null) @compileError("Editor vtable missing required hook: setDocumentGroupingOnBuffer (a document that ignores its grouping cannot be opened to the side)");
+        if (vt.setDocumentGroupingOnBuffer == null)
+            @compileError("Editor vtable missing required hook: setDocumentGroupingOnBuffer " ++
+                "(a document that ignores its grouping cannot be opened to the side)");
         if (vt.documentGrouping == null) @compileError("Editor vtable missing required hook: documentGrouping");
         if (vt.isDirty == null) @compileError("Editor vtable missing required hook: isDirty");
         if (vt.saveDocument == null) @compileError("Editor vtable missing required hook: saveDocument");
@@ -448,7 +507,8 @@ pub fn assertUtilityVTable(comptime vt: VTable) void {
     comptime {
         if (vt.loadDocument != null) @compileError("Utility vtable must not implement document hook: loadDocument");
         if (vt.drawDocument != null) @compileError("Utility vtable must not implement document hook: drawDocument");
-        if (vt.registerOpenDocument != null) @compileError("Utility vtable must not implement document hook: registerOpenDocument");
+        if (vt.registerOpenDocument != null)
+            @compileError("Utility vtable must not implement document hook: registerOpenDocument");
         if (vt.createDocument != null) @compileError("Utility vtable must not implement document hook: createDocument");
     }
 }
@@ -464,7 +524,8 @@ pub fn fileTypes(self: Plugin) []const []const u8 {
 pub fn contributeKeybinds(self: Plugin, win: *dvui.Window) !void {
     const prof = core.profile.begin(self.id, "contributeKeybinds");
     defer prof.end();
-    if (self.vtable.contributeKeybinds) |f| f(self.state, win) catch |err| return self.failed("contributeKeybinds", err);
+    if (self.vtable.contributeKeybinds) |f| f(self.state, win) catch |err|
+        return self.failed("contributeKeybinds", err);
 }
 
 pub fn tickKeybinds(self: Plugin) !void {
@@ -482,7 +543,8 @@ pub fn drawOverlay(self: Plugin) !void {
 pub fn registerOpenDocument(self: Plugin, file: *anyopaque) !*anyopaque {
     const prof = core.profile.begin(self.id, "registerOpenDocument");
     defer prof.end();
-    return if (self.vtable.registerOpenDocument) |f| (f(self.state, file) catch |err| return self.failed("registerOpenDocument", err)) else error.Unsupported;
+    return if (self.vtable.registerOpenDocument) |f| (f(self.state, file) catch |err|
+        return self.failed("registerOpenDocument", err)) else error.Unsupported;
 }
 
 pub fn documentPtr(self: Plugin, id: u64) ?*anyopaque {
@@ -503,7 +565,13 @@ pub fn unregisterDocument(self: Plugin, id: u64) void {
     if (self.vtable.unregisterDocument) |f| f(self.state, id);
 }
 
-pub fn bindDocumentToPane(self: Plugin, doc: DocHandle, canvas_id: dvui.Id, workspace_handle: *anyopaque, center: bool) void {
+pub fn bindDocumentToPane(
+    self: Plugin,
+    doc: DocHandle,
+    canvas_id: dvui.Id,
+    workspace_handle: *anyopaque,
+    center: bool,
+) void {
     const prof = core.profile.begin(self.id, "bindDocumentToPane");
     defer prof.end();
     if (self.vtable.bindDocumentToPane) |f| f(self.state, doc, canvas_id, workspace_handle, center);
@@ -530,7 +598,8 @@ pub fn documentPath(self: Plugin, doc: DocHandle) []const u8 {
 pub fn setDocumentPath(self: Plugin, doc: DocHandle, path: []const u8) !void {
     const prof = core.profile.begin(self.id, "setDocumentPath");
     defer prof.end();
-    if (self.vtable.setDocumentPath) |f| f(self.state, doc, path) catch |err| return self.failed("setDocumentPath", err);
+    if (self.vtable.setDocumentPath) |f| f(self.state, doc, path) catch |err|
+        return self.failed("setDocumentPath", err);
 }
 
 pub fn documentHasNativeExtension(self: Plugin, doc: DocHandle) bool {
@@ -572,7 +641,13 @@ pub fn loadDocumentFromBytes(self: Plugin, path: []const u8, bytes: []const u8, 
 }
 
 /// `loadUntitledDocument`. Returns whether the plugin handled it (`false` = no hook).
-pub fn loadUntitledDocument(self: Plugin, title: []const u8, bytes_path: []const u8, bytes: []const u8, out_doc: *anyopaque) !bool {
+pub fn loadUntitledDocument(
+    self: Plugin,
+    title: []const u8,
+    bytes_path: []const u8,
+    bytes: []const u8,
+    out_doc: *anyopaque,
+) !bool {
     const prof = core.profile.begin(self.id, "loadUntitledDocument");
     defer prof.end();
     if (self.vtable.loadUntitledDocument) |f| {
@@ -600,12 +675,18 @@ pub fn documentSnapshot(self: Plugin, doc: DocHandle, path: []const u8, allocato
     if (!self.canSaveThroughHost()) return null;
     const prof = core.profile.begin(self.id, "documentSnapshot");
     defer prof.end();
-    return self.vtable.documentSnapshot.?(self.state, doc, path, allocator) catch |err| self.failed("documentSnapshot", err);
+    return self.vtable.documentSnapshot.?(self.state, doc, path, allocator) catch |err|
+        self.failed("documentSnapshot", err);
 }
 
 /// The second half, on a worker. No profiler scope and no logging here: neither is the worker's
 /// to touch. The caller reports a failure from the UI thread.
-pub fn encodeSnapshot(self: Plugin, snapshot: *anyopaque, path: []const u8, allocator: std.mem.Allocator) anyerror![]u8 {
+pub fn encodeSnapshot(
+    self: Plugin,
+    snapshot: *anyopaque,
+    path: []const u8,
+    allocator: std.mem.Allocator,
+) anyerror![]u8 {
     return self.vtable.encodeSnapshot.?(self.state, snapshot, path, allocator);
 }
 
@@ -648,7 +729,8 @@ pub fn saveBytes(self: Plugin, doc: DocHandle, path: []const u8, allocator: std.
 pub fn documentWritten(self: Plugin, doc: DocHandle, path: []const u8) !void {
     const prof = core.profile.begin(self.id, "documentWritten");
     defer prof.end();
-    if (self.vtable.documentWritten) |f| f(self.state, doc, path) catch |err| return self.failed("documentWritten", err);
+    if (self.vtable.documentWritten) |f| f(self.state, doc, path) catch |err|
+        return self.failed("documentWritten", err);
 }
 
 pub fn canSaveThroughHost(self: Plugin) bool {
@@ -853,13 +935,15 @@ pub fn setDocumentGroupingOnBuffer(self: Plugin, doc: *anyopaque, grouping: u64)
 pub fn createDocument(self: Plugin, path: []const u8, grid: EditorAPI.NewDocGrid, out_doc: *anyopaque) !void {
     const prof = core.profile.begin(self.id, "createDocument");
     defer prof.end();
-    if (self.vtable.createDocument) |f| (f(self.state, path, grid, out_doc) catch |err| return self.failed("createDocument", err)) else return error.Unsupported;
+    if (self.vtable.createDocument) |f| (f(self.state, path, grid, out_doc) catch |err|
+        return self.failed("createDocument", err)) else return error.Unsupported;
 }
 
 pub fn documentDefaultSaveAsFilename(self: Plugin, doc: DocHandle, allocator: std.mem.Allocator) ![]const u8 {
     const prof = core.profile.begin(self.id, "documentDefaultSaveAsFilename");
     defer prof.end();
-    return if (self.vtable.documentDefaultSaveAsFilename) |f| (f(self.state, doc, allocator) catch |err| return self.failed("documentDefaultSaveAsFilename", err)) else error.Unsupported;
+    return if (self.vtable.documentDefaultSaveAsFilename) |f| (f(self.state, doc, allocator) catch |err|
+        return self.failed("documentDefaultSaveAsFilename", err)) else error.Unsupported;
 }
 
 pub fn saveQuestion(self: Plugin, doc: DocHandle, path: []const u8, allocator: std.mem.Allocator) ?SaveQuestion {
@@ -911,7 +995,8 @@ pub fn needsContinuousRepaint(self: Plugin) bool {
     return if (self.vtable.needsContinuousRepaint) |f| f(self.state) else false;
 }
 
-/// Allocate a buffer suitable for staging `loadDocument` / `createDocument`. Caller frees `backing`.
+/// Allocate a buffer suitable for staging `loadDocument` / `createDocument`. Caller frees
+/// `backing`.
 pub fn allocDocumentBuffer(self: Plugin, allocator: std.mem.Allocator) !struct { backing: []u8, buf: []u8 } {
     const size = self.documentStackSize();
     const align_req = self.documentStackAlign();

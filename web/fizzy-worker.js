@@ -69,6 +69,8 @@ const functionTable = new WebAssembly.Table({ initial: 4096, element: "anyfunc" 
 //
 // A worker has no `localStorage`, and the app reads its settings synchronously. The page sends
 // the entries filed under its `storageName` at startup; writes land here at once and go back to the page to keep.
+let focusEpoch = 0;
+const fileKey = (path) => path === "fizzyedit.person" ? path : env.storageName + ".file:" + path;
 function storageGet(key) {
     return Object.prototype.hasOwnProperty.call(env.storage, key) ? env.storage[key] : null;
 }
@@ -222,18 +224,19 @@ const fizzyImports = (target) => ({
     fizzy_web_now_real_ms() {
         return Date.now();
     },
+    fizzy_web_focus_epoch() { return focusEpoch; },
     fizzy_web_storage_get(keyPtr, keyLen, bufPtr, bufLen) {
-        const value = storageGet(env.storageName + ".file:" + str(keyPtr, keyLen));
+        const value = storageGet(fileKey(str(keyPtr, keyLen)));
         if (value === null) return 0xffffffff;
         const bytes = utf8encode(value);
         if (bytes.length <= bufLen) new Uint8Array(mem(), bufPtr, bytes.length).set(bytes);
         return bytes.length;
     },
     fizzy_web_storage_set(keyPtr, keyLen, valPtr, valLen) {
-        storageSet(env.storageName + ".file:" + str(keyPtr, keyLen), str(valPtr, valLen));
+        storageSet(fileKey(str(keyPtr, keyLen)), str(valPtr, valLen));
     },
     fizzy_web_storage_remove(keyPtr, keyLen) {
-        storageRemove(env.storageName + ".file:" + str(keyPtr, keyLen));
+        storageRemove(fileKey(str(keyPtr, keyLen)));
     },
     fizzy_web_plugin_fingerprint(fpPtr, fpLen) {
         pluginFingerprint = str(fpPtr, fpLen);
@@ -713,9 +716,20 @@ onmessage = (e) => {
         case "init":
             start(m).catch((err) => postMessage({ type: "error", message: err instanceof Error ? err.message : String(err) }));
             break;
+        case "personFocus":
+            if (m.value === null) delete env.storage["fizzyedit.person"];
+            else env.storage["fizzyedit.person"] = m.value;
+            focusEpoch++;
+            if (dvuiApp) dvuiApp.requestRender();
+            break;
         case "size":
             env.size = m.size;
             applyForm();
+            if (dvuiApp) dvuiApp.requestRender();
+            break;
+        case "inset":
+            // The keyboard's height: laid out above by the app, the canvas is not resized.
+            if (wasmInstance && wasmInstance.exports.FizzyWebSetKeyboardInset) wasmInstance.exports.FizzyWebSetKeyboardInset(m.bottom);
             if (dvuiApp) dvuiApp.requestRender();
             break;
         case "prefs":

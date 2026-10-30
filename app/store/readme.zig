@@ -28,14 +28,14 @@ pub const Readme = struct {
     subpath: []u8,
     io: std.Io,
     /// Captured at select time so the worker can wake the blocked event loop when the fetch
-    /// finishes (otherwise the UI stays on "Loading…" until an unrelated input event).
+    /// finishes (otherwise the UI stays on "Loading..." until an unrelated input event).
     window: *dvui.Window,
     status: std.atomic.Value(u8) = .init(@backingInt(Status.idle)),
     /// Fetched README bytes (app-allocator owned). Written once by the worker before it flips
     /// `status` to `ready` with release ordering; read on the UI thread only after an acquire
     /// load sees `ready`, so no lock is needed for the bytes themselves.
     bytes: ?[]u8 = null,
-    /// Where the README was found — the dev-tree directory, or the raw URL it was fetched from.
+    /// Where the README was found - the dev-tree directory, or the raw URL it was fetched from.
     /// Written by the worker alongside `bytes`; the preview resolves the README's own relative
     /// images (`![shot](assets/shot.png)`) against it, which for the fetched case means pulling
     /// them from the same repo over HTTPS.
@@ -52,7 +52,7 @@ pub const Readme = struct {
     }
 
     /// Start fetching `id`'s README (from its `repo` URL, optionally scoped to `subpath` within
-    /// that repo). Null when the strings could not be copied — the caller has no README to draw.
+    /// that repo). Null when the strings could not be copied - the caller has no README to draw.
     pub fn init(id: []const u8, repo: []const u8, subpath: []const u8) ?Readme {
         const gpa = repo_asset.gpa();
         const id_owned = gpa.dupe(u8, id) catch return null;
@@ -77,7 +77,7 @@ pub const Readme = struct {
     }
 
     /// Kick off the fetch. Separate from `init` because the worker takes a pointer to the value,
-    /// which has to be at its final address first — a `Readme` returned by value and then moved
+    /// which has to be at its final address first - a `Readme` returned by value and then moved
     /// into a document would hand the thread a dangling one.
     pub fn start(self: *Readme) void {
         if (comptime is_wasm) {
@@ -145,7 +145,7 @@ pub const Readme = struct {
             .failed => placeholder("Could not fetch the README.", true),
             .ready => {
                 const bytes = self.bytes orelse return;
-                // Transparent — the page behind this draws its own background (matching every
+                // Transparent - the page behind this draws its own background (matching every
                 // other pane in the app); without this the preview's own scroll area painted a
                 // visibly different `.content`-styled fill on top of it.
                 markdown.drawPreview(&self.preview, bytes, repo_asset.gpa(), .{
@@ -220,7 +220,7 @@ fn worker(self: *Readme) void {
     for (candidates.slice()) |url| {
         if (repo_asset.fetchOk(self.io, url, limit)) |body| {
             self.bytes = body;
-            // `url` lives in the worker's stack buffer — the preview needs it every frame.
+            // `url` lives in the worker's stack buffer - the preview needs it every frame.
             self.image_base = repo_asset.gpa().dupe(u8, url) catch null;
             self.status.store(@backingInt(Status.ready), .release);
             return;

@@ -24,11 +24,11 @@ const State = @This();
 /// on request (`snapshots_wanted`), one per surface per request, never on an ordinary frame.
 pub const Snapshot = struct {
     texture: dvui.Texture,
-    /// The size it was drawn at, in points — the aspect the card should keep.
+    /// The size it was drawn at, in points - the aspect the card should keep.
     natural: dvui.Size,
 };
 
-/// A view being carried from one place to another — see `ViewDrag.zig`.
+/// A view being carried from one place to another - see `ViewDrag.zig`.
 pub const ViewDrag = @import("ViewDrag.zig");
 
 /// What the picker needs from a plugin store without importing one. The store's module graph
@@ -51,8 +51,8 @@ pub const Beside = struct {
 /// lands in any place as a view would, inside a new such view (`ViewDrag.place`).
 pub const Documents = struct {
     ctx: *anyopaque,
-    /// A new view holding the documents `ids`, the first shown — a document not open yet opened
-    /// in it — for the layout to place like any view it lands. Its id, or null when none went in.
+    /// A new view holding the documents `ids`, the first shown - a document not open yet opened
+    /// in it - for the layout to place like any view it lands. Its id, or null when none went in.
     house: *const fn (ctx: *anyopaque, ids: []const []const u8) ?[]const u8,
     /// The view holding document `id` and nothing else, if one does: carried alone, the
     /// document carries that view, which lands as itself rather than inside a new one.
@@ -74,7 +74,7 @@ pub const StoreCatalog = struct {
 /// Keyed by group rather than by region so two regions written with the same keywords share a
 /// selection with no wiring between them (see `layout/Layout.zig`).
 selection: std.AutoHashMapUnmanaged(u64, []const u8) = .empty,
-/// What a region shows, by the name its shape declared — the user's answer to "what goes
+/// What a region shows, by the name its shape declared - the user's answer to "what goes
 /// *here*", which overrides keyword matching wholesale for that region. An entry with no
 /// surfaces is a region the user deliberately emptied; a region with no entry shows whatever
 /// its keywords attract, which is every region's starting state.
@@ -89,11 +89,11 @@ selection: std.AutoHashMapUnmanaged(u64, []const u8) = .empty,
 assignments: std.StringHashMapUnmanaged([]const []const u8) = .empty,
 /// The order the user dragged a place's views into, by region name. Separate from `assignments`
 /// on purpose: an assignment says *which* views a place holds, and writing one down for a place
-/// its keywords fill would freeze it — a plugin installed later would never appear there. An
+/// its keywords fill would freeze it - a plugin installed later would never appear there. An
 /// order only sorts: views it names come first, in its order; the rest follow as they would
 /// have. Keys and ids gpa-owned, like `assignments`.
 orders: std.StringHashMapUnmanaged([]const []const u8) = .empty,
-/// Surface id → its snapshot. Keys are gpa-owned copies: a surface can unregister (plugin
+/// Surface id -> its snapshot. Keys are gpa-owned copies: a surface can unregister (plugin
 /// unloaded) while the picker is open.
 snapshots: std.StringHashMapUnmanaged(Snapshot) = .empty,
 /// While true, `Layout.draw` captures any surface it draws that has no snapshot yet, and
@@ -124,7 +124,7 @@ unmarked_scrollers: if (builtin.mode == .debug) UnmarkedScrollers else void = if
 /// one place above everything else (`Picker.draw`).
 picker: Picker = .{},
 /// Filled in by the application when it has a plugin store. Null means the picker only lists
-/// loaded surfaces — tests, and an app that never switched the store on.
+/// loaded surfaces - tests, and an app that never switched the store on.
 store_catalog: ?StoreCatalog = null,
 /// Filled in by the application when documents can have homes outside their slots. Null means a
 /// document goes only into a slot made for it.
@@ -134,26 +134,26 @@ documents: ?Documents = null,
 pending_store_region: []const u8 = "",
 pending_store_plugin: []const u8 = "",
 
-/// Regions the last completed shape declared — what `Editor.regionFor` answers from.
+/// Regions the last completed shape declared - what `Editor.regionFor` answers from.
 ///
 /// Deliberately the *previous* frame's set rather than the one being built: a command can run
 /// between frames (a native menu item is dispatched before the shape has drawn anything), and a
-/// command that drives a region — Toggle Explorer, Toggle Panel — must find one. Reading a
+/// command that drives a region - Toggle Explorer, Toggle Panel - must find one. Reading a
 /// half-built list gave it nothing, and the toggle silently did half its job: the menu title
 /// flipped, because that reads a bool, and the sidebar never moved.
 ///
 /// Answering from last frame is correct rather than merely convenient: a region's id comes from
 /// its shape's `@src()`, so it is the same id this frame will declare. The one case it cannot
-/// help is a command dispatched before the *first* shape has ever run — there is genuinely no
-/// region yet — which is why this is a swap rather than a claim that ordering no longer matters.
+/// help is a command dispatched before the *first* shape has ever run - there is genuinely no
+/// region yet - which is why this is a swap rather than a claim that ordering no longer matters.
 regions: std.ArrayList(Region) = .empty,
 /// The set the shape currently running is declaring. Swapped into `regions` when it finishes.
 regions_building: std.ArrayList(Region) = .empty,
-/// Every region's remembered extent in **points** — width under a horizontal parent, height
-/// under a vertical one — by the name its shape declared, loaded from
+/// Every region's remembered extent in **points** - width under a horizontal parent, height
+/// under a vertical one - by the name its shape declared, loaded from
 /// `layout.zon` at startup and written back debounced.
 ///
-/// Replaces `explorer_ratio` / `panel_ratio`, which named the two regions fizzy happens to have —
+/// Replaces `explorer_ratio` / `panel_ratio`, which named the two regions fizzy happens to have -
 /// so an app with a "Stack" and a "Strip" could persist nothing, and fizzy's own furniture was
 /// baked into a framework's on-disk format. Those two survive only for the legacy shell.
 extents: std.StringHashMapUnmanaged(f32) = .empty,
@@ -195,12 +195,12 @@ layer_building: u16 = 0,
 /// past the last share it.
 card_area: [card_layers]dvui.Rect.Physical = @splat(.{}),
 card_area_building: [card_layers]dvui.Rect.Physical = @splat(.{}),
-/// Explorer/panel split ratios — "window shape" state persisted in `window.zon`, not
+/// Explorer/panel split ratios - "window shape" state persisted in `window.zon`, not
 /// `settings.zon` (dragging a splitter fires every frame; keeping it out of the settings file
 /// means normal window use never dirties a git-tracked settings.zon). Loaded once at startup
 /// (see `init`); defaults match the pre-move `Settings` field defaults.
 /// Debounced-save bookkeeping for the ratios above, separate from `settings_dirty`/
-/// `settings_save_deadline_ns` — sidebar/panel dragging must not force a settings.zon write
+/// `settings_save_deadline_ns` - sidebar/panel dragging must not force a settings.zon write
 /// attempt on every drag frame.
 dirty: bool = false,
 save_deadline_ns: i128 = 0,
@@ -225,15 +225,15 @@ names: std.StringHashMapUnmanaged(void) = .empty,
 
 // ---- the app's side of a region ---------------------------------------------------------------
 //
-// Regions are declared by a shape and driven from outside it — a rail button, a command, a
+// Regions are declared by a shape and driven from outside it - a rail button, a command, a
 // keybind. These four are that seam, and they live on the state rather than on the application
 // because nothing here is fizzy's: a name, an extent, and the set the last shape declared.
 
-/// The region accepting `keywords`, or null when this app's shape declared none — a normal
+/// The region accepting `keywords`, or null when this app's shape declared none - a normal
 /// state, not an error.
 ///
 /// `intersects`, not `accepts`: a caller here holds a *vocabulary* and wants the region that
-/// speaks it — Toggle Explorer asks for `ide.sidebar` and must find the sidebar whether the
+/// speaks it - Toggle Explorer asks for `ide.sidebar` and must find the sidebar whether the
 /// shape declared it qualified or not. Whether a *surface* belongs in a region is the asymmetric
 /// question, and that one goes through `accepts`.
 pub fn regionFor(self: *State, keywords: []const []const u8) ?Region {
@@ -247,7 +247,7 @@ pub fn regionFor(self: *State, keywords: []const []const u8) ?Region {
 /// main area becomes `{"main.document"}`. Interned, and stable for as long as the state lives.
 ///
 /// Interned rather than arena-allocated because the registry is read a frame *later* than it is
-/// written — `regionFor` answers a command dispatched between frames from the last completed
+/// written - `regionFor` answers a command dispatched between frames from the last completed
 /// shape, and an arena string would be freed by then. There are as many of these as a shape has
 /// nested regions, which is a handful, so the pool is a list and a linear scan.
 ///
@@ -329,7 +329,7 @@ pub fn deinitQualified(self: *State, gpa: std.mem.Allocator) void {
     self.names.deinit(gpa);
 }
 
-/// A copy of `name` that outlives the frame — the registry, the assignment table and the picker
+/// A copy of `name` that outlives the frame - the registry, the assignment table and the picker
 /// all hold a region's name across frames. Same string in, same slice out.
 pub fn internName(self: *State, gpa: std.mem.Allocator, name: []const u8) []const u8 {
     if (self.names.getKey(name)) |k| return k;
@@ -369,7 +369,7 @@ pub fn clearDock(self: *State) void {
     self.tree_cleared = true;
 }
 
-/// On the tree, a leaf that has a sibling to collapse into — minted or declared, since a
+/// On the tree, a leaf that has a sibling to collapse into - minted or declared, since a
 /// declared place's pin moves to whatever is left. Off the tree, never (the old split forest
 /// has its own rule, `isMinted`).
 pub fn canRemove(self: *const State, name: []const u8) bool {
@@ -379,7 +379,7 @@ pub fn canRemove(self: *const State, name: []const u8) bool {
 }
 
 /// The heir of a closed pinned place takes its name: whatever this state keyed by the heir's
-/// old name — its assignment, order, extent — is now the place's, and the closed
+/// old name - its assignment, order, extent - is now the place's, and the closed
 /// place's own entries go with it.
 pub fn renamePlace(self: *State, gpa: std.mem.Allocator, from: []const u8, to: []const u8) void {
     self.unassign(gpa, to);
@@ -497,7 +497,7 @@ pub fn siblingLeaf(self: *const State, name: []const u8) ?[]const u8 {
     return self.splits.siblingLeaf(name);
 }
 
-/// Whether `name` is one half of a split the user made — minted by it, or the place that was
+/// Whether `name` is one half of a split the user made - minted by it, or the place that was
 /// split, with the minted half beside it. Such a place can go: emptied it closes, and the trash
 /// takes it (`ViewDrag`). A place the shape declared, never split, cannot.
 pub fn userSplitPart(self: *const State, name: []const u8) bool {
@@ -506,7 +506,7 @@ pub fn userSplitPart(self: *const State, name: []const u8) bool {
     return self.isMinted(sibling);
 }
 
-/// The two halves of one split — the pair a drop in the middle of one joins — as the place
+/// The two halves of one split - the pair a drop in the middle of one joins - as the place
 /// that stays and the one that closes; null for any other pair. The live dock tree when there is
 /// one: its two leaves under one split, a declared (pinned) leaf always the one kept and two
 /// declared leaves never a pair, since neither may go. Otherwise the split forest
@@ -565,11 +565,11 @@ pub fn assignment(self: *State, name: []const u8) ?[]const []const u8 {
     return self.assignments.get(name);
 }
 
-/// Set what region `name` shows. An empty list is a real choice — "nothing here" — distinct from
+/// Set what region `name` shows. An empty list is a real choice - "nothing here" - distinct from
 /// `unassign`, which hands the region back to its keywords. A surface lives in one
 /// place: putting it here takes it out of every other assignment.
 ///
-/// `surfaces` may borrow from any assignment, this region's included — read, edit, write back
+/// `surfaces` may borrow from any assignment, this region's included - read, edit, write back
 /// is how a pane adds a tab. So past `setAssignment`, which frees the old lists, only this
 /// region's new, owned copy is read: its key and list, taken out of the map first, since
 /// rewriting the other regions can grow the map and move its entries.
@@ -673,8 +673,8 @@ pub fn unassign(self: *State, gpa: std.mem.Allocator, name: []const u8) void {
     gpa.free(kv.value);
 }
 
-/// Forget everything kept under place `name` — what it holds, their order and its
-/// extent — because the place itself is gone for good: a float closed, whose number the next
+/// Forget everything kept under place `name` - what it holds, their order and its
+/// extent - because the place itself is gone for good: a float closed, whose number the next
 /// float may reuse. Returns true when an extent went, which the app may want to save.
 pub fn forgetPlace(self: *State, gpa: std.mem.Allocator, name: []const u8) bool {
     self.unassign(gpa, name);
@@ -828,7 +828,7 @@ pub fn deinitExtents(self: *State, gpa: std.mem.Allocator) void {
     self.floats.deinit(gpa);
 }
 
-/// Drop every per-place overlay texture. Safe to call twice — the map is
+/// Drop every per-place overlay texture. Safe to call twice - the map is
 /// emptied. Tests that only tear down extents or assignments both reach here.
 pub const Warm = struct { key: u64, id: []u8 };
 
@@ -849,7 +849,7 @@ pub fn discardSwaps(self: *State) void {
 }
 
 /// The overlay for this place, created on first use. Null only if the map
-/// cannot grow — the caller then draws without a transition.
+/// cannot grow - the caller then draws without a transition.
 pub fn swapFor(self: *State, gpa: std.mem.Allocator, key: u64) ?*core.anim.Transition {
     if (self.swaps.get(key)) |t| return t;
     const t = gpa.create(core.anim.Transition) catch return null;
@@ -861,7 +861,7 @@ pub fn swapFor(self: *State, gpa: std.mem.Allocator, key: u64) ?*core.anim.Trans
     return t;
 }
 
-/// Draw the surface `id` once, invisibly, in the place `key` — before it is ever shown there.
+/// Draw the surface `id` once, invisibly, in the place `key` - before it is ever shown there.
 /// A view that measures itself on its first draw (a large text document laying out every line)
 /// does that now, while it is not what anyone is waiting on, instead of on the click that
 /// shows it. Drawn in its own place because widget ids follow their parents: a warm-up drawn
@@ -897,7 +897,7 @@ pub fn resetLayout(self: *State, gpa: std.mem.Allocator) void {
     self.floats.clear();
 }
 
-/// Forget what the user arranged — extents, assignments, orders, Single/Multiple and the splits —
+/// Forget what the user arranged - extents, assignments, orders, Single/Multiple and the splits -
 /// and any drag or transition under way, keeping each place's widget state (how wide it is drawn,
 /// shut or not), the seed tree and the floats. For putting an arrangement back on top of it
 /// (`Editor.applySavedRegions`), as a demo's snapshot does; `resetLayout` forgets the rest too.
@@ -1006,8 +1006,8 @@ pub fn requestSlideOpen(self: *State, name: []const u8) void {
     self.slide_open = name;
 }
 
-/// Whether `name` should ease open this frame, and from where (0…1 of its target): always from
-/// nothing — a new leaf appears by growing into its space.
+/// Whether `name` should ease open this frame, and from where (0...1 of its target): always from
+/// nothing - a new leaf appears by growing into its space.
 pub fn takeSlideOpen(self: *State, name: []const u8) ?f32 {
     if (self.slide_open.len == 0 or !std.mem.eql(u8, self.slide_open, name)) return null;
     self.slide_open = "";
@@ -1042,7 +1042,7 @@ pub fn clearExtent(self: *State, gpa: std.mem.Allocator, name: []const u8) bool 
 }
 
 /// Remember a region's extent. Returns true when the value actually changed, so the application
-/// can decide what "remember" means — fizzy debounces a write to `layout.zon`; another app might
+/// can decide what "remember" means - fizzy debounces a write to `layout.zon`; another app might
 /// do nothing at all.
 pub fn setExtent(self: *State, gpa: std.mem.Allocator, name: []const u8, value: f32) bool {
     const gop = self.extents.getOrPut(gpa, name) catch return false;

@@ -19,6 +19,7 @@ const BlurBackdrop = @import("glass").BlurBackdrop;
 const dialogs = @import("dialogs.zig");
 const FrameTarget = @import("glass").FrameTarget;
 pub const crossfade = @import("crossfade.zig");
+pub const rearrange = @import("rearrange.zig");
 pub const Kind = crossfade.Kind;
 
 /// How a pane *travels* when the layout moves it: a region folding away, a sidebar coming back,

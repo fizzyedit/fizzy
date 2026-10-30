@@ -54,7 +54,7 @@ pending: bool = false,
 frame: ?u64 = null,
 /// How many have been taken; the last one's text is `text`.
 taken: u32 = 0,
-text: std.ArrayListUnmanaged(u8) = .empty,
+text: std.ArrayList(u8) = .empty,
 /// Taking every frame (`keepTaking`): each frame's end arms the next one's capture, asking for no
 /// frame of its own, so `latest` is always the frame last drawn.
 continuous: bool = false,
@@ -172,7 +172,7 @@ pub fn endFrame(self: *Snapshot) void {
 /// The nodes of the frame whose capture is `first`: its build phase's widgets, then each dialog's,
 /// captured on its own after it.
 fn collect(self: *const Snapshot, arena: std.mem.Allocator, first: u64) ![]Node {
-    var widgets: std.ArrayListUnmanaged(CapturedWidget) = .empty;
+    var widgets: std.ArrayList(CapturedWidget) = .empty;
     for (dvui.debug.frames.items) |*f| {
         if (f.index >= first) try widgets.appendSlice(arena, f.widgets.items);
     }
@@ -301,7 +301,7 @@ pub fn build(arena: std.mem.Allocator, widgets: []const CapturedWidget, windows:
     // Each widget's tag: `Options.tag`, or the name a mark gave it this frame. A mark on a place
     // within a widget (`anchor.markRect`) is a node of its own, inside it.
     var tags: std.AutoHashMapUnmanaged(dvui.Id, []const u8) = .empty;
-    var places: std.ArrayListUnmanaged(struct { name: []const u8, data: dvui.TagData }) = .empty;
+    var places: std.ArrayList(struct { name: []const u8, data: dvui.TagData }) = .empty;
     {
         var it = dvui.currentWindow().tags.iterator();
         while (it.next_used()) |e| {
@@ -328,7 +328,7 @@ pub fn build(arena: std.mem.Allocator, widgets: []const CapturedWidget, windows:
         }
     }
 
-    var nodes: std.ArrayListUnmanaged(Node) = .empty;
+    var nodes: std.ArrayList(Node) = .empty;
     for (windows) |w| try nodes.append(arena, .{
         .role = "window",
         .name = if (w.title.len > 0) w.title else null,

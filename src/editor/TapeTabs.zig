@@ -23,7 +23,7 @@ const app = @import("app");
 const automation = app.automation;
 const Editor = @import("Editor.zig");
 
-playing: std.ArrayListUnmanaged(*Playback) = .empty,
+playing: std.ArrayList(*Playback) = .empty,
 /// The next playback's number, for its root.
 next: u32 = 1,
 /// A tape waiting for the plugins its documents need (`openWhenReady`): its bytes, owned.
@@ -107,7 +107,7 @@ pub fn openWhenReady(self: *TapeTabs, editor: *Editor, bytes: []const u8, alone:
     }.any;
     var owned = automation.Tape.load(gpa, bytes, check) catch return error.BadTape;
     defer owned.deinit();
-    var owners: std.ArrayListUnmanaged([]u8) = .empty;
+    var owners: std.ArrayList([]u8) = .empty;
     errdefer {
         for (owners.items) |o| gpa.free(o);
         owners.deinit(gpa);

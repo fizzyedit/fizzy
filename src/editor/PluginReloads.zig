@@ -27,7 +27,7 @@ const PluginLoader = @import("app").store.Loader;
 const Editor = @import("Editor.zig");
 const KeptDocuments = @import("KeptDocuments.zig");
 
-jobs: std.ArrayListUnmanaged(*Job) = .empty,
+jobs: std.ArrayList(*Job) = .empty,
 
 /// Native only: the web links a plugin as a wasm side module (`loadWebPlugin`), with no reload.
 const native = builtin.target.cpu.arch != .wasm32;

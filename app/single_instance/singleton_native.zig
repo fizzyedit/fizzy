@@ -9,7 +9,7 @@
 //!   * `drainPending` is called from the top of each frame to open queued
 //!     paths in the editor.
 //!
-//! Path dispatch: directories → `editor.setProjectFolder`, files → `editor.openFilePath`.
+//! Path dispatch: directories -> `editor.setProjectFolder`, files -> `editor.openFilePath`.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -26,7 +26,7 @@ const log = std.log.scoped(.singleton);
 /// not fizzy's: two apps built on fizzy would otherwise share one lock, and launching the second
 /// would forward its argv to the first and exit.
 /// The application's identity, set by the app before `earlyStartup`. The lock is *per
-/// application* — two different fizzy-based apps must not fight over one — so this cannot be
+/// application* - two different fizzy-based apps must not fight over one - so this cannot be
 /// read from fizzy's own identity the way it used to be.
 pub var app_id: [:0]const u8 = "app.unnamed";
 pub var app_name: []const u8 = "app";
@@ -95,7 +95,7 @@ pub fn tryAcquireLock(gpa: std.mem.Allocator, argv: []const []const u8) !bool {
     var socket_dir = pickUnixSocketDir(&socket_dir_buf);
 
     // A profile has a lock of its own, named for it, and keeps its socket in its runtime
-    // directory — unless that path would not fit a socket address, when the temp directory
+    // directory - unless that path would not fit a socket address, when the temp directory
     // holds it instead, still under the profile's own name.
     var id: [:0]const u8 = app_id;
     var profile_id: ?[:0]u8 = null;
@@ -225,7 +225,7 @@ fn queueArgvPaths(argv: []const []const u8) void {
 /// What the application does with a path a second launch forwarded to this one.
 ///
 /// The lock, the socket and the argv plumbing are the same for every app; what "open this" means
-/// is not — fizzy sets a project folder for a directory and opens a document for a file, having
+/// is not - fizzy sets a project folder for a directory and opens a document for a file, having
 /// first walked up for a project marker. An app with no documents can point both of these at
 /// something else entirely.
 pub const Sink = struct {
@@ -235,7 +235,7 @@ pub const Sink = struct {
     /// A file was forwarded. `project_root` is the marker directory found above it, when the app
     /// asked for that search and one exists.
     openFile: *const fn (ctx: *anyopaque, path: []const u8, project_root: ?[]const u8) anyerror!void,
-    /// Whether to search upward for a project marker before opening a file — fizzy only does it
+    /// Whether to search upward for a project marker before opening a file - fizzy only does it
     /// when nothing is open yet.
     wantsProjectRoot: *const fn (ctx: *anyopaque) bool,
 };
@@ -252,14 +252,14 @@ fn dispatchPath(path: []const u8) !void {
     const to = sink orelse return error.NoSink;
 
     // A path on a mounted filesystem is not the disk's to inspect: the app decides what it
-    // is once the mount answers. Handed over as a file — a folder there is opened from the
+    // is once the mount answers. Handed over as a file - a folder there is opened from the
     // explorer, not from argv.
     if (core.paths.isMountPath(path)) {
         try to.openFile(to.ctx, path, null);
         return;
     }
 
-    // Try as directory first: openDirAbsolute succeeds → it's a folder.
+    // Try as directory first: openDirAbsolute succeeds -> it's a folder.
     if (std.Io.Dir.openDirAbsolute(io, path, .{})) |dir| {
         var d = dir;
         d.close(io);
@@ -310,7 +310,7 @@ fn dirHasProjectMarker(gpa: std.mem.Allocator, dir: []const u8) bool {
 }
 
 /// Walk `argv` once via this zig's `Args.Iterator` API and return a slice
-/// `[argv[0], abs_path_1, abs_path_2, …]` owned by `gpa`. Flags (entries
+/// `[argv[0], abs_path_1, abs_path_2, ...]` owned by `gpa`. Flags (entries
 /// starting with `-`) pass through unchanged; everything else is resolved
 /// to an absolute path so the singleton primary doesn't need to know the
 /// secondary's working directory. Resolution failures pass the original
@@ -413,7 +413,7 @@ pub fn freeResolvedArgv(gpa: std.mem.Allocator, argv: []const []const u8) void {
 
 /// Normalizing (not just joining) matters for the common `fizzy .` invocation: a plain join
 /// yields `<cwd>/.`, which names the right directory but is a distinct string from `<cwd>`
-/// everywhere downstream — see `core.paths.normalize`.
+/// everywhere downstream - see `core.paths.normalize`.
 fn resolveAbsolute(gpa: std.mem.Allocator, cwd: []const u8, path: []const u8) ![]u8 {
     if (std.fs.path.isAbsolute(path) or core.paths.isMountPath(path)) return core.paths.normalize(gpa, path);
     if (cwd.len == 0) return error.NoCwd;
@@ -422,7 +422,7 @@ fn resolveAbsolute(gpa: std.mem.Allocator, cwd: []const u8, path: []const u8) ![
 
 fn pickUnixSocketDir(buf: *[std.fs.max_path_bytes]u8) []const u8 {
     if (builtin.target.os.tag == .windows) return "."; // unused on Windows
-    // Prefer TMPDIR (macOS sets it per-user) → /tmp fallback.
+    // Prefer TMPDIR (macOS sets it per-user) -> /tmp fallback.
     // Use the libc env to avoid plumbing `process.Environ` here.
     if (std.c.getenv("TMPDIR")) |env_ptr| {
         const len = std.mem.len(env_ptr);

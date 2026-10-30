@@ -6,9 +6,10 @@
 //! surfaces, commands, services, menus and the rest it registered.
 //!
 //! Consumers: anything that waits on a plugin's rebuild (an agent's build loop watches the
-//! generation move), a plugin author's status line, the store's page for a plugin, a
-//! development overlay, the dashboard's Plugins section (plans/DASHBOARD_PLAN.md). A reload that fails leaves the running build in place: `state` stays
-//! `loaded`, the generation stays put, and `why` says what went wrong.
+//! generation move), a plugin author's status line, the store's page for a plugin, a development
+//! overlay, the dashboard's Plugins section (plans/DASHBOARD_PLAN.md). A reload that fails leaves
+//! the running build in place: `state` stays `loaded`, the generation stays put, and `why` says
+//! what went wrong.
 const std = @import("std");
 
 pub const Api = struct {

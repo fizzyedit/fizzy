@@ -48,7 +48,8 @@ A PR carries one stage label at a time; each names whose turn it is.
 
 `reviewer:<team>-<kind>` (for example `reviewer:linux-codex`) assigns a review; a reviewer adds
 `reviewing:<team>-<kind>` while it is in progress and removes it when its `REVIEW` is posted.
-A different worker than the author reviews. Not every reviewer reviews every PR: the PM names who.
+A worker of another kind than the author reviews: one reviewer by default, two where
+[`REVIEW.md`](REVIEW.md) says so. The PM names who.
 
 ### Markers
 
@@ -56,8 +57,8 @@ A comment on the thread starts with its marker, so the harness and the next read
 
 - `TRIAGE`: the PM's first read: the stage to enter, the reviewers, and any `APPROACH` it wants.
 - `REVIEW`: a reviewer's answer in the format of [`REVIEW.md`](REVIEW.md) (its four questions).
-- `RULING`: the PM's decision on the findings. It lists only the must-fix ones; a finding not
-  listed is not owed a change.
+- `RULING`: the PM's decision on the findings. It lists the must-fix ones and the minor findings
+  to answer; a finding not listed is not owed a change, and follow-ups are never owed one.
 - `FIXES @<new head commit>`: the author's answer after pushing, one line per ruled finding:
   `<reviewer> F<n> fixed: <what, with the commit>` or `<reviewer> F<n> declined: <reason>`.
 - `VERIFY`: a reviewer's check that each fix holds, and that nothing else moved.
@@ -69,26 +70,145 @@ the PR, or close it and restart. [`REVIEW.md`](REVIEW.md) carries the detail.
 
 Nothing auto-merges (see Review).
 
-## Kickoff template (the issue body, 1,600 characters at most)
+## Kickoff template (the issue body: 1,800 characters before `Spec`, 12,000 in all)
+
+The issue's title says in plain words what changes for a person using fizzy, and its first
+field says what and why, with no jargon: a visitor who has never read the code understands both.
+
+The body is the whole spec. A worker is given the body; it does not hunt through comments or
+follow a link to learn what to build, so nothing it needs is in a comment. An issue is sized so a
+worker of any kind finishes it without asking: if the spec does not fit in 12,000 characters,
+split the issue.
 
 ```
+In plain words: <what changes for a person using fizzy, and why it matters; no jargon>
+Serves: <the goal or principle, as docs/VISION.md#<anchor>>
 Task: <what a user or plugin author sees when it's done>
 Plan: <fizzyedit/plans#N step k, or none>
 Builds on: <PRs/branches, or main>
 Branch: <area>/<slug>
-Files/area: <paths to start in>
+In bounds: <every file the PR may change, by path, or a `rg` command whose hits are the list>
+Not in scope: <what this PR must not do: the later step, the second design, the files to leave alone>
+Acceptance: <the check that proves it, in backticks: a test by name and file that fails on main today, or a command and its expected output>
 Gates: scripts/check-fmt.sh; scripts/zb build, scripts/zb build test, scripts/zb build test-integration, scripts/zb build check-web, scripts/zb build test-sdk-version (read "N/N steps succeeded")
 Rules: docs/AGENT_WORK.md (the shared worker contract). PRs say "Part of fizzyedit/work#N".
-Done: draft PR on first push; gates pass; PR body says what was run and how verified (test, tape, measurement).
+Done: draft PR on first push; gates pass; the PR page (docs/AGENT_WORK.md) says what was run and how verified.
 Notes: <only what code and plans don't say>
+Spec: <the rest of the spec, last: signatures, names, each test and its assertion; or "none: the fields above are the spec">
 ```
 
 Before assigning a worker, run `scripts/check-kickoff <file|issue-number>` (issue numbers
 are read from `fizzyedit/work` through `gh`). It reports every missing or empty template
-field, bodies over 1,600 characters, invalid branch names, a `zig` command wrapped in `scripts/zb` in Gates,
-and Rules without a `fizzyedit/work#N` reference. It accepts the template above and GitHub
-issue-form `### Field` headings. The template is the source of the required field list.
+field, more than 1,800 characters before `Spec` or 12,000 in all, invalid branch names, a `zig`
+command wrapped in `scripts/zb` in Gates, Rules without a `fizzyedit/work#N` reference, a Serves
+that links no anchor of `docs/VISION.md`, an In bounds that names no path or says "and callers"
+or "etc.", an Acceptance with no command or test in backticks, and a body that sends the worker to a
+comment for the spec. Everything after `Spec:` belongs to Spec. It accepts the template above and
+GitHub issue-form `### Field` headings. The template is the source of the required field list.
 Run `python3 scripts/test-check-kickoff.py` for the validator tests.
+
+## The PR page
+
+A fizzy PR is public. Someone who has never read the code (a person using fizzy, a plugin author,
+a visitor) must understand from the page what is changing and why, without jargon. Writing that is
+worth the extra words. The technical summary for agents and reviewers stays, collapsed at the
+bottom. The body, in order:
+
+1. `## In plain words`: two to four sentences. What changes for a person using fizzy, and why it
+   matters. No function, file or flag names.
+2. `## What changes`: bullets, in plain terms, with at least one fenced code snippet taken from the
+   diff (a before/after or the key function, 15 lines at most), so a reader sees the change itself.
+3. `## What you will notice`: what a person sees or feels, or `Nothing visible: internal` and
+   what it makes possible.
+4. `## How we know it works`: in plain terms: the tests that fail without the change, the check
+   on a real device, the measurement.
+5. `## How this serves fizzy`: one sentence naming the goal or principle the change moves and the
+   result for people, linked to its anchor in [`VISION.md`](VISION.md), for example
+   `[Phones and tablets](https://github.com/fizzyedit/fizzy/blob/main/docs/VISION.md#mobile)`.
+6. A collapsed `<details><summary>For agents: technical summary</summary>` block holding `## Goal`,
+   `## What changed and why`, `## How it was verified` and `## Not done / follow-ups`.
+7. The **agent notes**, the last line of the body: a hidden comment
+   `<!-- agent-notes {"issue":N,"worker":"codex","slot":"linux-codex-3","status":"draft|ready","area":"core/widgets","open_questions":[],"next":"review|fixes|merge"} -->`.
+   It is the one known place for agents to leave each other notes; agents read and write only this
+   block (and the PR thread for findings), never free text in the body. `agent-finish` writes it
+   (worker and slot from `FIZZY_WORKER` and `FIZZY_SLOT`, `status` `draft` at the claim and `ready`
+   after the gates) and on a rerun keeps the `open_questions` and `next` the last agent set.
+
+The title follows the same rule: `area: what changes`, 72 characters at most, in words a visitor
+understands. It is never a branch slug: `windows: work-723` and `linux: touch-slop` are refused.
+The claim's draft PR takes the work issue's title; the finished title is the first line
+`# area: what changes` of `PR_SUMMARY.md`, which `agent-finish` sets. The stage is not in the body:
+the PM's status comment, kept current, opens with it in one plain sentence.
+
+A worker writes the plain sections first, in `PR_SUMMARY.md` (step 5 below), and
+`scripts/agent-finish` puts the technical half in the collapsed block. `scripts/check-pr-body
+[--title <title>] <file|PR number>` checks a page: the title, the five sections there, in order and
+not empty or still the template's text, the snippet, the vision link naming an anchor that exists,
+the block, and the agent notes (required on a PR number, checked when a file has them: valid JSON
+with every key above). A page whose notes say `"status":"draft"` may still have empty sections;
+a `ready` one may not. `agent-finish` runs it before the gates and refuses to publish a page that
+fails; the PM runs it on a person's PR at triage.
+
+An example, PR #978 rewritten:
+
+````markdown
+## In plain words
+
+On a phone, tapping a text box opened the keyboard and closed it again straight away, so you could
+not type in fizzy's web app at all. Typing on a phone is how many people talk to fizzy, so this
+had to work.
+
+## What changes
+
+- A touch on the screen no longer also counts as a mouse click, and that click was what took the
+  focus back from the text box.
+
+```js
+// web/fizzy.js, pointerInput
+canvas.addEventListener("touchstart", (e) => e.preventDefault(), { capture: true, passive: false });
+canvas.addEventListener("touchend", (e) => e.preventDefault(), { capture: true, passive: false });
+```
+
+## What you will notice
+
+Tap a text box on a phone or tablet and the keyboard opens and stays open. Nothing changes with a
+mouse or a keyboard.
+
+## How we know it works
+
+A new test replays the browser's events for a tap: without the fix the text box loses focus, with
+it the text box keeps it. The check on a real phone is still to do and is listed below.
+
+## How this serves fizzy
+
+[Phones and tablets](https://github.com/fizzyedit/fizzy/blob/main/docs/VISION.md#mobile): typing
+on a phone works in the web app.
+
+<details><summary>For agents: technical summary</summary>
+
+## Goal
+
+On a touch device a tap on a text field opened the keyboard and closed it again: the canvas took
+the focus back from the hidden input.
+
+## What changed and why
+
+`pointerInput` (web/fizzy.js) now cancels a touch's `touchstart` and `touchend` (capture,
+non-passive), which suppresses the compatibility `mousedown` that focused the canvas.
+
+## How it was verified
+
+`web/tests/pointer-input.test.mjs`: touchstart/touchend end `defaultPrevented`, and a tap model in
+which the hidden input keeps focus. Fails without the change.
+
+## Not done / follow-ups
+
+The 10-of-10 phone check needs a real phone (the QA loop).
+
+</details>
+
+<!-- agent-notes {"issue":978,"worker":"claude","slot":"web","status":"ready","area":"web","open_questions":[],"next":"review"} -->
+````
 
 ## Trust boundary
 
@@ -129,17 +249,20 @@ runs the publishing helper after collecting the edits.
    `fizzyedit/work#N`): it pushes the branch and opens the draft PR saying
    `Part of fizzyedit/work#N` with "gates not run yet", so the claim is visible early.
 5. Before finishing, write `$(git rev-parse --git-dir)/PR_SUMMARY.md` (inside the git dir, never
-   committed) in a few lines under four headings: `## Goal`, `## What changed and why`,
-   `## How it was verified` (the tests that fail without the change; screenshots or a tape for a
-   UI change) and `## Not done / follow-ups`.
+   committed) in the shape of "The PR page" above: optionally a first line `# area: what changes`
+   (the PR title), the four plain sections first, then in a few lines `## Goal`,
+   `## What changed and why`, `## How it was verified` (the tests that fail without the change;
+   screenshots or a tape for a UI change) and `## Not done / follow-ups`.
 6. When the work is done run `scripts/agent-finish <issue>` in the worker checkout. It checks
    formatting and the build gates, records the current change (keeping your description; it
    only fills in an empty one), pushes, and updates the PR body, creating the draft if the
-   claim step was skipped. The body is `Part of fizzyedit/work#N`, your summary, then two
-   collapsed sections: the diff stat (`Changes (N files, +A/-D)`) and the last 50 lines of each
+   claim step was skipped. It refuses a summary that `scripts/check-pr-body` rejects. The body is
+   `Part of fizzyedit/work#N`, your summary (its technical half collapsed), then two collapsed
+   sections: the diff stat (`Changes (N files, +A/-D)`) and the last 50 lines of each
    gate's output (`Gates: K of K passed`). With no `PR_SUMMARY.md` it keeps the summary already in
    the PR body (above the `agent-finish: generated below` marker); with neither it writes the
-   headings with "(to fill)". `--claim` writes the headings with "Draft: work in progress".
+   headings with "(to fill)", which the check rejects. `--claim` writes the headings with "Draft: work
+   in progress".
    Additional gate evidence and explanations belong in the PR before review.
 
 Both helpers exit non-zero and print a one-line reason on failure. A failed prepare can leave
@@ -149,7 +272,7 @@ PR creation. Fix the reported problem and retry finish. Neither helper merges or
 ## Where verification happens
 
 Three places, in order: the worker's **local gates** (step 3), which decide whether the PR is
-worth pushing; **cross-review** by a different worker; and **CI at ready**. A draft PR runs only
+worth pushing; **cross-review** by a worker of another kind; and **CI at ready**. A draft PR runs only
 the light `changes` job (`ci.yml`); `ci-ok` is skipped on drafts. Pushing to a draft costs almost
 nothing and proves nothing; `gh pr ready` starts the full matrix, and `ci-ok` is the required
 check on that run. A reviewer waits for finished checks, so a draft is reviewed from its diff and the gate output in its body,

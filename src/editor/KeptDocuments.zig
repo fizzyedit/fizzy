@@ -45,12 +45,12 @@ const sdk = Editor.sdk;
 const emptyStateFolder = @import("app").watch.SettingsWatcher.emptyStateFolder;
 
 gpa: std.mem.Allocator,
-docs: std.ArrayListUnmanaged(Kept) = .empty,
+docs: std.ArrayList(Kept) = .empty,
 /// The path of the document that was active, when it was one of these.
 active: ?[]u8 = null,
 /// A restart's: the tab each pane showed, selected a frame after the documents open
 /// (`applySelections`), once the panes they opened into have drawn and can be selected in.
-selections: std.ArrayListUnmanaged(Selection) = .empty,
+selections: std.ArrayList(Selection) = .empty,
 
 const Selection = struct { region: []u8, surface: []u8 };
 
@@ -358,7 +358,7 @@ pub fn saveGeneration(self: *const KeptDocuments, dir: []const u8, generation: u
 /// the caller, which writes it.
 fn writeFiles(self: *const KeptDocuments, dir: []const u8, generation: u32) ![]u8 {
     const gpa = self.gpa;
-    var docs: std.ArrayListUnmanaged(Saved.Doc) = .empty;
+    var docs: std.ArrayList(Saved.Doc) = .empty;
     defer docs.deinit(gpa);
     for (self.docs.items) |d| {
         const state = d.state orelse continue;

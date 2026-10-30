@@ -18,7 +18,8 @@
 //!     if (list.nearStart()) requestOlder();
 //!
 //! The scroll position is an `Anchor` (a row's key and an offset into it), so rows prepended or
-//! measured above the reader, and a change of width, never move what is being read.
+//! measured above the reader, and a change of width, never move what is being read, not even for
+//! the frame a row is first drawn: each row is laid out at the height the index holds for it.
 //!
 //! It holds only the rows it is given. dvui clamps every size at `dvui.max_float_safe` (2e6), so
 //! the rows' total height must stay under that (about 25,000 rows of 80 px); a longer history is
@@ -167,31 +168,49 @@ pub fn next(self: *VirtualList) ?usize {
 /// The box for row `index` as `next` gave it. Its size, once deinitialized, is the row's
 /// measurement.
 pub fn row(self: *VirtualList, index: usize) Row {
-    const key = self.opts.state.index.keys.items[index];
+    const idx = &self.opts.state.index;
+    const h = idx.heightAt(index);
+    // dvui lays a box out at last frame's min size, and caps that at the max: pinning both to the
+    // index's height places the row where the index does, whatever it measured last.
+    const outer = dvui.box(@src(), .{}, .{
+        .expand = .horizontal,
+        .min_size_content = .{ .w = 0, .h = h },
+        .max_size_content = .height(h),
+        // Hash both halves before narrowing to the target's widget-id extra.
+        .id_extra = @truncate(std.hash.Wyhash.hash(0, std.mem.asBytes(&idx.keys.items[index]))),
+    });
+    // The box records its min size in `deinit`, so opening it leaves `firstFrame` as it was.
+    const inner = dvui.box(@src(), .{}, .{ .expand = .horizontal });
     return .{
         .list = self,
         .index = index,
-        .box = dvui.box(@src(), .{}, .{
-            .expand = .horizontal,
-            // Hash both halves before narrowing to the target's widget-id extra.
-            .id_extra = @truncate(std.hash.Wyhash.hash(0, std.mem.asBytes(&key))),
-        }),
+        .outer = outer,
+        .box = inner,
+        .first_frame = dvui.firstFrame(inner.data().id),
     };
 }
 
-/// One row's box. `deinit` hands the box's natural size back to the index as the row's
+/// One row's box. `deinit` hands the inner box's natural size back to the index as the row's
 /// measurement.
 pub const Row = struct {
     list: *VirtualList,
     index: usize,
+    outer: *dvui.BoxWidget,
+    /// The box the caller draws into; its size is the measurement, whatever the outer box is
+    /// pinned to.
     box: *dvui.BoxWidget,
+    first_frame: bool,
 
     pub fn deinit(self: *Row) void {
         const id = self.box.data().id;
         self.box.deinit();
+        self.outer.deinit();
         // The box has put its natural size, margins included, where dvui keeps min sizes.
         const size = dvui.minSizeGet(id) orelse return;
-        if (self.list.opts.state.index.record(self.index, size.h)) self.list.measured_change = true;
+        const index = &self.list.opts.state.index;
+        // A first-frame size never replaces a measurement.
+        if (self.first_frame and index.stateAt(self.index) == .measured) return;
+        if (index.record(self.index, size.h)) self.list.measured_change = true;
     }
 };
 
@@ -228,6 +247,12 @@ const Messages = struct {
     top_y: f32 = 0,
     /// The dvui id of the first rows' boxes in the last frame.
     box_ids: [2]dvui.Id = undefined,
+    /// Draws a row one line shorter on the first frame its box exists, as text does before it
+    /// wraps.
+    short_first: bool = false,
+    /// A key to follow, and where its row's top was in the last frame (null when undrawn).
+    track_key: u64 = 0,
+    track_y: ?f32 = null,
 
     const line_h = 20;
 
@@ -256,18 +281,22 @@ const Messages = struct {
         defer list.deinit();
         self.drawn = 0;
         self.top_y = std.math.floatMax(f32);
+        self.track_y = null;
         while (list.next()) |i| {
             var r = list.row(i);
             defer r.deinit();
             if (self.drawn < self.box_ids.len) self.box_ids[self.drawn] = r.box.data().id;
             self.drawn += 1;
             const id = self.first_id + i * self.stride;
-            for (0..lines(id)) |l| _ = dvui.spacer(@src(), .{ .id_extra = l, .min_size_content = .{ .w = 10, .h = line_h } });
-            const top = r.box.data().rectScale().r.y;
+            const short = self.short_first and r.first_frame;
+            for (0..lines(id) - @intFromBool(short)) |l| _ = dvui.spacer(@src(), .{ .id_extra = l, .min_size_content = .{ .w = 10, .h = line_h } });
+            const rs = r.box.data().rectScale();
+            const top = rs.r.y / rs.s;
             if (top >= 0 and top < self.top_y) {
                 self.top_y = top;
                 self.top_key = id;
             }
+            if (id == self.track_key) self.track_y = top;
         }
         // What the scroll area does with wheel and touch input, before the list is deinitialized.
         self.state.si.viewport.y += self.nudge;
@@ -390,5 +419,38 @@ test "keys that differ only above 32 bits draw boxes with distinct ids" {
         try settleOn(&m);
         try testing.expect(m.drawn >= 2);
         try testing.expect(m.box_ids[0] != m.box_ids[1]);
+    }
+}
+
+test "scrolling up through rows that measure short on their first frame never moves the reader's row" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    var m: Messages = .{ .count = 2000, .short_first = true };
+    defer m.state.deinit();
+    try settleOn(&m);
+    m.state.scrollTo(1800);
+    try settleOn(&m);
+
+    const step = 7;
+    var tracking = false;
+    var last_y: f32 = 0;
+    for (0..20 * 400 / step) |frame_no| {
+        m.nudge = -step;
+        _ = try dvui.testing.step(currentFrame);
+        if (tracking) {
+            if (m.track_y) |y| {
+                if (@abs(y - (last_y + step)) > 1) {
+                    std.debug.print("frame {d}: key {d} top {d} after {d}\n", .{ frame_no, m.track_key, y, last_y });
+                    return error.ReaderMoved;
+                }
+                last_y = y;
+            }
+        }
+        // Follow the row at the top until it leaves the view, then the one now at the top.
+        if (!tracking or m.track_y == null or m.track_y.? >= 400) {
+            m.track_key = m.top_key;
+            last_y = m.top_y;
+            tracking = true;
+        }
     }
 }

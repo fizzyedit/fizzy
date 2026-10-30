@@ -44,7 +44,7 @@ const ts_highlights = [_]TextEntryWidget.HighlightStyle{
 
 /// Live document + knobs for the frame function, which `dvui.App.frameFunction` requires to
 /// take no arguments.
-var text: std.ArrayListUnmanaged(u8) = .empty;
+var text: std.ArrayList(u8) = .empty;
 var pending_sel: ?usize = null;
 var cache_layout: bool = true;
 var tree_sitter: bool = true;
@@ -165,7 +165,7 @@ fn run(label: []const u8, sample: []const u8, cursor: usize) !void {
 /// Built at runtime rather than embedded: the repo has no such file, and a checked-in fixture
 /// of this size would be dead weight (`long_len` is the knob worth sweeping anyway).
 fn buildLongLine(gpa: std.mem.Allocator, long_len: usize, trailing_lines: usize) ![]u8 {
-    var buf: std.ArrayListUnmanaged(u8) = .empty;
+    var buf: std.ArrayList(u8) = .empty;
     errdefer buf.deinit(gpa);
     for (0..5) |i| try buf.print(gpa, "const short_{d} = {d};\n", .{ i, i });
     const unit = "const x = foo(bar, 1234); ";

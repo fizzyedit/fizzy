@@ -1,7 +1,7 @@
 //! Host identity for the plugin store: the `os-arch` key used both as a `downloads` map key and
 //! as a path segment when building a plugin's download URL.
 //!
-//! Fingerprint compatibility is no longer matched here — a `registry.ReleaseShard` is already
+//! Fingerprint compatibility is no longer matched here - a `registry.ReleaseShard` is already
 //! scoped to exactly one `abi_fingerprint` (see `store.Catalog`, which fetches the shard for the
 //! running host's own `dylib.abi_fingerprint`), so the only thing left to check client-side is
 //! whether that shard's release has a binary for this `os-arch` (see

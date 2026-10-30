@@ -1,7 +1,7 @@
-//! Browser `fetch` for the wasm build — GET a URL, get the body bytes back.
+//! Browser `fetch` for the wasm build - GET a URL, get the body bytes back.
 //!
 //! The markdown preview's image path rasterizes via `Image` (SVG badges, CORS overlays).
-//! Everything else that just needs bytes — the store catalog, plugin READMEs, card icons —
+//! Everything else that just needs bytes - the store catalog, plugin READMEs, card icons -
 //! goes through here. Same handshake as the image trio: Zig starts the load with
 //! `fizzy_web_fetch`, JS writes the body through `FizzyWebFetchAlloc` / `FizzyWebFetchReady`.
 //!

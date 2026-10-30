@@ -191,7 +191,7 @@ pub fn roundedOutline(x: f32, y: f32, w: f32, h: f32, r_in: f32, out: []Pt) []Pt
 pub const corner_points = 10;
 
 /// The part of convex `poly` on the near side of the line through `at` whose far side `away` (a
-/// unit vector) points to (`(p - at) · away <= 0` is kept), into `out` (at least `poly.len + 1`
+/// unit vector) points to (`(p - at) . away <= 0` is kept), into `out` (at least `poly.len + 1`
 /// long). Still convex: a liquid is its vessel cut by its surface.
 ///
 /// A point within `on_line` of the line counts as kept. A line just touching the vessel (an

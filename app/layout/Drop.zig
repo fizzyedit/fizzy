@@ -1,7 +1,7 @@
 //! What releasing a dragged view does, as a value.
 //!
 //! One rule: **the edge you release on is where the dragged view ends up.**
-//! The middle of another place is a trade — or, when the two places are the
+//! The middle of another place is a trade - or, when the two places are the
 //! halves of one split, a join: they are one place again, holding both. The
 //! middle of the place the view came out of floats it, into a window of its
 //! own over the layout (`Floats`). Both the drop zones and the commit read this
@@ -18,8 +18,8 @@
 //!
 //! A self-split cannot move the view onto the leaf: the view is *already* in
 //! the origin, and remounting a surface into a fresh slot tears down every
-//! widget under it — scroll positions, sash sizes, focus. So the origin keeps
-//! it and the leaf opens empty on the far side — which is also the only way the
+//! widget under it - scroll positions, sash sizes, focus. So the origin keeps
+//! it and the leaf opens empty on the far side - which is also the only way the
 //! view can stay under the pointer, where the user dropped it.
 const std = @import("std");
 const dvui = @import("dvui");
@@ -51,7 +51,7 @@ pub const Plan = union(enum) {
     float,
 
     pub const Split = struct {
-        /// The edge the pointer chose — where the dragged view ends up.
+        /// The edge the pointer chose - where the dragged view ends up.
         landing: Side,
         /// Where the empty leaf opens. Opposite `landing` when the origin
         /// keeps the view, so the view stays on the edge it was dropped on.
@@ -65,7 +65,7 @@ pub const Plan = union(enum) {
 /// Read a pointer position against a place: the drop's own reading (`DropZones`), so what the
 /// drop shows under the pointer is what a release does. Its middle is a swap, each side of
 /// its ring a split on that side, the trash (offered with `remove`) a removal, and off the drop
-/// nothing — null.
+/// nothing - null.
 pub fn kindAt(bounds: dvui.Rect.Physical, mouse: dvui.Point.Physical, scale: f32, remove: bool) ?Kind {
     return kindAtDisc(bounds, mouse, 0, scale, remove);
 }
@@ -91,7 +91,7 @@ pub fn kindAtDisc(bounds: dvui.Rect.Physical, c: dvui.Point.Physical, r: f32, sc
 /// not the place the view was lifted from, whether the two are the halves of
 /// one split (`halves`, `SplitTree.Forest.joinable`), and whether the view may
 /// float (`can_float`, `float_rules.canFloat`). The middle of your own place is
-/// not a trade with yourself: it floats the view, or — where it cannot float —
+/// not a trade with yourself: it floats the view, or - where it cannot float -
 /// does nothing, null.
 pub fn plan(kind: Kind, self_drop: bool, halves: bool, can_float: bool) ?Plan {
     return switch (kind) {
@@ -106,7 +106,7 @@ pub fn plan(kind: Kind, self_drop: bool, halves: bool, can_float: bool) ?Plan {
 }
 
 test "the drop's middle is a swap, each side a split, the trash a removal, off it nothing" {
-    // An 800×600 place: the bubbles sit round (400, 300) — the sides 108 out, the trash 88 out
+    // An 800x600 place: the bubbles sit round (400, 300) - the sides 108 out, the trash 88 out
     // on the diagonal.
     const r: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 800, .h = 600 };
     try std.testing.expectEqual(@as(?Kind, .swap), kindAt(r, .{ .x = 400, .y = 300 }, 1, false));

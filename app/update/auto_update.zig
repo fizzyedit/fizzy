@@ -4,7 +4,7 @@ const build_opts = @import("build_opts");
 const install_location = @import("install_location.zig");
 const macos_bundle = @import("macos_bundle.zig");
 
-/// What the application wants done at Velopack's lifecycle points — after an install, after an
+/// What the application wants done at Velopack's lifecycle points - after an install, after an
 /// update, before an uninstall.
 ///
 /// Fizzy registers its file associations here; an app that claims no file types leaves these
@@ -44,7 +44,7 @@ fn castManager(m: *anyopaque) *Vpk.vpkc_update_manager_t {
 /// Velopack's macOS locator expects the process image under `*.app/Contents/MacOS/*`, and the
 /// bundle where Velopack can write the new version: in an Applications folder, not translocated by
 /// Gatekeeper (`install_location.updatable`). Loose binaries from `zig build` / `zig-out/.../fizzy`
-/// are not supported — skip the C API so we don't spam logs or Velopack errors on every frame.
+/// are not supported - skip the C API so we don't spam logs or Velopack errors on every frame.
 pub fn installLayoutSupported(io: std.Io) bool {
     if (!impl) return false;
     if (builtin.target.os.tag != .macos) return true;
@@ -132,7 +132,7 @@ pub fn openUpdateManager(io: std.Io, allocator: std.mem.Allocator) error{OutOfMe
         return @ptrCast(manager.?);
     }
 
-    // Fast path: no fallback configured — single source, no extra probe (the
+    // Fast path: no fallback configured - single source, no extra probe (the
     // caller's own check is the only network round-trip), matching the original
     // behavior exactly.
     if (!hasFallbackUrl()) {
@@ -182,9 +182,9 @@ pub fn freeUpdateManager(m: ?*anyopaque) void {
 
 /// Set inside a fast-callback hook to record that Velopack dispatched an
 /// install/update/uninstall lifecycle event. `appRunHook` reads this after
-/// `vpkc_app_run` returns and exits the process — Velopack's docs promise an
+/// `vpkc_app_run` returns and exits the process - Velopack's docs promise an
 /// auto-exit but the runtime we link against doesn't always deliver it,
-/// leaving the installer's "Installing fizzy…" window hanging until its 30 s
+/// leaving the installer's "Installing fizzy..." window hanging until its 30 s
 /// timeout marks the hook failed (even though our work succeeded).
 var lifecycle_hook_fired: bool = false;
 

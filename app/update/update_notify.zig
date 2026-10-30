@@ -1,7 +1,7 @@
 //! Background check for Velopack/GitHub updates on launch. Network work runs on a
 //! side thread so startup never blocks. When an update is detected, we arm a DVUI
 //! toast with a "Relaunch to update" button so the user can install in one click
-//! while it's visible (or use Help → Check for Updates / the infobar button later).
+//! while it's visible (or use Help -> Check for Updates / the infobar button later).
 
 const std = @import("std");
 const dvui = @import("dvui");
@@ -29,7 +29,7 @@ var simulated: bool = false;
 var remote_ver: [128]u8 = undefined;
 var remote_ver_len: usize = 0;
 
-// Latched so we only arm the toast once per app session — calling `toastAdd`
+// Latched so we only arm the toast once per app session - calling `toastAdd`
 // every frame would queue an unbounded stack of toasts.
 var toast_armed: bool = false;
 /// Latched while a progress toast is registered. Both the launch toast button and
@@ -44,11 +44,11 @@ const TOAST_TIMEOUT_US: i32 = 10 * std.time.us_per_s;
 const PROGRESS_TOAST_TIMEOUT_US: i32 = std.math.maxInt(i32);
 
 /// Stable, non-null subwindow id for this toast. Using a non-null id makes DVUI's
-/// default `toastsShow(null, …)` (run in `Window.end`) skip it, so we can render
+/// default `toastsShow(null, ...)` (run in `Window.end`) skip it, so we can render
 /// it ourselves in a custom rect via `dvui.toastsFor(SUBWINDOW_ID)`.
 const SUBWINDOW_ID: dvui.Id = @fromBackingInt(@intCast(0xF122_DA70_AD0E_71D0));
 
-// Estimated toast size — used for the FloatingWidget bounding rect and for
+// Estimated toast size - used for the FloatingWidget bounding rect and for
 // computing the bottom-left anchor relative to the infobar. The real toast
 // auto-sizes inside, but the FloatingWidget needs an initial rect.
 // Distance from the window's left edge to the toast's left edge (window-natural pixels).
@@ -162,13 +162,13 @@ pub fn badgeVisible() bool {
 }
 
 /// Where the launch update check has got to, for anything that must sequence itself *behind* a
-/// Fizzy update — today that is `PluginStore`'s auto-update pass. A store plugin is built against
+/// Fizzy update - today that is `PluginStore`'s auto-update pass. A store plugin is built against
 /// one Fizzy SDK generation, so the plugin builds that match a pending Fizzy release only become
-/// visible to us once we are running it: Fizzy goes first (always by the user's own hand — see
+/// visible to us once we are running it: Fizzy goes first (always by the user's own hand - see
 /// `tick`; nothing here ever installs the app update on its own), and plugins follow on the
 /// relaunch.
 pub const AppUpdateState = enum {
-    /// The launch check hasn't answered yet — callers that must sequence behind it should wait.
+    /// The launch check hasn't answered yet - callers that must sequence behind it should wait.
     checking,
     /// Up to date, no feed, unsupported install layout, or the check failed. Nothing to wait for.
     none,
@@ -179,7 +179,7 @@ pub const AppUpdateState = enum {
 };
 
 pub fn appUpdateState() AppUpdateState {
-    // A simulated update never installs, so treat it as "nothing pending" for sequencing —
+    // A simulated update never installs, so treat it as "nothing pending" for sequencing -
     // otherwise the debug flag would silently disable plugin updates.
     if (simulated) return .none;
     if (comptime auto_update.impl) {
@@ -205,7 +205,7 @@ pub fn tick() void {
     if (!badgeVisible()) return;
     toast_armed = true;
 
-    // Non-null subwindow_id so DVUI's automatic toast render skips it — we draw
+    // Non-null subwindow_id so DVUI's automatic toast render skips it - we draw
     // it ourselves via `drawAbove` so the placement is anchored to the infobar.
     const id_mutex = dvui.toastAdd(null, @src(), 0, SUBWINDOW_ID, displayUpdateToast, TOAST_TIMEOUT_US);
     id_mutex.mutex.unlock(dvui.io);
@@ -224,11 +224,11 @@ pub fn drawAbove(infobar_top_y_physical: f32, gap_above_infobar: f32) void {
     // Anchor the toast's bottom-left corner at (TOAST_MARGIN, infobar_top - gap)
     // in physical screen pixels. Using `from` instead of a fixed `rect` lets the
     // FloatingWidget self-size to the toast pill's natural dimensions, so its
-    // bottom edge sits EXACTLY at the anchor — no leftover slack between the
+    // bottom edge sits EXACTLY at the anchor - no leftover slack between the
     // floating widget and the toast inside.
     //
-    // `from_gravity_x = 1` → the anchor point is the floating's left edge.
-    // `from_gravity_y = 0` → the anchor point is the floating's bottom edge.
+    // `from_gravity_x = 1` -> the anchor point is the floating's left edge.
+    // `from_gravity_y = 0` -> the anchor point is the floating's bottom edge.
     const scale = dvui.windowNaturalScale();
     const anchor_physical: dvui.Point.Physical = .{
         .x = TOAST_MARGIN * scale,
@@ -376,8 +376,8 @@ fn displayProgressToast(id: dvui.Id) !void {
         .padding = .{ .x = 4, .w = 12 },
     });
 
-    // Velopack only streams download progress (0–100). Other phases get the
-    // label only — no bar — since we have nothing meaningful to show.
+    // Velopack only streams download progress (0-100). Other phases get the
+    // label only - no bar - since we have nothing meaningful to show.
     if (cur_phase == .downloading) {
         const pct: f32 = @as(f32, @floatFromInt(job.progressPercent())) / 100.0;
         dvui.progress(@src(), .{ .percent = pct }, .{
@@ -390,7 +390,7 @@ fn displayProgressToast(id: dvui.Id) !void {
 
     // Terminal states get a dismiss button so the user can clear the toast.
     // Active phases (`queued`/`downloading`, and `downloaded` while its restart
-    // runs) don't — the app is on its way to the new version.
+    // runs) don't - the app is on its way to the new version.
     const terminal = cur_phase == .failed or cur_phase == .no_update;
     if (waiting) {
         if (dvui.button(@src(), "Restart to update", .{}, .{

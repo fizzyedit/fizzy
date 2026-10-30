@@ -24,7 +24,7 @@ pub const Ctx = struct {
     pub fn deinit(self: *Ctx, gpa: std.mem.Allocator) void {
         // A test that registers a surface (`registerSurface`) puts it in a
         // host-owned list, so the host has to come down with the rest. Safe on the zeroed host
-        // below: every registry in it is an empty `ArrayListUnmanaged`/`HashMapUnmanaged`.
+        // below: every registry in it is an empty `ArrayList`/`HashMapUnmanaged`.
         self.editor.app.host.deinit();
         // A place writes its order down as it shows views (`Layout.ordered`), so any test that
         // asked a place what it shows holds an order. Safe after a test freed them itself.

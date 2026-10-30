@@ -7,7 +7,7 @@
 //! the endless shape's (fizzyedit/example-app) *loops*, making a new edge tray each time the user drags one open.
 //! Data cannot answer those without becoming a language, and the interpreter for that language
 //! would be the configurable layout engine fizzy deliberately does not have. So this covers only
-//! the static case — a fixed arrangement of named places — and says so rather than growing
+//! the static case - a fixed arrangement of named places - and says so rather than growing
 //! conditionals later. When an app needs a condition, it copies a shape file and writes one.
 //!
 //! **What it can say:** nesting and direction, a region's name and keywords, its starting extent,
@@ -42,12 +42,12 @@ resize: bool = false,
 collapsible: bool = false,
 /// Collapse while nothing matches, rather than holding empty space open.
 hide_when_empty: bool = false,
-/// The places inside this one. A spec with children is a container — its own `name`/`keywords`
-/// may still make it host surfaces — and one without is a leaf place. A subtree is a `Shape`
+/// The places inside this one. A spec with children is a container - its own `name`/`keywords`
+/// may still make it host surfaces - and one without is a leaf place. A subtree is a `Shape`
 /// like any other, which is why the whole file is one type.
 children: []const Shape = &.{},
 
-/// Draw the whole tree. One `@src()` serves every region and every split — identity comes from
+/// Draw the whole tree. One `@src()` serves every region and every split - identity comes from
 /// each node's position in a depth-first walk, which is stable as long as the file is.
 ///
 /// Uses nothing an app's own shape file could not: `Layout.region` and `Layout.split`, the same

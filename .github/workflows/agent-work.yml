@@ -1,6 +1,7 @@
 # The label side of docs/AGENT_WORK.md: `running:*` is a lock, a stranded claim is released, and
-# `merge-ok` stays the maintainers'. Labels and events only: no checkout, no secrets, no model
-# calls, and event data is read in JavaScript, never interpolated into a shell. Not part of
+# `merge-ok` stays the maintainers'. Labels and events only: no checkout, no model calls, and
+# event data is read in JavaScript, never interpolated into a shell. One secret: the `bridge`
+# job's dispatch-only App key, in environment `bridge` (main only). Not part of
 # `ci-ok`'s needs: it guards labels, not code.
 #
 # `pull_request_target`, not `pull_request`: a fork's PR gets a read-only token under the latter,
@@ -12,7 +13,10 @@ on:
   issues:
     types: [labeled]
   pull_request_target:
-    types: [labeled]
+    types: [opened, synchronize, ready_for_review, closed, labeled]
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
   schedule:
     - cron: "17 3 * * *"
   workflow_dispatch:
@@ -23,11 +27,11 @@ permissions:
 
 concurrency:
   # The label is in the group so a pending merge-ok run is never replaced by a run for another label.
-  group: agent-work-${{ github.event.issue.number || github.event.pull_request.number || 'sweep' }}-${{ github.event.label.name }}
+  group: agent-work-${{ github.event.issue.number || github.event.pull_request.number || github.event.workflow_run.id || 'sweep' }}-${{ github.event.action }}-${{ github.event.label.name }}
 
 jobs:
   labels:
-    if: github.repository == 'fizzyedit/fizzy' && github.event_name != 'schedule' && github.event_name != 'workflow_dispatch'
+    if: github.repository == 'fizzyedit/fizzy' && (github.event_name == 'issues' || (github.event_name == 'pull_request_target' && github.event.action == 'labeled'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/github-script@v7
@@ -187,4 +191,75 @@ jobs:
               } catch (e) {
                 core.warning('issue #' + issue.number + ': ' + e.message);
               }
+            }
+
+  # The bridge to fizzyedit/work (slot protocol): sends repository_dispatch so the review, rework and
+  # sweep workflows start by themselves. Never checks out code; event data is read in JavaScript only.
+  # A fork's PR and a PR without a `kind:<k>` label (a human's) send nothing.
+  bridge:
+    if: >-
+      github.repository == 'fizzyedit/fizzy' &&
+      ((github.event_name == 'pull_request_target' && github.event.action != 'labeled') ||
+       (github.event_name == 'pull_request_target' && github.event.label.name == 'pm-approval') ||
+       (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'failure'))
+    runs-on: ubuntu-latest
+    # The key's secrets live only in this environment, which only main may use: a workflow on a
+    # pushed branch cannot read them.
+    environment: bridge
+    permissions:
+      pull-requests: read
+    steps:
+      - uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        id: app
+        with:
+          app-id: ${{ secrets.BRIDGE_APP_ID }}
+          private-key: ${{ secrets.BRIDGE_APP_KEY }}
+          owner: fizzyedit
+          repositories: work
+      - uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          APP_TOKEN: ${{ steps.app.outputs.token }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            // github-script v7 has no getOctokit (v9 adds it): call the dispatch API directly.
+            const send = async (event_type, client_payload) => {
+              const res = await fetch(`https://api.github.com/repos/${owner}/work/dispatches`, {
+                method: 'POST',
+                headers: {
+                  Accept: 'application/vnd.github+json',
+                  Authorization: `Bearer ${process.env.APP_TOKEN}`,
+                  'X-GitHub-Api-Version': '2022-11-28',
+                  'Content-Type': 'application/json',
+                  'User-Agent': 'fizzy-bridge',
+                },
+                body: JSON.stringify({ event_type, client_payload }),
+              });
+              if (res.status !== 204) throw new Error(`dispatch ${event_type}: ${res.status} ${await res.text()}`);
+            };
+            let pr;
+            if (context.eventName === 'workflow_run') {
+              const run = context.payload.workflow_run;
+              // A fork's run lists no pull request: nothing to send.
+              if (!run.pull_requests.length) return;
+              pr = (await github.rest.pulls.get({ owner, repo, pull_number: run.pull_requests[0].number })).data;
+              if (pr.head.sha !== run.head_sha) return;
+            } else {
+              pr = context.payload.pull_request;
+            }
+            if (pr.head.repo.full_name !== `${owner}/${repo}`) return;
+            const names = pr.labels.map((l) => l.name);
+            const pick = (prefix) => (names.find((n) => n.startsWith(prefix)) || '').slice(prefix.length);
+            const kind = pick('kind:');
+            if (!kind) return;
+            const action = context.payload.action;
+            if (context.eventName === 'workflow_run') {
+              const round = Math.max(0, ...names.filter((n) => n.startsWith('rework:')).map((n) => Number(n.slice(7)) || 0)) + 1;
+              await send('rework', { pr: pr.number, round, reason: 'ci' });
+            } else if (action === 'labeled') {
+              await send('gate', { pr: pr.number });
+            } else if (action === 'closed') {
+              if (pr.merged) await send('merged', { pr: pr.number, area: pick('area:') });
+            } else if (!pr.draft) {
+              await send('pr', { pr: pr.number, sha: pr.head.sha, author_kind: kind });
             }

@@ -31,7 +31,7 @@ const button_tags = blk: {
     break :blk tags;
 };
 
-var text: std.ArrayListUnmanaged(u8) = .empty;
+var text: std.ArrayList(u8) = .empty;
 var player: automation.Player = undefined;
 var clock: i128 = 0;
 var presses: usize = 0;

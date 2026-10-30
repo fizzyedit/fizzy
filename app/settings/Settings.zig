@@ -53,7 +53,7 @@ font_title_size: f32 = 9,
 font_heading_size: f32 = 8,
 font_mono_size: f32 = 8,
 
-/// The window's glass, per theme (`core.glass_look`): its opacity — above 0 frosted glass at one
+/// The window's glass, per theme (`core.glass_look`): its opacity - above 0 frosted glass at one
 /// frost, the window's colour over it from a little to the window's fill, opaque, at 1; 0 a clear
 /// window, no glass at all, which the settings pane does not offer. On macOS and Windows the window
 /// itself is that glass, and every glass the app draws (dialogs, menus, drops) is too; elsewhere,
@@ -77,13 +77,8 @@ modal_dim: f32 = 0.0,
 /// theme's own corner. All the way round by default, on every platform.
 corner_roundness: f32 = 1.0,
 
-/// How the interface moves, 0 to 1: 0 is off (nothing animates), up to 0.5 (minimal) plain even
-/// motion, toward 1 (playful) an overshoot past the target and back, arriving on time throughout.
-/// Published each frame through `core.motion`, which every animation reads. Playful by default.
-motion: f32 = 1,
-
 /// How fast the interface moves, 0 (slow) to 1 (fast): half as fast to twice as fast as written,
-/// 0.5 as written. Never stops motion — that is `motion` at 0.
+/// 0.5 as written. Never stops motion - that is `motion` at 0.
 motion_speed: f32 = core.motion.default_speed,
 
 /// What the app's windows are made of (`core.material`): opaque (`none`), clear (`transparent`),
@@ -97,8 +92,8 @@ window_material: core.material.Kind = .none,
 /// app's renderer can draw it, whatever the windows are made of, else the richest glass below it.
 in_app_material: ?core.material.Kind = null,
 
-/// Whether glass is drawn by the glass program (`core.LiquidField`) where the backend has one —
-/// shapes that run together, in one pass a pixel — rather than by its meshes. On; a switch to
+/// Whether glass is drawn by the glass program (`core.LiquidField`) where the backend has one -
+/// shapes that run together, in one pass a pixel - rather than by its meshes. On; a switch to
 /// compare the two.
 glass_shader: bool = true,
 
@@ -107,18 +102,18 @@ glass_shader: bool = true,
 /// app says (`Editor.restartPending`). On by default on macOS; `FIZZY_POPOUT` overrides it.
 float_windows: bool = builtin.target.os.tag == .macos,
 
-/// Whether a view drag's glass — the carried view and the drop zones — is the OS's own (Liquid Glass,
+/// Whether a view drag's glass - the carried view and the drop zones - is the OS's own (Liquid Glass,
 /// macOS 26) rather than the app's, where floats are windows. Applied at once; `FIZZY_NATIVE_GLASS`
 /// overrides it.
 native_glass: bool = true,
 
-/// Whether menus open in OS windows of their own — the OS's material, shadow and corners, over every
-/// window, past the window's edge — rather than drawn inside the window they open from, where floats
+/// Whether menus open in OS windows of their own - the OS's material, shadow and corners, over every
+/// window, past the window's edge - rather than drawn inside the window they open from, where floats
 /// are windows. Applied at once; `FIZZY_NATIVE_MENUS` overrides it.
 native_menus: bool = true,
 
-/// Whether dialogs open in OS windows of their own — the OS's material, shadow and corners, riding
-/// on the main window — rather than drawn inside it, where floats are windows. Applied at once;
+/// Whether dialogs open in OS windows of their own - the OS's material, shadow and corners, riding
+/// on the main window - rather than drawn inside it, where floats are windows. Applied at once;
 /// `FIZZY_NATIVE_DIALOGS` overrides it.
 native_dialogs: bool = true,
 
@@ -155,14 +150,14 @@ input_scheme: InputScheme = .auto,
 /// that visit and is never stored here.
 layout_mode: LayoutMode = .auto,
 
-/// How updates found by `PluginStore`'s post-launch pass are applied — prompted, or silent.
+/// How updates found by `PluginStore`'s post-launch pass are applied - prompted, or silent.
 /// Only covers plugins that haven't individually opted out via `.plugins.<id>.auto_update`.
 plugin_update_mode: PluginUpdateMode = .prompt,
 
 /// The window's glass as it comes, per platform. Where the window is the glass (macOS, Windows), as
 /// fizzy's windows have been: mostly the window's colour in a dark theme, little in a light one,
 /// frosted. Where the window is opaque (the web, Linux), the glass the app draws over it: little
-/// colour, well frosted — the dialogs' glass as it was.
+/// colour, well frosted - the dialogs' glass as it was.
 pub const GlassDefaults = struct { opacity_dark: f32, opacity_light: f32 };
 pub const default_glass: GlassDefaults = if (builtin.target.cpu.arch == .wasm32 or (builtin.target.os.tag != .macos and builtin.target.os.tag != .windows))
     .{ .opacity_dark = 0.2, .opacity_light = 0.2 }
@@ -194,12 +189,12 @@ pub fn setThemeName(settings: *Settings, allocator: std.mem.Allocator, name: []c
     settings.theme = copy;
 }
 
-/// Loads settings (`theme` is always heap-owned after successful return — see `setThemeName` / `deinit`).
+/// Loads settings (`theme` is always heap-owned after successful return - see `setThemeName` / `deinit`).
 /// One-shot migrates any pre-R10 `<plugins_dir>/<id>.settings.zon` files into this file's
 /// `.plugins.<id>` field first (see `SettingsMigration.mergeLegacyPerPluginFiles`), then any
 /// pre-R12 flat plugin blocks + top-level `disabled_plugins` into nested
 /// `.{ .enabled, .settings }` (see `SettingsMigration.migrateToPerPluginEnabled`). Unknown
-/// fields (including `.plugins`, which this struct doesn't itself model — see
+/// fields (including `.plugins`, which this struct doesn't itself model - see
 /// `serialize`'s doc comment) are ignored, both for forward-compat with newer on-disk shapes and
 /// because `.plugins` is read separately, per-plugin, via `Host.loadPluginSettings`.
 pub fn load(allocator: std.mem.Allocator, path: []const u8, plugins_dir: ?[]const u8) !Settings {
@@ -227,9 +222,9 @@ pub fn load(allocator: std.mem.Allocator, path: []const u8, plugins_dir: ?[]cons
 }
 
 /// Parses `data` (already-read `settings.zon` bytes) into a `Settings` value, ignoring unknown
-/// fields (forward-compat + `.plugins` is handled separately — see `load`'s doc comment above).
+/// fields (forward-compat + `.plugins` is handled separately - see `load`'s doc comment above).
 /// Unlike `load`, this returns the raw parse error on failure instead of falling back to
-/// defaults — defaulting is only correct when there's no existing live state to fall back *to*
+/// defaults - defaulting is only correct when there's no existing live state to fall back *to*
 /// (startup); `Editor.reconcileExternalSettingsChange` (external hand-edit reconciliation, R11)
 /// has existing state and must not let a transient torn-write read reset every fizzy field and
 /// every plugin's settings. The result's strings live in `arena` (`allocator` is the parse's
@@ -248,7 +243,7 @@ pub fn parseOnly(allocator: std.mem.Allocator, arena: std.mem.Allocator, data: [
     return parsed;
 }
 
-/// The value every field is diffed against by `serialize` — this struct's own declared defaults.
+/// The value every field is diffed against by `serialize` - this struct's own declared defaults.
 const default_value: Settings = .{};
 
 fn fieldEqual(comptime FT: type, a: FT, b: FT) bool {
@@ -261,17 +256,17 @@ fn fieldEqual(comptime FT: type, a: FT, b: FT) bool {
 }
 
 /// Serialize fizzy's own fields as `.{ ...fizzy fields... }`, emitting **only the fields that
-/// differ from the declared defaults above** — the same non-default-only rule plugin settings
+/// differ from the declared defaults above** - the same non-default-only rule plugin settings
 /// follow (`sdk.settings.Schema(T).diffSerialize`, R12 in plans/PLUGIN_MANIFEST_PLAN.md), so both
 /// halves of `settings.zon` record just what the user actually changed. An untouched fizzy
 /// serializes to `.{}`; a field hand-written back at its default drops out on the next write.
 /// Reading back is unaffected: `load`/`parseOnly` fill every missing field from these same
 /// defaults (they are the declared defaults themselves: `load` copies `theme` before keeping it).
 ///
-/// This is *not* the whole `settings.zon` file — plugin settings are a separate
+/// This is *not* the whole `settings.zon` file - plugin settings are a separate
 /// `.plugins = .{ .<id> = .{...}, ... }` field spliced on afterward by
 /// `Editor.composeSettingsText`/`SettingsPluginsZon.composeMergedText` (R10).
-/// `Editor.writeMergedSettings` is the only writer of `settings.zon` — there is no standalone
+/// `Editor.writeMergedSettings` is the only writer of `settings.zon` - there is no standalone
 /// fizzy-only save path anymore, since writing this half alone would silently drop the
 /// `.plugins` half.
 pub fn serialize(settings: *const Settings, allocator: std.mem.Allocator) ![]u8 {

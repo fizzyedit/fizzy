@@ -50,7 +50,7 @@ const Action = struct {
 pub const Act = enum {
     /// Redo step `tag` ("Undid Claude's Draw").
     redo,
-    /// Go back to before the last run of author `tag` ("Claude · Draw").
+    /// Go back to before the last run of author `tag` ("Claude . Draw").
     go_back,
     /// The same, told that it also takes back some of the person's own steps.
     go_back_anyway,

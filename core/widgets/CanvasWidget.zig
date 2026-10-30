@@ -587,6 +587,7 @@ pub fn install(self: *CanvasWidget, src: std.lang.SourceLocation, init_opts: Ini
     const overflow_w = vp.w > 0 and content_w_vp > vp.w + 0.001;
     const overflow_h = vp.h > 0 and content_h_vp > vp.h + 0.001;
 
+    // lint-allow(raw-scroll-area): Canvas owns pan and zoom input; touch scrolling would compete with it.
     self.scroll = dvui.scrollArea(src, .{
         .scroll_info = &self.scroll_info,
         .horizontal_bar = if (overflow_w) .auto else .hide,

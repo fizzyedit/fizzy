@@ -1,6 +1,6 @@
 //! The `automation` service (`sdk.services.automation`) over a `LiveDriver`: what an app that
 //! plays live tapes offers its plugins. The service's doc says what a plugin sees; this is the
-//! bookkeeping behind it — tickets, the outcomes of the last few tapes, and the arbitration with
+//! bookkeeping behind it - tickets, the outcomes of the last few tapes, and the arbitration with
 //! whatever else drives the app.
 //!
 //! An app owns one beside its driver and registers `&service.api` once it is at its final
@@ -8,7 +8,7 @@
 //! the next tape starts.
 //!
 //! **Settled** includes dvui itself: no refresh asked for and no animation running. dvui says so
-//! only as `Window.end`'s return, so the app hands that over after each frame (`frameEnded`) —
+//! only as `Window.end`'s return, so the app hands that over after each frame (`frameEnded`) -
 //! fizzy from its backends' `frame_ended_hook`. An app that never does is taken to be quiet, and
 //! `settled` falls back to the stage and the driver.
 const Service = @This();
@@ -25,7 +25,7 @@ const Api = sdk.services.automation.Api;
 
 gpa: std.mem.Allocator,
 driver: *LiveDriver,
-/// Something else that drives the app, refusing a tape while it does — fizzy's demos.
+/// Something else that drives the app, refusing a tape while it does - fizzy's demos.
 other: ?Other = null,
 /// Told who each live tape plays for (`OnAuthor`). Null: nobody listens, and authors are dropped.
 on_author: ?OnAuthor = null,
