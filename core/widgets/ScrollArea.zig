@@ -15,8 +15,8 @@
 //!
 //! How it hooks in without touching dvui: `deinit` claims this area's touch motion events
 //! (`handle`, as dvui does) *before* the area's own `deinit`, which skips handled events, so
-//! `si.velocity` stays 0 and dvui's coast never runs. Wheel, trackpad, keys and the bars are
-//! dvui's, unchanged. A motion the area cannot take is passed to the enclosing scroll
+//! `si.velocity` stays 0 and dvui's coast never runs. Web wheel events retain their input kind: notches glide and trackpad deltas apply directly.
+//! Keys and the bars are dvui's. A motion the area cannot take is passed to the enclosing scroll
 //! container's own `processMotionScroll`, so a dvui parent still scrolls (with dvui's coast).
 //!
 //! Past either end a finger drags the content on a rubber band (`Fling.rubber_band`) and, let go,
@@ -47,6 +47,8 @@ const Touch = struct {
     x: Fling = .{},
     y: Fling = .{},
     dragging: bool = false,
+    wheel_pending: dvui.Point = .{},
+    wheel_time_ns: i128 = 0,
     last_viewport: dvui.Point = .{},
     last_coast: dvui.Point = .{},
     coast_start_ns: i128 = 0,
@@ -115,6 +117,7 @@ pub fn init(src: std.builtin.SourceLocation, init_opts: dvui.ScrollAreaWidget.In
     for (dvui.events()) |*e| {
         if (!dvui.eventMatch(e, .{ .id = c.data().id, .r = c.data().borderRectScale().r })) continue;
         if (e.evt != .mouse or e.evt.mouse.action != .press or !e.evt.mouse.button.touch()) continue;
+        t.wheel_pending = .{};
         if (!t.x.coasting and !t.y.coasting and !t.springing and !t.seating) continue;
         e.handle(@src(), c.data());
         t.x.cancel();
@@ -139,6 +142,7 @@ pub fn init(src: std.builtin.SourceLocation, init_opts: dvui.ScrollAreaWidget.In
     // that frame. Moved after the children, it would draw where the clock was one gap ago, and
     // an uneven gap would show as an uneven step.
     if (!t.dragging) {
+        self.wheelStep();
         self.coast();
         self.springBack();
         self.seatStep();
@@ -185,6 +189,7 @@ pub fn deinit(self: *ScrollArea) void {
     var released = false;
     var release_ns = glass.MotionClock.wallFrameNs();
     for (dvui.events()) |*e| {
+        self.wheelEvent(e);
         if (e.evt != .mouse or !e.evt.mouse.button.touch()) continue;
         const finger = e.evt.mouse.button;
         switch (e.evt.mouse.action) {
@@ -250,6 +255,67 @@ pub fn deinit(self: *ScrollArea) void {
     }
     t.last_viewport = self.si.viewport.topLeft();
     self.area.deinit();
+}
+
+// A notch leaves 5% of its distance after 150 ms, independent of frame rate.
+fn wheelStep(self: *ScrollArea) void {
+    const t = self.touch;
+    if (!t.wheel_pending.nonZero()) return;
+    const elapsed = @as(f32, @floatFromInt(dvui.frameTimeNS() - t.wheel_time_ns)) / std.time.ns_per_s;
+    t.wheel_time_ns = dvui.frameTimeNS();
+    const fraction = 1 - @exp(-20 * @max(0, elapsed));
+    var moved = t.wheel_pending.scale(fraction, dvui.Point);
+    t.wheel_pending = t.wheel_pending.diff(moved);
+    if (@abs(t.wheel_pending.x) < 0.01) {
+        moved.x += t.wheel_pending.x;
+        t.wheel_pending.x = 0;
+    }
+    if (@abs(t.wheel_pending.y) < 0.01) {
+        moved.y += t.wheel_pending.y;
+        t.wheel_pending.y = 0;
+    }
+    self.si.scrollByOffset(.horizontal, moved.x);
+    self.si.scrollByOffset(.vertical, moved.y);
+    if (self.area.scroll.?.init_opts.user_scroll) |us| us.* = us.plus(moved);
+    dvui.refresh(null, @src(), self.data().id);
+}
+
+fn wheelEvent(self: *ScrollArea, e: *dvui.Event) void {
+    const c = &self.area.scroll.?;
+    if (e.evt != .mouse) return;
+    const dir: dvui.enums.Direction = switch (e.evt.mouse.action) {
+        .wheel_x => .horizontal,
+        .wheel_y => .vertical,
+        else => return,
+    };
+    var buf: [32]u8 = undefined;
+    // The prefix and a u16 event number fit in 32 bytes; the web backend writes this key.
+    const key = std.mem.print(&buf, "_wheel_trackpad_{d}", .{e.num}) catch unreachable;
+    const trackpad = dvui.dataGet(null, dvui.currentWindow().data().id, key, bool) orelse return;
+    if (!dvui.eventMatch(e, .{ .id = c.data().id, .r = c.init_opts.event_rect orelse c.data().borderRectScale().r })) return;
+    const by = -switch (e.evt.mouse.action) {
+        .wheel_x => |n| n,
+        .wheel_y => |n| n,
+        else => return,
+    };
+    const at = if (dir == .vertical) self.si.viewport.y else self.si.viewport.x;
+    const max = self.si.scrollMax(dir);
+    if (max <= 0 or (by < 0 and at <= 0) or (by > 0 and at >= max)) return;
+    e.handle(@src(), c.data());
+    self.touch.x.cancel();
+    self.touch.y.cancel();
+    self.touch.seating = false;
+    if (trackpad) {
+        self.touch.wheel_pending = .{};
+        self.si.scrollByOffset(dir, by);
+        if (c.init_opts.user_scroll) |us| {
+            if (dir == .vertical) us.y += by else us.x += by;
+        }
+    } else {
+        if (!self.touch.wheel_pending.nonZero()) self.touch.wheel_time_ns = dvui.frameTimeNS();
+        if (dir == .vertical) self.touch.wheel_pending.y += by else self.touch.wheel_pending.x += by;
+    }
+    dvui.refresh(null, @src(), self.data().id);
 }
 
 /// Scroll by one touch motion, as dvui's `processMotionScroll` does but without setting
@@ -1274,4 +1340,75 @@ test "a press stops a seat where it is drawn" {
     try std.testing.expect(t_moving);
     _ = try dvui.currentWindow().addEventPointer(.{ .button = .touch0, .action = .press, .xynorm = .{ .x = 0.5, .y = 0.5 } });
     try std.testing.expectApproxEqAbs(@as(f32, 0), try restJump(16), 0.001);
+}
+
+/// Script a web wheel event with its per-event kind, as the web backend does.
+fn webWheel(by: f32, trackpad: bool) !void {
+    const cw = dvui.currentWindow();
+    _ = try cw.addEventMouseWheel(-by, .vertical, if (trackpad) .trackpad else .mouse);
+    var buf: [32]u8 = undefined;
+    // The prefix and a u16 event number fit in 32 bytes.
+    const key = std.mem.print(&buf, "_wheel_trackpad_{d}", .{cw.event_num}) catch unreachable;
+    dvui.dataSet(cw, cw.data().id, key, trackpad);
+}
+
+test "web trackpad pixels and momentum apply once and stop with the events" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    t_use_dvui = false;
+    try dvui.testing.settle(testFrame);
+    _ = try dvui.currentWindow().addEventMouseMotion(.{ .pt = .{ .x = 150, .y = 200 } });
+    for (0..10) |_| {
+        try webWheel(10, true);
+        try frameAfter(16);
+    }
+    try std.testing.expectApproxEqAbs(@as(f32, 100), t_viewport_y, 0.01);
+    for ([_]f32{ 8, 4, 2, 1, 0.25 }) |by| {
+        try webWheel(by, true);
+        try frameAfter(16);
+    }
+    try std.testing.expectApproxEqAbs(@as(f32, 115.25), t_viewport_y, 0.01);
+    for (0..30) |_| try frameAfter(16);
+    try std.testing.expectApproxEqAbs(@as(f32, 115.25), t_viewport_y, 0.01);
+}
+
+test "a web mouse notch glides 100 points reaching 95 percent in 150 ms" {
+    for ([_]u64{ 60, 120 }) |hz| {
+        var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+        defer t.deinit();
+        t_use_dvui = false;
+        try dvui.testing.settle(testFrame);
+        _ = try dvui.currentWindow().addEventMouseMotion(.{ .pt = .{ .x = 150, .y = 200 } });
+        try webWheel(100, false);
+        try frameAfter(0);
+        try std.testing.expectApproxEqAbs(@as(f32, 0), t_viewport_y, 0.01);
+        const cw = dvui.currentWindow();
+        const start = cw.frame_time_ns;
+        // Both rates have a frame at exactly 150 ms (9 frames or 18 frames).
+        for (1..hz * 150 / 1000 + 1) |frame| {
+            _ = try testFrame();
+            _ = try cw.end(.{});
+            try cw.begin(start + @divTrunc(@as(i128, @intCast(frame)) * std.time.ns_per_s, hz));
+        }
+        _ = try testFrame();
+        try std.testing.expect(t_viewport_y >= 95 and t_viewport_y < 100);
+        _ = try cw.end(.{});
+        try cw.begin(cw.frame_time_ns + 8 * std.time.ns_per_ms);
+        for (0..120) |_| try frameAfter(8);
+        try std.testing.expectApproxEqAbs(@as(f32, 100), t_viewport_y, 0.01);
+    }
+}
+
+test "mixed web wheel kinds keep each event's behavior in one frame" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    t_use_dvui = false;
+    try dvui.testing.settle(testFrame);
+    _ = try dvui.currentWindow().addEventMouseMotion(.{ .pt = .{ .x = 150, .y = 200 } });
+    try webWheel(10, true);
+    try webWheel(100, false);
+    try frameAfter(16);
+    try std.testing.expectApproxEqAbs(@as(f32, 10), t_viewport_y, 0.01);
+    for (0..60) |_| try frameAfter(16);
+    try std.testing.expectApproxEqAbs(@as(f32, 110), t_viewport_y, 0.01);
 }
