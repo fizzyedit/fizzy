@@ -999,22 +999,21 @@ fn addTests(
     //
     // Fizzy has two test layers (see tests/README.md):
     //
-    //   1. Unit tests — pure-logic only (math, palette parsing, layer
-    //      order). The test root imports nothing but std + the pure
-    //      modules under test, so it compiles in well under a second
-    //      and never needs dvui/SDL/assets.
+    //   1. Unit tests — pure logic (math, palette parsing, layer order), without
+    //      windows or native backends. Glass arithmetic also imports dvui's types.
     //
     //   2. Integration tests use dvui's testing backend and exercise
     //      real fizzy drawing functions in a headless Window.
     //
-    // Both share the same `zig build test` and `zig build check`
-    // entry points.
+    // Unit tests use `test` / `check`; integration tests use
+    // `test-integration` / `check-integration`.
 
     // `zig build test` is the CI entry point and must stay self-contained: pure
-    // unit tests only, no dvui/SDL/Velopack/MSVC. Integration tests live under
-    // `zig build test-integration` (Velopack + dvui-testing + comctl32 on Windows
+    // unit tests only, no windows/SDL/Velopack/MSVC. Glass arithmetic uses dvui types.
+    // Integration tests live under `zig build test-integration`
+    // (Velopack + dvui-testing + comctl32 on Windows
     // → needs MSVC SDK on Windows hosts). `zig build test-all` runs both.
-    const test_step = b.step("test", "Run fizzy unit tests (pure-logic only, no dvui/SDL/Velopack)");
+    const test_step = b.step("test", "Run fizzy unit tests (pure-logic only, no windows/SDL/Velopack)");
 
     // `check` mirrors the split so editor compile-error checking matches CI.
     const check_step = b.step("check", "Compile fizzy unit tests without running them");
@@ -1376,6 +1375,32 @@ fn addTests(
         try unit_test_artifacts.append(b.allocator, remote_tests);
     }
 
+    const dvui_testing_dep = sdk.dvuiDependency(b, .{
+        .target = target,
+        .optimize = optimize,
+        .backend = .testing,
+        .accesskit = accesskit,
+    });
+
+    // The liquid field's packing and edge-light arithmetic needs dvui's geometry types,
+    // but no Window or native backend. Keep it in `test`, apart from the glass window tests.
+    const liquid_field_module = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("backend/src/glass/LiquidField.zig"),
+    });
+    liquid_field_module.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
+    liquid_field_module.addImport("glass_look", b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("backend/src/glass_look.zig"),
+    }));
+    try unit_test_artifacts.append(b.allocator, b.addTest(.{
+        .name = "fizzy-liquid-field-tests",
+        .root_module = liquid_field_module,
+        .filters = test_filters,
+    }));
+
     for (unit_test_artifacts.items) |unit_test| {
         test_step.dependOn(&b.addRunArtifact(unit_test).step);
         check_step.dependOn(&unit_test.step);
@@ -1412,12 +1437,6 @@ fn addTests(
         return;
     }
 
-    const dvui_testing_dep = sdk.dvuiDependency(b, .{
-        .target = target,
-        .optimize = optimize,
-        .backend = .testing,
-        .accesskit = accesskit,
-    });
     const dvui_test_proxy_bridge = sdk.addProxyBridgeModule(
         b,
         target,
