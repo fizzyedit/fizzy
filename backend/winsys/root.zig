@@ -20,13 +20,6 @@
 //!
 //! Deferred, each with the seam it will use:
 //!
-//! - Android safe-area and keyboard insets: an `Event.Payload` insets variant carrying physical
-//!   edge widths, separate from `resized` so the keyboard does not resize the window.
-//! - Android surface loss and recreation: `Event.Payload` surface-unavailable/available variants
-//!   to release and rebuild the swapchain independently of `background` and `foreground`.
-//! - Android low memory: an `Event.Payload` memory-pressure variant for the app to release caches.
-//! - Android save-before-kill: `Event.Payload.background` for the app to persist state before
-//!   suspension; process termination need not deliver `quit`.
 //! - Gamepads and raw mouse/keyboard input for games: new `Event.Payload` variants and a
 //!   `Caps` flag; devices are named by an id, like `Touch.device`.
 //! - Tablets and pens (pressure, tilt, eraser): a `Pointer` extension carrying pressure, with the
