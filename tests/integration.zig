@@ -6500,7 +6500,7 @@ test "liquid field: groups are the shapes that touch, each drawn as its own quad
     try std.testing.expectEqual(@as(u8, 2), g.size[0]);
     try std.testing.expectEqual(@as(u8, 1), g.size[1]);
     // The uniforms are the shader's `uData`: its header, then three vec4s a shape.
-    try std.testing.expectEqual(@as(usize, (9 + 3 * LF.max_shapes) * 16), @sizeOf(LF.Uniforms));
+    try std.testing.expectEqual(@as(usize, (11 + 3 * LF.max_shapes) * 16), @sizeOf(LF.Uniforms));
     const u = f.pack(.{ .x = 0, .y = 0, .w = 400, .h = 100 }, false, g.order[0..f.len]);
     try std.testing.expectEqual(@as(f32, 22), u.shapes[1][0][0]);
 }
@@ -6545,6 +6545,28 @@ test "liquid field: fizzy's default look packs to today's uniforms for every rol
             try std.testing.expectEqual(l.diagonal, u.backdrop[2]);
             try std.testing.expectEqual(l.rim, u.rim[3]);
             try std.testing.expectEqual(l.frost * f.shapes[0].blur, u.shapes[0][2][0]);
+        }
+    }
+}
+
+test "liquid field: fizzy's looks pack the lit edge off" {
+    const LF = fizzy.core.LiquidField;
+    const gl = fizzy.core.glass_look;
+    for ([_]f32{ 0.05, 0.5, 1 }) |opacity| {
+        const looks = fizzy.core.material.Looks.fromOpacity(opacity);
+        inline for (comptime std.enums.values(gl.Role)) |which| {
+            var f: LF = .{ .tint = .{ .r = 10, .g = 20, .b = 30, .a = 200 }, .mix = 0.5, .lift = 0.2, .role = which };
+            f.add(LF.Shape.circle(.{ .x = 50, .y = 50 }, 40));
+            const order = [_]u8{0};
+            var u = f.pack(.{ .x = 0, .y = 0, .w = 100, .h = 100 }, false, &order);
+            f.applyLook(&u, looks.get(which));
+            try std.testing.expectEqual([4]f32{ 0, 0, 0, 0 }, u.edge);
+            try std.testing.expectApproxEqAbs(@as(f32, -0.70710678), u.light[0], 1e-6);
+            try std.testing.expectApproxEqAbs(@as(f32, -0.70710678), u.light[1], 1e-6);
+            try std.testing.expectEqual(@as(f32, 0.5), u.light[2]);
+            try std.testing.expectEqual(@as(f32, 0), u.light[3]);
+            try std.testing.expectEqual(@as(f32, 0), u.widths[3]);
+            try std.testing.expectEqual(@as(f32, 0.85), u.widths[0]);
         }
     }
 }
