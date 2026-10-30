@@ -81,4 +81,8 @@ function reader() {
   r.emit(100, { deltaX: 100 });
   assert.deepEqual(r.sent, [[0, 0, -1], [1, 0, -1]], 'both axes');
 }
+
+// Device evidence belongs to the event, including its horizontal component.
+assert.deepEqual(wheelTicks(event(10, { deltaX: 100, wheelDeltaY: -30 }), initial()).events,
+  [{ axis: 0, ticks: -100 / 80, trackpad: 1 }, { axis: 1, ticks: -10 / 80, trackpad: 1 }]);
 console.log('wheel reader: pixel distance, fractional history, momentum, notches, mixed kinds and capture passed');
