@@ -453,12 +453,23 @@ pub fn drawPicture(self: *const LiquidField, picture: dvui.Texture, covered: dvu
     if (self.len == 0) return true;
     if (!ready()) return false;
     const job = dvui.currentWindow().arena().create(PictureJob) catch return false;
-    job.* = .{ .field = self.*, .picture = picture, .covered = covered };
+    job.* = .{ .field = self.*, .picture = picture, .sharp = null, .covered = covered };
     job.field.lens = true;
     job.field.tint = null;
     job.field.mix = 0;
     job.field.lift = 0;
     for (job.field.shapes[0..job.field.len]) |*sh| sh.blur = 0;
+    dvui.deferRender(job, PictureJob.run);
+    return true;
+}
+
+/// Queue glass over the app's own blurred picture, preserving this field's role and tint.
+/// Both textures must live until the frame ends. No scene capture is performed.
+pub fn drawOver(self: *const LiquidField, frost: dvui.Texture, sharp: dvui.Texture, covered: dvui.Rect.Physical) bool {
+    if (self.len == 0) return true;
+    if (!ready()) return false;
+    const job = dvui.currentWindow().arena().create(PictureJob) catch return false;
+    job.* = .{ .field = self.*, .picture = frost, .sharp = sharp, .covered = covered };
     dvui.deferRender(job, PictureJob.run);
     return true;
 }
@@ -476,6 +487,7 @@ pub fn pictureMargin(self: *const LiquidField) f32 {
 const PictureJob = struct {
     field: LiquidField,
     picture: dvui.Texture,
+    sharp: ?dvui.Texture,
     covered: dvui.Rect.Physical,
 
     fn run(ctx: ?*anyopaque) void {
@@ -483,7 +495,7 @@ const PictureJob = struct {
         const prev_alpha = dvui.currentWindow().alpha;
         dvui.alphaSet(1);
         defer dvui.alphaSet(prev_alpha);
-        _ = self.field.draw(self.picture, self.covered, null);
+        _ = self.field.draw(self.picture, self.covered, self.sharp);
     }
 };
 

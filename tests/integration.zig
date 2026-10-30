@@ -14363,3 +14363,56 @@ test "mobile sheets: turning the window with a sheet open shuts it, in both dire
     try dvui.testing.settle(MobileFrame.frame);
     try std.testing.expectApproxEqAbs(1024 * 0.6 + 16, regionRect(editor, "Panel").?.h, 1);
 }
+
+test "a layer inside a scroll area is clipped to it" {
+    var t = try dvui.testing.init(.{});
+    defer t.deinit();
+    const glass = fizzy.core.glass;
+    const LF = fizzy.core.LiquidField;
+    const id: dvui.Id = @fromBackingInt(@intCast(802));
+    LF.readyInTest(true);
+    var si: dvui.ScrollInfo = .{ .virtual_size = .{ .w = 200, .h = 1000 } };
+    const frame = struct {
+        fn area(info: *dvui.ScrollInfo) fizzy.core.widgets.ScrollArea {
+            return fizzy.core.widgets.ScrollArea.init(@src(), .{ .scroll_info = info }, .{
+                .rect = .{ .x = 20, .y = 40, .w = 200, .h = 200 },
+            });
+        }
+        fn empty() !dvui.App.Result {
+            return .ok;
+        }
+    };
+    var area = frame.area(&si);
+    var l = glass.layer(id, .{});
+    try std.testing.expect(l.add(.{ .x = 20, .y = 60, .w = 100, .h = 80 }, .round(8)));
+    l.end();
+    area.deinit();
+    _ = try dvui.testing.step(frame.empty);
+    si.viewport.y = 100;
+    area = frame.area(&si);
+    const clip = dvui.clipGet();
+    const texture = try dvui.textureCreate(&(@as([4]dvui.Color.PMA, @splat(.{ .r = 255, .g = 255, .b = 255, .a = 255 }))), .{ .width = 2, .height = 2 });
+    defer dvui.textureDestroyLater(texture);
+    fizzy.core.material.publishBackdrop(.{ .sharp = texture, .frost = texture, .covered = .{ .w = 1200, .h = 800 } });
+    var queues: dvui.RenderQueues = .{};
+    const cw = dvui.currentWindow();
+    const was_rendering = dvui.renderingSet(false);
+    defer _ = dvui.renderingSet(was_rendering);
+    cw.defer_render = &queues;
+    defer cw.defer_render = null;
+    l = glass.layer(id, .{});
+    l.end();
+    const fields = dvui.dataGetSlice(null, id, "_layer_fields", []LF).?;
+    try std.testing.expectEqual(1, fields.len);
+    const card = fields[0].shapes[0].rect;
+    // Half the card is above the scroll clip: it must remain shaped there, while its ink is cut.
+    try std.testing.expectApproxEqAbs(clip.y - card.h / 2, card.y, 0.01);
+    try std.testing.expectEqual(1, queues.normal.items.len);
+    const command = queues.normal.items[0];
+    try std.testing.expect(command.cmd == .custom);
+    // deferRender restores this clip for the program's triangles, just as for ordinary triangles.
+    try std.testing.expectEqual(clip, command.clip);
+    try std.testing.expectEqual(clip.y, fields[0].bounds().intersect(command.clip).y);
+    try std.testing.expectEqual(card.h / 2, card.intersect(command.clip).h);
+    area.deinit();
+}
