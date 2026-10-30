@@ -256,7 +256,7 @@ jobs:
         # `.github/known-failing-windows.txt`, which fail on main too and ejected passing PRs;
         # anything not listed, by binary and test name, still fails (scripts/ci-known-failing.sh).
         env:
-          KNOWN_FAILING: ${{ github.event_name == 'merge_group' && matrix.name == 'Windows' && '.github/known-failing-windows.txt' || '' }}
+          KNOWN_FAILING: ${{ matrix.name == 'Windows' && '.github/known-failing-windows.txt' || '' }}
         run: |
           if [ -n "$KNOWN_FAILING" ]; then
             bash scripts/ci-retry.sh bash scripts/ci-known-failing.sh "$KNOWN_FAILING" zig build test --summary all
