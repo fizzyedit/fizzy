@@ -8,7 +8,12 @@ from pathlib import Path
 
 TEMPLATE = Path(__file__).resolve().parents[1] / "docs/AGENT_WORK.md"
 VISION = TEMPLATE.with_name("VISION.md")
-MAX_CHARACTERS = 1800
+MAX_HEADER = 1800
+MAX_CHARACTERS = 12000
+PATH = re.compile(r"[\w.*-]+/[\w./*-]+|\b[\w-]+\.(?:zig|zon|md|mjs|js|py|sh|yml|json)\b|\brg\b")
+VAGUE = re.compile(r"\band (?:its |the )?callers\b|\betc\b|\band so on\b|\bsomething like\b", re.IGNORECASE)
+ELSEWHERE = re.compile(r"\b(?:first|next|following|latest) comment\b|\bsee (?:the |my )?comments?\b"
+                       r"|\bspec (?:is )?in (?:a|the) comment\b", re.IGNORECASE)
 
 
 def template_fields():
@@ -28,7 +33,8 @@ def validate(body, fields):
         heading = re.fullmatch(r"### (.+?)\s*", line)
         label, separator, value = line.partition(":")
         name = heading[1] if heading else label
-        if name in fields and (heading or separator):
+        # Spec comes last and holds free text, so nothing after it starts a field.
+        if current != "Spec" and name in fields and (heading or separator):
             current = name
             values.setdefault(name, []).append("" if heading else value)
         elif current:
@@ -38,8 +44,20 @@ def validate(body, fields):
     for name in fields:
         if not values.get(name) or values[name] == "_No response_":
             failures.append(f"{name}: missing field or empty value")
+    spec = re.search(r"^(?:### Spec\s*$|Spec:)", body, re.MULTILINE)
+    header = spec.start() if spec else len(body)
+    if header > MAX_HEADER:
+        failures.append(f"Body: {header} characters before Spec exceeds {MAX_HEADER}")
     if len(body) > MAX_CHARACTERS:
-        failures.append(f"Body: {len(body)} characters exceeds {MAX_CHARACTERS}")
+        failures.append(f"Body: {len(body)} characters exceeds {MAX_CHARACTERS}; split the issue")
+    if ELSEWHERE.search(body):
+        failures.append("Body: the spec must be in the body, not in a comment")
+    if values.get("In bounds") and not PATH.search(values["In bounds"]):
+        failures.append("In bounds: name each file by path, or an rg command whose hits are the list")
+    if VAGUE.search(values.get("In bounds", "")):
+        failures.append('In bounds: name the files; "and callers" or "etc." is not a list')
+    if values.get("Acceptance") and "`" not in values["Acceptance"]:
+        failures.append("Acceptance: name the test or command in backticks")
     if values.get("Branch") and not re.fullmatch(r"[a-z0-9-]+/[a-z0-9._-]+", values["Branch"]):
         failures.append("Branch: must match ^[a-z0-9-]+/[a-z0-9._-]+$")
     if re.search(r"scripts/zb\s+zig\s+build", values.get("Gates", "")):

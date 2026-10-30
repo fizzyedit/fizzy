@@ -52,7 +52,7 @@ fi
 $claim || [[ -s $tmp/stat ]] || fail 'no changes relative to main'
 marker='<!-- agent-finish: generated below -->'
 # The plain sections a visitor reads, then the technical ones (docs/AGENT_WORK.md, "The PR page").
-headings=$'## In plain words\n\n%s\n\n## What you will notice\n\n%s\n\n## How this serves fizzy\n\n%s\n\n## How we know it works\n\n%s\n\n## Goal\n\n%s\n\n## What changed and why\n\n%s\n\n## How it was verified\n\n%s\n\n## Not done / follow-ups\n\n%s'
+headings=$'## In plain words\n\n%s\n\n## What changes\n\n%s\n\n## What you will notice\n\n%s\n\n## How we know it works\n\n%s\n\n## How this serves fizzy\n\n%s\n\n## Goal\n\n%s\n\n## What changed and why\n\n%s\n\n## How it was verified\n\n%s\n\n## Not done / follow-ups\n\n%s'
 details='<details><summary>For agents: technical summary</summary>'
 if $use_jj && ! git rev-parse --git-dir >/dev/null 2>&1; then
     summary_file="$(jj root)/.jj/PR_SUMMARY.md"
@@ -71,11 +71,15 @@ if [[ -f $summary_file ]]; then
 elif grep -qxF "$marker" <<<"$pr_body"; then
     awk -v m="$marker" '$0 == m { exit } !started && (/^Part of / || /^Rework: / || /^$/) { next } { started = 1; print }' <<<"$pr_body" >"$tmp/summary"
 elif $claim; then
-    printf "$headings\n" 'Draft: work in progress' '' '' '' '' '' '' 'Draft: work in progress' >"$tmp/summary"
+    printf "$headings\n" 'Draft: work in progress' '' '' '' '' '' '' '' 'Draft: work in progress' >"$tmp/summary"
 else
-    printf "$headings\n" '(to fill)' '(to fill)' '(to fill)' '(to fill)' '(to fill)' '(to fill)' '(to fill)' '(to fill)' >"$tmp/summary"
+    printf "$headings\n" '(to fill)' '(to fill)' '(to fill)' '(to fill)' '(to fill)' '(to fill)' '(to fill)' '(to fill)' '(to fill)' >"$tmp/summary"
 fi
 retitle=()
+if $claim && [[ -z $pr ]]; then
+    # The claim's draft is titled by the work issue until the real summary names the change.
+    title=$(gh issue view "$issue" --repo fizzyedit/work --json title --jq .title) || fail 'could not read the work issue title'
+fi
 # A first line `# <title>` is the PR title (the commit on main), in plain words.
 if [[ $(head -n 1 "$tmp/summary") == '# '* ]]; then
     title=$(head -n 1 "$tmp/summary" | cut -c3-)
@@ -91,7 +95,7 @@ fi
 # Checked before the gates run, so a missing plain section costs no build.
 if ! $claim; then
     reason='the summary misses part of the PR page (docs/AGENT_WORK.md, "The PR page")'
-    scripts/check-pr-body "$tmp/summary"
+    scripts/check-pr-body --title "$title" "$tmp/summary"
 fi
 changes=$(tail -n 1 "$tmp/stat" | awk '
     /files? changed/ { n = $1; a = 0; d = 0 }
@@ -138,6 +142,23 @@ else
     done
     gates_label="$gates_passed of $gates_total passed"
 fi
+# The agent-notes block is the one place agents leave each other notes; a rerun keeps the open
+# questions and next step the last agent wrote there.
+status=ready
+if $claim; then status=draft; fi
+notes=$(perl -MJSON::PP -e '
+    my ($issue, $worker, $slot, $status, $area, $old) = @ARGV;
+    my %n = (issue => $issue + 0, worker => $worker, slot => $slot, status => $status, area => $area,
+        open_questions => [], next => "review");
+    if ($old =~ /^<!-- agent-notes (\{.*\}) -->$/m) {
+        my $o = eval { decode_json($1) };
+        if (ref $o eq "HASH") {
+            $n{open_questions} = $o->{open_questions} if ref $o->{open_questions} eq "ARRAY";
+            $n{next} = $o->{next} if ($o->{next} // "") =~ /^(review|fixes|merge)$/;
+        }
+    }
+    print "<!-- agent-notes ", JSON::PP->new->canonical->encode(\%n), " -->";
+' "$issue" "${FIZZY_WORKER:-unknown}" "${FIZZY_SLOT:-unknown}" "$status" "${branch%%/*}" "$pr_body")
 # A rework run on an existing PR keeps the PR's own work issue: its running: lock and
 # close-merged find the PR by that line.
 part_of=$(grep -m1 -E '^Part of fizzyedit/work#[1-9][0-9]*$' <<<"$pr_body" || true)
@@ -152,7 +173,7 @@ part_of=$(grep -m1 -E '^Part of fizzyedit/work#[1-9][0-9]*$' <<<"$pr_body" || tr
     head -n 100 "$tmp/stat"
     printf '```\n\n</details>\n\n<details><summary>Gates: %s</summary>\n\n' "$gates_label"
     cat "$tmp/gates"
-    printf '</details>\n'
+    printf '</details>\n\n%s\n' "$notes"
 } >"$tmp/body"
 reason='could not publish branch'
 if $use_jj; then
