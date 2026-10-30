@@ -149,7 +149,9 @@ pub fn deinit(self: *VirtualList) void {
         const from = if (st.anchor) |a| st.index.resolve(a) orelse st.frame_y else st.frame_y;
         st.anchor = st.index.anchorAt(from + moved);
         st.pinned = st.index.atEnd(st.si.viewport.y, st.si.viewport.h);
-    } else if (st.anchor == null) {
+    } else if (st.anchor == null or (self.opts.follow_end and st.pinned)) {
+        // A pinned view is placed by `endY`, not the anchor: keep the anchor on it, or the first
+        // move would be added to the place the reader was before the view went to the end.
         st.anchor = st.index.anchorAt(st.frame_y);
     }
     if (self.measured_change) dvui.refresh(null, @src(), id);
@@ -453,4 +455,24 @@ test "scrolling up through rows that measure short on their first frame never mo
             tracking = true;
         }
     }
+}
+
+test "a small drag away from the pinned end moves the view by the drag, not to a stale row" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    var m: Messages = .{ .count = 500, .follow_end = true };
+    defer m.state.deinit();
+    try settleOn(&m);
+    try testing.expect(m.state.pinned);
+    const top_key = m.top_key;
+    const view_y = m.state.si.viewport.y;
+
+    const drag = 5;
+    m.nudge = -drag;
+    _ = try dvui.testing.step(currentFrame);
+    m.nudge = 0;
+    _ = try dvui.testing.step(currentFrame);
+    try testing.expectApproxEqAbs(view_y - drag, m.state.si.viewport.y, 1);
+    // A drag of 5 px moves the top by at most the row it reveals, never screens.
+    try testing.expect(m.top_key <= top_key and top_key - m.top_key <= 1);
 }
