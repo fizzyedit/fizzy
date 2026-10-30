@@ -247,7 +247,7 @@ fn apply(app: *BundledApp, step: Step, obs: *Observation) !void {
             if (app.editor.activeDoc()) |doc| {
                 const host = &app.editor.app.host;
                 const path = doc.owner.documentPath(doc);
-                const args = try std.fmt.allocPrint(std.testing.allocator, ".{{ .path = \"{s}\", .text = \"# Fuzzer edit\\n\" }}", .{path});
+                const args = try std.fmt.allocPrint(std.testing.allocator, ".{{ .path = \"{f}\", .text = \"# Fuzzer edit\\n\" }}", .{std.zig.fmtString(path)});
                 defer std.testing.allocator.free(args);
                 _ = host.callCommand("text.write", args, host.arena());
             }

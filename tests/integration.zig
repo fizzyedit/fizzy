@@ -69,6 +69,26 @@ test "an ignored input preserves preceding event timestamps" {
     }
 }
 
+// Windows' backend arms `ReadDirectoryChangesW` on a directory handle only, so watching a
+// document's file used to fail with `WatchFailed` there (and every external edit went unseen).
+test "an open document's file can be watched" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(dvui.io, .{ .sub_path = "doc.txt", .data = "a" });
+    var root_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const root = root_buf[0..try tmp.dir.realPath(dvui.io, &root_buf)];
+    const path = try std.fs.path.join(gpa, &.{ root, "doc.txt" });
+    defer gpa.free(path);
+
+    var w: fizzy.Editor.DocumentWatcher = .init(gpa);
+    try w.start();
+    defer w.stop();
+    try w.watchPath(path);
+}
+
 // -- menu accelerators -------------------------------------------------------------------------
 
 // The regression that made every plugin menu row show a blank accelerator: a chord that exists
@@ -11243,7 +11263,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         defer gpa.free(b);
         const args = struct {
             fn path(p: []const u8) ![]u8 {
-                return gpa.print(".{{ .path = \"{s}\" }}", .{p});
+                return gpa.print(".{{ .path = \"{f}\" }}", .{std.zig.fmtString(p)});
             }
         };
 
@@ -11598,7 +11618,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try std.testing.expectEqualStrings("// top\nconst a = 1;\nconst b = 3;\n", (try read(host, "")).text);
 
         // By path: a document that is open but not the one in front, read and written.
-        const notes_args = try gpa.print(".{{ .path = \"{s}\" }}", .{notes});
+        const notes_args = try gpa.print(".{{ .path = \"{f}\" }}", .{std.zig.fmtString(notes)});
         defer gpa.free(notes_args);
         try std.testing.expect(std.mem.startsWith(u8, (try read(host, notes_args)).text, "# Notes"));
         try std.testing.expect(host.callCommand("text.read", ".{ .path = \"/not/open.txt\" }", host.arena()) == .failed);
@@ -11621,7 +11641,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try dvui.testing.settle(headlessFrame);
 
         // A write changes only what differs, as one edit, and one undo puts back exactly that.
-        const write_args = try gpa.print(".{{ .path = \"{s}\", .text = \"// top\\nconst a = 42;\\nconst b = 3;\\n\" }}", .{main_zig});
+        const write_args = try gpa.print(".{{ .path = \"{f}\", .text = \"// top\\nconst a = 42;\\nconst b = 3;\\n\" }}", .{std.zig.fmtString(main_zig)});
         defer gpa.free(write_args);
         const wrote = host.callCommand("text.write", write_args, host.arena());
         try std.testing.expect(wrote == .ok);
@@ -11637,7 +11657,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         {
             const notes_doc = editor.docFromPath(notes) orelse return error.TestUnexpectedResult;
             const before = (try read(host, notes_args)).text;
-            const notes_write = try gpa.print(".{{ .path = \"{s}\", .text = \"# Notes, by Claude\\n\" }}", .{notes});
+            const notes_write = try gpa.print(".{{ .path = \"{f}\", .text = \"# Notes, by Claude\\n\" }}", .{std.zig.fmtString(notes)});
             defer gpa.free(notes_write);
             const outer = host.act(.{ .kind = .agent, .plugin = "test", .session = 1, .label = "Claude" });
             try std.testing.expect(host.callCommand("text.write", notes_write, host.arena()) == .ok);
@@ -11645,7 +11665,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
             const line = notes_doc.owner.historyLine(notes_doc, host.arena()) orelse return error.TestUnexpectedResult;
             const top = line.entries[line.at - 1].id;
 
-            const stale = try gpa.print(".{{ .path = \"{s}\", .expect = {d} }}", .{ notes, top + 1000 });
+            const stale = try gpa.print(".{{ .path = \"{f}\", .expect = {d} }}", .{ std.zig.fmtString(notes), top + 1000 });
             defer gpa.free(stale);
             switch (host.callCommand("fizzy.undo", stale, host.arena())) {
                 .failed => |m| try std.testing.expect(std.mem.find(u8, m, "by Claude") != null),
@@ -11653,7 +11673,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
             }
             try std.testing.expectEqualStrings("# Notes, by Claude\n", (try read(host, notes_args)).text);
 
-            const named = try gpa.print(".{{ .path = \"{s}\", .expect = {d} }}", .{ notes, top });
+            const named = try gpa.print(".{{ .path = \"{f}\", .expect = {d} }}", .{ std.zig.fmtString(notes), top });
             defer gpa.free(named);
             const undid = host.callCommand("fizzy.undo", named, host.arena());
             try std.testing.expect(undid == .ok);
@@ -11673,7 +11693,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         {
             const front = editor.activeDoc() orelse return error.TestUnexpectedResult;
             const before = (try read(host, "")).text;
-            const front_write = try gpa.print(".{{ .path = \"{s}\", .text = \"// by Claude\\n\" }}", .{main_zig});
+            const front_write = try gpa.print(".{{ .path = \"{f}\", .text = \"// by Claude\\n\" }}", .{std.zig.fmtString(main_zig)});
             defer gpa.free(front_write);
             const outer = host.act(.{ .kind = .agent, .plugin = "test", .session = 1, .label = "Claude" });
             try std.testing.expect(host.callCommand("text.write", front_write, host.arena()) == .ok);
@@ -11700,9 +11720,9 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         {
             const front = editor.activeDoc() orelse return error.TestUnexpectedResult;
             const claude: sdk.Author = .{ .kind = .agent, .plugin = "test", .session = 2, .label = "Claude" };
-            const first = try gpa.print(".{{ .path = \"{s}\", .text = \"// first\\n\" }}", .{main_zig});
+            const first = try gpa.print(".{{ .path = \"{f}\", .text = \"// first\\n\" }}", .{std.zig.fmtString(main_zig)});
             defer gpa.free(first);
-            const second = try gpa.print(".{{ .path = \"{s}\", .text = \"// second\\n\" }}", .{main_zig});
+            const second = try gpa.print(".{{ .path = \"{f}\", .text = \"// second\\n\" }}", .{std.zig.fmtString(main_zig)});
             defer gpa.free(second);
             const before = try gpa.dupe(u8, (try read(host, "")).text);
             defer gpa.free(before);
@@ -11743,7 +11763,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
             defer gpa.free(before);
             const writeAs = struct {
                 fn f(h: *sdk.Host, who: sdk.Author, path: []const u8, body: []const u8) !void {
-                    const args = try h.arena().print(".{{ .path = \"{s}\", .text = \"{s}\" }}", .{ path, body });
+                    const args = try h.arena().print(".{{ .path = \"{f}\", .text = \"{s}\" }}", .{ std.zig.fmtString(path), body });
                     const outer = h.act(who);
                     defer h.endAct(outer);
                     try std.testing.expect(h.callCommand("text.write", args, h.arena()) == .ok);
@@ -11755,7 +11775,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
                 const outer = host.act(claude);
                 defer host.endAct(outer);
                 for ([_][]const u8{ "// claude one\\n", "// claude two\\n" }) |body| {
-                    const args = try host.arena().print(".{{ .path = \"{s}\", .text = \"{s}\" }}", .{ main_zig, body });
+                    const args = try host.arena().print(".{{ .path = \"{f}\", .text = \"{s}\" }}", .{ std.zig.fmtString(main_zig), body });
                     try std.testing.expect(host.callCommand("text.write", args, host.arena()) == .ok);
                 }
             }
@@ -11776,7 +11796,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
             try std.testing.expectEqual(@as(usize, 1), mixed.yours);
             try std.testing.expectEqual(back.to, mixed.to);
 
-            const args = try host.arena().print(".{{ .path = \"{s}\" }}", .{main_zig});
+            const args = try host.arena().print(".{{ .path = \"{f}\" }}", .{std.zig.fmtString(main_zig)});
             const went = host.callCommand("fizzy.goBackBefore", args, host.arena());
             try std.testing.expect(went == .ok);
             try std.testing.expect(std.mem.find(u8, went.ok.?, ".also_taken_back = 1") != null);
@@ -12084,7 +12104,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         }.newDoc;
         const textOf = struct {
             fn textOf(h: *sdk.Host, d: sdk.DocHandle) ![]const u8 {
-                const args = try h.arena().print(".{{ .path = \"{s}\" }}", .{d.owner.documentPath(d)});
+                const args = try h.arena().print(".{{ .path = \"{f}\" }}", .{std.zig.fmtString(d.owner.documentPath(d))});
                 const zon = switch (h.callCommand("text.read", args, h.arena())) {
                     .ok => |r| r orelse return error.TestUnexpectedResult,
                     else => return error.TestUnexpectedResult,
@@ -12253,7 +12273,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         }.newDoc;
         const textOf = struct {
             fn textOf(h: *sdk.Host, d: sdk.DocHandle) ![]const u8 {
-                const args = try h.arena().print(".{{ .path = \"{s}\" }}", .{d.owner.documentPath(d)});
+                const args = try h.arena().print(".{{ .path = \"{f}\" }}", .{std.zig.fmtString(d.owner.documentPath(d))});
                 const zon = switch (h.callCommand("text.read", args, h.arena())) {
                     .ok => |r| r orelse return error.TestUnexpectedResult,
                     else => return error.TestUnexpectedResult,
@@ -12982,7 +13002,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try dvui.testing.settle(headlessFrame);
         const textOf = struct {
             fn textOf(h: *sdk.Host, path: []const u8) ![]const u8 {
-                const args = try h.arena().print(".{{ .path = \"{s}\" }}", .{path});
+                const args = try h.arena().print(".{{ .path = \"{f}\" }}", .{std.zig.fmtString(path)});
                 const zon = switch (h.callCommand("text.read", args, h.arena())) {
                     .ok => |r| r orelse return error.TestUnexpectedResult,
                     else => return error.TestUnexpectedResult,
@@ -12999,7 +13019,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
 
         const out = try gpa.print("{s}/tapes/export-test.tape", .{editor.app.config_folder});
         defer gpa.free(out);
-        const args = try host.arena().print(".{{ .path = \"{s}\", .out = \"{s}\" }}", .{ path, out });
+        const args = try host.arena().print(".{{ .path = \"{f}\", .out = \"{f}\" }}", .{ std.zig.fmtString(path), std.zig.fmtString(out) });
         const result = switch (host.callCommand("fizzy.tracks.export", args, host.arena())) {
             .ok => |r| r orelse return error.TestUnexpectedResult,
             else => |r| {
@@ -13013,7 +13033,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         {
             const ranged = try gpa.print("{s}/tapes/export-range.tape", .{editor.app.config_folder});
             defer gpa.free(ranged);
-            const range_args = try host.arena().print(".{{ .path = \"{s}\", .out = \"{s}\", .from = 2 }}", .{ path, ranged });
+            const range_args = try host.arena().print(".{{ .path = \"{f}\", .out = \"{f}\", .from = 2 }}", .{ std.zig.fmtString(path), std.zig.fmtString(ranged) });
             const range_result = switch (host.callCommand("fizzy.tracks.export", range_args, host.arena())) {
                 .ok => |r| r orelse return error.TestUnexpectedResult,
                 else => return error.TestUnexpectedResult,
@@ -13180,7 +13200,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         const gone_path = gone.owner.documentPath(gone);
         const before_text = try gpa.dupe(u8, try textOf(host, gone_path));
         defer gpa.free(before_text);
-        const gone_args = try host.arena().print(".{{ .path = \"{s}\", .out = \"{s}\" }}", .{ gone_path, out });
+        const gone_args = try host.arena().print(".{{ .path = \"{f}\", .out = \"{f}\" }}", .{ std.zig.fmtString(gone_path), std.zig.fmtString(out) });
         try std.testing.expect(host.callCommand("fizzy.tracks.export", gone_args, host.arena()) == .ok);
         try std.testing.expectEqualStrings(before_text, try textOf(host, gone_path));
         try editor.rawCloseFileID(gone.id);
@@ -13269,7 +13289,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try std.testing.expect(host.callCommand("dashboard.show", "", host.arena()) == .ok);
         for (0..4) |_| _ = try dvui.testing.step(headlessFrame);
         try std.testing.expectEqualStrings("dashboard.view", host.selectionFor(sdk.keywords.ide.sidebar) orelse "");
-        const cards = host.getServiceTyped(sdk.services.dashboard_cards.Api) orelse return error.TestUnexpectedResult;
+        const cards = @import("dashboard").View.provider(host);
         const before = try Reader.read(host);
         try std.testing.expectEqual(@as(usize, 3), before.count);
         try std.testing.expectEqual(@as(usize, 1), before.drawn);

@@ -39,8 +39,6 @@ const ScrollArea = @This();
 area: *dvui.ScrollAreaWidget,
 si: *dvui.ScrollInfo,
 touch: *Touch,
-/// dvui's `snap_to_pixels` as the area found it, put back by `deinit`.
-snap: bool,
 /// The places of interest this frame (`notches`).
 notch_list: []const Fling.Notch = &.{},
 
@@ -103,17 +101,13 @@ pub fn init(src: std.builtin.SourceLocation, init_opts: dvui.ScrollAreaWidget.In
         .area = area,
         .si = area.si,
         .touch = dvui.dataGetPtrDefault(null, c.data().id, "_touch", Touch, .{}),
-        .snap = dvui.snapToPixels(),
     };
 
-    // A coast's last stretch moves a fraction of a pixel a frame: drawn at whole pixels it
-    // steps instead of gliding. Content is drawn at the fractional offset until the coast
-    // ends (`settle` puts it on whole pixels that frame), and `deinit` snaps it again so text
-    // is crisp at rest.
+    // Preserve the caller's pixel snapping during motion: glyphs need whole device pixels
+    // to keep their weight stable. The viewport itself keeps its fractional coast position.
     const was_coasting_x = self.touch.x.coasting;
     const was_coasting_y = self.touch.y.coasting;
     const was_seating = self.touch.seating;
-    if (was_coasting_x or was_coasting_y or was_seating or self.touch.over.nonZero()) _ = dvui.snapToPixelsSet(false);
 
     // A press while coasting or springing back only stops the motion: eat it so it doesn't also
     // tap what is under it.
@@ -256,7 +250,6 @@ pub fn deinit(self: *ScrollArea) void {
     }
     t.last_viewport = self.si.viewport.topLeft();
     self.area.deinit();
-    _ = dvui.snapToPixelsSet(self.snap);
 }
 
 /// Scroll by one touch motion, as dvui's `processMotionScroll` does but without setting
@@ -428,9 +421,7 @@ fn sameSide(v: f32, side: f32) f32 {
 }
 
 /// On the axes whose coast ended this frame (run out, or stopped by a press), move the content
-/// onto whole physical pixels. This last frame is still drawn unsnapped and the next ones
-/// snapped; at a fractional offset the snap would round every rect and texture to another
-/// pixel, so panes and cards would shift or change size by a pixel the moment the coast stops.
+/// onto whole physical pixels so the resting viewport agrees with the drawn content origin.
 fn settle(self: *ScrollArea, x: bool, y: bool) void {
     if (!x and !y) return;
     const rs = self.area.scroll.?.data().contentRectScale();
@@ -489,6 +480,8 @@ var t_raw_y: f32 = 0;
 /// Written by testFrame on the test thread from the child's physical draw scale.
 var t_draw_scale: f32 = 1;
 var t_snapping: bool = false;
+/// Written by testFrame on the test thread after motion advances.
+var t_moving: bool = false;
 /// The overscroll the area's content sees this frame.
 var t_over_y: f32 = 0;
 /// Lay the area out as a column of `t_rows` rows, `t_top` points below the window's top, and
@@ -512,6 +505,7 @@ fn testFrame() !dvui.App.Result {
     } else {
         var scroll = ScrollArea.init(@src(), .{ .horizontal = .none, .vertical_bar = .hide }, .{ .expand = .both, .margin = .{ .y = t_top } });
         scroll.notches(t_notches);
+        t_moving = scroll.touch.x.coasting or scroll.touch.y.coasting or scroll.touch.seating;
         // Read the final viewport after the area's event handling and edge correction.
         const si = scroll.si;
         defer t_viewport_y = si.viewport.y;
@@ -522,7 +516,15 @@ fn testFrame() !dvui.App.Result {
         if (t_column) {
             t_snapping = dvui.snapToPixels();
             for (&t_rows, 0..) |*drawn, i| {
-                const r = dvui.spacer(@src(), .{ .id_extra = i, .min_size_content = .{ .w = 100, .h = 30 } }).rectScale().r;
+                var label: dvui.LabelWidget = undefined;
+                label.init(@src(), "Row {d}", .{i}, .{}, .{
+                    .id_extra = i,
+                    .min_size_content = .{ .w = 100, .h = 30 },
+                    .padding = .{},
+                });
+                defer label.deinit();
+                label.draw();
+                const r = label.wd.rectScale().r;
                 // Where the renderer puts a texture or a glyph run: rounded while snapping.
                 drawn.* = if (t_snapping) .{ .x = @round(r.x), .y = @round(r.y) } else .{ .x = r.x, .y = r.y };
             }
@@ -619,25 +621,25 @@ test "coast displacement follows each frame gap" {
     const release_speed: f64 = t_release_velocity * t_draw_scale;
     var previous_time = dvui.currentWindow().frame_time_ns;
     try frameAfter(25);
-    var previous_y = t_drawn_y;
+    var previous_y = t_raw_y;
     // frameAfter draws at the current timestamp, then begins the next frame with this gap.
     // Alternating long and short gaps exposes a displacement applied one frame late.
     var max_error: f32 = 0;
     for ([_]u64{ 8, 25, 8, 25, 8, 25, 8, 25 }) |next_gap| {
         const time = dvui.currentWindow().frame_time_ns;
         try frameAfter(next_gap);
-        const displacement = previous_y - t_drawn_y;
+        const displacement = previous_y - t_raw_y;
         const from_s = @as(f64, @floatFromInt(previous_time - release_time)) / std.time.ns_per_s;
         const to_s = @as(f64, @floatFromInt(time - release_time)) / std.time.ns_per_s;
         const expected: f32 = @floatCast(release_speed / tuning.decay *
             (@exp(-tuning.decay * from_s) - @exp(-tuning.decay * to_s)));
-        std.debug.print("coast frame: gap={d} ms, drawn={d:.6} px, integral={d:.6} px, error={d:.6} px\n", .{
+        std.debug.print("coast frame: gap={d} ms, float={d:.6} px, integral={d:.6} px, error={d:.6} px\n", .{
             @divTrunc(time - previous_time, std.time.ns_per_ms), displacement, expected, displacement - expected,
         });
-        // Check what reaches the renderer against the release integral, including its decay.
+        // The float trajectory follows the release integral before pixel quantization.
         max_error = @max(max_error, @abs(displacement - expected));
         previous_time = time;
-        previous_y = t_drawn_y;
+        previous_y = t_raw_y;
     }
     try std.testing.expectApproxEqAbs(@as(f32, 0), max_error, 0.0001);
 }
@@ -676,29 +678,57 @@ test "coast position matches the release integral through jitter and a long stal
     try std.testing.expectEqual(stopped, coastPosition(&fling, origin, velocity, tuning.decay, 20));
 }
 
-test "a slow coast draws at a new place every frame, then snaps at rest" {
+test "a slow coast preserves pixel snapping while its position stays fractional" {
     var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
     defer t.deinit();
+    // A phone with three physical pixels per point.
+    t.backend.size_pixels = .{ .w = 900, .h = 1200 };
     t_use_dvui = false;
     _ = try swipe();
-    // 120 fps until the coast is slow: under 60 points a second is under half a point a frame.
-    var prev: f32 = t_drawn_y;
-    var slow_frames: usize = 0;
+    var prev = t_drawn_y;
+    var prev_raw = t_raw_y;
+    var tail_frames: usize = 0;
+    var tail_repeats: usize = 0;
+    var tail_min: f32 = std.math.inf(f32);
+    var tail_max: f32 = 0;
+    var raw_min: f32 = std.math.inf(f32);
+    var raw_max: f32 = 0;
     var last = t_viewport_y;
+    var slow_frames: usize = 0;
+    var repeated_pixels: usize = 0;
+    // 8 ms frames approximate a 120 Hz display through the slow tail.
     for (0..600) |_| {
         try frameAfter(8);
         const speed = (t_viewport_y - last) / 0.008;
         last = t_viewport_y;
-        if (t_snapping) break;
         if (speed < 60 and speed > 25) {
             slow_frames += 1;
-            try std.testing.expect(t_drawn_y != prev);
+            try std.testing.expect(t_snapping);
+            try std.testing.expectEqual(@round(t_drawn_y), t_drawn_y);
+            try std.testing.expect(@abs(t_drawn_y - t_raw_y) <= 0.5);
+            if (t_drawn_y == prev) repeated_pixels += 1;
+        }
+        // At decay 2, the final 300 ms spans speeds 20..20*exp(2*0.3) points/s.
+        if (speed > tuning.stop and speed < tuning.stop * @exp(tuning.decay * 0.3)) {
+            tail_frames += 1;
+            const drawn_delta = @abs(t_drawn_y - prev);
+            const raw_delta = @abs(t_raw_y - prev_raw);
+            tail_min = @min(tail_min, drawn_delta);
+            tail_max = @max(tail_max, drawn_delta);
+            raw_min = @min(raw_min, raw_delta);
+            raw_max = @max(raw_max, raw_delta);
+            if (drawn_delta == 0) tail_repeats += 1;
         }
         prev = t_drawn_y;
+        prev_raw = t_raw_y;
     }
+    std.debug.print("3x coast tail: gap=8 ms, frames={d}, float delta={d:.6}..{d:.6} px, snapped delta={d:.6}..{d:.6} px, repeated pixels={d}\n", .{
+        tail_frames, raw_min, raw_max, tail_min, tail_max, tail_repeats,
+    });
+    try std.testing.expectApproxEqAbs(@as(f32, 3), t_draw_scale, 0.001);
+    try std.testing.expect(tail_frames >= 36);
     try std.testing.expect(slow_frames > 20);
-    // At rest the area snaps again.
-    for (0..30) |_| try frameAfter(8);
+    try std.testing.expect(repeated_pixels > 0);
     try std.testing.expect(t_snapping);
 }
 
@@ -720,15 +750,14 @@ test "a settled viewport puts the content's origin on a pixel, inside the range"
     }
 }
 
-/// Step frames until the area snaps again and return the largest move of any row between the
-/// last unsnapped frame and the first snapped one.
+/// Step frames until motion ends and return the largest row movement on the final frame.
 fn restJump(gap_ms: u64) !f32 {
     var last_coast: [t_rows.len]dvui.Point.Physical = t_rows;
     for (0..600) |_| {
         try frameAfter(gap_ms);
-        if (t_snapping) break;
+        if (!t_moving) break;
         last_coast = t_rows;
-    } else return error.NeverSnapped;
+    } else return error.NeverStopped;
     var jump: f32 = 0;
     for (last_coast, t_rows) |a, b| jump = @max(jump, @abs(a.x - b.x), @abs(a.y - b.y));
     return jump;
@@ -748,17 +777,20 @@ test "the end of a coast draws where the rest frames do" {
     try std.testing.expectApproxEqAbs(@as(f32, 0), jump, 0.001);
 }
 
-test "a press that stops a coast leaves the rows where they were drawn" {
+test "a press that stops a coast leaves text rows where they were drawn at 3x" {
     var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
     defer t.deinit();
     t_use_dvui = false;
+    // Phone density: one device pixel is a third of a point.
+    t.backend.size_pixels = .{ .w = 900, .h = 1200 };
     t_column = true;
     defer t_column = false;
     t_top = 0.5;
     defer t_top = 0;
     _ = try swipe();
     for (0..7) |_| try frameAfter(16);
-    try std.testing.expect(!t_snapping);
+    try std.testing.expect(t_moving);
+    try std.testing.expect(t_snapping);
     _ = try dvui.currentWindow().addEventPointer(.{ .button = .touch0, .action = .press, .xynorm = .{ .x = 0.5, .y = 0.5 } });
     const jump = try restJump(16);
     try std.testing.expectApproxEqAbs(@as(f32, 0), jump, 0.001);
@@ -1209,6 +1241,8 @@ test "a press stops an aimed coast where it is drawn" {
     var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
     defer t.deinit();
     t_use_dvui = false;
+    // Phone density: one device pixel is a third of a point.
+    t.backend.size_pixels = .{ .w = 900, .h = 1200 };
     t_column = true;
     defer t_column = false;
     t_top = 0.5;
@@ -1217,7 +1251,7 @@ test "a press stops an aimed coast where it is drawn" {
     defer t_notches = &.{};
     _ = try swipe();
     for (0..7) |_| try frameAfter(16);
-    try std.testing.expect(!t_snapping);
+    try std.testing.expect(t_moving);
     _ = try dvui.currentWindow().addEventPointer(.{ .button = .touch0, .action = .press, .xynorm = .{ .x = 0.5, .y = 0.5 } });
     try std.testing.expectApproxEqAbs(@as(f32, 0), try restJump(16), 0.001);
 }
@@ -1226,6 +1260,8 @@ test "a press stops a seat where it is drawn" {
     var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
     defer t.deinit();
     t_use_dvui = false;
+    // Phone density: one device pixel is a third of a point.
+    t.backend.size_pixels = .{ .w = 900, .h = 1200 };
     t_column = true;
     defer t_column = false;
     t_top = 0.5;
@@ -1235,7 +1271,7 @@ test "a press stops a seat where it is drawn" {
     try dragIn(100, 6);
     try lift();
     for (0..3) |_| try frameAfter(16);
-    try std.testing.expect(!t_snapping);
+    try std.testing.expect(t_moving);
     _ = try dvui.currentWindow().addEventPointer(.{ .button = .touch0, .action = .press, .xynorm = .{ .x = 0.5, .y = 0.5 } });
     try std.testing.expectApproxEqAbs(@as(f32, 0), try restJump(16), 0.001);
 }

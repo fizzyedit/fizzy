@@ -49,10 +49,10 @@ class SlotRunTests(unittest.TestCase):
     def git(self, repo, *args):
         return subprocess.check_output(['git', *args], cwd=repo, env=self.env, stderr=subprocess.PIPE).decode()
 
-    def run_slot(self, mode='write-ok', keep=False):
+    def run_slot(self, mode='write-ok', keep=False, agent=None):
         (self.job_dir / 'job.json').write_text(json.dumps(self.job))
         agents = self.root / 'agents.json'
-        agents.write_text(json.dumps({'codex': dict(cmd=[sys.executable, str(ROOT / 'fakes/agent.py'), mode],
+        agents.write_text(json.dumps({self.env['SLOT_KIND']: dict(cmd=[sys.executable, str(agent or ROOT / 'fakes/agent.py'), mode],
                                                    prompt='stdin', model_flag='--model', auth_exit=[64])}))
         self.env['SLOT_AGENTS'] = str(agents)
         args = [sys.executable, str(ROOT / 'slot'), 'run', str(self.job_dir), '--out', str(self.out)]
@@ -85,6 +85,67 @@ class SlotRunTests(unittest.TestCase):
     def test_decline(self):
         self.assertEqual(self.run_slot('decline'), 3, self.detail)
         self.assertIn('Missing acceptance', self.result('declined')['decline'])
+
+    def test_workspace_decline_is_copied_to_output(self):
+        agent = self.root / 'decline_agent.py'
+        agent.write_text("from pathlib import Path\n"
+                         "import sys\n"
+                         "prompt = sys.stdin.read()\n"
+                         "note = Path(prompt.split('Decline note path: ', 1)[1].splitlines()[0])\n"
+                         "assert note.is_absolute() and note.parent == Path.cwd()\n"
+                         "note.write_text('Question: which acceptance criterion applies?')\n"
+                         "sys.exit(1)\n")
+        for agent_kind in ('codex', 'claude'):
+            for kind in ('write', 'review', 'rework'):
+                with self.subTest(agent=agent_kind, kind=kind):
+                    self.env['SLOT_KIND'] = agent_kind
+                    self.job['kind'] = kind
+                    self.out = self.root / ('out-' + agent_kind + '-' + kind)
+                    self.assertEqual(self.run_slot(agent=agent), 3, self.detail)
+                    note = (self.out / 'decline.md').read_text()
+                    self.assertEqual(note, 'Question: which acceptance criterion applies?')
+                    result = self.result('declined')
+                    self.assertEqual(result['agent_kind'], agent_kind)
+                    self.assertEqual(result['decline'], note)
+                    self.assertEqual((self.out / 'agent/decline.md').read_text(), note)
+                    self.assertFalse((self.root / 'home/work' / self.job['id']).exists())
+
+    def test_workspace_pr_body_and_report_are_collected(self):
+        agent = self.root / 'workspace_agent.py'
+        agent.write_text("from pathlib import Path\n"
+                         "import json, sys\n"
+                         "prompt = sys.stdin.read()\n"
+                         "for label, text in [('PR body path: ', '## In plain words\\nA useful change.'), "
+                         "('Report path: ', 'Verified.')]:\n"
+                         "    if label not in prompt: continue\n"
+                         "    path = Path(prompt.split(label, 1)[1].splitlines()[0])\n"
+                         "    assert path.is_absolute() and path.parent == Path.cwd()\n"
+                         "    path.write_text(text)\n"
+                         "if prompt.startswith('Review'):\n"
+                         "    path = Path(prompt.split('Review path: ', 1)[1].splitlines()[0])\n"
+                         "    assert path.is_absolute() and path.parent == Path.cwd()\n"
+                         "    path.write_text(json.dumps(dict(verdict='clean', findings=[], follow_ups=[])))\n"
+                         "else:\n"
+                         "    Path('hello.txt').write_text('improved\\n')\n")
+        for kind in ('write', 'rework', 'review'):
+            with self.subTest(kind=kind):
+                self.job['kind'] = kind
+                self.job['id'] = 'workspace-artifacts-' + kind
+                self.out = self.root / ('out-' + kind)
+                self.assertEqual(self.run_slot(agent=agent, keep=True), 0, self.detail)
+                result = self.result('done')
+                self.assertEqual(result['report'], 'Verified.')
+                self.assertEqual((self.out / 'agent/report.md').read_text(), 'Verified.')
+                if kind != 'review':
+                    self.assertEqual(result['pr_body'], '## In plain words\nA useful change.')
+                    self.assertEqual(result['changed']['files'], 1)
+                if kind == 'review':
+                    self.assertEqual(result['review']['verdict'], 'clean')
+                    self.assertTrue((self.out / 'agent/review.json').is_file())
+                work = self.root / 'home/work' / self.job['id']
+                self.assertFalse((work / 'review.json').exists())
+                self.assertFalse((work / 'pr-body.md').exists())
+                self.assertFalse((work / 'report.md').exists())
 
     def test_no_change_fails(self):
         self.assertEqual(self.run_slot('no-change'), 4, self.detail)

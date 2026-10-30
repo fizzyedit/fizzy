@@ -227,7 +227,7 @@ The validator refuses when any of these fails, and lists every failure, not the 
 
 | Result | Action |
 |---|---|
-| write done | push `branch` to fizzy (new branch, fails if it exists), open the PR (ready, not draft) with `pr_body` + `Part of fizzyedit/work#N`, labels `area:<x>`, `kind:<k>`, `gate:yes` if risky |
+| write done | push `branch` to fizzy (new branch, fails if it exists), open the PR (ready, not draft) with `pr_body` + `Part of fizzyedit/work#N`, labels `area:<x>`, `kind:<agent_kind>` from result.json (never the issue's work-kind labels), `gate:yes` if risky |
 | rework done | push to the PR's branch, fast-forward only (refuse if head moved), label `rework:<round>` |
 | review done | comment the findings on the PR's pr-thread issue in work (`REVIEW: clean|changes @<sha>`); commit status `agent-review` on `head_sha` (success when clean); follow-ups appended to the PR's follow-up list; `changes` dispatches `rework` (round + 1), round 3 labels `stuck` instead; `clean` runs `gh pr merge --auto` |
 | declined | comment `APPROACH:` + the decline on the issue, label `arch:needed`, remove `ready` |

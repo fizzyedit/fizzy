@@ -1,17 +1,69 @@
 #!/usr/bin/env bash
-# Check a PR body against docs/AGENT_WORK.md "The PR page": the plain sections a visitor reads, the
-# vision anchor, and the collapsed technical summary. `check-pr-body <file|PR number>`.
+# Check a PR page against docs/AGENT_WORK.md "The PR page": a real title, the plain sections a visitor
+# reads in order (with a code snippet under "What changes"), the vision anchor, the collapsed technical
+# summary and the agent-notes block. `check-pr-body [--title <title>] <file|PR number>`.
+# A PR number reads the live title and requires the agent-notes block; a file checks the notes only
+# when it holds them, and takes its title from a first line `# <title>` or `--title`.
 set -euo pipefail
 fail() { echo "check-pr-body: $*" >&2; exit 2; }
-[[ $# == 1 ]] || fail 'usage: check-pr-body <file|PR number>'
+title=
+have_title=false
+if [[ ${1:-} == --title ]]; then
+    [[ $# -ge 2 ]] || fail 'usage: check-pr-body [--title <title>] <file|PR number>'
+    title=$2; have_title=true; shift 2
+fi
+[[ $# == 1 ]] || fail 'usage: check-pr-body [--title <title>] <file|PR number>'
 cd "$(dirname "$0")/.."
+require_notes=false
 if [[ $1 =~ ^[1-9][0-9]*$ ]]; then
+    title=$(gh pr view "$1" --repo fizzyedit/fizzy --json title --jq .title) || fail "cannot read PR #$1"
+    have_title=true; require_notes=true
     body=$(gh pr view "$1" --repo fizzyedit/fizzy --json body --jq .body) || fail "cannot read PR #$1"
 else
     body=$(<"$1") || fail "cannot read $1"
+    if ! $have_title && [[ $body == '# '* ]]; then
+        title=$(head -n 1 <<<"$body" | tr -d '\r' | cut -c3-); have_title=true
+    fi
 fi
+body=$(tr -d '\r' <<<"$body")
+problems=()
+if $have_title; then
+    if [[ ${#title} -gt 72 ]]; then problems+=("title is over 72 characters: \"$title\""); fi
+    if [[ ! $title =~ ^[a-z0-9_-]+:\ .+ ]]; then
+        problems+=("title \"$title\" is not \"area: what changes\"")
+    elif [[ $title =~ ^[A-Za-z0-9_]+:\ work-[0-9]+ || $title =~ ^[A-Za-z0-9_]+:\ [a-z-]+$ ]]; then
+        problems+=("title \"$title\" is a slug; say what changes, in words a person understands")
+    fi
+fi
+# Agent notes: the one place agents talk to each other, a hidden comment at the end of the body.
+notes=$(grep -E '^<!-- agent-notes \{.*\} -->$' <<<"$body" || true)
+if [[ -n $notes && $(grep -c . <<<"$notes") != 1 ]]; then
+    problems+=('more than one agent-notes block')
+elif [[ -z $notes ]]; then
+    if grep -q '^<!-- *agent-notes' <<<"$body"; then
+        problems+=('the agent-notes block is malformed: expected one line <!-- agent-notes {...} -->')
+    elif $require_notes; then problems+=('no "<!-- agent-notes {...} -->" block'); fi
+else
+    last=$(grep -v '^[[:space:]]*$' <<<"$body" | tail -n 1)
+    [[ $last == "$notes" ]] || problems+=('the agent-notes block is not the last thing in the body')
+    json=${notes#'<!-- agent-notes '}; json=${json%' -->'}
+    if ! why=$(perl -MJSON::PP -e '
+        my $j = eval { decode_json($ARGV[0]) } or die "is not valid JSON\n";
+        ref $j eq "HASH" or die "is not a JSON object\n";
+        for (qw(issue worker slot status area open_questions next)) { exists $j->{$_} or die "lacks \"$_\"\n" }
+        ref $j->{open_questions} eq "ARRAY" or die "\"open_questions\" is not a list\n";
+        $j->{status} =~ /^(draft|ready)$/ or die "\"status\" is not draft or ready\n";
+        $j->{next} =~ /^(review|fixes|merge)$/ or die "\"next\" is not review, fixes or merge\n";
+    ' "$json" 2>&1); then
+        problems+=("agent-notes ${why:-is invalid}")
+    fi
+    # A claim draft may still be empty; a ready page may not.
+    draft=false
+    draft_re='"status": *"draft"'; if [[ $json =~ $draft_re ]]; then draft=true; fi
+fi
+draft=${draft:-false}
 # Template hints are HTML comments, often several lines long: they are not content.
-body=$(tr -d '\r' <<<"$body" | awk '
+body=$(awk '
     {
         line = $0; out = ""
         while (line != "") {
@@ -26,22 +78,47 @@ body=$(tr -d '\r' <<<"$body" | awk '
             }
         }
         print out
-    }')
-problems=()
-# The text under a `## <heading>`, up to the next heading or the technical summary.
+    }' <<<"$body")
+# The text under a `## <heading>`, up to the next heading or the technical summary; a `#` line
+# inside a code fence is code.
 section() {
     awk -v h="## $1" '
-        $0 == h { on = 1; next }
-        on && (/^##? / || /^<details>/) { exit }
+        /^```/ && on { fence = !fence }
+        $0 == h && !fence { on = 1; next }
+        on && !fence && (/^##? / || /^<details>/) { exit }
         on && !/^[[:space:]]*$/ { print }
     ' <<<"$body"
 }
-for heading in 'In plain words' 'What you will notice' 'How this serves fizzy' 'How we know it works'; do
+empty=()
+order=
+for heading in 'In plain words' 'What changes' 'What you will notice' 'How we know it works' 'How this serves fizzy'; do
     text=$(section "$heading")
-    if [[ -z $text || $text == '(to fill)' ]]; then problems+=("\"## $heading\" is missing or empty"); fi
+    if [[ -z $text || $text == '(to fill)' || $text == 'Draft: work in progress' ]]; then
+        empty+=("\"## $heading\" is missing or empty")
+    fi
+    order+="$(grep -n -m1 -xF "## $heading" <<<"$body" | cut -d: -f1 || true) "
 done
+if [[ $(tr ' ' '\n' <<<"$order" | grep . | sort -n | tr '\n' ' ') != "$order" ||
+    $(tr ' ' '\n' <<<"$order" | grep -c .) != 5 ]]; then
+    problems+=('the plain sections are not all there in order: In plain words, What changes, What you will notice, How we know it works, How this serves fizzy')
+fi
+changes=$(section 'What changes')
+if [[ -n $changes && $changes != 'Draft: work in progress' ]]; then
+    # Each fenced snippet is at most 15 lines; at least one is there.
+    sizes=$(awk '/^```/ { if (inside) { print n; inside = 0 } else { inside = 1; n = 0 } next } inside { n++ }' <<<"$changes")
+    if [[ -z $sizes ]]; then
+        empty+=('"## What changes" has no fenced code snippet (a before/after or the key function)')
+    elif [[ $(sort -n <<<"$sizes" | tail -n 1) -gt 15 ]]; then
+        problems+=('a code snippet under "## What changes" is over 15 lines')
+    fi
+fi
+if $draft; then
+    for e in ${empty[@]+"${empty[@]}"}; do echo "check-pr-body: $1: draft, still to write: $e" >&2; done
+else
+    problems+=(${empty[@]+"${empty[@]}"})
+fi
 anchors=$(grep -o 'docs/VISION\.md#[a-z0-9-]*' <<<"$(section 'How this serves fizzy')" | sed 's/.*#//' | sort -u || true)
-if [[ -z $anchors ]]; then
+if [[ -z $anchors ]] && ! $draft; then
     problems+=('"## How this serves fizzy" links no docs/VISION.md#<anchor>')
 fi
 for anchor in $anchors; do
