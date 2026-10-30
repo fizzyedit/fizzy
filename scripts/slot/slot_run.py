@@ -214,7 +214,8 @@ def run(job, job_dir, out, keep):
             (out / 'agent').mkdir()
             decline_path = work / 'decline.md'
             values = {**job, 'out_agent': str(out / 'agent'), 'decline_path': str(decline_path),
-                      'pr_body_path': str(work / 'pr-body.md'), 'report_path': str(work / 'report.md')}
+                      'pr_body_path': str(work / 'pr-body.md'), 'report_path': str(work / 'report.md'),
+                      'review_path': str(work / 'review.json')}
             prompt = (ROOT / 'prompts' / (job['kind'] + '.md')).read_text(encoding='utf-8').format_map(values)
             if os.environ.get('SLOT_MODEL'):
                 command += [config['model_flag'], os.environ['SLOT_MODEL']]
@@ -226,7 +227,7 @@ def run(job, job_dir, out, keep):
                                  prompt.encode() if config['prompt'] == 'stdin' else None)
                 finally:
                     # Collect sandbox outputs before staging the implementation patch.
-                    for name in ('pr-body.md', 'report.md', 'decline.md'):
+                    for name in ('pr-body.md', 'report.md', 'review.json', 'decline.md'):
                         source = work / name
                         if source.is_file():
                             shutil.copyfile(source, out / 'agent' / name)
