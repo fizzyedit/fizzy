@@ -11,6 +11,7 @@ const sdk = @import("fizzy_sdk");
 const dvui = @import("dvui");
 const core = @import("core");
 const Carousel = @import("Carousel.zig");
+const demo_cards = @import("demo_cards.zig");
 
 const Api = sdk.services.dashboard_cards.Api;
 const Card = Api.Card;
@@ -23,23 +24,39 @@ pub var carousel: Carousel = .{};
 /// agent reads to know the carousel shows one at a time.
 pub var drawn: usize = 0;
 
+/// The provider whose cards are shown: whichever the host has, else the demo's. The demo is a
+/// fallback and not a registered service, so a provider loaded after the dashboard is the one
+/// listed from its first frame.
+pub fn provider(host: *sdk.Host) *Api {
+    return host.getServiceTyped(Api) orelse &demo_cards.api;
+}
+
+/// An action the person picked this frame. The strings are the provider's, valid until `act`.
+const Pick = struct { card_id: []const u8, action_id: []const u8 };
+
 pub fn draw(host: *sdk.Host) void {
     drawn = 0;
     var column = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .padding = .all(8) });
     defer column.deinit();
 
-    const api = host.getServiceTyped(Api) orelse {
-        _ = header(0, 0, null);
-        return note("This app has no cards to show.");
-    };
+    const api = provider(host);
+    // Finish reading cards before `act` can free them.
+    const picked = drawCards(api) orelse return;
+    api.act(picked.card_id, picked.action_id);
+}
+
+fn drawCards(api: *Api) ?Pick {
     const cards = api.list();
-    const ids = host.arena().alloc(u64, cards.len) catch return;
+    const ids = dvui.currentWindow().arena().alloc(u64, cards.len) catch return null;
     for (cards, ids) |c, *id| id.* = Carousel.hashId(c.id);
     carousel.sync(ids);
 
     const go = header(carousel.index, cards.len, ids);
     if (go) |dir| _ = carousel.go(ids, dir);
-    if (cards.len == 0) return note("Nothing needs you.");
+    if (cards.len == 0) {
+        note("Nothing needs you.");
+        return null;
+    }
 
     var stage = dvui.overlay(@src(), .{ .expand = .both });
     defer stage.deinit();
@@ -50,18 +67,20 @@ pub fn draw(host: *sdk.Host) void {
     const t = carousel.progress(dvui.frameTimeNS(), core.motion.durationMs(slide_ms));
     const slide = carousel.slide;
     const shown = cards[carousel.index];
+    var picked: ?Pick = null;
     if (t == null or slide == null) {
-        drawCard(api, shown, 0, .{ .x = 0, .y = 0, .w = stage_rect.w, .h = stage_rect.h });
-        return;
+        drawCard(&picked, shown, 0, .{ .x = 0, .y = 0, .w = stage_rect.w, .h = stage_rect.h });
+        return picked;
     }
     // Still moving: the next frame is wanted, and `slide` is what this frame ends on (it was
     // dropped by `progress` at the end, so its last frame is the card in place).
     dvui.refresh(null, @src(), stage.data().id);
     const off = Carousel.offsets(slide.?.dir, core.motion.settle(t.?));
-    drawCard(api, shown, 0, .{ .x = off.entering * stage_rect.w, .y = 0, .w = stage_rect.w, .h = stage_rect.h });
+    drawCard(&picked, shown, 0, .{ .x = off.entering * stage_rect.w, .y = 0, .w = stage_rect.w, .h = stage_rect.h });
     if (slide.?.from) |f| {
-        drawCard(api, cards[f.index], 1, .{ .x = off.leaving * stage_rect.w, .y = 0, .w = stage_rect.w, .h = stage_rect.h });
+        drawCard(&picked, cards[f.index], 1, .{ .x = off.leaving * stage_rect.w, .y = 0, .w = stage_rect.w, .h = stage_rect.h });
     }
+    return picked;
 }
 
 /// The title on the left; on the right the count and the two buttons. Returns the way the person
@@ -98,7 +117,7 @@ fn button(name: []const u8, glyph: []const u8, enabled: bool, tag: []const u8, i
 }
 
 /// One card in `rect` (within the stage), whole: its source, title and body, then its actions.
-fn drawCard(api: *Api, card: Card, id_extra: usize, rect: dvui.Rect) void {
+fn drawCard(picked: *?Pick, card: Card, id_extra: usize, rect: dvui.Rect) void {
     drawn += 1;
     const theme = dvui.themeGet();
     var box = dvui.box(@src(), .{ .dir = .vertical }, .{
@@ -135,8 +154,9 @@ fn drawCard(api: *Api, card: Card, id_extra: usize, rect: dvui.Rect) void {
             .primary => .highlight,
             .destructive => .err,
         };
-        if (dvui.button(@src(), a.label, .{}, .{ .id_extra = i, .style = style, .margin = .{ .w = 6 } })) {
-            api.act(card.id, a.id);
+        const tag = dvui.currentWindow().arena().print("dashboard.action.{d}.{d}", .{ id_extra, i }) catch null;
+        if (dvui.button(@src(), a.label, .{}, .{ .id_extra = i, .tag = tag, .style = style, .margin = .{ .w = 6 } })) {
+            picked.* = .{ .card_id = card.id, .action_id = a.id };
         }
     }
 }
@@ -147,4 +167,135 @@ fn note(text: []const u8) void {
 
 fn dim() dvui.Color {
     return dvui.themeGet().color(.control, .text).opacity(0.6);
+}
+
+/// A provider whose cards live on the heap and are freed when one is answered, as a real one's do.
+const HeapProvider = struct {
+    gpa: std.mem.Allocator,
+    cards: []Card = &.{},
+    generation: u32 = 0,
+    answered: ?[]const u8 = null,
+
+    fn add(self: *HeapProvider, id: []const u8, labels: []const []const u8) !void {
+        const actions = try self.gpa.alloc(Api.Action, labels.len);
+        for (actions, labels) |*a, l| a.* = .{ .id = try self.gpa.dupe(u8, l), .label = try self.gpa.dupe(u8, l) };
+        const cards = try self.gpa.realloc(self.cards, self.cards.len + 1);
+        cards[cards.len - 1] = .{ .id = try self.gpa.dupe(u8, id), .title = try self.gpa.dupe(u8, id), .body = try self.gpa.dupe(u8, id), .actions = actions };
+        self.cards = cards;
+    }
+
+    fn freeCards(self: *HeapProvider) void {
+        for (self.cards) |c| {
+            for (c.actions) |a| {
+                self.gpa.free(a.id);
+                self.gpa.free(a.label);
+            }
+            self.gpa.free(c.actions);
+            self.gpa.free(c.id);
+            self.gpa.free(c.title);
+            self.gpa.free(c.body);
+        }
+        self.gpa.free(self.cards);
+        self.cards = &.{};
+    }
+
+    fn list(ctx: *anyopaque) []const Card {
+        const self: *HeapProvider = @ptrCast(@alignCast(ctx));
+        return self.cards;
+    }
+
+    fn act(ctx: *anyopaque, card_id: []const u8, action_id: []const u8) void {
+        const self: *HeapProvider = @ptrCast(@alignCast(ctx));
+        self.answered = self.gpa.dupe(u8, action_id) catch null;
+        _ = card_id;
+        self.freeCards();
+        self.generation +%= 1;
+    }
+
+    fn currentGeneration(ctx: *anyopaque) u32 {
+        const self: *HeapProvider = @ptrCast(@alignCast(ctx));
+        return self.generation;
+    }
+
+    const vtable: Api.VTable = .{ .list = list, .act = act, .generation = currentGeneration };
+
+    fn api(self: *HeapProvider) Api {
+        return .{ .ctx = self, .vtable = &vtable };
+    }
+};
+
+var test_host: *sdk.Host = undefined;
+
+fn testFrame() !dvui.App.Result {
+    draw(test_host);
+    return .ok;
+}
+
+test "an action picked on a card is acted on after the card is drawn, not while the provider's list is in use" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 400, .h = 400 } });
+    defer t.deinit();
+    var host: sdk.Host = .init(std.testing.allocator);
+    defer host.deinit();
+    test_host = &host;
+
+    var heap: HeapProvider = .{ .gpa = std.testing.allocator };
+    defer {
+        heap.freeCards();
+        if (heap.answered) |a| heap.gpa.free(a);
+    }
+    try heap.add("card", &.{ "first", "second", "third" });
+    var api = heap.api();
+    try host.registerService(Api, &api, null);
+
+    try dvui.testing.settle(testFrame);
+    try dvui.testing.moveTo("dashboard.action.0.0");
+    try dvui.testing.click(.left);
+    // `act` frees the card the loop was walking; a later action button read from it would be a
+    // use after free, which the testing allocator and the filled freed memory turn into a crash.
+    _ = try dvui.testing.step(testFrame);
+    try std.testing.expectEqualStrings("first", heap.answered orelse return error.TestUnexpectedResult);
+    try std.testing.expectEqual(@as(usize, 0), heap.cards.len);
+    try dvui.testing.settle(testFrame);
+}
+
+test "a provider registered after the dashboard is the one listed, over the demo's cards" {
+    var host: sdk.Host = .init(std.testing.allocator);
+    defer host.deinit();
+    try @import("../plugin.zig").register(&host);
+    try std.testing.expectEqual(&demo_cards.api, provider(&host));
+
+    var heap: HeapProvider = .{ .gpa = std.testing.allocator };
+    defer heap.freeCards();
+    try heap.add("mine", &.{"ok"});
+    var api = heap.api();
+    try host.registerService(Api, &api, null);
+
+    try std.testing.expectEqual(&api, provider(&host));
+    try std.testing.expectEqualStrings("mine", provider(&host).list()[0].id);
+}
+
+test "cards with the same action id have distinct tags during a slide" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 400, .h = 400 } });
+    defer t.deinit();
+    var host: sdk.Host = .init(std.testing.allocator);
+    defer host.deinit();
+    test_host = &host;
+    carousel = .{};
+    defer carousel = .{};
+
+    var heap: HeapProvider = .{ .gpa = std.testing.allocator };
+    defer heap.freeCards();
+    try heap.add("one", &.{"approve"});
+    try heap.add("two", &.{"approve"});
+    var api = heap.api();
+    try host.registerService(Api, &api, null);
+
+    try dvui.testing.settle(testFrame);
+    const ids = [_]u64{ Carousel.hashId("one"), Carousel.hashId("two") };
+    try std.testing.expect(carousel.go(&ids, .next));
+    _ = try dvui.testing.step(testFrame);
+    try std.testing.expectEqual(@as(usize, 2), drawn);
+    const entering = try dvui.testing.tagGet("dashboard.action.0.0");
+    const leaving = try dvui.testing.tagGet("dashboard.action.1.0");
+    try std.testing.expect(entering.id != leaving.id);
 }

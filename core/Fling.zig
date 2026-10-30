@@ -163,10 +163,13 @@ pub fn release(self: *Fling, t: Tuning) bool {
     return self.coasting;
 }
 
-/// Record one motion sample using its timestamp in the backend nanosecond clock.
+/// Record one motion sample using its timestamp in the backend nanosecond clock. A sample
+/// stamped before the one it follows is held at that one's time: the history only moves forward,
+/// so a stray time can't make a speed of one sample's travel over an unrelated gap.
 pub fn sampleTimed(self: *Fling, delta: f32, time_ns: i128) void {
     self.hist_pos += delta;
-    self.hist[self.hist_head] = .{ .pos = self.hist_pos, .t = time_ns };
+    const t = if (self.hist_len > 0) @max(time_ns, self.histAt(0).t) else time_ns;
+    self.hist[self.hist_head] = .{ .pos = self.hist_pos, .t = t };
     self.hist_head = (self.hist_head + 1) % hist_cap;
     if (self.hist_len < hist_cap) self.hist_len += 1;
 }
@@ -250,6 +253,15 @@ test "the rubber band shows a third of the travel at 120 points and never reache
     for ([_]f32{ -250, -3, 0, 40, 300 }) |x| {
         try std.testing.expectApproxEqAbs(x, unrubber(rubber(x, rubber_band), rubber_band), 0.01);
     }
+}
+
+test "a sample stamped before the previous one is held at the previous time" {
+    var f: Fling = .{};
+    f.sampleTimed(10, 100 * std.time.ns_per_ms);
+    f.sampleTimed(10, 40 * std.time.ns_per_ms);
+    try std.testing.expectEqual(@as(i128, 100 * std.time.ns_per_ms), f.histAt(0).t);
+    f.sampleTimed(10, 108 * std.time.ns_per_ms);
+    try std.testing.expectEqual(@as(i128, 108 * std.time.ns_per_ms), f.histAt(0).t);
 }
 
 /// Where a coast released at `origin` with `v` stops, from its closed form.
