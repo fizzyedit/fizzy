@@ -184,6 +184,7 @@ def run(job, job_dir, out, keep):
         agents = json.loads(Path(os.environ.get('SLOT_AGENTS', ROOT / 'agents.json')).read_text())
         config = agents[kind]
         command = list(config.get('windows_cmd', config['cmd']) if os.name == 'nt' else config['cmd'])
+        command = [os.path.expandvars(os.path.expanduser(a)) for a in command]
         if not shutil.which(command[0]):
             raise BrokenSlot('agent command not on PATH')
     except (OSError, ValueError, KeyError, IndexError, TypeError) as exc:
