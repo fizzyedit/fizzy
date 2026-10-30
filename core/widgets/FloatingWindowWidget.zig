@@ -191,7 +191,9 @@ pub const DragPart = enum {
     }
 };
 
-prev_rendering: bool = undefined,
+/// Clears an enclosing `Picture`'s or `RenderFrontToBack`'s queues for the window's life, as dvui's
+/// floating widgets do, so its draws land in its own subwindow.
+render_ftb: dvui.RenderFrontToBack = undefined,
 /// Window alpha before the close-flight fade replaced it, restored in `deinit`. Null while no
 /// close animation is running, which is every frame of a window's normal life.
 prev_alpha: ?f32 = null,
@@ -511,7 +513,7 @@ pub fn init(self: *FloatingWindowWidget, src: std.lang.SourceLocation, init_opts
     }
 
     self.data().register();
-    self.prev_rendering = dvui.renderingSet(false);
+    self.render_ftb.initReset();
 
     if (dvui.firstFrame(self.data().id)) {
         dvui.focusSubwindow(self.data().id, null);
@@ -1031,7 +1033,7 @@ pub fn deinit(self: *FloatingWindowWidget) void {
     _ = dvui.subwindowCurrentSet(self.prev_windowInfo.id, self.prev_windowInfo.rect);
     dvui.clipSet(self.prevClip);
     if (self.prev_alpha) |pa| dvui.alphaSet(pa);
-    _ = dvui.renderingSet(self.prev_rendering);
+    self.render_ftb.deinit();
 }
 
 test {

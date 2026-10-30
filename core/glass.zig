@@ -1,6 +1,13 @@
-//! Shared glass layers and visibility of their ink, including the physical antialiasing fringe.
+//! Glass drawn under a run of cards, and the visibility of glass ink in physical pixels, including
+//! its antialiasing fringe.
 const std = @import("std");
+const builtin = @import("builtin");
 const dvui = @import("dvui");
+const LiquidField = @import("glass").LiquidField;
+const BlurBackdrop = @import("glass").BlurBackdrop;
+const glass_look = @import("glass_look");
+const material = @import("material.zig");
+const dialogs = @import("dialogs.zig");
 
 /// The antialiasing fringe, in physical pixels, that ink may reach past the clip and still show.
 /// The backend keeps a copy (`BlurBackdrop.fringe_px`), pinned to it by the test below.
@@ -18,97 +25,231 @@ pub fn reaches(ink: dvui.Rect.Physical) bool {
     return !clip.empty() and within(ink, clip, fringe_px);
 }
 
-const LiquidField = @import("glass").LiquidField;
-const BlurBackdrop = @import("glass").BlurBackdrop;
-const material = @import("material.zig");
-const glass_look = @import("glass_look");
+pub const Under = enum {
+    /// The app's published picture (`material.publishBackdrop`) when there is one, else `capture`.
+    backdrop,
+    /// What is on the screen under the cards, copied and blurred (`BlurBackdrop.fieldPane`).
+    capture,
+};
 
-pub const Under = enum { backdrop, capture };
 pub const LayerOptions = struct {
     role: glass_look.Role = .card,
+    /// Points: how near two cards come before their glass runs together.
     merge: f32 = 12,
     under: Under = .backdrop,
     tint: ?dvui.Color = null,
     mix: f32 = 0,
+    /// The blur, for `.capture`.
     radius: f32 = 20,
+    /// The cards' shadow rings' share, 0…1.
+    shadow: f32 = 1,
 };
 
-const Card = struct { rect: dvui.Rect, corners: dvui.CornerRect };
+/// Cards in one field: the program's shape slots, less the one an edge takes.
+const field_cards = LiquidField.max_shapes - 1;
 
-/// Begin under the cards that follow, using last frame's content coordinates.
-/// Fields hold at most 15 cards; further cards start another field.
+const Card = struct { rect: dvui.Rect.Physical, radii: [4]f32, corners: dvui.CornerRect };
+
+/// Begin a layer: everything drawn until `end` goes over its glass, which is of the cards `add`ed
+/// THIS frame and ordered under all of it, so it never trails a card that moves.
+///
+/// Drawing in the span is deferred, whatever the window was doing (as in a `dvui.RenderFrontToBack`
+/// block), and replays at `end`: in an immediate context at once, in a deferred one (a floating
+/// window, a picture, a front-to-back block) as one command at the layer's place. So the cards'
+/// own draw-last commands (focus rings) draw at the layer's end, not at the subwindow's, and text
+/// in the span is shaped at replay, as in every floating window. The span is a block: `end` runs
+/// in the subwindow `layer` did, and a window opened inside it draws in its own subwindow.
+///
+///     var l = core.glass.layer(id, .{});
+///     defer l.end();
+///
+/// `id` keys the capture of `.capture` and so must be stable.
 pub fn layer(id: dvui.Id, opts: LayerOptions) Layer {
-    const out: Layer = .{ .id = id };
-    if (@import("builtin").is_test) {
-        dvui.dataSet(null, id, "_layer_captures", @as(usize, 0));
-        dvui.dataSetSlice(null, id, "_layer_fields", @as([]const LiquidField, &.{}));
-    }
-    if (!LiquidField.ready()) return out;
-    const cards = dvui.dataGetSlice(null, id, "_layer_cards", []Card) orelse return out;
-    const rs = dvui.parentGet().screenRectScale(.{});
-    var field: LiquidField = .{
-        .scale = rs.s,
-        .merge_px = opts.merge * rs.s,
-        .role = opts.role,
-        .tint = opts.tint,
-        .mix = opts.mix,
+    if (!LiquidField.ready()) return .{};
+    const cw = dvui.currentWindow();
+    const job = cw.arena().create(Job) catch return .{};
+    job.* = .{
+        .id = id,
+        .opts = opts,
+        .scale = dvui.parentGet().screenRectScale(.{}).s,
+        .subwindow = dvui.subwindowCurrentId(),
+        .prev_rendering = dvui.renderingSet(false),
+        .prev_queues = cw.defer_render,
     };
-    var group: usize = 0;
-    for (cards) |card| {
-        const rect = rs.rectToPhysical(card.rect);
-        if (!reaches(rect)) continue;
-        const theme = dvui.themeGet();
-        const c = card.corners.finalize(&theme);
-        field.add(.{ .rect = rect, .radii = .{ c.tl.radius() * rs.s, c.tr.radius() * rs.s, c.br.radius() * rs.s, c.bl.radius() * rs.s } });
-        if (field.len == 15) {
-            drawLayer(id, group, field, opts);
-            field.len = 0;
-            group += 1;
-        }
-    }
-    if (field.len > 0) drawLayer(id, group, field, opts);
-    return out;
-}
-
-fn drawLayer(id: dvui.Id, group: usize, field: LiquidField, opts: LayerOptions) void {
-    if (@import("builtin").is_test) {
-        const previous = dvui.dataGetSlice(null, id, "_layer_fields", []LiquidField).?;
-        const fields = dvui.currentWindow().arena().alloc(LiquidField, previous.len + 1) catch return;
-        @memcpy(fields[0..previous.len], previous);
-        fields[previous.len] = field;
-        dvui.dataSetSlice(null, id, "_layer_fields", fields);
-    }
-    if (opts.under == .backdrop) {
-        if (material.backdrop()) |b| {
-            _ = field.drawOver(b.frost, b.sharp, b.covered);
-            return;
-        }
-    }
-    if (@import("builtin").is_test) {
-        const n = dvui.dataGet(null, id, "_layer_captures", usize).?;
-        dvui.dataSet(null, id, "_layer_captures", n + 1);
-    }
-    BlurBackdrop.fieldPane(id.extendId(@src(), group), field, field.scale, .{
-        .radius = opts.radius,
-        .tint = opts.tint,
-        .mix = opts.mix,
-        .form = 1,
-    });
+    cw.defer_render = &job.queues;
+    // First in the span's queue, so under every card; the cards fill `job.cards` as they lay out.
+    dvui.deferRender(job, Job.drawGlass);
+    return .{ .job = job };
 }
 
 pub const Layer = struct {
-    id: dvui.Id,
-    cards: std.ArrayList(Card) = .empty,
+    job: ?*Job = null,
 
-    /// Record in the parent's content coordinates for next frame. False on allocation failure.
-    pub fn add(self: *Layer, rect: dvui.Rect, corners: dvui.CornerRect) bool {
-        self.cards.append(dvui.currentWindow().arena(), .{ .rect = rect, .corners = corners }) catch return false;
+    /// A card's border rect, physical, this frame's (`data().borderRectScale().r`), right after
+    /// the card's box installs and before its contents. False with no glass program
+    /// (`LiquidField.ready()`): the caller paints its fallback face. Cards go into fields of 15.
+    pub fn add(self: *Layer, rect: dvui.Rect.Physical, corners: dvui.CornerRect) bool {
+        const job = self.job orelse return false;
+        const theme = dvui.themeGet();
+        const c = corners.finalize(&theme);
+        const s = job.scale;
+        const card: Card = .{
+            .rect = rect,
+            .radii = .{ c.tl.radius() * s, c.tr.radius() * s, c.br.radius() * s, c.bl.radius() * s },
+            .corners = corners,
+        };
+        job.cards.append(dvui.currentWindow().arena(), card) catch return false;
         return true;
     }
 
     pub fn end(self: *Layer) void {
-        dvui.dataSetSlice(null, self.id, "_layer_cards", self.cards.items);
+        const job = self.job orelse return;
+        self.job = null;
+        const cw = dvui.currentWindow();
+        std.debug.assert(cw.defer_render == &job.queues);
+        std.debug.assert(dvui.subwindowCurrentId() == job.subwindow);
+        cw.defer_render = job.prev_queues;
+        _ = dvui.renderingSet(job.prev_rendering);
+        dvui.deferRender(job, Job.replay);
     }
+};
+
+const Job = struct {
+    id: dvui.Id,
+    opts: LayerOptions,
+    scale: f32,
+    subwindow: dvui.Id,
+    prev_rendering: bool,
+    prev_queues: ?*dvui.RenderQueues,
+    queues: dvui.RenderQueues = .{},
+    cards: std.ArrayList(Card) = .empty,
+
+    fn replay(ctx: ?*anyopaque) void {
+        const job: *Job = @ptrCast(@alignCast(ctx orelse return));
+        job.queues.render(dvui.currentWindow()) catch |err| dvui.logError(@src(), err, "glass layer could not replay", .{});
+    }
+
+    /// The layer's first command: at replay `cards` holds this frame's, all of them.
+    fn drawGlass(ctx: ?*anyopaque) void {
+        const job: *Job = @ptrCast(@alignCast(ctx orelse return));
+        record.beginJob();
+        var group: usize = 0;
+        var field = job.newField();
+        for (job.cards.items) |card| {
+            if (!reaches(card.rect)) continue;
+            field.add(.{ .rect = card.rect, .radii = card.radii });
+            if (field.len == field_cards) {
+                job.drawField(field, group);
+                group += 1;
+                field = job.newField();
+            }
+        }
+        job.drawField(field, group);
+        // The rings over the glass, never under it, so none lands on a neighbour drawn earlier.
+        if (job.opts.shadow > 0) {
+            const bs = dialogs.surfaceShadow();
+            for (job.cards.items) |card| {
+                if (!reaches(card.rect.insetAll(-bs.fade * job.scale))) continue;
+                record.shadow();
+                dialogs.glassShadow(card.rect, card.corners, job.scale, bs, job.opts.shadow);
+            }
+        }
+    }
+
+    fn newField(job: *const Job) LiquidField {
+        return .{
+            .scale = job.scale,
+            .merge_px = job.opts.merge * job.scale,
+            .role = job.opts.role,
+            .tint = job.opts.tint,
+            .mix = job.opts.mix,
+        };
+    }
+
+    fn drawField(job: *const Job, field: LiquidField, group: usize) void {
+        if (field.len == 0) return;
+        record.field(&field);
+        if (job.opts.under == .backdrop) {
+            if (material.backdrop()) |b| {
+                record.over();
+                _ = field.drawOver(b.frost, b.sharp, b.covered);
+                return;
+            }
+        }
+        record.capture();
+        BlurBackdrop.fieldPane(job.id.extendId(@src(), group), field, job.scale, .{
+            .radius = job.opts.radius,
+            .tint = job.opts.tint,
+            .mix = job.opts.mix,
+            .form = 1,
+        });
+    }
+};
+
+/// The shapes the last replayed job drew, physical (tests only).
+pub fn drawnRects() []const dvui.Rect.Physical {
+    if (!builtin.is_test) @compileError("drawnRects is for tests");
+    return record.rects[0..@min(record.glass_shapes, record.rects.len)];
+}
+
+/// What the replay drew, for tests: nothing in other builds.
+const record = if (builtin.is_test) struct {
+    const Tag = enum { glass, shadow, card, float_core, float_dvui };
+    var jobs: usize = 0;
+    var captures: usize = 0;
+    var overs: usize = 0;
+    var glass_shapes: usize = 0;
+    var shadow_shapes: usize = 0;
+    var field_lens: [8]usize = undefined;
+    var fields: usize = 0;
+    var rects: [64]dvui.Rect.Physical = undefined;
+    var order: [128]Tag = undefined;
+    var order_len: usize = 0;
+
+    fn reset() void {
+        jobs = 0;
+        captures = 0;
+        overs = 0;
+        glass_shapes = 0;
+        shadow_shapes = 0;
+        fields = 0;
+        order_len = 0;
+    }
+    fn log(tag: Tag) void {
+        if (order_len < order.len) order[order_len] = tag;
+        order_len += 1;
+    }
+    fn beginJob() void {
+        glass_shapes = 0;
+        shadow_shapes = 0;
+        fields = 0;
+        jobs += 1;
+        log(.glass);
+    }
+    fn field(f: *const LiquidField) void {
+        if (fields < field_lens.len) field_lens[fields] = f.len;
+        fields += 1;
+        for (f.shapes[0..f.len]) |sh| {
+            if (glass_shapes < rects.len) rects[glass_shapes] = sh.rect;
+            glass_shapes += 1;
+        }
+    }
+    fn shadow() void {
+        shadow_shapes += 1;
+        log(.shadow);
+    }
+    fn capture() void {
+        captures += 1;
+    }
+    fn over() void {
+        overs += 1;
+    }
+} else struct {
+    fn beginJob() void {}
+    fn field(_: *const LiquidField) void {}
+    fn shadow() void {}
+    fn capture() void {}
+    fn over() void {}
 };
 
 test "ink must reach both axes, with the same margins in core and the backend" {
@@ -135,105 +276,214 @@ test "ink must reach both axes, with the same margins in core and the backend" {
 
 const test_id: dvui.Id = @fromBackingInt(@intCast(802));
 
-fn testCards(count: usize) !void {
-    var l = layer(test_id, .{});
-    for (0..count) |i| {
-        try std.testing.expect(l.add(.{ .x = 20, .y = 60 + @as(f32, @floatFromInt(i)), .w = 100, .h = 60 }, .round(8)));
+/// Test frames: `n` cards stacked 12 px apart, each followed by a recorded fill.
+var test_n: usize = 3;
+
+fn testRect(i: usize) dvui.Rect.Physical {
+    return .{ .x = 20, .y = 20 + 12 * @as(f32, @floatFromInt(i)), .w = 100, .h = 10 };
+}
+
+fn recordFill(ctx: ?*anyopaque) void {
+    const tag: record.Tag = if (ctx) |c| @fromBackingInt(@intCast(@intFromPtr(c))) else .card;
+    record.log(tag);
+}
+
+fn fill(tag: record.Tag) void {
+    dvui.deferRender(@ptrFromInt(@backingInt(tag)), recordFill);
+}
+
+fn addCards(l: *Layer) !void {
+    for (0..test_n) |i| {
+        try std.testing.expect(l.add(testRect(i), .round(8)));
+        fill(.card);
     }
+}
+
+fn immediateFrame() !dvui.App.Result {
+    record.reset();
+    var l = layer(test_id, .{});
+    try addCards(&l);
+    try std.testing.expectEqual(0, record.glass_shapes);
+    try std.testing.expectEqual(0, record.shadow_shapes);
     l.end();
-}
-
-fn testFields() []LiquidField {
-    return dvui.dataGetSlice(null, test_id, "_layer_fields", []LiquidField).?;
-}
-
-fn emptyFrame() !dvui.App.Result {
     return .ok;
 }
 
-test "a layer draws last frame's cards" {
+fn floatFrame() !dvui.App.Result {
+    record.reset();
+    // lint-allow(raw-transient-surface): the test is about dvui's own float inside a layer.
+    var win = dvui.floatingWindow(@src(), .{}, .{ .rect = .{ .x = 0, .y = 0, .w = 500, .h = 350 } });
+    defer win.deinit();
+    var l = layer(test_id, .{});
+    try addCards(&l);
+    l.end();
+    return .ok;
+}
+
+fn expectCardRects(count: usize) !void {
+    try std.testing.expectEqual(count, record.glass_shapes);
+    for (0..count) |i| try std.testing.expectEqual(testRect(i), record.rects[i]);
+}
+
+test "a layer draws this frame's cards" {
     var t = try dvui.testing.init(.{});
     defer t.deinit();
     LiquidField.readyInTest(true);
-    try testCards(3);
-    try std.testing.expectEqual(0, testFields().len);
-    _ = try dvui.testing.step(emptyFrame);
-    const rs = dvui.parentGet().screenRectScale(.{});
-    var l = layer(test_id, .{});
-    l.end();
-    try std.testing.expectEqual(1, testFields().len);
-    try std.testing.expectEqual(3, testFields()[0].len);
-    try std.testing.expectEqual(rs.rectToPhysical(.{ .x = 20, .y = 60, .w = 100, .h = 60 }), testFields()[0].shapes[0].rect);
-    // An empty list replaces the previous frame, rather than retaining vanished cards.
-    _ = try dvui.testing.step(emptyFrame);
-    l = layer(test_id, .{});
-    l.end();
-    try std.testing.expectEqual(0, testFields().len);
+    test_n = 3;
+    _ = try dvui.testing.step(immediateFrame);
+    try std.testing.expectEqual(1, record.jobs);
+    try std.testing.expectEqual(1, record.fields);
+    try std.testing.expectEqual(3, record.field_lens[0]);
+    try expectCardRects(3);
+    // Moved the same frame, not the next: the rects are the ones added before `end`.
+    test_n = 2;
+    _ = try dvui.testing.step(immediateFrame);
+    try expectCardRects(2);
 }
 
 test "15 cards make one field, the 16th starts a second" {
     var t = try dvui.testing.init(.{});
     defer t.deinit();
     LiquidField.readyInTest(true);
-    try testCards(16);
-    _ = try dvui.testing.step(emptyFrame);
-    var l = layer(test_id, .{});
-    l.end();
-    try std.testing.expectEqual(2, testFields().len);
-    try std.testing.expectEqual(15, testFields()[0].len);
-    try std.testing.expectEqual(1, testFields()[1].len);
+    test_n = 16;
+    _ = try dvui.testing.step(immediateFrame);
+    try std.testing.expectEqual(2, record.fields);
+    try std.testing.expectEqual(15, record.field_lens[0]);
+    try std.testing.expectEqual(1, record.field_lens[1]);
+    test_n = 15;
+    _ = try dvui.testing.step(immediateFrame);
+    try std.testing.expectEqual(1, record.fields);
 }
 
-test "a scroll moves last frame's cards rigidly" {
+test "the glass is under the cards" {
     var t = try dvui.testing.init(.{});
     defer t.deinit();
     LiquidField.readyInTest(true);
-    var si: dvui.ScrollInfo = .{ .virtual_size = .{ .w = 200, .h = 1000 } };
-    var area = @import("widgets/ScrollArea.zig").init(@src(), .{ .scroll_info = &si }, .{ .rect = .{ .w = 200, .h = 200 } });
-    const rs = dvui.parentGet().screenRectScale(.{});
-    try testCards(3);
-    area.deinit();
-    _ = try dvui.testing.step(emptyFrame);
-    si.viewport.y = 40;
-    area = @import("widgets/ScrollArea.zig").init(@src(), .{ .scroll_info = &si }, .{ .rect = .{ .w = 200, .h = 200 } });
-    var l = layer(test_id, .{});
-    l.end();
-    try std.testing.expectEqual(3, testFields()[0].len);
-    for (testFields()[0].shapes[0..3], 0..) |shape, i| {
-        const y = 60 + @as(f32, @floatFromInt(i));
-        try std.testing.expectApproxEqAbs(rs.rectToPhysical(.{ .y = y }).y - 40 * rs.s, shape.rect.y, 0.01);
+    test_n = 3;
+    _ = try dvui.testing.step(immediateFrame);
+    const order = record.order[0..record.order_len];
+    try std.testing.expectEqual(record.Tag.glass, order[0]);
+    var cards: usize = 0;
+    for (order, 0..) |tag, i| {
+        if (tag != .card) continue;
+        try std.testing.expect(i > 0);
+        cards += 1;
     }
-    area.deinit();
+    try std.testing.expectEqual(3, cards);
+    // The rings come with the glass, before any card's fill.
+    for (order[1 .. 1 + record.shadow_shapes]) |tag| try std.testing.expectEqual(record.Tag.shadow, tag);
+}
+
+test "immediate and deferred alike" {
+    var t = try dvui.testing.init(.{});
+    defer t.deinit();
+    LiquidField.readyInTest(true);
+    test_n = 3;
+    const cw = dvui.currentWindow();
+    _ = try dvui.testing.step(immediateFrame);
+    try expectCardRects(3);
+    try std.testing.expect(cw.render_target.rendering);
+    try std.testing.expect(cw.defer_render == null);
+    _ = try dvui.testing.step(floatFrame);
+    try expectCardRects(3);
+    try std.testing.expectEqual(1, record.jobs);
+    try std.testing.expect(cw.render_target.rendering);
+    try std.testing.expect(cw.defer_render == null);
 }
 
 test "over a published backdrop a layer captures nothing" {
     var t = try dvui.testing.init(.{});
     defer t.deinit();
     LiquidField.readyInTest(true);
-    try testCards(1);
-    _ = try dvui.testing.step(emptyFrame);
-    const texture = try dvui.textureCreate(&(@as([16 * 16]dvui.Color.PMA, @splat(.{ .r = 255, .g = 255, .b = 255, .a = 255 }))), .{ .width = 16, .height = 16 });
+    test_n = 3;
+    const texture = try dvui.textureCreate(&(@as([4]dvui.Color.PMA, @splat(.{ .r = 255, .g = 255, .b = 255, .a = 255 }))), .{ .width = 2, .height = 2 });
     defer dvui.textureDestroyLater(texture);
     material.publishBackdrop(.{ .sharp = texture, .frost = texture, .covered = .{ .w = 600, .h = 400 } });
-    var queues: dvui.RenderQueues = .{};
-    const cw = dvui.currentWindow();
-    const prev_rendering = dvui.renderingSet(false);
-    defer _ = dvui.renderingSet(prev_rendering);
-    cw.defer_render = &queues;
-    defer cw.defer_render = null;
-    var l = layer(test_id, .{});
-    try std.testing.expectEqual(0, dvui.dataGet(null, test_id, "_layer_captures", usize).?);
-    try std.testing.expectEqual(1, queues.normal.items.len);
-    try std.testing.expect(queues.normal.items[0].cmd == .custom);
+    _ = try dvui.testing.step(immediateFrame);
+    try std.testing.expectEqual(0, record.captures);
+    try std.testing.expectEqual(1, record.overs);
+    try std.testing.expectEqual(1, record.jobs);
     material.publishBackdrop(null);
-    l = layer(test_id, .{});
-    try std.testing.expectEqual(1, dvui.dataGet(null, test_id, "_layer_captures", usize).?);
-    material.publishBackdrop(.{ .sharp = texture, .frost = texture, .covered = .{ .w = 600, .h = 400 } });
-    l = layer(test_id, .{ .under = .capture });
-    try std.testing.expectEqual(1, dvui.dataGet(null, test_id, "_layer_captures", usize).?);
+    _ = try dvui.testing.step(immediateFrame);
+    try std.testing.expectEqual(1, record.captures);
+    try std.testing.expectEqual(0, record.overs);
+}
+
+test "30 cards: glass and shadows both drawn at replay" {
+    var t = try dvui.testing.init(.{});
+    defer t.deinit();
+    LiquidField.readyInTest(true);
+    test_n = 30;
+    _ = try dvui.testing.step(immediateFrame);
+    try std.testing.expectEqual(30, record.glass_shapes);
+    try std.testing.expectEqual(30, record.shadow_shapes);
+}
+
+fn nestedFrame() !dvui.App.Result {
+    record.reset();
+    const cw = dvui.currentWindow();
+    var l = layer(test_id, .{});
+    try addCards(&l);
+    const queued = l.job.?.queues.normal.items.len;
+    {
+        var win = fizzy_floating(@src());
+        defer win.deinit();
+        fill(.float_core);
+    }
+    try std.testing.expect(cw.defer_render == &l.job.?.queues);
+    try std.testing.expect(!cw.render_target.rendering);
+    {
+        // lint-allow(raw-transient-surface): the test is about dvui's own float inside a layer.
+        var win = dvui.floatingWindow(@src(), .{}, .{ .rect = .{ .x = 50, .y = 50, .w = 100, .h = 100 } });
+        defer win.deinit();
+        fill(.float_dvui);
+    }
+    try std.testing.expect(cw.defer_render == &l.job.?.queues);
+    // Neither window's fill came into the layer's queue.
+    try std.testing.expectEqual(queued, l.job.?.queues.normal.items.len);
     l.end();
+    try std.testing.expect(cw.defer_render == null);
+    return .ok;
+}
+
+fn fizzy_floating(src: std.lang.SourceLocation) *@import("widgets/FloatingWindowWidget.zig") {
+    return @import("widgets.zig").floatingWindow(src, .{}, .{ .rect = .{ .x = 10, .y = 10, .w = 100, .h = 100 } });
+}
+
+test "a floating window opened inside the layer draws normally" {
+    var t = try dvui.testing.init(.{});
+    defer t.deinit();
+    LiquidField.readyInTest(true);
+    test_n = 3;
+    _ = try dvui.testing.step(nestedFrame);
+    // Both draw, after the page: each in its own subwindow.
+    const order = record.order[0..record.order_len];
+    try std.testing.expectEqual(record.Tag.float_core, order[order.len - 2]);
+    try std.testing.expectEqual(record.Tag.float_dvui, order[order.len - 1]);
 }
 
 test "keptFrost re-blurs only when the version changes" {
-    try material.testKeptFrost();
+    var t = try dvui.testing.init(.{});
+    defer t.deinit();
+    const Blur = struct {
+        var calls: usize = 0;
+        fn run(sharp: dvui.Texture, radius: f32) ?dvui.Texture {
+            calls += 1;
+            std.debug.assert(radius == 8);
+            const pixels = dvui.currentWindow().arena().alloc(dvui.Color.PMA, sharp.width * sharp.height) catch return null;
+            @memset(pixels, .{ .r = 255, .g = 255, .b = 255, .a = 255 });
+            return dvui.textureCreate(pixels, .{ .width = sharp.width, .height = sharp.height }) catch null;
+        }
+    };
+    Blur.calls = 0;
+    material.blur_in_test = Blur.run;
+    defer material.blur_in_test = null;
+    const texture = try dvui.textureCreate(&(@as([16 * 16]dvui.Color.PMA, @splat(.{ .r = 255, .g = 255, .b = 255, .a = 255 }))), .{ .width = 16, .height = 16 });
+    defer dvui.textureDestroyLater(texture);
+    const first = material.keptFrost(texture, 8, 1).?;
+    try std.testing.expectEqual(first, material.keptFrost(texture, 8, 1).?);
+    try std.testing.expectEqual(1, Blur.calls);
+    const second = material.keptFrost(texture, 8, 2).?;
+    try std.testing.expectEqual(2, Blur.calls);
+    try std.testing.expect(!std.meta.eql(first, second));
 }

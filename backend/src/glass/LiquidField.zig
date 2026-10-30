@@ -453,7 +453,7 @@ pub fn drawPicture(self: *const LiquidField, picture: dvui.Texture, covered: dvu
     if (self.len == 0) return true;
     if (!ready()) return false;
     const job = dvui.currentWindow().arena().create(PictureJob) catch return false;
-    job.* = .{ .field = self.*, .picture = picture, .sharp = null, .covered = covered };
+    job.* = .{ .field = self.*, .picture = picture, .covered = covered };
     job.field.lens = true;
     job.field.tint = null;
     job.field.mix = 0;
@@ -463,15 +463,23 @@ pub fn drawPicture(self: *const LiquidField, picture: dvui.Texture, covered: dvu
     return true;
 }
 
-/// Queue glass over the app's own blurred picture, preserving this field's role and tint.
-/// Both textures must live until the frame ends. No scene capture is performed.
+/// The shapes as glass over the app's own picture, drawn NOW: `frost` its blur and `sharp` the
+/// picture itself, both of `covered` (physical pixels, window coordinates), so nothing under the
+/// glass is captured. Unlike `drawPicture` it keeps this field's role look and tint, and unlike
+/// `draw` it takes the draw-time alpha as `drawPicture` does. For a caller already at replay
+/// (`core.glass.layer`'s job); False, having drawn nothing, where there is no glass program.
 pub fn drawOver(self: *const LiquidField, frost: dvui.Texture, sharp: dvui.Texture, covered: dvui.Rect.Physical) bool {
     if (self.len == 0) return true;
     if (!ready()) return false;
-    const job = dvui.currentWindow().arena().create(PictureJob) catch return false;
-    job.* = .{ .field = self.*, .picture = frost, .sharp = sharp, .covered = covered };
-    dvui.deferRender(job, PictureJob.run);
-    return true;
+    return drawFull(self, frost, covered, sharp);
+}
+
+/// `draw` at full alpha: glass replaces what it covers, and at part alpha it left a hole.
+fn drawFull(self: *const LiquidField, frost: dvui.Texture, covered: dvui.Rect.Physical, sharp: ?dvui.Texture) bool {
+    const prev_alpha = dvui.currentWindow().alpha;
+    dvui.alphaSet(1);
+    defer dvui.alphaSet(prev_alpha);
+    return self.draw(frost, covered, sharp);
 }
 
 /// Physical pixels the picture `drawPicture` lays the glass over should reach past the shapes: as
@@ -487,15 +495,11 @@ pub fn pictureMargin(self: *const LiquidField) f32 {
 const PictureJob = struct {
     field: LiquidField,
     picture: dvui.Texture,
-    sharp: ?dvui.Texture,
     covered: dvui.Rect.Physical,
 
     fn run(ctx: ?*anyopaque) void {
         const self: *PictureJob = @ptrCast(@alignCast(ctx orelse return));
-        const prev_alpha = dvui.currentWindow().alpha;
-        dvui.alphaSet(1);
-        defer dvui.alphaSet(prev_alpha);
-        _ = self.field.draw(self.picture, self.covered, self.sharp);
+        _ = self.field.drawFull(self.picture, self.covered, null);
     }
 };
 

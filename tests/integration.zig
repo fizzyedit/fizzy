@@ -14364,55 +14364,116 @@ test "mobile sheets: turning the window with a sheet open shuts it, in both dire
     try std.testing.expectApproxEqAbs(1024 * 0.6 + 16, regionRect(editor, "Panel").?.h, 1);
 }
 
-test "a layer inside a scroll area is clipped to it" {
-    var t = try dvui.testing.init(.{});
-    defer t.deinit();
+/// Glass-layer frames: `n_cards` cards of 50 points down a scroll area, each added to one layer.
+const GlassLayerFrame = struct {
     const glass = fizzy.core.glass;
-    const LF = fizzy.core.LiquidField;
     const id: dvui.Id = @fromBackingInt(@intCast(802));
-    LF.readyInTest(true);
-    var si: dvui.ScrollInfo = .{ .virtual_size = .{ .w = 200, .h = 1000 } };
-    const frame = struct {
-        fn area(info: *dvui.ScrollInfo) fizzy.core.widgets.ScrollArea {
-            return fizzy.core.widgets.ScrollArea.init(@src(), .{ .scroll_info = info }, .{
-                .rect = .{ .x = 20, .y = 40, .w = 200, .h = 200 },
-            });
+    var n_cards: usize = 30;
+    var viewport_y: f32 = 0;
+    var max_diff: f32 = 0;
+    var drawn: usize = 0;
+
+    var si: dvui.ScrollInfo = .{ .vertical = .auto, .horizontal = .none };
+
+    fn frame() !dvui.App.Result {
+        var scroll = fizzy.core.widgets.ScrollArea.init(@src(), .{ .scroll_info = &si, .horizontal = .none, .vertical_bar = .hide }, .{ .expand = .both });
+        defer {
+            scroll.deinit();
+            viewport_y = si.viewport.y;
         }
-        fn empty() !dvui.App.Result {
-            return .ok;
+        var l = glass.layer(id, .{});
+        var rects: [64]dvui.Rect.Physical = undefined;
+        var expected: usize = 0;
+        for (0..n_cards) |i| {
+            var box = dvui.box(@src(), .{}, .{ .id_extra = i, .expand = .horizontal, .min_size_content = .{ .w = 100, .h = 50 }, .margin = .all(5) });
+            defer box.deinit();
+            const r = box.data().borderRectScale().r;
+            try std.testing.expect(l.add(r, .round(8)));
+            if (glass.reaches(r)) {
+                rects[expected] = r;
+                expected += 1;
+            }
+        }
+        l.end();
+        const got = glass.drawnRects();
+        try std.testing.expectEqual(expected, got.len);
+        for (got, rects[0..expected]) |g, r| {
+            max_diff = @max(max_diff, @abs(g.x - r.x), @abs(g.y - r.y), @abs(g.w - r.w), @abs(g.h - r.h));
+        }
+        drawn += got.len;
+        return .ok;
+    }
+};
+
+test "fling: the glass never trails a card" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    const F = GlassLayerFrame;
+    fizzy.core.LiquidField.readyInTest(true);
+    F.n_cards = 30;
+    F.max_diff = 0;
+    F.drawn = 0;
+    const cw = dvui.currentWindow();
+    try dvui.testing.settle(F.frame);
+    // A touch flick up the screen at 10 points a frame, then 60 frames of coast.
+    const x = 0.5;
+    var y: f32 = 0.8;
+    const h = cw.data().rect.h;
+    const Step = struct {
+        fn after(ms: u64) !void {
+            const w = dvui.currentWindow();
+            _ = try F.frame();
+            _ = try w.end(.{});
+            try w.begin(w.frame_time_ns + @as(i128, ms) * std.time.ns_per_ms);
         }
     };
-    var area = frame.area(&si);
-    var l = glass.layer(id, .{});
-    try std.testing.expect(l.add(.{ .x = 20, .y = 60, .w = 100, .h = 80 }, .round(8)));
-    l.end();
-    area.deinit();
-    _ = try dvui.testing.step(frame.empty);
-    si.viewport.y = 100;
-    area = frame.area(&si);
+    _ = try cw.addEventPointer(.{ .button = .touch0, .action = .press, .xynorm = .{ .x = x, .y = y } });
+    try Step.after(16);
+    for (0..10) |_| {
+        _ = try cw.addEventTouchMotion(.touch0, x, y - 10 / h, 0, -10 / h);
+        y -= 10 / h;
+        try Step.after(16);
+    }
+    _ = try cw.addEventPointer(.{ .button = .touch0, .action = .release, .xynorm = .{ .x = x, .y = y } });
+    try Step.after(16);
+    const at_release = F.viewport_y;
+    for (0..60) |_| try Step.after(16);
+    // It did scroll, so the check was made on moving cards, and the glass was on the same pixels.
+    try std.testing.expect(F.viewport_y - at_release > 50);
+    try std.testing.expect(F.drawn > 60);
+    std.debug.print("fling: max |glass - card| = {d} px over {d} drawn shapes\n", .{ F.max_diff, F.drawn });
+    try std.testing.expectEqual(0, F.max_diff);
+}
+
+test "a layer inside a scroll area is clipped to it" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    const glass = fizzy.core.glass;
+    fizzy.core.LiquidField.readyInTest(true);
+    var scroll = fizzy.core.widgets.ScrollArea.init(@src(), .{ .horizontal = .none }, .{ .rect = .{ .x = 20, .y = 100, .w = 200, .h = 200 } });
+    defer scroll.deinit();
     const clip = dvui.clipGet();
-    const texture = try dvui.textureCreate(&(@as([4]dvui.Color.PMA, @splat(.{ .r = 255, .g = 255, .b = 255, .a = 255 }))), .{ .width = 2, .height = 2 });
-    defer dvui.textureDestroyLater(texture);
-    fizzy.core.material.publishBackdrop(.{ .sharp = texture, .frost = texture, .covered = .{ .w = 1200, .h = 800 } });
+    // As a deferred context sees it: the layer is one command in the enclosing queue.
     var queues: dvui.RenderQueues = .{};
     const cw = dvui.currentWindow();
     const was_rendering = dvui.renderingSet(false);
-    defer _ = dvui.renderingSet(was_rendering);
     cw.defer_render = &queues;
-    defer cw.defer_render = null;
-    l = glass.layer(id, .{});
+    var l = glass.layer(GlassLayerFrame.id, .{});
+    // Half the card is above the area's top edge.
+    const card: dvui.Rect.Physical = .{ .x = clip.x + 10, .y = clip.y - 40, .w = 100, .h = 80 };
+    try std.testing.expect(l.add(card, .round(8)));
     l.end();
-    const fields = dvui.dataGetSlice(null, id, "_layer_fields", []LF).?;
-    try std.testing.expectEqual(1, fields.len);
-    const card = fields[0].shapes[0].rect;
-    // Half the card is above the scroll clip: it must remain shaped there, while its ink is cut.
-    try std.testing.expectApproxEqAbs(clip.y - card.h / 2, card.y, 0.01);
+    cw.defer_render = null;
+    _ = dvui.renderingSet(was_rendering);
     try std.testing.expectEqual(1, queues.normal.items.len);
     const command = queues.normal.items[0];
     try std.testing.expect(command.cmd == .custom);
-    // deferRender restores this clip for the program's triangles, just as for ordinary triangles.
+    // The clip in effect at `layer` rides with the command and is restored at replay, so the
+    // glass quad is cut to the area as dvui's triangles are.
     try std.testing.expectEqual(clip, command.clip);
-    try std.testing.expectEqual(clip.y, fields[0].bounds().intersect(command.clip).y);
+    try queues.render(cw);
+    const drawn = glass.drawnRects();
+    try std.testing.expectEqual(1, drawn.len);
+    try std.testing.expectEqual(card, drawn[0]);
     try std.testing.expectEqual(card.h / 2, card.intersect(command.clip).h);
-    area.deinit();
 }

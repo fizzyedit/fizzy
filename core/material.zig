@@ -18,8 +18,8 @@
 //! glass the app draws is drawn with (`publishLook`), set once in `Editor.tick` before plugins'
 //! `beginFrame` and read by `LiquidField`.
 //!
-//! Material selection is std-only (a unit-test root in `build/app.zig`). Backdrop publication
-//! and its versioned blur cache need a dvui window, as the other publication functions do.
+//! The app's backdrop (`publishBackdrop`) is kept the same way. All but the publish, read and kept
+//! functions is std-only (a unit-test root in `build/app.zig`).
 const std = @import("std");
 
 pub const Material = struct {
@@ -88,50 +88,48 @@ pub const Looks = @import("glass_look").Looks;
 /// …published for this frame: null for the earlier glass, as each field's own numbers say.
 pub const publishLook = @import("glass").LiquidField.publishLook;
 
-/// The app's picture behind its glass, in physical window coordinates.
-/// The app owns both textures and keeps them alive until the next publish (and frame end).
-pub const Backdrop = struct {
-    sharp: @import("dvui").Texture,
-    frost: @import("dvui").Texture,
-    covered: @import("dvui").Rect.Physical,
-};
+/// A picture of what lies behind the app's glass: `sharp` and its blur `frost`, both of `covered`
+/// (physical px, window coordinates). Both live until the next publish.
+pub const Backdrop = struct { sharp: dvui.Texture, frost: dvui.Texture, covered: dvui.Rect.Physical };
 
-/// Publish before drawing glass each frame; null removes the backdrop.
+const dvui = @import("dvui");
+const kept_id: dvui.Id = @fromBackingInt(@intCast(@import("glass_look").data_id_backing));
+
+/// Publish this frame's backdrop (null: none). The app calls it each frame before glass draws.
 pub fn publishBackdrop(b: ?Backdrop) void {
-    const dvui = @import("dvui");
-    const id: dvui.Id = @fromBackingInt(@intCast(@import("glass_look").data_id_backing));
-    if (b) |picture| dvui.dataSet(null, id, "_app_backdrop", picture) else dvui.dataRemove(null, id, "_app_backdrop");
+    if (b) |picture| dvui.dataSet(null, kept_id, "_app_backdrop", picture) else dvui.dataRemove(null, kept_id, "_app_backdrop");
 }
 
 pub fn backdrop() ?Backdrop {
-    const dvui = @import("dvui");
-    const id: dvui.Id = @fromBackingInt(@intCast(@import("glass_look").data_id_backing));
-    return dvui.dataGet(null, id, "_app_backdrop", Backdrop);
+    return dvui.dataGet(null, kept_id, "_app_backdrop", Backdrop);
 }
-
-/// Test seam for the headless backend, which cannot allocate render targets.
-var blur_in_test: ?*const fn (@import("dvui").Texture, f32) ?@import("dvui").Texture = null;
 
 const KeptFrost = struct {
     version: ?u64 = null,
-    texture: ?@import("dvui").Texture = null,
+    texture: ?dvui.Texture = null,
 
     fn release(ptr: *anyopaque) void {
         const self: *KeptFrost = @ptrCast(@alignCast(ptr));
-        if (self.texture) |texture| @import("dvui").textureDestroyLater(texture);
+        if (self.texture) |texture| dvui.textureDestroyLater(texture);
     }
 };
 
-/// Borrow a cached blur until the next version or until this window's data expires.
-/// Bump version whenever the picture or radius changes. The window owns the result.
-pub fn keptFrost(sharp: @import("dvui").Texture, radius_px: f32, version: u64) ?@import("dvui").Texture {
-    const dvui = @import("dvui");
-    const id: dvui.Id = @fromBackingInt(@intCast(@import("glass_look").data_id_backing));
-    const kept = dvui.dataGetPtrDefault(null, id, "_kept_frost", KeptFrost, .{});
-    dvui.dataSetDeinitFunction(null, id, "_kept_frost", &KeptFrost.release);
+/// Test seam for the headless backend, which cannot make render targets (`core/glass.zig`'s tests).
+pub var blur_in_test: ?*const fn (dvui.Texture, f32) ?dvui.Texture = null;
+
+/// `sharp` blurred at `radius_px`, kept and re-made only when `version` changes
+/// (`BlurBackdrop.blurred`); the old texture is released when it is. The window owns the result.
+/// A moving wallpaper bumps `version` each frame it moves.
+pub fn keptFrost(sharp: dvui.Texture, radius_px: f32, version: u64) ?dvui.Texture {
+    const kept = dvui.dataGetPtrDefault(null, kept_id, "_kept_frost", KeptFrost, .{});
+    dvui.dataSetDeinitFunction(null, kept_id, "_kept_frost", &KeptFrost.release);
     if (kept.version == null or kept.version.? != version) {
         KeptFrost.release(kept);
-        kept.* = .{ .version = version, .texture = if (@import("builtin").is_test and blur_in_test != null) blur_in_test.?(sharp, radius_px) else @import("glass").BlurBackdrop.blurred(sharp, radius_px) };
+        const made = if (@import("builtin").is_test and blur_in_test != null)
+            blur_in_test.?(sharp, radius_px)
+        else
+            @import("glass").BlurBackdrop.blurred(sharp, radius_px);
+        kept.* = .{ .version = version, .texture = made };
     }
     return kept.texture;
 }
@@ -141,13 +139,11 @@ const key = "core.material";
 /// The window material this frame, as the backend can show it, set by the app before anything
 /// draws: what the OS windows are made of.
 pub fn publish(m: Material) void {
-    const dvui = @import("dvui");
     dvui.dataSet(null, dvui.Id.update(.zero, key), "_material", m);
 }
 
 /// The window material this frame (`publish`): `none` until the app says.
 pub fn get() Material {
-    const dvui = @import("dvui");
     return dvui.dataGet(null, dvui.Id.update(.zero, key), "_material", Material) orelse .{};
 }
 
@@ -155,14 +151,12 @@ pub fn get() Material {
 /// draws itself is made of (dialogs, menus, floats, toasts), the window material's unless the
 /// person chose another.
 pub fn publishInApp(m: Material) void {
-    const dvui = @import("dvui");
     dvui.dataSet(null, dvui.Id.update(.zero, key), "_in_app", m);
 }
 
 /// The material every glass the app draws is made of this frame (`publishInApp`): the window
 /// material's until the app says otherwise.
 pub fn inApp() Material {
-    const dvui = @import("dvui");
     return dvui.dataGet(null, dvui.Id.update(.zero, key), "_in_app", Material) orelse get();
 }
 
@@ -195,35 +189,4 @@ test "in-app glass draws every kind where the glass program is, Liquid Glass onl
     try std.testing.expect(without.has(.frost));
     try std.testing.expectEqual(Kind.frost, (Material{ .kind = .liquid }).effective(without).kind);
     try std.testing.expect(inAppMissing(.liquid, false) != null);
-}
-
-/// Window test reached by glass.zig; this file also has a std-only unit-test root.
-pub fn testKeptFrost() !void {
-    if (!@import("builtin").is_test) @compileError("testKeptFrost is for tests");
-    const dvui = @import("dvui");
-    var t = try dvui.testing.init(.{});
-    defer t.deinit();
-    const Blur = struct {
-        var calls: usize = 0;
-        fn run(sharp: dvui.Texture, radius: f32) ?dvui.Texture {
-            calls += 1;
-            std.debug.assert(radius == 8);
-            const pixels = dvui.currentWindow().arena().alloc(dvui.Color.PMA, sharp.width * sharp.height) catch return null;
-            @memset(pixels, .{ .r = 255, .g = 255, .b = 255, .a = 255 });
-            return dvui.textureCreate(pixels, .{ .width = sharp.width, .height = sharp.height }) catch null;
-        }
-    };
-    Blur.calls = 0;
-    blur_in_test = Blur.run;
-    defer blur_in_test = null;
-    const texture = try dvui.textureCreate(&(@as([16 * 16]dvui.Color.PMA, @splat(.{ .r = 255, .g = 255, .b = 255, .a = 255 }))), .{ .width = 16, .height = 16 });
-    defer dvui.textureDestroyLater(texture);
-    const first = keptFrost(texture, 8, 1);
-    try std.testing.expect(first != null);
-    try std.testing.expectEqual(first, keptFrost(texture, 8, 1));
-    try std.testing.expectEqual(1, Blur.calls);
-    const second = keptFrost(texture, 8, 2);
-    try std.testing.expect(second != null);
-    try std.testing.expectEqual(2, Blur.calls);
-    try std.testing.expect(!std.meta.eql(first, second));
 }
