@@ -180,3 +180,23 @@ test "card_level: progress falls back when the size barely changes" {
     try std.testing.expectEqual(@as(f32, 0), progress(from, to, from, -1));
     try std.testing.expectEqual(@as(f32, 1), progress(from, from, from, 2));
 }
+
+test "card_level: four levels can be crossed in one pick" {
+    const levels = [_]Size{
+        .{ .w = 0, .h = 0 },
+        .{ .w = 100, .h = 0 },
+        .{ .w = 200, .h = 0 },
+        .{ .w = 300, .h = 0 },
+    };
+    try std.testing.expectEqual(@as(u8, 3), pick(&levels, .{ .w = 324, .h = 0 }, 0));
+    try std.testing.expectEqual(@as(u8, 0), pick(&levels, .{ .w = 99, .h = 0 }, 3));
+    try std.testing.expectEqual(@as(u8, 3), pick(&levels, .{ .w = 300, .h = 0 }, null));
+}
+
+test "card_level: progress follows width when shrinking a wide shell" {
+    const from: Size = .{ .w = 400, .h = 200 };
+    const to: Size = .{ .w = 200, .h = 150 };
+    try std.testing.expectEqual(@as(f32, 0.5), progress(from, to, .{ .w = 300, .h = 150 }, 0));
+    try std.testing.expectEqual(@as(f32, 1), progress(from, to, .{ .w = 100, .h = 200 }, 0));
+    try std.testing.expectEqual(@as(f32, 0), progress(from, to, .{ .w = 500, .h = 150 }, 0));
+}
