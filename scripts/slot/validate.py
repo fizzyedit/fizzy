@@ -107,6 +107,10 @@ def review_checks(job, result, base, reasons):
     head = info['head_sha']
     # PR base is read from GitHub; job.base is the PR head, not its merge base.
     pr = gh('api', f'repos/fizzyedit/fizzy/pulls/{info["pr"]}')
+    # The checkout may be shallow or at a commit that lacks the PR's merge base: fetch both ends.
+    for sha in (pr['base']['sha'], head):
+        if subprocess.run(['git', 'cat-file', '-e', sha + '^{commit}'], cwd=base).returncode:
+            run('git', 'fetch', '--no-tags', 'origin', sha, cwd=base)
     diff = run('git', 'diff', '--no-renames', '--unified=0', pr['base']['sha'] + '..' + head,
                cwd=base).decode()
     added, path, line = {}, None, 0
