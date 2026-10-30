@@ -575,6 +575,20 @@ fn serveLink(self: *Server, link: *Link, stream: Io.net.Stream, reader: *Io.Read
     writer.flush() catch return;
     var sender = self.io.concurrent(writeLink, .{ self, link, stream, writer }) catch return;
     defer sender.cancel(self.io);
+    // Where `shutdown` wakes a blocked read (`writeLink` and `Link.abort` both call it), the read
+    // runs here, as it did before the receiver task.
+    if (comptime builtin.target.os.tag != .windows) return readLink(self, link, reader);
+    var receiver = self.io.concurrent(readLink, .{ self, link, reader }) catch return;
+    defer receiver.cancel(self.io);
+    // Either task ending, `Link.abort` or the server cancelling this task ends the connection;
+    // cancelling the tasks is what frees one blocked in the socket, which `shutdown` does not do
+    // on Windows.
+    link.ended.wait(self.io) catch {};
+}
+
+/// Push what the peer sends into `link` until it goes, the link refuses more, or the server stops.
+fn readLink(self: *Server, link: *Link, reader: *Io.Reader) void {
+    defer link.ended.set(self.io);
     while (!self.stopping.load(.acquire)) {
         const bytes = reader.peekGreedy(1) catch return;
         link.push(bytes) catch return;
@@ -583,8 +597,9 @@ fn serveLink(self: *Server, link: *Link, stream: Io.net.Stream, reader: *Io.Read
 }
 
 /// Write what the app queues on `link` until it closes it or a write fails, then shut the socket
-/// down, which ends the read that `serveLink` is blocked in.
+/// down.
 fn writeLink(self: *Server, link: *Link, stream: Io.net.Stream, writer: *Io.Writer) void {
+    defer link.ended.set(self.io);
     while (true) {
         // Read first: what was queued before `close` is still written.
         const closing = link.closing.load(.acquire);

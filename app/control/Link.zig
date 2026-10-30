@@ -35,6 +35,9 @@ closing: std.atomic.Value(bool) = .init(false),
 /// The connection's tasks are done with the link: the peer left, or `close` was answered. Only
 /// then may the app `deinit` it; the tasks touch nothing after setting this.
 gone: std.atomic.Value(bool) = .init(false),
+/// Set when either of the connection's tasks ends, or by `abort`: the supervising task then cancels
+/// both, which frees one blocked in the socket.
+ended: Io.Event = .unset,
 /// The connection's socket, once its task has one, under `lock`: `abort` shuts it down.
 stream: ?Io.net.Stream = null,
 
@@ -86,6 +89,7 @@ pub fn abort(self: *Link) void {
     self.lock.lockUncancelable(self.io);
     defer self.lock.unlock(self.io);
     if (self.stream) |s| s.shutdown(self.io, .both) catch {};
+    self.ended.set(self.io);
 }
 
 /// A `close` that nobody heard (the writer is blocked on a peer that does not read) is made an
