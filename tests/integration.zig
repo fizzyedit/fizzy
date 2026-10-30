@@ -32,6 +32,26 @@ test "shim brings up a dvui.testing window with usable fizzy globals" {
     try std.testing.expect(fizzy.editor() == ctx.editor);
 }
 
+// Windows' backend arms `ReadDirectoryChangesW` on a directory handle only, so watching a
+// document's file used to fail with `WatchFailed` there (and every external edit went unseen).
+test "an open document's file can be watched" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(dvui.io, .{ .sub_path = "doc.txt", .data = "a" });
+    var root_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const root = root_buf[0..try tmp.dir.realPath(dvui.io, &root_buf)];
+    const path = try std.fs.path.join(gpa, &.{ root, "doc.txt" });
+    defer gpa.free(path);
+
+    var w: fizzy.Editor.DocumentWatcher = .init(gpa);
+    try w.start();
+    defer w.stop();
+    try w.watchPath(path);
+}
+
 // -- menu accelerators -------------------------------------------------------------------------
 
 // The regression that made every plugin menu row show a blank accelerator: a chord that exists

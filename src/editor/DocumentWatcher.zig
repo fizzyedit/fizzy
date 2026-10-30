@@ -389,17 +389,33 @@ fn reconcile(self: *DocumentWatcher, editor: *fizzy.Editor) void {
     }
 }
 
-fn watchPath(self: *DocumentWatcher, path: []const u8) !void {
+/// What nightwatch is asked to watch for `path`. Windows' backend arms `ReadDirectoryChangesW`
+/// on the handle it opens, which only works on a directory, so a file is watched through its
+/// folder; every event only sets the dirty flag and the content hash decides, so the extra
+/// events from siblings cost nothing. Elsewhere it is the file itself.
+fn watchKey(path: []const u8) []const u8 {
+    if (comptime builtin.target.os.tag != .windows) return path;
+    return std.fs.path.dirname(path) orelse path;
+}
+
+/// Arms the OS watch for `path` (see `watchKey`); `track` and the re-arms call it.
+pub fn watchPath(self: *DocumentWatcher, path: []const u8) !void {
     if (comptime !have_impl) return;
     const nw = if (self.impl.nw) |*n| n else return;
     // Re-arm is a no-op when the path is already watched (nightwatch early-returns).
-    try nw.watch(path);
+    try nw.watch(watchKey(path));
 }
 
+/// Call once `path` has left `by_id`: a watch key another document shares stays armed.
 fn unwatchPath(self: *DocumentWatcher, path: []const u8) void {
     if (comptime !have_impl) return;
     const nw = if (self.impl.nw) |*n| n else return;
-    nw.unwatch(path) catch {};
+    const key = watchKey(path);
+    var it = self.by_id.valueIterator();
+    while (it.next()) |e| {
+        if (std.mem.eql(u8, watchKey(e.path), key)) return;
+    }
+    nw.unwatch(key) catch {};
 }
 
 fn normalizePath(gpa: Allocator, path: []const u8) ![]u8 {
