@@ -52,7 +52,7 @@ class SlotRunTests(unittest.TestCase):
     def run_slot(self, mode='write-ok', keep=False, agent=None):
         (self.job_dir / 'job.json').write_text(json.dumps(self.job))
         agents = self.root / 'agents.json'
-        agents.write_text(json.dumps({'codex': dict(cmd=[sys.executable, str(agent or ROOT / 'fakes/agent.py'), mode],
+        agents.write_text(json.dumps({self.env['SLOT_KIND']: dict(cmd=[sys.executable, str(agent or ROOT / 'fakes/agent.py'), mode],
                                                    prompt='stdin', model_flag='--model', auth_exit=[64])}))
         self.env['SLOT_AGENTS'] = str(agents)
         args = [sys.executable, str(ROOT / 'slot'), 'run', str(self.job_dir), '--out', str(self.out)]
@@ -95,15 +95,20 @@ class SlotRunTests(unittest.TestCase):
                          "assert note.is_absolute() and note.parent == Path.cwd()\n"
                          "note.write_text('Question: which acceptance criterion applies?')\n"
                          "sys.exit(1)\n")
-        for kind in ('write', 'review', 'rework'):
-            with self.subTest(kind=kind):
-                self.job['kind'] = kind
-                self.out = self.root / ('out-' + kind)
-                self.assertEqual(self.run_slot(agent=agent), 3, self.detail)
-                note = (self.out / 'decline.md').read_text()
-                self.assertEqual(note, 'Question: which acceptance criterion applies?')
-                self.assertEqual(self.result('declined')['decline'], note)
-                self.assertFalse((self.root / 'home/work' / self.job['id']).exists())
+        for agent_kind in ('codex', 'claude'):
+            for kind in ('write', 'review', 'rework'):
+                with self.subTest(agent=agent_kind, kind=kind):
+                    self.env['SLOT_KIND'] = agent_kind
+                    self.job['kind'] = kind
+                    self.out = self.root / ('out-' + agent_kind + '-' + kind)
+                    self.assertEqual(self.run_slot(agent=agent), 3, self.detail)
+                    note = (self.out / 'decline.md').read_text()
+                    self.assertEqual(note, 'Question: which acceptance criterion applies?')
+                    result = self.result('declined')
+                    self.assertEqual(result['agent_kind'], agent_kind)
+                    self.assertEqual(result['decline'], note)
+                    self.assertEqual((self.out / 'agent/decline.md').read_text(), note)
+                    self.assertFalse((self.root / 'home/work' / self.job['id']).exists())
 
     def test_workspace_pr_body_and_report_are_collected(self):
         agent = self.root / 'workspace_agent.py'
