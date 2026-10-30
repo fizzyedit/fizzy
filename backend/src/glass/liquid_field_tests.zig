@@ -251,3 +251,238 @@ test "rim_falloff shapes the fade, rim_extent ends it" {
         }
     }
 }
+
+const Seam = LiquidField.Seam;
+const Panel = LiquidField.Panel;
+const panel_rect: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 400, .h = 120 };
+
+fn panelField(seams: []const Seam) LiquidField {
+    return .{ .panel = .{ .rect = panel_rect, .radii = @splat(20), .seams = seams } };
+}
+
+fn parentField(rect: dvui.Rect.Physical, radius: f32) LiquidField {
+    var f: LiquidField = .{};
+    f.add(.{ .rect = rect, .radii = @splat(radius) });
+    return f;
+}
+
+fn panelSample(f: *const LiquidField, x: f32, y: f32) Sample {
+    return f.sampleWith(.{ .x = x, .y = y }, dropLook());
+}
+
+fn checkPieces(f: *const LiquidField) !void {
+    var storage: [16]Shape = undefined;
+    const parts = LiquidField.pieces(f.panel.?, &storage);
+    var expected: LiquidField = .{};
+    for (parts) |part| expected.add(part);
+    // The contour and its anti-aliasing band, including every cut corner.
+    for (0..129) |yi| for (0..409) |xi| {
+        const x = @as(f32, @floatFromInt(xi)) - 4;
+        const y = @as(f32, @floatFromInt(yi)) - 4;
+        const a = panelSample(f, x, y);
+        const b = panelSample(&expected, x, y);
+        if (@abs(a.d) <= 1 or @abs(b.d) <= 1) try testing.expectApproxEqAbs(b.d, a.d, 0.25);
+    };
+}
+
+/// The narrowest remaining neck across 32 parallel rays through the seam's centre.
+fn neckWidth(f: *const LiquidField, at: f32, height: f32) f32 {
+    var width: f32 = height;
+    for (0..32) |ray| {
+        const x = at + (@as(f32, @floatFromInt(ray)) / 31 - 0.5) * 0.5;
+        var run: f32 = 0;
+        var longest: f32 = 0;
+        var y: f32 = 0;
+        while (y < height) : (y += 0.25) {
+            if (panelSample(f, x, y).coverage >= 0.5) {
+                run += 0.25;
+                longest = @max(longest, run);
+            } else run = 0;
+        }
+        width = @min(width, longest);
+    }
+    return width;
+}
+
+fn checkNeck(nested: bool) !void {
+    var seams = [_]Seam{
+        .{ .axis = .horizontal, .at = 60, .reach = 12 },
+        .{ .axis = .vertical, .at = 200, .span = .{ 0, 60 }, .reach = 12 },
+    };
+    if (!nested) seams[1].span = null;
+    var previous: f32 = if (nested) 60 else 120;
+    const total = previous;
+    for (0..61) |step| {
+        seams[1].gap = @as(f32, @floatFromInt(step)) / 60 * 12;
+        const f = panelField(if (nested) &seams else seams[1..]);
+        const width = neckWidth(&f, 200, total);
+        try testing.expect(width <= previous + 0.25);
+        try testing.expect(previous - width <= total * 0.15);
+        previous = width;
+    }
+    try testing.expectEqual(@as(f32, 0), previous);
+}
+
+/// Opt-in headless evidence; ordinary test runs write no files.
+fn dumpPanelCoverage() !void {
+    const destination = testing.environ.getAlloc(testing.allocator, "FIZZY_PANEL_DUMPS") catch |err| switch (err) {
+        error.EnvironmentVariableMissing => return,
+        else => return err,
+    };
+    defer testing.allocator.free(destination);
+    var dir = try std.Io.Dir.cwd().openDir(testing.io, destination, .{});
+    defer dir.close(testing.io);
+    const width = 408;
+    const height = 128;
+    const header = "P5\n408 128\n255\n";
+    const bytes = try testing.allocator.alloc(u8, header.len + width * height);
+    defer testing.allocator.free(bytes);
+    @memcpy(bytes[0..header.len], header);
+    for (0..5) |step| {
+        const gap = @as(f32, @floatFromInt(step)) * 3;
+        const seams = [_]Seam{
+            .{ .axis = .horizontal, .at = 60, .gap = gap, .reach = 12 },
+            .{ .axis = .vertical, .at = 200, .span = .{ 0, 60 }, .gap = gap, .reach = 12 },
+        };
+        const f = panelField(&seams);
+        for (0..height) |y| for (0..width) |x| {
+            const coverage = panelSample(&f, @as(f32, @floatFromInt(x)) - 4, @as(f32, @floatFromInt(y)) - 4).coverage;
+            bytes[header.len + y * width + x] = @intFromFloat(coverage * 255);
+        };
+        var name: [32]u8 = undefined;
+        const filename = try std.mem.print(&name, "panel-{d}.pgm", .{step});
+        try dir.writeFile(testing.io, .{ .sub_path = filename, .data = bytes });
+    }
+}
+
+test "a closed panel is its parent" {
+    comptime {
+        _ = &LiquidField.drawOutlines;
+    }
+    const seams = [_]Seam{
+        .{ .axis = .horizontal, .at = 30, .reach = 12 },
+        .{ .axis = .vertical, .at = 150, .reach = 12 },
+        .{ .axis = .vertical, .at = 270, .span = .{ 0, 30 }, .reach = 12 },
+    };
+    const rect: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 400, .h = 60 };
+    const f: LiquidField = .{ .panel = .{ .rect = rect, .radii = @splat(30), .seams = &seams } };
+    const parent = parentField(rect, 30);
+    for (0..69) |yi| for (0..409) |xi| {
+        const x = @as(f32, @floatFromInt(xi)) - 4;
+        const y = @as(f32, @floatFromInt(yi)) - 4;
+        const a = panelSample(&f, x, y);
+        const b = panelSample(&parent, x, y);
+        try testing.expectApproxEqAbs(b.coverage, a.coverage, 0.25);
+        try testing.expectApproxEqAbs(b.d, a.d, 0.25);
+    };
+    const groups = f.clusters();
+    try testing.expectEqual(@as(usize, 1), groups.count);
+    try testing.expectEqual(@as(u8, 1), groups.size[0]);
+    const uniforms = f.pack(rect, false, groups.order[0..1]);
+    try testing.expectEqual(@as(f32, 0), uniforms.shapes[15][2][2]);
+    try testing.expectEqual(@as(f32, 4), uniforms.shapes[15][2][3]);
+}
+
+test "no bump at the seam while it opens" {
+    var seams = [_]Seam{.{ .axis = .vertical, .at = 200, .reach = 12 }};
+    const parent = parentField(panel_rect, 20);
+    for (0..19) |step| {
+        seams[0].gap = @as(f32, @floatFromInt(step)) / 60 * 12;
+        const f = panelField(&seams);
+        for (0..41) |xi| {
+            const x = 180 + @as(f32, @floatFromInt(xi));
+            try testing.expect(panelSample(&f, x, 0).d >= panelSample(&parent, x, 0).d - 0.01);
+        }
+    }
+}
+
+test "a through seam's pieces are rounded rects" {
+    try dumpPanelCoverage();
+    const seams = [_]Seam{.{ .axis = .vertical, .at = 200, .gap = 12, .reach = 12 }};
+    const f = panelField(&seams);
+    try checkPieces(&f);
+}
+
+test "the neck moves smoothly" {
+    try checkNeck(false);
+}
+
+test "2D: closed is the parent" {
+    var seams = [_]Seam{
+        .{ .axis = .horizontal, .at = 60, .reach = 12 },
+        .{ .axis = .vertical, .at = 200, .span = .{ 0, 60 }, .reach = 12 },
+    };
+    const parent = parentField(panel_rect, 20);
+    for ([_]f32{ 0, 1e-6 }) |gap| {
+        for (&seams) |*seam| seam.gap = gap;
+        const f = panelField(&seams);
+        for (0..129) |yi| for (0..409) |xi| {
+            const x = @as(f32, @floatFromInt(xi)) - 4;
+            const y = @as(f32, @floatFromInt(yi)) - 4;
+            try testing.expectApproxEqAbs(panelSample(&parent, x, y).d, panelSample(&f, x, y).d, 0.01);
+        };
+    }
+}
+
+test "2D: three rounded pieces" {
+    const seams = [_]Seam{
+        .{ .axis = .horizontal, .at = 60, .gap = 12, .reach = 12 },
+        .{ .axis = .vertical, .at = 200, .span = .{ 0, 60 }, .gap = 12, .reach = 12 },
+    };
+    const f = panelField(&seams);
+    try checkPieces(&f);
+    const groups = f.clusters();
+    const u = f.pack(panel_rect, false, groups.order[0..1]);
+    try testing.expectEqual(@as(f32, 2), u.shapes[15][2][2]);
+    try testing.expectEqual([4]f32{ 12, 12, 6, 1 }, u.shapes[13][1]);
+    try testing.expectEqual(@as(f32, 1), u.shapes[13][2][0]);
+}
+
+test "2D: pills part, the brief stays whole" {
+    const seams = [_]Seam{
+        .{ .axis = .horizontal, .at = 60, .reach = 12 },
+        .{ .axis = .vertical, .at = 200, .span = .{ 0, 60 }, .gap = 12, .reach = 12 },
+    };
+    const f = panelField(&seams);
+    const parent = parentField(panel_rect, 20);
+    var storage: [8]Shape = undefined;
+    const parts = LiquidField.pieces(f.panel.?, &storage);
+    try testing.expectEqual(@as(f32, 20), parts[0].radii[2]);
+    // The half-pixel below the host belongs to the continuous antialiasing band.
+    for (0..120) |yi| for (0..401) |xi| {
+        const x: f32 = @floatFromInt(xi);
+        const y = 60.5 + @as(f32, @floatFromInt(yi)) * 0.5;
+        try testing.expectApproxEqAbs(panelSample(&parent, x, y).coverage, panelSample(&f, x, y).coverage, 0.001);
+    };
+    try checkNeck(true);
+}
+
+test "pieces() is the console's model" {
+    const seams = [_]Seam{
+        .{ .axis = .horizontal, .at = 60, .reach = 12 },
+        Seam.between(.vertical, 197, 203, .{ 0, 60 }, 12),
+    };
+    const f = panelField(&seams);
+    var storage: [8]Shape = undefined;
+    const parts = LiquidField.pieces(f.panel.?, &storage);
+    try testing.expectEqual(@as(usize, 3), parts.len);
+    try testing.expectEqual(@as(f32, 10), parts[0].radii[1]);
+    try testing.expectEqual(@as(f32, 10), parts[0].radii[2]);
+    try testing.expectEqual(@as(f32, 10), parts[2].radii[0]);
+    try testing.expectEqual(@as(f32, 10), parts[2].radii[3]);
+    var area: f32 = 0;
+    for (parts) |part| area += part.rect.w * part.rect.h;
+    try testing.expectEqual(@as(f32, 400 * 120 - 6 * 60), area);
+}
+
+test "a drop still runs into a panel" {
+    var f = panelField(&.{});
+    f.merge_px = 16;
+    f.add(Shape.circle(.{ .x = 200, .y = -18 }, 10));
+    // At exactly half the merge width the quadratic minimum is tangent at coverage 0.5.
+    try testing.expectApproxEqAbs(@as(f32, 0.5), panelSample(&f, 200, -4).coverage, 0.001);
+    f.shapes[0].rect.y += 0.1;
+    try testing.expect(panelSample(&f, 200, -4).coverage > 0.5);
+    f.merge_px = 0;
+    try testing.expectEqual(@as(f32, 0), panelSample(&f, 200, -4).coverage);
+}
