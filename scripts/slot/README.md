@@ -3,7 +3,6 @@
 A slot is a worker that takes a job, runs an agent in a fresh checkout, and returns a result.
 It runs the job's checks and packages a successful change with a signature identifying the slot.
 The agent has no GitHub token; separate validation and publishing decide what happens next.
-
 ## Commands
 Use `scripts/slot/slot` from the repository root (called `slot` in [PROTOCOL.md](PROTOCOL.md)).
 
@@ -14,16 +13,15 @@ Use `scripts/slot/slot` from the repository root (called `slot` in [PROTOCOL.md]
   Exit: 0 done, 3 declined, 4 failed, 5 timeout, 2 bad job/usage, 6 broken slot.
 - `slot validate JOB_DIR OUT_DIR --fizzy BASE_CHECKOUT --job-digest SHA256`: takes the original
   job's digest, signed output and trusted base checkout; checks them before any publishing.
-  Prints refusal reasons to stderr and writes `OUT_DIR/../verdict.json`; exits 0 accept, 1 refuse.
+  Success prints nothing; refusal reasons go to stderr. Writes `OUT_DIR/../verdict.json`; exits 0 accept, 1 refuse.
 - `slot publish JOB_DIR OUT_DIR`: takes validated output and `GH_TOKEN` (the App token).
   Publishes the change/review or records a decline/failure on GitHub, according to the result.
   Success has no summary on stdout; errors go to stderr. This step acts on GitHub.
 
 ## Offline example
 Requires Python 3, Git and OpenSSH (`ssh-keygen` with `-Y` support); no agent login or token.
-Paste this from the repository root in a POSIX shell. It uses the fake agent and temporary files;
-the printed status comes from the result file, since `slot run` itself is silent on success.
-
+Paste this from the repository root in a POSIX shell. The fake agent writes hello.txt in a temporary
+checkout; the wrapper prints the result status and checks that a patch and signature were produced.
 ```sh
 python3 - <<'PY'
 import json, os, subprocess, sys, tempfile
@@ -55,6 +53,8 @@ with tempfile.TemporaryDirectory() as tmp:
     print('patch:', (out / 'change.mbox').is_file(), 'signature:', (out / 'result.sig').is_file())
 PY
 ```
+Expected output (temporary files are removed when the example finishes):
 
-Expected output: `status: done` then `patch: True signature: True`. Temporary files are removed.
+    status: done
+    patch: True signature: True
 Tests live in `scripts/slot/tests`: `cd scripts && python3 -m unittest discover -s slot/tests -t .`.
