@@ -5,6 +5,9 @@
 //! per frame, since a 2-in-1's pointer changes at runtime. `core.platform` holds the live value.
 const std = @import("std");
 
+/// Minimum touch hit width and height in points.
+pub const min_hit: f32 = 44;
+
 pub const FormFactor = enum { desktop, tablet, mobile };
 
 /// The person's Layout setting (`settings.zon`'s `layout_mode`): `auto` follows what was detected,
