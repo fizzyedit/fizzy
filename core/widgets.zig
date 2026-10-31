@@ -48,6 +48,8 @@ pub const ScrollArea = @import("widgets/ScrollArea.zig");
 pub const VirtualList = @import("widgets/VirtualList.zig");
 /// A `dvui.textLayout` whose touch selection is a hold, not a tap (`core/TouchHold.zig`).
 pub const SelectableText = @import("widgets/SelectableText.zig");
+/// A `dvui.textEntry` whose touch focus and selection are taps and holds, not a press (`core/TouchHold.zig`).
+pub const TextEntry = @import("widgets/TextEntry.zig");
 
 /// The menu chain, copied from dvui so a menu can be frosted and so its rows are the same rows
 /// the command palette and the flyouts draw — see `widgets/menu/FloatingMenu.zig`'s header for

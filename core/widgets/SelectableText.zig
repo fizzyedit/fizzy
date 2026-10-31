@@ -22,6 +22,7 @@
 //! or one on a window holding a handle's `_offset`.
 const std = @import("std");
 const dvui = @import("dvui");
+const touch_press = @import("touch.zig");
 const TouchHold = @import("../TouchHold.zig");
 
 const SelectableText = @This();
@@ -33,7 +34,7 @@ hold: *TouchHold,
 pub fn init(src: std.builtin.SourceLocation, init_opts: dvui.TextLayoutWidget.InitOptions, opts: dvui.Options) SelectableText {
     var tl_opts = init_opts;
     tl_opts.touch_edit_just_focused = false;
-    const unhandled = unhandledPresses();
+    const unhandled = touch_press.unhandledPresses();
     const tl = dvui.textLayout(src, tl_opts, opts);
     const self: SelectableText = .{
         .tl = tl,
@@ -53,28 +54,8 @@ pub fn deinit(self: *SelectableText) void {
     self.* = undefined;
 }
 
-/// The touch presses among the frame's first `max_presses` events that nothing has handled yet.
-const Presses = std.bit_set.IntegerBitSet(max_presses);
-const max_presses = 32;
-
-fn unhandledPresses() Presses {
-    var set: Presses = .empty;
-    for (dvui.events(), 0..) |*e, i| {
-        if (i == max_presses) break;
-        if (e.evt == .mouse and e.evt.mouse.action == .press and e.evt.mouse.button.touch() and !e.handled) set.set(i);
-    }
-    return set;
-}
-
-/// Whether `dvui.textLayout` took the press `e`, the `i`th event, in a window other than its own:
-/// its menu handles the press, and its selection handles keep an `_offset` under their window's id.
-fn tookPress(unhandled: Presses, i: usize, e: *const dvui.Event) bool {
-    if (i < max_presses and unhandled.isSet(i) and e.handled) return true;
-    return dvui.dataGet(null, e.evt.mouse.floating_win, "_offset", dvui.Point.Physical) != null;
-}
-
 /// `unhandled` is `unhandledPresses` as it was before `dvui.textLayout` ran.
-fn processTouch(self: SelectableText, unhandled: Presses) void {
+fn processTouch(self: SelectableText, unhandled: touch_press.Presses) void {
     const tl = self.tl;
     const hold = self.hold;
     const rs = tl.data().borderRectScale();
@@ -86,37 +67,46 @@ fn processTouch(self: SelectableText, unhandled: Presses) void {
         switch (me.action) {
             .press => {
                 if (me.floating_win != dvui.subwindowCurrentId()) {
-                    if (!tookPress(unhandled, i, e)) {
+                    if (!touch_press.tookPress(unhandled, i, e)) {
                         hold.cancel();
                         clear(tl);
                     }
                 } else if (rs.r.contains(me.p) and dvui.clipGet().contains(me.p)) {
-                    hold.press(me.p.x, me.p.y, dvui.frameTimeNS());
+                    hold.press(me.p.x, me.p.y, dvui.frameTimeNS(), slop);
                 } else {
                     hold.cancel();
                     clear(tl);
                 }
             },
             .motion => hold.move(me.p.x, me.p.y, slop),
-            .release => if (hold.release()) clear(tl),
+            .release => switch (hold.release(dvui.frameTimeNS())) {
+                .none => {},
+                .tap => clear(tl),
+                .double_tap => selectWordAt(tl, tl.data().id, me.p.x, me.p.y),
+            },
             else => {},
         }
     }
     // A press the layout did not take, or a drag it let go of, is not a hold.
     if (hold.armed and !hold.fired and !dvui.captured(tl.data().id)) hold.cancel();
 
-    if (hold.due(dvui.frameTimeNS())) {
-        tl.sel_move = .{ .expand_pt = .{ .which = .word, .pt = tl.data().contentRectScale().pointFromPhysical(.{ .x = hold.x, .y = hold.y }) } };
-        tl.state.touch_editing = true;
-        tl.state.te_show_draggables = true;
-        tl.state.te_show_context_menu = true;
-        // dvui shows the menu and handles only for the focused layout.
-        dvui.focusWidget(tl.data().id, null, null);
-        dvui.refresh(null, @src(), tl.data().id);
-    }
+    if (hold.due(dvui.frameTimeNS())) selectWordAt(tl, tl.data().id, hold.x, hold.y);
     if (hold.remaining(dvui.frameTimeNS())) |ns| {
         dvui.timer(tl.data().id, @intCast(@divTrunc(ns, std.time.ns_per_us) + 1));
     }
+}
+
+/// Selects the word under the physical point (`x`, `y`) of `tl` and shows its handles and menu:
+/// what a hold or a double tap does, for read-only text and for a text entry alike. dvui shows the
+/// menu and handles only for the focused layout, so this focuses `focus_id`, the widget that owns
+/// `tl` (the layout itself, or the entry around it).
+pub fn selectWordAt(tl: *dvui.TextLayoutWidget, focus_id: dvui.Id, x: f32, y: f32) void {
+    tl.sel_move = .{ .expand_pt = .{ .which = .word, .pt = tl.data().contentRectScale().pointFromPhysical(.{ .x = x, .y = y }) } };
+    tl.state.touch_editing = true;
+    tl.state.te_show_draggables = true;
+    tl.state.te_show_context_menu = true;
+    dvui.focusWidget(focus_id, null, null);
+    dvui.refresh(null, @src(), tl.data().id);
 }
 
 fn clear(tl: *dvui.TextLayoutWidget) void {
