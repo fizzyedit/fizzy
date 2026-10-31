@@ -260,7 +260,38 @@ pub const Look = struct {
     diagonal: f32,
     /// The colour fringe where the band bends hardest, 0…1.
     dispersion: f32,
+    /// Where the light comes from, degrees, dvui's gradient convention (0 from the left, 90 from the top).
+    light_angle: f32 = 45,
+    /// The light's height over the glass, 0 grazing .. 1 overhead: how wide the lit arc is.
+    light_height: f32 = 0.5,
+    /// The sharp line at the outline, 0..1 (0: the lit edge is off and a drop's `diagonal` edge
+    /// draws), and its width in points.
+    rim_line: f32 = 0,
+    rim_width: f32 = 1,
+    /// How far the light runs on along the outline from each lit corner, in points, fading to
+    /// nothing at that distance. 0: only where the outline faces the light (a drop's corners on the
+    /// diagonal); 1e4: the whole outline. One knob for a drop's edge and the lit edge.
+    rim_extent: f32 = 0,
+    /// The share of `rim_extent`, at its far end, over which the light falls off in a smoothstep.
+    /// 0: full light, then a hard cut at `rim_extent`; 1: a smooth ramp over the whole length.
+    /// No effect at a `rim_extent` of 0.
+    rim_falloff: f32 = 0.5,
+    /// A soft band just inside the line, lit on the same sides, 0..1, and its width in points.
+    rim_glow: f32 = 0,
+    glow_width: f32 = 0,
+    /// A dark band on the sides square to the light, 0..1.
+    rim_shade: f32 = 0,
+    /// The far side's share of the light, 0..1.
+    rim_back: f32 = 0,
 };
+
+/// The unit vector toward the light for `Look.light_angle`, in physical pixels, y down: the light at
+/// the start of dvui's linear gradient of that angle (`Gradient.linear`, 0 left-to-right, 90
+/// top-to-bottom, clockwise), so 45 lights the top left.
+pub fn lightVector(angle_degrees: f32) [2]f32 {
+    const a = std.math.degreesToRadians(angle_degrees);
+    return .{ -@cos(a), -@sin(a) };
+}
 
 pub fn inApp(opacity: f32) Look {
     const w = way(opacity);
@@ -587,5 +618,26 @@ test "fizzy's looks keep every new curve at its identity" {
         // Cards and bars are a drop's until an app says otherwise.
         try std.testing.expectEqual(looks.drop, looks.card);
         try std.testing.expectEqual(looks.drop, looks.bar);
+    }
+}
+
+test "51.7 degrees packs toward the top left" {
+    const l = lightVector(51.7);
+    try std.testing.expectApproxEqAbs(@as(f32, -0.619), l[0], 1e-3);
+    try std.testing.expectApproxEqAbs(@as(f32, -0.785), l[1], 1e-3);
+    const left = lightVector(0);
+    try std.testing.expectApproxEqAbs(@as(f32, -1), left[0], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), left[1], 1e-6);
+    const top = lightVector(90);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), top[0], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, -1), top[1], 1e-6);
+}
+
+test "the lit edge is off in every look glass_look makes" {
+    const looks = [_]Look{ inApp(0.5), forDrops(inApp(0.5)), forText(inApp(0.5)), forLens(inApp(0.5)) };
+    for (looks) |l| {
+        try std.testing.expectEqual(@as(f32, 0), l.rim_line);
+        try std.testing.expectEqual(@as(f32, 0), l.rim_extent);
+        try std.testing.expectEqual(@as(f32, 45), l.light_angle);
     }
 }

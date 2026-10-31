@@ -9,6 +9,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 from slot import common, slot_run
 
@@ -49,10 +50,10 @@ class SlotRunTests(unittest.TestCase):
     def git(self, repo, *args):
         return subprocess.check_output(['git', *args], cwd=repo, env=self.env, stderr=subprocess.PIPE).decode()
 
-    def run_slot(self, mode='write-ok', keep=False, agent=None):
+    def run_slot(self, mode='write-ok', keep=False, agent=None, command_args=()):
         (self.job_dir / 'job.json').write_text(json.dumps(self.job))
         agents = self.root / 'agents.json'
-        agents.write_text(json.dumps({self.env['SLOT_KIND']: dict(cmd=[sys.executable, str(agent or ROOT / 'fakes/agent.py'), mode],
+        agents.write_text(json.dumps({self.env['SLOT_KIND']: dict(cmd=[sys.executable, str(agent or ROOT / 'fakes/agent.py'), mode, *command_args],
                                                    prompt='stdin', model_flag='--model', auth_exit=[64])}))
         self.env['SLOT_AGENTS'] = str(agents)
         args = [sys.executable, str(ROOT / 'slot'), 'run', str(self.job_dir), '--out', str(self.out)]
@@ -81,6 +82,17 @@ class SlotRunTests(unittest.TestCase):
         self.assertEqual((self.base / 'hello.txt').read_text(), 'hello from agent\n')
         self.assertIn('Signed-off-by: fizzy test-slot <slot+test-slot@fizzy.invalid>', self.git(self.base, 'log', '-1', '--format=%B'))
         self.assertFalse((self.root / 'home/work' / self.job['id']).exists())
+
+    def test_add_dir_expands_home(self):
+        self.env['HOME'] = str(self.root)
+        self.env['USERPROFILE'] = str(self.root)
+        agent = self.root / 'args_agent.py'
+        agent.write_text("import os, sys\n"
+                         "from pathlib import Path\n"
+                         "assert sys.argv[2:] == ['--add-dir', str(Path(os.environ['HOME']) / 'x')]\n"
+                         "Path('hello.txt').write_text('expanded home\\n')\n")
+        self.assertEqual(self.run_slot(agent=agent, command_args=['--add-dir', '~/x']), 0, self.detail)
+        self.result('done')
 
     def test_decline(self):
         self.assertEqual(self.run_slot('decline'), 3, self.detail)
@@ -180,6 +192,29 @@ class SlotRunTests(unittest.TestCase):
                 else:
                     with self.assertRaises(ProcessLookupError):
                         os.kill(pid, 0)
+
+    def test_rmtree_removes_read_only_file(self):
+        tree = Path(self.temp.name) / 'tree'
+        (tree / 'sub').mkdir(parents=True)
+        locked = tree / 'sub' / 'obj'
+        locked.write_text('x')
+        locked.chmod(0o444)
+        slot_run.rmtree(tree)
+        self.assertFalse(tree.exists())
+
+    def test_execute_resolves_command_through_child_path(self):
+        bin_dir = Path(self.temp.name) / 'pathbin'
+        bin_dir.mkdir()
+        name = 'fake-tool.cmd' if os.name == 'nt' else 'fake-tool.sh'
+        tool = bin_dir / name
+        tool.write_text('@echo resolved\r\n' if os.name == 'nt' else '#!/bin/sh\necho resolved\n')
+        tool.chmod(0o755)
+        log = Path(self.temp.name) / 'exec.log'
+        with mock.patch.object(slot_run, 'clean_env', return_value={**os.environ, 'PATH': str(bin_dir)}):
+            with log.open('wb') as out:
+                code = slot_run.execute([name], Path(self.temp.name), out, time.monotonic() + 30)
+        self.assertEqual(code, 0)
+        self.assertIn('resolved', log.read_text())
 
     def test_agent_env_has_no_tokens(self):
         names = ['GITHUB_TOKEN', 'GH_TOKEN', 'ACTIONS_RUNTIME_TOKEN', 'FOO_TOKEN',
