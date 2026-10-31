@@ -7,9 +7,8 @@ import re
 import subprocess
 import tempfile
 
+from slot.common import target
 from slot.validate import gh, run
-
-FIZZY = 'fizzyedit/fizzy'
 
 
 def api(endpoint, method='GET', **fields):
@@ -46,13 +45,13 @@ def push(job, out, result, branch, expected=None):
     with tempfile.TemporaryDirectory(prefix='slot-publish-') as tmp:
         tree, hooks = Path(tmp) / 'tree', Path(tmp) / 'hooks'
         hooks.mkdir()
-        run('git', 'clone', '--no-checkout', job['base']['repo'], str(tree))
+        run('git', 'clone', '--no-checkout', f'https://github.com/{target(job)["repo"]}.git', str(tree))
         git = ['git', '-c', f'core.hooksPath={hooks}', '-c', 'user.name=slot-publish',
                '-c', 'user.email=publish@fizzy.invalid']
         run(*git, 'checkout', '--detach', job['base']['sha'], cwd=tree)
         run(*git, 'am', '--3way', '--committer-date-is-author-date', str(out / 'change.mbox'), cwd=tree)
         # The push subprocess's captured output is deliberately never surfaced.
-        url = f'https://x-access-token:{token}@github.com/{FIZZY}.git'
+        url = f'https://x-access-token:{token}@github.com/{target(job)["repo"]}.git'
         head = run(*git, 'rev-parse', 'HEAD', cwd=tree).decode().strip()
         remote = subprocess.run([*git, 'ls-remote', url, f'refs/heads/{branch}'], capture_output=True)
         if remote.returncode:
@@ -77,6 +76,8 @@ def publish(job_dir, out):
     if not os.environ.get('GH_TOKEN'):
         raise ValueError('GH_TOKEN is required')
     job = json.loads((job_dir / 'job.json').read_text())
+    dest = target(job)
+    slug = dest['repo']
     repo, number = job['issue']['repo'], job['issue']['number']
     marker = f'<!-- slot-job: {job["id"]} -->'
     if verdict['accept'] is not True:
@@ -92,7 +93,7 @@ def publish(job_dir, out):
         comment(repo, number, f'{status}: {result.get("error", "")}\n{result["report"][-2000:]}', marker)
         labels(repo, number, [f'attempt:{job["attempt"]}'] + (['stuck'] if job['attempt'] >= 2 else []))
     elif job['kind'] == 'write':
-        prs = gh('pr', 'list', '--repo', FIZZY, '--head', job['branch'], '--state', 'all',
+        prs = gh('pr', 'list', '--repo', slug, '--head', job['branch'], '--state', 'all',
                  '--json', 'number,body')
         if prs:
             if not any(marker in pr['body'] for pr in prs):
@@ -100,21 +101,29 @@ def publish(job_dir, out):
             return
         push(job, out, result, job['branch'])
         body = result['pr_body'] + f'\n\nPart of {repo}#{number}\n\n' + marker
-        args = ['pr', 'create', '--repo', FIZZY, '--head', job['branch'], '--title', result['title'],
-                '--body', body, '--label', f'area:{job["issue"]["area"]}',
+        args = ['pr', 'create', '--repo', slug, '--base', dest['branch'], '--head', job['branch'],
+                '--title', result['title'], '--body', body, '--label', f'area:{job["issue"]["area"]}',
                 '--label', f'kind:{result["agent_kind"]}']
-        if verdict['risky']:
+        if verdict['risky'] or dest['gate']:
             args += ['--label', 'gate:yes']
-        gh(*args)
+        created = gh(*args)
+        if dest['gate']:
+            # This repo has no review bridge: ask the work repo to review the new PR.
+            found = re.search(r'/pull/(\d+)', str(created))
+            if not found:
+                raise ValueError('cannot read the new PR number')
+            payload = dict(event_type='review', client_payload=dict(pr=int(found.group(1)), repo=slug))
+            run(os.environ.get('SLOT_GH', 'gh'), 'api', f'repos/{repo}/dispatches',
+                '--input', '-', data=json.dumps(payload).encode())
     elif job['kind'] == 'rework':
         info = job['rework']
-        pr = gh('api', f'repos/{FIZZY}/pulls/{info["pr"]}')
-        comments = gh('api', '--paginate', f'repos/{FIZZY}/issues/{info["pr"]}/comments')
+        pr = gh('api', f'repos/{slug}/pulls/{info["pr"]}')
+        comments = gh('api', '--paginate', f'repos/{slug}/issues/{info["pr"]}/comments')
         if any(marker in c['body'] for c in comments):
             return
         push(job, out, result, pr['head']['ref'], job['base']['sha'])
-        labels(FIZZY, info['pr'], [f'rework:{info["round"]}'])
-        comment(FIZZY, info['pr'], 'Rework published.', marker)
+        labels(slug, info['pr'], [f'rework:{info["round"]}'])
+        comment(slug, info['pr'], 'Rework published.', marker)
     else:
         info, review = job['for_review'], result['review']
         pr_number, sha = info['pr'], info['head_sha']
@@ -126,21 +135,21 @@ def publish(job_dir, out):
         text = f'REVIEW: {review["verdict"]} @{sha}\n' + json.dumps(review, indent=2)
         comment(repo, threads[0]['number'], text, marker)
         if review['follow_ups']:
-            comment(FIZZY, pr_number, 'Follow-ups:\n' + json.dumps(review['follow_ups'], indent=2), marker)
-        endpoint = f'repos/{FIZZY}/statuses/{sha}'
+            comment(slug, pr_number, 'Follow-ups:\n' + json.dumps(review['follow_ups'], indent=2), marker)
+        endpoint = f'repos/{slug}/statuses/{sha}'
         statuses = gh('api', '--paginate', endpoint)
         state = 'success' if review['verdict'] == 'clean' else 'failure'
         description = f'slot {job["id"]}'
         if not any(s['context'] == 'agent-review' and s.get('description') == description for s in statuses):
             api(endpoint, 'POST', state=state, context='agent-review', description=description)
         if review['verdict'] == 'clean':
-            pr = gh('api', f'repos/{FIZZY}/pulls/{pr_number}')
-            if not pr.get('auto_merge') and not pr.get('merged'):
-                gh('pr', 'merge', str(pr_number), '--repo', FIZZY, '--auto')
+            pr = gh('api', f'repos/{slug}/pulls/{pr_number}')
+            if not dest['gate'] and not pr.get('auto_merge') and not pr.get('merged'):
+                gh('pr', 'merge', str(pr_number), '--repo', slug, '--auto')
         else:
             round_number = job.get('attempt', 1) + 1
             if round_number >= 3:
-                labels(FIZZY, pr_number, ['stuck'])
+                labels(slug, pr_number, ['stuck'])
             else:
                 # A dispatch receipt makes subsequent successful runs a no-op.
                 receipt = f'<!-- slot-dispatch: {job["id"]} -->'

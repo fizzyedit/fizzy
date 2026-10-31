@@ -11,10 +11,13 @@ from unittest.mock import patch
 
 from slot.validate import validate, matches
 
+OLD_URL = 'https://github.com/fizzyedit/fizzy.git'
 FAKE = Path(__file__).resolve().parents[1] / 'fakes/gh.py'
 
 
 class Artifacts(unittest.TestCase):
+    base_has_checker = True
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -26,6 +29,11 @@ class Artifacts(unittest.TestCase):
         self.git('config', 'user.name', 'fizzy linux-codex-2')
         self.git('config', 'user.email', 'slot+linux-codex-2@fizzy.invalid')
         (self.base / 'a.txt').write_text('before\n')
+        if self.base_has_checker:
+            checker = self.base / 'scripts/check-pr-body'
+            checker.parent.mkdir()
+            checker.write_text('#!/bin/sh\nexit 0\n')
+            checker.chmod(0o755)
         self.git('add', '.')
         self.git('commit', '-qm', 'base')
         self.sha = self.git('rev-parse', 'HEAD').strip()
@@ -36,7 +44,7 @@ class Artifacts(unittest.TestCase):
         now = dt.datetime.now(dt.timezone.utc)
         self.job = dict(protocol=1, id='work-722-w1-123', kind='write',
                         issue=dict(repo='fizzyedit/work', number=722, area='scripts', labels=['kind:test-provable']),
-                        base=dict(repo=str(self.base), sha=self.sha), branch='scripts/example',
+                        base=dict(repo=OLD_URL, sha=self.sha), branch='scripts/example',
                         in_bounds=['a.txt'], limits=dict(max_changed_lines=10),
                         lease=dict(ttl_minutes=110), attempt=1, for_review=None, rework=None)
         self.result = dict(protocol=1, job_id=self.job['id'], slot_id='linux-codex-2', agent_kind='codex',
@@ -78,13 +86,53 @@ class Artifacts(unittest.TestCase):
         return validate(self.job_dir, self.out, self.base, self.sign(), self.signers)
 
     def review(self):
-        self.job.update(kind='review', base=dict(repo=str(self.base), sha=self.head), in_bounds=[],
+        self.job.update(kind='review', base=dict(repo=OLD_URL, sha=self.head), in_bounds=[],
                         for_review=dict(pr=9, head_sha=self.head, author_kind='agy', must_fix=None))
         self.result['review'] = dict(verdict='changes', findings=[dict(id='F1', severity='major',
                                             file='a.txt', line=1, added=True, text='problem')], follow_ups=[])
 
 
+class ScriptsTreeCheckerTests(Artifacts):
+    base_has_checker = False
+
+    def test_base_without_checker_runs_the_scripts_trees_own(self):
+        verdict = self.verdict()
+        self.assertFalse(verdict['accept'])
+        self.assertIn('check-pr-body', str(verdict['reasons']))
+        self.assertIn('"## In plain words" is missing', str(verdict['reasons']))
+
+
 class ValidateTests(Artifacts):
+    def test_refuses_repo_not_on_the_allow_list(self):
+        self.job['base']['repo'] = 'fizzyedit/evil'
+        verdict = self.verdict()
+        self.assertFalse(verdict['accept'])
+        self.assertIn('repo not allowed', str(verdict['reasons']))
+
+    def test_refuses_dvui_on_the_fizzy_branch(self):
+        self.job['base'].update(repo='fizzyedit/dvui', branch='main')
+        self.assertIn('branch not allowed', str(self.verdict()['reasons']))
+
+    def test_accepts_dvui_on_its_branch(self):
+        self.job['base'].update(repo='https://github.com/fizzyedit/dvui.git', branch='zig-0.17')
+        verdict = self.verdict()
+        self.assertTrue(verdict['accept'], verdict)
+
+    def test_review_reads_the_pull_from_the_target_repo(self):
+        self.review()
+        self.job['base'].update(repo='fizzyedit/dvui', branch='zig-0.17')
+        self.state['objects']['repos/fizzyedit/dvui/pulls/9'] = self.state['objects'].pop('repos/fizzyedit/fizzy/pulls/9')
+        self.state_path.write_text(json.dumps(self.state))
+        self.verdict()
+        calls = json.loads(self.state_path.read_text())['calls']
+        self.assertIn(['api', 'repos/fizzyedit/dvui/pulls/9'], [c[:2] for c in calls])
+        self.assertNotIn('repos/fizzyedit/fizzy/pulls/9', [c[1] for c in calls if c[0] == 'api'])
+
+    def test_scripts_slot_change_is_risky(self):
+        import re
+        risky = re.compile((Path(__file__).parents[1] / 'risky-paths.txt').read_text().strip(), re.I)
+        self.assertTrue(risky.search('scripts/slot/publish.py'))
+
     def test_accepts_good_write(self):
         verdict = self.verdict()
         self.assertTrue(verdict['accept'], verdict)
@@ -169,7 +217,6 @@ class ValidateTests(Artifacts):
 
     def test_pr_body_checker_comes_from_base(self):
         scripts = self.base / 'scripts'
-        scripts.mkdir()
         checker = scripts / 'check-pr-body'
         checker.write_text('#!/bin/sh\ngrep -q required-heading "$1"\n')
         checker.chmod(0o755)
