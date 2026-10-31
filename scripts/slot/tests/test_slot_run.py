@@ -9,6 +9,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 from slot import common, slot_run
 
@@ -191,6 +192,29 @@ class SlotRunTests(unittest.TestCase):
                 else:
                     with self.assertRaises(ProcessLookupError):
                         os.kill(pid, 0)
+
+    def test_rmtree_removes_read_only_file(self):
+        tree = Path(self.temp.name) / 'tree'
+        (tree / 'sub').mkdir(parents=True)
+        locked = tree / 'sub' / 'obj'
+        locked.write_text('x')
+        locked.chmod(0o444)
+        slot_run.rmtree(tree)
+        self.assertFalse(tree.exists())
+
+    def test_execute_resolves_command_through_child_path(self):
+        bin_dir = Path(self.temp.name) / 'pathbin'
+        bin_dir.mkdir()
+        name = 'fake-tool.cmd' if os.name == 'nt' else 'fake-tool.sh'
+        tool = bin_dir / name
+        tool.write_text('@echo resolved\r\n' if os.name == 'nt' else '#!/bin/sh\necho resolved\n')
+        tool.chmod(0o755)
+        log = Path(self.temp.name) / 'exec.log'
+        with mock.patch.object(slot_run, 'clean_env', return_value={**os.environ, 'PATH': str(bin_dir)}):
+            with log.open('wb') as out:
+                code = slot_run.execute([name], Path(self.temp.name), out, time.monotonic() + 30)
+        self.assertEqual(code, 0)
+        self.assertIn('resolved', log.read_text())
 
     def test_agent_env_has_no_tokens(self):
         names = ['GITHUB_TOKEN', 'GH_TOKEN', 'ACTIONS_RUNTIME_TOKEN', 'FOO_TOKEN',
