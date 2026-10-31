@@ -20,7 +20,7 @@ export function wheelTicks(ev, state) {
       lowestBatch[i] = Math.min(Math.abs(delta), lowestBatch[i]);
       const notch = ev.deltaMode === 1 && Math.abs(delta) % 4 === 0 ? 4 : 3;
       ticks = -delta / (ev.deltaMode === 1 ? notch : lowestBatch[i]);
-    } else if (i === 1 && ev.wheelDeltaY === -3 * delta) {
+    } else if (ev.deltaY !== 0 && ev.wheelDeltaY === -3 * ev.deltaY) {
       trackpad = 1;
       ticks = -delta / 80;
     } else if (i === 1 && ev.wheelDeltaY && ev.wheelDeltaY % 120 === 0) {
@@ -966,9 +966,7 @@ export class Fizzy {
     // (every modern browser synthesizes this). Two things to do here in the capture phase,
     // before dvui's bubble-phase listener on the canvas:
     //   1. preventDefault + stopImmediatePropagation — keeps the browser from page-zooming
-    //      and keeps the wheel reader from folding the tiny pinch delta into its
-    //      `lowest` minimum (an all-time min that never resets and otherwise
-    //      poisons trackpad scroll sensitivity for the rest of the session).
+    //      and keeps pinch deltas out of the scroll path.
     //   2. Forward the magnification into the wasm trackpad accumulator
     //      (`FizzyWebTrackpadMagnification`). The canvas widget drains it each frame and
     //      applies the same scale-around-point math used by macOS native pinch.
