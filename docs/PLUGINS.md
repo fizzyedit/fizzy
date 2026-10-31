@@ -789,7 +789,7 @@ reachable from a ref, so a pinned commit that later falls out of `fizzy-dev`'s h
 rebase does that — takes every plugin build for that SDK version with it.
 
 So the order is: **tag, then pin.** Each pinned commit gets an immutable `fizzy-sdk-<version>`
-tag in `foxnne/dvui-dev` before `sdk/build.zig.zon` names it, and that tag is never moved or
+tag in `fizzyedit/dvui` (protected by its `sdk-tags` ruleset) before `sdk/build.zig.zon` names it, and that tag is never moved or
 deleted. `fizzy-dev` stays an ordinary working branch and can be rebased onto upstream whenever
 it needs to be; the tags are what the published SDKs actually depend on.
 

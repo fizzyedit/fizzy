@@ -7,7 +7,7 @@ bump it; keep it current whenever a pin or a patch moves.
 
 | Dependency | Upstream | Fizzy's changes | Pinned in | Carries |
 |---|---|---|---|---|
-| [`foxnne/dvui-dev`](https://github.com/foxnne/dvui-dev) | [`david-vanderson/dvui`](https://github.com/david-vanderson/dvui) | branch `zig-0.17` (on 0.16, `fizzy-dev`) | `sdk/build.zig.zon` | dvui changes fizzy needs |
+| [`fizzyedit/dvui`](https://github.com/fizzyedit/dvui) | [`david-vanderson/dvui`](https://github.com/david-vanderson/dvui) | branch `zig-0.17` (on 0.16, `fizzy-dev`) | `sdk/build.zig.zon` | dvui changes fizzy needs |
 | dvui's `web.js` | the dvui `sdk/build.zig.zon` pins | `web/patches/dvui` | `build.zig.zon` (`.patch`) | the web backend's JavaScript, patched by zig-patch for the web build (below) |
 | SDL | [`libsdl-org/SDL`](https://github.com/libsdl-org/SDL) `release-3.4.16` | `backend/patches/sdl` | `backend/build.zig.zon` (`.sdl_source`) | SDL C patches, applied by [zig-patch](https://github.com/marler8997/zig-patch) (below) |
 | [`fizzyedit/sdl_zig`](https://github.com/fizzyedit/sdl_zig) | [`Games-By-Mason/sdl_zig`](https://github.com/Games-By-Mason/sdl_zig) | branch `fizzy` | `backend/build.zig.zon` (`.sdl`) | the Zig build of SDL, taking the patched tree |
@@ -38,7 +38,9 @@ backend and never link SDL, so an SDL bump is never an SDK release and never mov
    [`fizzyedit/SDL`](https://github.com/fizzyedit/SDL) (or of the fork); once merged it comes out
    empty at the next rebase and is dropped.
 
-## foxnne/dvui-dev
+## fizzyedit/dvui
+
+Moved from `foxnne/dvui-dev` on 2026-10-30; the old URL redirects, and SDK tarballs up to this one depend on that, so never re-create `foxnne/dvui-dev`.
 
 `fizzy-dev` = upstream `main` (`9b372ab`, 2026-10-02) plus:
 
@@ -390,4 +392,4 @@ the file for Windows in the checkout; it needs no build of the rest of SDL:
 CI's Windows cross-build (`ci.yml`) then builds it into fizzy.
 
 For local work on sdl_zig, point `backend/build.zig.zon`'s `.sdl` at a checkout with
-`.path = "../../sdl_zig"`, as `sdk/build.zig.zon` does for `../dvui-dev`.
+`.path = "../../sdl_zig"`, as `sdk/build.zig.zon` does for `../dvui`.

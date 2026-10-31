@@ -43,9 +43,9 @@
         .dvui = .{
             // The zig-0.17 branch: fizzy-sdk-0.2.30-7 and the floating window background hook after
             // it (docs/DEPENDENCIES.md, patch 14)
-            .url = "git+https://github.com/foxnne/dvui-dev#3d90fdda949d50ba7fa82117ccb18a40da5b41cc",
+            .url = "git+https://github.com/fizzyedit/dvui#3d90fdda949d50ba7fa82117ccb18a40da5b41cc",
             .hash = "dvui-0.6.0-dev-AQFJmTG2BAHCy_MTZv6SjCTs3xHXSOPuxEsON67RQ7uS",
-            //.path = "../../dvui-dev",
+            //.path = "../../dvui",
         },
         .zf = .{
             .url = "git+https://github.com/natecraddock/zf#e00f9e978b6a7126d1b35fa8ffd49b62042ad6f3",

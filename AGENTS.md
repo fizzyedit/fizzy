@@ -250,12 +250,12 @@ access works from what the code and its public docs say.
   `src/editor/Demo.zig` + `src/editor/demos/`.
 - Floating views (a view dropped on its own place's middle floats into a glass window: the rule,
   occlusion, close-home, persistence) → `app/layout/SPLITS.md` "Floating a view"; taking floats out
-  into OS windows (ImGui-style viewports, per-OS dressing, the dvui-dev replay hook) →
+  into OS windows (ImGui-style viewports, per-OS dressing, the dvui replay hook) →
   [`plans/POPOUT_WINDOWS_PLAN.md`](https://github.com/fizzyedit/plans/blob/main/plans/POPOUT_WINDOWS_PLAN.md).
 - Full plugin contract + lifecycle/hook tables → `docs/PLUGINS.md`
 - Driving a running fizzy from outside (`curl` on its socket, the commands as the API, events,
   OpenAPI) → [`docs/CONTROL.md`](docs/CONTROL.md); code in `app/control/`.
-- The forks and patches fizzy builds on (dvui-dev, SDL's patches in `backend/patches/sdl`, sdl_zig): what each changes, where each is pinned, how to bump → [`docs/DEPENDENCIES.md`](docs/DEPENDENCIES.md)
+- The forks and patches fizzy builds on (fizzyedit/dvui, SDL's patches in `backend/patches/sdl`, sdl_zig): what each changes, where each is pinned, how to bump → [`docs/DEPENDENCIES.md`](docs/DEPENDENCIES.md)
 - Native windows and glass: what Liquid Glass can do (measured), the drag's glass as one native
   overlay on macOS 26, and fizzy's backend owning its windows while taking SDL's releases →
   [`plans/NATIVE_WINDOWS_PLAN.md`](https://github.com/fizzyedit/plans/blob/main/plans/NATIVE_WINDOWS_PLAN.md)
