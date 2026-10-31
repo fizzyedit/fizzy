@@ -11,6 +11,31 @@ class JobError(ValueError):
     pass
 
 
+# The only repos slot work may land in. gate=True: the repo has no review bridge of its own, so
+# publish labels the PR gate:yes and dispatches its review to the work repo.
+TARGETS = {
+    'fizzyedit/fizzy': dict(branch='main', gate=False),
+    'fizzyedit/dvui': dict(branch='zig-0.17', gate=True),
+}
+
+
+def target(job):
+    """The allowed target the job names, as dict(repo=<slug>, branch=..., gate=...)."""
+    try:
+        base = job['base']
+        url = re.fullmatch(r'https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)\.git', base['repo'])
+        slug = url.group(1) if url else base['repo']
+        if slug not in TARGETS:
+            raise JobError(f'repo not allowed: {slug}')
+        entry = TARGETS[slug]
+        branch = base.get('branch', entry['branch'])
+        if branch != entry['branch']:
+            raise JobError(f'branch not allowed for {slug}: {branch}')
+    except (KeyError, TypeError, AttributeError) as exc:
+        raise JobError(f'invalid base: {exc}') from exc
+    return dict(repo=slug, **entry)
+
+
 def load_job(path):
     try:
         with Path(path).open('rb') as source:

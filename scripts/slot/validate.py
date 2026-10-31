@@ -11,6 +11,8 @@ import subprocess
 import sys
 import tempfile
 
+from slot.common import JobError, target
+
 
 def run(*args, cwd=None, data=None):
     p = subprocess.run(args, cwd=cwd, input=data, capture_output=True)
@@ -101,12 +103,13 @@ def patch_checks(job, result, out, base, verdict):
 
 
 def review_checks(job, result, base, reasons):
+    repo = target(job)['repo']
     info, review = job['for_review'], result['review']
     if result['agent_kind'] == info['author_kind']:
         reasons.append('review same kind as author')
     head = info['head_sha']
     # PR base is read from GitHub; job.base is the PR head, not its merge base.
-    pr = gh('api', f'repos/fizzyedit/fizzy/pulls/{info["pr"]}')
+    pr = gh('api', f'repos/{repo}/pulls/{info["pr"]}')
     # The checkout may be shallow or at a commit that lacks the PR's merge base: fetch both ends.
     for sha in (pr['base']['sha'], head):
         if subprocess.run(['git', 'cat-file', '-e', sha + '^{commit}'], cwd=base).returncode:
@@ -166,6 +169,11 @@ def validate(job_dir, out, base, digest, signers):
     except (ValueError, OSError) as error:
         reasons.append(f'invalid input: {error}')
         return verdict
+    try:
+        target(job)
+    except JobError as error:
+        reasons.append(f'target: {error}')
+        return verdict
     if hashlib.sha256(job_bytes).hexdigest() != digest:
         reasons.append('wrong job digest')
     if job.get('protocol') != 1 or result.get('protocol') != 1:
@@ -207,7 +215,7 @@ def validate(job_dir, out, base, digest, signers):
                 reasons.append('issue no longer open and ready')
         else:
             info = job['for_review'] if job['kind'] == 'review' else job['rework']
-            pr = gh('api', f'repos/fizzyedit/fizzy/pulls/{info["pr"]}')
+            pr = gh('api', f'repos/{target(job)["repo"]}/pulls/{info["pr"]}')
             if pr['state'] != 'open' or pr['head']['sha'] != job['base']['sha']:
                 reasons.append('PR closed or head moved')
     check('lease', lease)
@@ -227,13 +235,11 @@ def validate(job_dir, out, base, digest, signers):
                         job['base']['sha'], cwd=tree)
                     body_file = Path(tmp) / 'body.md'
                     body_file.write_text(result['pr_body'])
-                    run(str(tree / 'scripts/check-pr-body'), str(body_file), cwd=tree)
-            exists = subprocess.run(['git', 'cat-file', '-e', f'{job["base"]["sha"]}:scripts/check-pr-body'],
-                                    cwd=base, capture_output=True).returncode == 0
-            if exists:
-                check('check-pr-body', body)
-            else:
-                verdict['notes'] = ['check-pr-body: not on base']
+                    checker = tree / 'scripts/check-pr-body'
+                    if not checker.exists():
+                        checker = Path(__file__).resolve().parents[1] / 'check-pr-body'
+                    run(str(checker), str(body_file), cwd=tree)
+            check('check-pr-body', body)
         elif job['kind'] == 'review':
             check('review', lambda: review_checks(job, result, base, reasons))
     verdict['accept'] = not reasons

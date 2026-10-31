@@ -3,7 +3,7 @@ import json
 from unittest.mock import patch
 
 from slot.publish import publish
-from slot.tests.test_validate import Artifacts
+from slot.tests.test_validate import OLD_URL, Artifacts
 
 
 class PublishTests(Artifacts):
@@ -26,6 +26,45 @@ class PublishTests(Artifacts):
         create = next(call for call in state['calls'] if call[:2] == ['pr', 'create'])
         labels = [create[index + 1] for index, arg in enumerate(create) if arg == '--label']
         self.assertCountEqual(labels, ['area:scripts', 'kind:codex'])
+
+    def dvui(self):
+        self.job['base'].update(repo='fizzyedit/dvui', branch='zig-0.17')
+
+    def test_dvui_pr_targets_its_repo_and_branch_and_dispatches_review(self):
+        self.dvui()
+        state, push = self.publish_twice()
+        create = next(call for call in state['calls'] if call[:2] == ['pr', 'create'])
+        self.assertEqual(create[create.index('--repo') + 1], 'fizzyedit/dvui')
+        self.assertEqual(create[create.index('--base') + 1], 'zig-0.17')
+        self.assertIn('gate:yes', create)
+        self.assertEqual(state['dispatches'], [dict(event_type='review',
+                                                    client_payload=dict(pr=1, repo='fizzyedit/dvui'))])
+        self.assertEqual(push.call_count, 1)
+
+    def test_fizzy_pr_targets_main_without_gate_or_review_dispatch(self):
+        state, _ = self.publish_twice()
+        create = next(call for call in state['calls'] if call[:2] == ['pr', 'create'])
+        self.assertEqual(create[create.index('--repo') + 1], 'fizzyedit/fizzy')
+        self.assertEqual(create[create.index('--base') + 1], 'main')
+        self.assertNotIn('gate:yes', create)
+        self.assertNotIn('dispatches', state)
+
+    def test_publish_refuses_unlisted_repo_before_any_github_call(self):
+        from slot.common import JobError
+        self.job['base']['repo'] = 'fizzyedit/evil'
+        with self.assertRaises(JobError):
+            self.publish_twice()
+        self.assertNotIn('calls', json.loads(self.state_path.read_text()))
+
+    def test_dvui_review_clean_does_not_auto_merge(self):
+        self.review()
+        self.dvui()
+        self.result['review'].update(verdict='clean', findings=[])
+        self.state['objects']['repos/fizzyedit/dvui/pulls/9'] = dict(state='open')
+        self.state_path.write_text(json.dumps(self.state))
+        state, _ = self.publish_twice()
+        self.assertEqual(len(state['statuses']['repos/fizzyedit/dvui/statuses/' + self.head]), 1)
+        self.assertNotIn('auto_merge', state['objects']['repos/fizzyedit/dvui/pulls/9'])
 
     def test_review_changes_dispatches_rework(self):
         self.review()
@@ -80,6 +119,8 @@ class PublishTests(Artifacts):
             for index, arg in enumerate(args):
                 if arg.startswith('https://x-access-token:'):
                     args[index] = str(remote)
+                elif arg.startswith('https://github.com/'):
+                    args[index] = str(self.base)
             if 'push' in args:
                 pushes.append(args)
             return real_run(args, **kwargs)
@@ -104,7 +145,7 @@ class PublishTests(Artifacts):
         push.assert_not_called()
 
     def test_rework_pushes_once_and_labels_round(self):
-        self.job.update(kind='rework', base=dict(repo=str(self.base), sha=self.head),
+        self.job.update(kind='rework', base=dict(repo=OLD_URL, sha=self.head),
                         rework=dict(pr=9, round=1))
         self.state['objects']['repos/fizzyedit/fizzy/issues/9'] = dict(labels=[])
         self.state_path.write_text(json.dumps(self.state))

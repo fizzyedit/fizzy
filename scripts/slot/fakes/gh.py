@@ -45,7 +45,9 @@ try:
     elif args[:2] == ['pr', 'list']:
         answer = [p for p in state.get('prs', []) if p['branch'] == flag('--head')]
     elif args[:2] == ['pr', 'create']:
-        state.setdefault('prs', []).append(dict(number=1, branch=flag('--head'), body=flag('--body')))
+        prs = state.setdefault('prs', [])
+        prs.append(dict(number=len(prs) + 1, branch=flag('--head'), body=flag('--body')))
+        answer = f'https://github.com/{flag("--repo")}/pull/{len(prs)}'
     elif args[:2] == ['pr', 'merge']:
         state['objects'][f'repos/{flag("--repo")}/pulls/{args[2]}']['auto_merge'] = True
     else:

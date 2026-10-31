@@ -12,6 +12,9 @@ carries them (now) or our own coordinator does (later, for outside slots).
 
 ```
 job/  job.json        what to do (built by make_job from the issue, never by an agent)
+      base.repo   owner/name, one of TARGETS in common.py (fizzyedit/fizzy on main, fizzyedit/dvui on
+                  zig-0.17); the old https://github.com/<owner>/<name>.git form reads as the same slug.
+                  Any other repo, or a base.branch other than the entry's (default: the entry's), is refused
       base.bundle     optional: git bundle holding base.sha (otherwise base.repo is fetched)
 out/  result.json     what happened (written by `slot run`, never by the agent)
       change.mbox     git format-patch base.sha..HEAD (write and rework only)
@@ -50,7 +53,7 @@ the key is its identity.
   "kind": "write",
   "issue": {"repo": "fizzyedit/work", "number": 704, "title": "...", "area": "core",
             "labels": ["ready", "prio:1", "os:any"]},
-  "base": {"repo": "https://github.com/fizzyedit/fizzy.git", "sha": "9fc9c05...", "bundle": null},
+  "base": {"repo": "fizzyedit/fizzy", "branch": "main", "sha": "9fc9c05...", "bundle": null},
   "branch": "core/touch-slop",
   "spec": "<the issue body, verbatim>",
   "in_bounds": ["sdk/src/dvui_context.zig", "core/core.zig", "app/layout/*.zig"],
@@ -227,7 +230,7 @@ The validator refuses when any of these fails, and lists every failure, not the 
 
 | Result | Action |
 |---|---|
-| write done | push `branch` to fizzy (new branch, fails if it exists), open the PR (ready, not draft) with `pr_body` + `Part of fizzyedit/work#N`, labels `area:<x>`, `kind:<agent_kind>` from result.json (never the issue's work-kind labels), `gate:yes` if risky |
+| write done | push `branch` to the target repo (new branch, fails if it exists), open the PR against its branch (ready, not draft) with `pr_body` + `Part of fizzyedit/work#N`, labels `area:<x>`, `kind:<agent_kind>` from result.json (never the issue's work-kind labels), `gate:yes` if risky or the target has no review bridge (dvui), which also dispatches `review` `{pr, repo}` to the work repo; a clean dvui review never runs `gh pr merge --auto` |
 | rework done | push to the PR's branch, fast-forward only (refuse if head moved), label `rework:<round>` |
 | review done | comment the findings on the PR's pr-thread issue in work (`REVIEW: clean|changes @<sha>`); commit status `agent-review` on `head_sha` (success when clean); follow-ups appended to the PR's follow-up list; `changes` dispatches `rework` (round + 1), round 3 labels `stuck` instead; `clean` runs `gh pr merge --auto` |
 | declined | comment `APPROACH:` + the decline on the issue, label `arch:needed`, remove `ready` |
