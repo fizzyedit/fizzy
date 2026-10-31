@@ -57,8 +57,9 @@ const Touch = struct {
     x: Fling = .{},
     y: Fling = .{},
     dragging: bool = false,
-    wheel_pending: dvui.Point = .{},
-    wheel_time_ns: i128 = 0,
+    glide_x: ?f32 = null,
+    glide_y: ?f32 = null,
+    glide_at: dvui.Point = .{},
     /// Where the drawn position (`si.viewport` plus `over`) was at the last frame's end.
     last_viewport: dvui.Point = .{},
     last_coast: dvui.Point = .{},
@@ -79,7 +80,7 @@ const Touch = struct {
     pull: dvui.Point = .{},
 
     fn anyMoving(self: *const Touch) bool {
-        return self.seg_x.kind != .none or self.seg_y.kind != .none or self.seating;
+        return self.seg_x.kind != .none or self.seg_y.kind != .none or self.seating or self.glide_x != null or self.glide_y != null;
     }
 };
 
@@ -142,6 +143,8 @@ pub fn init(src: std.builtin.SourceLocation, init_opts: dvui.ScrollAreaWidget.In
     const was_coasting_x = self.touch.seg_x.kind == .coast;
     const was_coasting_y = self.touch.seg_y.kind == .coast;
     const was_seating = self.touch.seating;
+    const was_moving_x = self.touch.seg_x.kind != .none;
+    const was_moving_y = self.touch.seg_y.kind != .none or was_seating;
 
     // A press while coasting or settling only stops the motion: eat it so it doesn't also tap
     // what is under it.
@@ -149,8 +152,9 @@ pub fn init(src: std.builtin.SourceLocation, init_opts: dvui.ScrollAreaWidget.In
     for (dvui.events()) |*e| {
         if (!dvui.eventMatch(e, .{ .id = c.data().id, .r = c.data().borderRectScale().r })) continue;
         if (e.evt != .mouse or e.evt.mouse.action != .press or !e.evt.mouse.button.touch()) continue;
-        t.wheel_pending = .{};
         if (!t.anyMoving()) continue;
+        t.glide_x = null;
+        t.glide_y = null;
         e.handle(@src(), c.data());
         dvui.captureMouse(c.data(), e.num);
         t.x.cancel();
@@ -176,12 +180,14 @@ pub fn init(src: std.builtin.SourceLocation, init_opts: dvui.ScrollAreaWidget.In
     // that frame. Moved after the children, it would draw where the clock was one gap ago, and
     // an uneven gap would show as an uneven step.
     if (!t.dragging) {
-        self.wheelStep();
+        self.glideStep();
         self.coast();
         self.seatStep();
     }
     // A bounce ends its coast past an edge; only in-range axes settle onto pixels.
     self.settle(was_coasting_x and t.seg_x.kind != .coast and t.over.x == 0, (was_coasting_y and t.seg_y.kind != .coast or was_seating and !t.seating) and t.over.y == 0);
+    if (was_moving_x) t.glide_at.x = self.si.viewport.x;
+    if (was_moving_y) t.glide_at.y = self.si.viewport.y;
     if (c.init_opts.frame_viewport == null) c.frame_viewport = self.si.viewport.topLeft().plus(t.over);
     return self;
 }
@@ -267,6 +273,8 @@ fn touchMotion(self: *ScrollArea, e: *dvui.Event) void {
     const taking_over = !dvui.captured(c.data().id);
     if (taking_over) dvui.captureMouse(c.data(), e.num);
     if (!t.dragging) {
+        t.glide_x = null;
+        t.glide_y = null;
         t.dragging = true;
         t.finger = me.button;
         t.last_coast = .{};
@@ -284,27 +292,58 @@ fn touchMotion(self: *ScrollArea, e: *dvui.Event) void {
     t.y.sampleTimed(delta.y, time_ns);
 }
 
-// A notch leaves 5% of its distance after 150 ms, independent of frame rate.
-fn wheelStep(self: *ScrollArea) void {
-    const t = self.touch;
-    if (!t.wheel_pending.nonZero()) return;
-    const elapsed = @as(f32, @floatFromInt(dvui.frameTimeNS() - t.wheel_time_ns)) / std.time.ns_per_s;
-    t.wheel_time_ns = dvui.frameTimeNS();
-    const fraction = 1 - @exp(-20 * @max(0, elapsed));
-    var moved = t.wheel_pending.scale(fraction, dvui.Point);
-    t.wheel_pending = t.wheel_pending.diff(moved);
-    if (@abs(t.wheel_pending.x) < 0.01) {
-        moved.x += t.wheel_pending.x;
-        t.wheel_pending.x = 0;
-    }
-    if (@abs(t.wheel_pending.y) < 0.01) {
-        moved.y += t.wheel_pending.y;
-        t.wheel_pending.y = 0;
-    }
-    self.si.scrollByOffset(.horizontal, moved.x);
-    self.si.scrollByOffset(.vertical, moved.y);
-    if (self.area.scroll.?.init_opts.user_scroll) |us| us.* = us.plus(moved);
+/// Seconds for a glide to cover 63% of what is left; about 95% in 150 ms.
+pub const glide_tau_s: f32 = 0.05;
+
+/// Slide the viewport to `to` along `axis`, clamped to 0..scrollMax. Moves from the next frame's `init`.
+pub fn glideTo(self: *ScrollArea, axis: dvui.enums.Direction, to: f32) void {
+    const target = if (axis == .horizontal) &self.touch.glide_x else &self.touch.glide_y;
+    target.* = std.math.clamp(to, 0, self.si.scrollMax(axis));
+    if (axis == .horizontal) self.touch.glide_at.x = self.si.viewport.x else self.touch.glide_at.y = self.si.viewport.y;
     dvui.refresh(null, @src(), self.data().id);
+}
+
+/// Add `by` to the glide's target (the viewport when none runs), clamped. Notches accumulate on the target.
+pub fn glideBy(self: *ScrollArea, axis: dvui.enums.Direction, by: f32) void {
+    const target = if (axis == .horizontal) self.touch.glide_x else self.touch.glide_y;
+    const pos = if (axis == .horizontal) self.si.viewport.x else self.si.viewport.y;
+    self.glideTo(axis, (target orelse pos) + by);
+}
+
+/// Whether either axis is gliding.
+pub fn gliding(self: *const ScrollArea) bool {
+    return self.touch.glide_x != null or self.touch.glide_y != null;
+}
+
+fn glideStep(self: *ScrollArea) void {
+    const t = self.touch;
+    const max_step_s = @as(f32, @floatFromInt(FrameClock.max_step_ns)) / std.time.ns_per_s;
+    const dt = @min(dvui.secondsSinceLastFrame(), max_step_s);
+    var axis_index: usize = 0;
+    while (axis_index < 2) : (axis_index += 1) {
+        const axis: dvui.enums.Direction = if (axis_index == 0) .horizontal else .vertical;
+        const horizontal = axis == .horizontal;
+        const target = if (horizontal) &t.glide_x else &t.glide_y;
+        const to = target.* orelse continue;
+        const pos = if (horizontal) self.si.viewport.x else self.si.viewport.y;
+        const at = if (horizontal) &t.glide_at.x else &t.glide_at.y;
+        if (@abs(pos - at.*) > 0.01) {
+            target.* = null;
+            continue;
+        }
+        const seg = if (horizontal) t.seg_x else t.seg_y;
+        if (seg.kind != .none or (!horizontal and t.seating)) continue;
+        const clamped = std.math.clamp(to, 0, self.si.scrollMax(axis));
+        var next = if (glass.motion.off()) clamped else pos + (clamped - pos) * (1 - @exp(-dt * glass.motion.rate() / glide_tau_s));
+        const done = @abs(clamped - next) <= 0.5;
+        if (done) next = clamped;
+        self.scrollBy(if (horizontal) .{ .x = next - pos } else .{ .y = next - pos });
+        if (done) {
+            target.* = null;
+            self.settle(horizontal, !horizontal);
+        } else dvui.refresh(null, @src(), self.data().id);
+        at.* = if (horizontal) self.si.viewport.x else self.si.viewport.y;
+    }
 }
 
 fn wheelEvent(self: *ScrollArea, e: *dvui.Event) void {
@@ -325,6 +364,9 @@ fn wheelEvent(self: *ScrollArea, e: *dvui.Event) void {
         .wheel_y => |n| n,
         else => return,
     };
+    if (trackpad) {
+        if (dir == .horizontal) self.touch.glide_x = null else self.touch.glide_y = null;
+    }
     const at = if (dir == .vertical) self.si.viewport.y else self.si.viewport.x;
     const max = self.si.scrollMax(dir);
     if (max <= 0 or (by < 0 and at <= 0) or (by > 0 and at >= max)) return;
@@ -335,14 +377,12 @@ fn wheelEvent(self: *ScrollArea, e: *dvui.Event) void {
     if (self.touch.seg_y.kind == .coast) self.touch.seg_y = .{};
     self.touch.seating = false;
     if (trackpad) {
-        self.touch.wheel_pending = .{};
         self.si.scrollByOffset(dir, by);
         if (c.init_opts.user_scroll) |us| {
             if (dir == .vertical) us.y += by else us.x += by;
         }
     } else {
-        if (!self.touch.wheel_pending.nonZero()) self.touch.wheel_time_ns = dvui.frameTimeNS();
-        if (dir == .vertical) self.touch.wheel_pending.y += by else self.touch.wheel_pending.x += by;
+        self.glideBy(dir, by);
     }
     dvui.refresh(null, @src(), self.data().id);
 }
@@ -643,6 +683,10 @@ var t_range_broken: bool = false;
 /// Set to place the viewport before the next frame's layout.
 var t_jump_to: ?f32 = null;
 var t_max_y: f32 = 0;
+/// Written by glide tests and consumed by testFrame on the test thread.
+var t_glide_to: ?f32 = null;
+var t_glide_by: ?f32 = null;
+var t_motion_off: bool = false;
 /// Lay the area out as a column of `t_rows` rows, `t_top` points below the window's top, and
 /// record where each row is drawn.
 var t_column: bool = false;
@@ -655,6 +699,7 @@ var t_notches: []const Fling.Notch = &.{};
 var t_peak: f32 = 0;
 
 fn testFrame() !dvui.App.Result {
+    if (t_motion_off) glass.motion.publish(0, 0.5, false, false, 1);
     var root = dvui.box(@src(), .{}, .{ .expand = .both });
     defer root.deinit();
     if (t_use_dvui) {
@@ -666,6 +711,10 @@ fn testFrame() !dvui.App.Result {
     } else {
         var scroll = ScrollArea.init(@src(), .{ .horizontal = .none, .vertical_bar = .hide }, .{ .expand = .both, .margin = .{ .y = t_top } });
         scroll.notches(t_notches);
+        if (t_glide_to) |to| scroll.glideTo(.vertical, to);
+        if (t_glide_by) |by| scroll.glideBy(.vertical, by);
+        t_glide_to = null;
+        t_glide_by = null;
         t_moving = scroll.touch.anyMoving();
         // Read the final viewport after the area's event handling and edge correction.
         const si = scroll.si;
@@ -1780,4 +1829,129 @@ test "an unscrollable axis releases at the finger speed of minus 625 points per 
 
 test "a nested area at its start releases at the finger speed of minus 625 points per second" {
     try releaseSpeedCase(.nested);
+}
+
+test "a glide reaches 95 percent in 150 ms at 60 and 120 Hz and ends exactly" {
+    for ([_]u64{ 60, 120 }) |hz| {
+        var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+        defer t.deinit();
+        t_use_dvui = false;
+        try dvui.testing.settle(testFrame);
+        t_glide_to = 400;
+        try frameAfter(0);
+        const cw = dvui.currentWindow();
+        const start = cw.frame_time_ns;
+        // Both rates include a frame at 150 ms.
+        for (1..hz * 150 / 1000 + 1) |frame| {
+            _ = try testFrame();
+            try std.testing.expect(t_viewport_y <= 400);
+            _ = try cw.end(.{});
+            try cw.begin(start + @divTrunc(@as(i128, @intCast(frame)) * std.time.ns_per_s, hz));
+        }
+        _ = try testFrame();
+        try std.testing.expect(t_viewport_y >= 380 and t_viewport_y < 400);
+        _ = try cw.end(.{});
+        try cw.begin(cw.frame_time_ns + 8 * std.time.ns_per_ms);
+        for (0..120) |_| {
+            try frameAfter(8);
+            try std.testing.expect(t_viewport_y <= 400);
+        }
+        try std.testing.expectEqual(@as(f32, 400), t_viewport_y);
+    }
+}
+
+test "a glide ends at the same place on an uneven frame schedule" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    try dvui.testing.settle(testFrame);
+    t_glide_to = 400;
+    var prev: f32 = 0;
+    for (0..30) |_| for ([_]u64{ 8, 33, 16, 50, 8 }) |gap| {
+        try frameAfter(gap);
+        try std.testing.expect(t_viewport_y >= prev and t_viewport_y <= 400);
+        prev = t_viewport_y;
+    };
+    try std.testing.expectEqual(@as(f32, 400), t_viewport_y);
+}
+
+test "glideBy accumulates on the target" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    try dvui.testing.settle(testFrame);
+    for (0..3) |_| {
+        t_glide_by = 100;
+        try frameAfter(16);
+    }
+    for (0..60) |_| try frameAfter(16);
+    try std.testing.expectEqual(@as(f32, 300), t_viewport_y);
+}
+
+test "a glide target is clamped to the content" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    t_range_broken = false;
+    try dvui.testing.settle(testFrame);
+    t_glide_to = 1e6;
+    for (0..120) |_| try frameAfter(16);
+    try std.testing.expectEqual(t_max_y, t_viewport_y);
+    t_glide_to = -50;
+    for (0..120) |_| try frameAfter(16);
+    try std.testing.expectEqual(@as(f32, 0), t_viewport_y);
+    try std.testing.expect(!t_range_broken);
+}
+
+test "a touch press stops a glide where it is drawn" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    t_column = true;
+    defer t_column = false;
+    try dvui.testing.settle(testFrame);
+    t_glide_to = 400;
+    for (0..4) |_| try frameAfter(16);
+    const before = t_viewport_y;
+    _ = try dvui.currentWindow().addEventPointer(.{ .button = .touch0, .action = .press, .xynorm = .{ .x = 0.5, .y = 0.5 } });
+    try std.testing.expectApproxEqAbs(@as(f32, 0), try restJump(16), 0.001);
+    for (0..10) |_| {
+        try frameAfter(16);
+        try std.testing.expectEqual(before, t_viewport_y);
+    }
+}
+
+test "a scrollbar move drops a glide" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    try dvui.testing.settle(testFrame);
+    t_glide_to = 400;
+    for (0..4) |_| try frameAfter(16);
+    t_jump_to = 125;
+    for (0..10) |_| {
+        try frameAfter(16);
+        try std.testing.expectEqual(@as(f32, 125), t_viewport_y);
+    }
+}
+
+test "motion off: a glide is one frame" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    t_motion_off = true;
+    defer t_motion_off = false;
+    try dvui.testing.settle(testFrame);
+    t_glide_to = 400;
+    try frameAfter(16);
+    try frameAfter(16);
+    try std.testing.expectEqual(@as(f32, 400), t_viewport_y);
+    try std.testing.expect(!t_moving);
+}
+
+test "snapping inside the area is the same while gliding and at rest" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    try dvui.testing.settle(testFrame);
+    const snapping = t_snapping;
+    t_glide_to = 400;
+    for (0..60) |_| {
+        try frameAfter(16);
+        try std.testing.expectEqual(snapping, t_snapping);
+    }
+    try std.testing.expectEqual(@as(f32, 400), t_viewport_y);
 }
