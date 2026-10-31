@@ -44,6 +44,8 @@ pub const State = struct {
     pinned: bool = true,
     /// The viewport's top as this frame put it, to tell the reader's scrolling from our own.
     frame_y: f32 = 0,
+    /// The last nonzero viewport height, retained while the area has no size.
+    view_h: f32 = 0,
 
     pub fn init(gpa: std.mem.Allocator) State {
         return .{ .gpa = gpa };
@@ -104,8 +106,9 @@ pub fn init(src: std.builtin.SourceLocation, opts: InitOptions, widget_opts: dvu
     const st = opts.state;
     const source: HeightIndex.Source = .{ .ctx = opts.ctx, .key = opts.key, .estimate = opts.estimate };
 
-    const width = if (st.si.viewport.w > 0) st.si.viewport.w else first_frame_width;
-    const view_h = if (st.si.viewport.h > 0) st.si.viewport.h else first_frame_height;
+    const width = if (st.si.viewport.w > 0) st.si.viewport.w else if (st.index.width > 0) st.index.width else first_frame_width;
+    if (st.si.viewport.h > 0) st.view_h = st.si.viewport.h;
+    const view_h = if (st.view_h > 0) st.view_h else first_frame_height;
     var count = opts.count;
     st.index.reconcile(st.gpa, source, count, width, opts.revision) catch |err| {
         // The rows are the caller's, and the index does not match them: draw none.
@@ -201,6 +204,7 @@ pub const Row = struct {
     box: *dvui.BoxWidget,
     first_frame: bool,
 
+    /// A first-frame size never replaces a measurement, current or from another width.
     pub fn deinit(self: *Row) void {
         const id = self.box.data().id;
         self.box.deinit();
@@ -208,8 +212,10 @@ pub const Row = struct {
         // The box has put its natural size, margins included, where dvui keeps min sizes.
         const size = dvui.minSizeGet(id) orelse return;
         const index = &self.list.opts.state.index;
-        // A first-frame size never replaces a measurement.
-        if (self.first_frame and index.stateAt(self.index) == .measured) return;
+        if (self.first_frame and index.stateAt(self.index) != .estimated) {
+            self.list.measured_change = true;
+            return;
+        }
         if (index.record(self.index, size.h)) self.list.measured_change = true;
     }
 };
@@ -372,6 +378,31 @@ test "State.scrollTo puts a row at the top, and an unknown key does nothing" {
     try testing.expectEqual(@as(u64, 300), m.top_key);
 }
 
+test "a frame laid out at 0 by 0 leaves every measured row measured" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    var m: Messages = .{ .count = 500 };
+    defer m.state.deinit();
+    try settleOn(&m);
+    m.state.scrollTo(300);
+    try settleOn(&m);
+
+    var measured: [500]?f32 = @splat(null);
+    for (&measured, 0..) |*height, i| {
+        if (m.state.index.stateAt(i) == .measured) height.* = m.state.index.heightAt(i);
+    }
+    m.state.si.viewport = .{};
+    _ = try dvui.testing.step(currentFrame);
+    try settleOn(&m);
+    for (measured, 0..) |height, i| {
+        if (height) |h| {
+            try testing.expectEqual(HeightIndex.State.measured, m.state.index.stateAt(i));
+            try testing.expectApproxEqAbs(h, m.state.index.heightAt(i), 0.5);
+        }
+    }
+    try testing.expectEqual(@as(u64, 300), m.top_key);
+}
+
 test "a scroll of a fraction of a pixel accumulates instead of being put back" {
     var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
     defer t.deinit();
@@ -437,6 +468,61 @@ test "scrolling up through rows that measure short on their first frame never mo
     for (0..20 * 400 / step) |frame_no| {
         m.nudge = -step;
         _ = try dvui.testing.step(currentFrame);
+        if (tracking) {
+            if (m.track_y) |y| {
+                if (@abs(y - (last_y + step)) > 1) {
+                    std.debug.print("frame {d}: key {d} top {d} after {d}\n", .{ frame_no, m.track_key, y, last_y });
+                    return error.ReaderMoved;
+                }
+                last_y = y;
+            }
+        }
+        // Follow the row at the top until it leaves the view, then the one now at the top.
+        if (!tracking or m.track_y == null or m.track_y.? >= 400) {
+            m.track_key = m.top_key;
+            last_y = m.top_y;
+            tracking = true;
+        }
+    }
+}
+
+test "scrolling up after a width change never moves the reader's row" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    var m: Messages = .{ .count = 2000, .short_first = true };
+    defer m.state.deinit();
+    try settleOn(&m);
+    m.state.scrollTo(1800);
+    try settleOn(&m);
+
+    // Give the upward path measurements, like a history the reader has already visited.
+    for (0..20 * 400 / 7) |_| {
+        m.nudge = -7;
+        _ = try dvui.testing.step(currentFrame);
+    }
+    m.nudge = 0;
+    m.state.scrollTo(1800);
+    try settleOn(&m);
+
+    // Force reconciliation at another width, then return to the actual viewport width.
+    m.state.index.width += 40;
+    _ = try dvui.testing.step(currentFrame);
+    try settleOn(&m);
+
+    var stale_heights: [2000]?f32 = @splat(null);
+    for (&stale_heights, 0..) |*height, i| {
+        if (m.state.index.stateAt(i) == .stale) height.* = m.state.index.heightAt(i);
+    }
+
+    const step = 7;
+    var tracking = false;
+    var last_y: f32 = 0;
+    for (0..20 * 400 / step) |frame_no| {
+        m.nudge = -step;
+        _ = try dvui.testing.step(currentFrame);
+        for (stale_heights, 0..) |height, i| {
+            if (height) |h| try testing.expectApproxEqAbs(h, m.state.index.heightAt(i), 0.5);
+        }
         if (tracking) {
             if (m.track_y) |y| {
                 if (@abs(y - (last_y + step)) > 1) {
