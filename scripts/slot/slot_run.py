@@ -3,6 +3,7 @@ import argparse
 from contextlib import contextmanager
 import json
 import os
+import tempfile
 from pathlib import Path
 import shutil
 import signal
@@ -151,9 +152,11 @@ def stop_tree(proc):
     proc.wait()
 
 
-def execute(command, repo, log, deadline, prompt=None, shell=False):
+def execute(command, repo, log, deadline, prompt=None, shell=False, tmpdir=None):
     options = {'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == 'nt' else {'start_new_session': True}
     env = clean_env()
+    if tmpdir:
+        env['TMPDIR'] = tmpdir  # short path: unix socket paths over 107 bytes give NameTooLong
     if not shell and isinstance(command, list):
         exe = shutil.which(command[0], path=env.get('PATH') or env.get('Path'))
         if exe:
@@ -290,7 +293,7 @@ def run(job, job_dir, out, keep):
                         with build_lock(locks, slots, deadline):
                             for gate in job['gates']:
                                 before = time.monotonic()
-                                code = execute(gate, work, log, deadline, shell=True)
+                                code = execute(gate, work, log, deadline, shell=True, tmpdir=tempfile.mkdtemp(prefix='s', dir='/tmp') if os.name != 'nt' else None)
                                 result['gates'].append(dict(cmd=gate, exit=code, seconds=round(time.monotonic() - before, 3)))
                                 if code:
                                     raise ValueError('gate failed: ' + gate)
