@@ -62,6 +62,189 @@ pub const Shape = struct {
     }
 };
 
+pub const max_seams = 4;
+
+pub const Seam = struct {
+    /// Vertical is x = at; horizontal is y = at, in physical window pixels.
+    axis: enum { vertical, horizontal },
+    at: f32,
+    /// Extent along the line; null crosses the parent. Hosts precede nested seams.
+    span: ?[2]f32 = null,
+    gap: f32 = 0,
+    reach: f32,
+
+    pub fn between(axis: @FieldType(Seam, "axis"), lo: f32, hi: f32, span: ?[2]f32, reach: f32) Seam {
+        return .{ .axis = axis, .at = (lo + hi) / 2, .gap = @max(hi - lo, 0), .span = span, .reach = reach };
+    }
+};
+
+/// A shared material across the pieces, with directional edge lighting but no pointer light.
+pub const Panel = struct {
+    rect: dvui.Rect.Physical,
+    /// Top-left, top-right, bottom-right, bottom-left.
+    radii: [4]f32 = @splat(0),
+    blur: f32 = 1,
+    lens: f32 = 1,
+    /// Borrowed until drawing completes; at most max_seams, hosts first.
+    seams: []const Seam,
+};
+
+const ResolvedSeam = struct {
+    span: [2]f32,
+    radius: f32,
+    ends: enum(u2) { start = 1, end = 2, both = 3 } = .both,
+    host: ?usize = null,
+};
+
+fn resolveSeam(p: Panel, i: usize) ResolvedSeam {
+    const seam = p.seams[i];
+    std.debug.assert(seam.reach > 0 and seam.gap >= 0);
+    const lo = if (seam.axis == .vertical) p.rect.y else p.rect.x;
+    const hi = lo + if (seam.axis == .vertical) p.rect.h else p.rect.w;
+    const radius = @min(@reduce(.Min, @as(@Vector(4, f32), p.radii)), @min(p.rect.w, p.rect.h) / 2);
+    var r: ResolvedSeam = .{ .span = seam.span orelse .{ lo, hi }, .radius = radius };
+    std.debug.assert(r.span[0] < r.span[1]);
+    for (p.seams[0..i], 0..) |host, j| {
+        if (host.axis == seam.axis) continue;
+        // Physical pixel coordinates computed by different layouts can differ by a few ulps.
+        const tolerance = 4 * std.math.floatEps(f32) * @max(1, @abs(host.at));
+        const at_start = @abs(r.span[0] - host.at) <= tolerance;
+        if (!at_start and @abs(r.span[1] - host.at) > tolerance) continue;
+        r.host = j;
+        r.ends = if (at_start) .end else .start;
+        r.radius = std.math.lerp(radius, @min(radius, host.gap / 2), std.math.clamp(host.gap / host.reach, 0, 1));
+        break;
+    }
+    return r;
+}
+
+fn intersectRound(a: f32, b: f32, r: f32) f32 {
+    if (r == 0) return @max(a, b);
+    return @min(-r, @max(a, b)) + @sqrt(@max(r + a, 0) * @max(r + a, 0) + @max(r + b, 0) * @max(r + b, 0));
+}
+
+fn panelDistance(p: Panel, point: [2]f32, soft: f32, g: *[2]f32) f32 {
+    const c: [2]f32 = .{ p.rect.x + p.rect.w / 2, p.rect.y + p.rect.h / 2 };
+    const half: [2]f32 = .{ p.rect.w / 2, p.rect.h / 2 };
+    var rad = p.radii;
+    for (&rad) |*r| r.* = @min(r.*, @min(half[0], half[1]));
+    var d = if (soft > 0) softBox(point, c, half, soft, g) else roundBox(.{ point[0] - c[0], point[1] - c[1] }, half, rad, g);
+    for (p.seams, 0..) |seam, i| {
+        if (seam.gap == 0) continue;
+        const rs = resolveSeam(p, i);
+        const open = std.math.clamp(seam.gap / seam.reach, 0, 1);
+        const along = point[if (seam.axis == .vertical) 1 else 0];
+        const v = point[if (seam.axis == .vertical) 0 else 1] - seam.at;
+        const half_gap = seam.gap / 2;
+        const len = rs.span[1] - rs.span[0];
+        const advance = smoothstep(0, 0.6, open); // Pinch before the cut corners finish rounding.
+        var tip: f32 = 0;
+        var direction: f32 = 0;
+        if (rs.ends == .both) {
+            const u = along - (rs.span[0] + rs.span[1]) / 2;
+            tip = @max(len / 2 * (1 - advance) - @abs(u), 0);
+            direction = if (u < 0) 1 else -1;
+        } else {
+            const u = if (rs.ends == .start) along - rs.span[0] else rs.span[1] - along;
+            tip = @max(u - (len - half_gap) * advance, 0);
+            direction = if (rs.ends == .start) 1 else -1;
+        }
+        const length = @sqrt(v * v + tip * tip);
+        const slot = length - half_gap;
+        var slot_out: [2]f32 = .{ 0, 0 };
+        if (length > 0) {
+            slot_out[if (seam.axis == .vertical) 0 else 1] = -v / length;
+            slot_out[if (seam.axis == .vertical) 1 else 0] = -tip * direction / length;
+        }
+        const radius = rs.radius * open;
+        const weights: [2]f32 = .{ @max(radius + d, 0), @max(radius - slot, 0) };
+        const norm = @sqrt(weights[0] * weights[0] + weights[1] * weights[1]);
+        if (radius > 0 and norm > 0) {
+            g.* = .{ (weights[0] * g[0] + weights[1] * slot_out[0]) / norm, (weights[0] * g[1] + weights[1] * slot_out[1]) / norm };
+        } else if (-slot > d) g.* = slot_out;
+        d = intersectRound(d, -slot, radius);
+    }
+    return d;
+}
+
+/// Writes the layout rectangles and their corner radii into caller-owned out.
+/// Asserts out can hold every piece (at most 1 + max_seams for non-crossing seams).
+pub fn pieces(p: Panel, out: []Shape) []Shape {
+    std.debug.assert(p.seams.len <= max_seams and out.len > 0);
+    out[0] = .{ .rect = p.rect, .radii = p.radii, .blur = p.blur, .lens = p.lens };
+    var n: usize = 1;
+    for (p.seams, 0..) |seam, si| {
+        const rs = resolveSeam(p, si);
+        const radius = rs.radius * std.math.clamp(seam.gap / seam.reach, 0, 1);
+        const count = n;
+        for (0..count) |i| {
+            const sh = out[i];
+            const vertical = seam.axis == .vertical;
+            const lo = if (vertical) sh.rect.x else sh.rect.y;
+            const hi = lo + if (vertical) sh.rect.w else sh.rect.h;
+            const start = if (vertical) sh.rect.y else sh.rect.x;
+            const end = start + if (vertical) sh.rect.h else sh.rect.w;
+            if (seam.at <= lo or seam.at >= hi or end <= rs.span[0] or start >= rs.span[1]) continue;
+            std.debug.assert(n < out.len);
+            var a = sh;
+            var b = sh;
+            if (vertical) {
+                a.rect.w = @max(seam.at - seam.gap / 2 - lo, 0);
+                b.rect.x = seam.at + seam.gap / 2;
+                b.rect.w = @max(hi - b.rect.x, 0);
+                a.radii[1] = radius;
+                a.radii[2] = radius;
+                b.radii[0] = radius;
+                b.radii[3] = radius;
+            } else {
+                a.rect.h = @max(seam.at - seam.gap / 2 - lo, 0);
+                b.rect.y = seam.at + seam.gap / 2;
+                b.rect.h = @max(hi - b.rect.y, 0);
+                a.radii[2] = radius;
+                a.radii[3] = radius;
+                b.radii[0] = radius;
+                b.radii[1] = radius;
+            }
+            out[i] = a;
+            out[n] = b;
+            n += 1;
+        }
+    }
+    return out[0..n];
+}
+
+/// Strokes each piece and seam in physical pixels. Call after drawing the glass, in a frame.
+pub fn drawOutlines(self: *const LiquidField, color: dvui.Color) void {
+    const opts: dvui.Path.StrokeOptions = .{ .thickness = 1.5, .color = .{ .color = color }, .closed = true };
+    var storage: [1 << max_seams]Shape = undefined;
+    const parts = if (self.panel) |p| pieces(p, &storage) else self.shapes[0..self.len];
+    for (parts) |part| part.rect.stroke(.{
+        .tl = .round(part.radii[0]),
+        .tr = .round(part.radii[1]),
+        .br = .round(part.radii[2]),
+        .bl = .round(part.radii[3]),
+    }, opts);
+    if (self.panel) |p| for (p.seams, 0..) |seam, i| {
+        const rs = resolveSeam(p, i);
+        var path: dvui.Path.Builder = .init(dvui.currentWindow().lifo());
+        defer path.deinit();
+        for (rs.span) |end| path.addPoint(if (seam.axis == .vertical) .{ .x = seam.at, .y = end } else .{ .x = end, .y = seam.at });
+        path.build().stroke(.{ .thickness = 1.5, .color = .{ .color = color } });
+    };
+}
+
+fn shapeAt(self: *const LiquidField, i: usize) Shape {
+    if (i < self.len) return self.shapes[i];
+    const p = self.panel.?;
+    return .{ .rect = p.rect, .radii = p.radii, .blur = p.blur, .lens = p.lens };
+}
+
+fn shapeCount(self: *const LiquidField) usize {
+    return self.len + @intFromBool(self.panel != null);
+}
+
+/// Mutually exclusive with edge. Reserves one slot plus one per seam.
+panel: ?Panel = null,
 shapes: [max_shapes]Shape = undefined,
 len: usize = 0,
 /// The place the glass belongs to: a view's card, rounded or square. Its outside is one more
@@ -125,6 +308,10 @@ pub const Edge = struct {
 const edge_gap: f32 = 1;
 
 pub fn add(self: *LiquidField, shape: Shape) void {
+    if (self.panel) |p| {
+        std.debug.assert(p.seams.len <= max_seams);
+        if (self.len >= max_shapes - 1 - p.seams.len) return;
+    }
     if (self.len >= max_shapes - 1 and self.edge != null) return;
     if (self.len >= max_shapes) return;
     self.shapes[self.len] = shape;
@@ -135,6 +322,7 @@ pub fn add(self: *LiquidField, shape: Shape) void {
 pub fn bounds(self: *const LiquidField) dvui.Rect.Physical {
     var r: dvui.Rect.Physical = .{};
     for (self.shapes[0..self.len], 0..) |s, i| r = if (i == 0) s.rect else r.unionWith(s.rect);
+    if (self.panel) |p| r = if (self.len == 0) p.rect else r.unionWith(p.rect);
     return self.withReach(r);
 }
 
@@ -161,7 +349,7 @@ pub const Clusters = struct {
 
 pub fn clusters(self: *const LiquidField) Clusters {
     var parent: [max_shapes]u8 = undefined;
-    for (0..self.len) |i| parent[i] = @intCast(i);
+    for (0..self.shapeCount()) |i| parent[i] = @intCast(i);
     const find = struct {
         fn f(p: *[max_shapes]u8, i: u8) u8 {
             var x = i;
@@ -170,21 +358,24 @@ pub fn clusters(self: *const LiquidField) Clusters {
         }
     }.f;
     const reach = self.merge_px * 0.5;
-    for (0..self.len) |i| for (i + 1..self.len) |j| {
-        const a = self.shapes[i].rect.outsetAll(reach);
-        const b = self.shapes[j].rect.outsetAll(reach);
-        if (a.intersect(b).empty()) continue;
+    for (0..self.shapeCount()) |i| for (i + 1..self.shapeCount()) |j| {
+        const a = self.shapeAt(i).rect.outsetAll(reach);
+        const b = self.shapeAt(j).rect.outsetAll(reach);
+        // Tangent drops must share the panel group so its boundary can form a neck.
+        if (self.panel != null and (i == self.len or j == self.len)) {
+            if (a.x > b.x + b.w or b.x > a.x + a.w or a.y > b.y + b.h or b.y > a.y + a.h) continue;
+        } else if (a.intersect(b).empty()) continue;
         const ri = find(&parent, @intCast(i));
         const rj = find(&parent, @intCast(j));
         if (ri != rj) parent[rj] = ri;
     };
     var out: Clusters = .{};
     var n: u8 = 0;
-    for (0..self.len) |root| {
+    for (0..self.shapeCount()) |root| {
         if (find(&parent, @intCast(root)) != root) continue;
         out.first[out.count] = n;
         var size: u8 = 0;
-        for (0..self.len) |i| {
+        for (0..self.shapeCount()) |i| {
             if (find(&parent, @intCast(i)) != root) continue;
             out.order[n] = @intCast(i);
             n += 1;
@@ -254,13 +445,14 @@ fn look(self: *const LiquidField) liquid_glass.Look {
 /// would be all rim. Every shape is glass whatever its size (`liquid_glass.fit`).
 fn rimScale(self: *const LiquidField, depth_px: f32) f32 {
     var f: f32 = 1;
-    for (self.shapes[0..self.len]) |sh| f = @min(f, liquid_glass.fit(sh.rect, depth_px));
+    for (0..self.shapeCount()) |i| f = @min(f, liquid_glass.fit(self.shapeAt(i).rect, depth_px));
     return self.scale * f;
 }
 
 /// The uniforms for drawing over `frost`, a picture of `covered`, the shapes in `order`: the
 /// field's own, so they are worked out with no window — what the window behind it is, `draw` adds.
 pub fn pack(self: *const LiquidField, covered: dvui.Rect.Physical, has_sharp: bool, order: []const u8) Uniforms {
+    std.debug.assert(self.panel == null or self.edge == null);
     const s = self.scale;
     const tint: [4]f32 = if (self.tint) |t| blk: {
         const a = @as(f32, @floatFromInt(t.a)) / 255;
@@ -285,12 +477,12 @@ pub fn pack(self: *const LiquidField, covered: dvui.Rect.Physical, has_sharp: bo
     u.widths[1..4].* = lanes.widths;
     @memset(std.mem.asBytes(&u.shapes), 0);
     for (order, 0..) |i, slot| {
-        const sh = self.shapes[i];
+        const sh = self.shapeAt(i);
         const r = sh.rect;
         u.shapes[slot] = .{
             .{ r.x + r.w / 2, r.y + r.h / 2, r.w / 2, r.h / 2 },
             sh.radii,
-            .{ sh.blur, sh.lens, sh.light, if (sh.round) 1 else 0 },
+            .{ sh.blur, sh.lens, sh.light, if (i == self.len and self.panel != null) -1 else if (sh.round) 1 else 0 },
         };
     }
     if (self.edge) |e| {
@@ -302,6 +494,25 @@ pub fn pack(self: *const LiquidField, covered: dvui.Rect.Physical, has_sharp: bo
             e.radii,
             // 3: cut, with an edge of its own (`Edge.cut`); 2: joined to the outside.
             .{ first.blur, first.lens, 0, if (e.cut) 3 else 2 },
+        };
+    }
+    if (self.panel) |p| {
+        std.debug.assert(p.seams.len <= max_seams and self.len <= max_shapes - 1 - p.seams.len);
+        var open = false;
+        for (p.seams) |seam| open = open or seam.gap > 0;
+        const first = self.shapeAt(self.len);
+        u.shapes[max_shapes - 1] = .{
+            .{ p.rect.x + p.rect.w / 2, p.rect.y + p.rect.h / 2, p.rect.w / 2, p.rect.h / 2 },
+            p.radii,
+            .{ first.blur, first.lens, if (open) @floatFromInt(p.seams.len) else 0, 4 },
+        };
+        if (open) for (p.seams, 0..) |seam, i| {
+            const rs = resolveSeam(p, i);
+            u.shapes[max_shapes - 2 - i] = .{
+                .{ if (seam.axis == .vertical) 0 else 1, seam.at, rs.span[0], rs.span[1] },
+                .{ seam.gap, seam.reach, rs.radius, @floatFromInt(@backingInt(rs.ends)) },
+                .{ if (rs.host) |h| @floatFromInt(h + 1) else 0, 0, 0, 0 },
+            };
         };
     }
     return u;
@@ -421,8 +632,9 @@ pub fn applyLook(self: *const LiquidField, u: *Uniforms, l: glass_look.Look) voi
     u.widths = .{ l.edge_dark, lanes.widths[0], lanes.widths[1], lanes.widths[2] };
     u.light = lanes.light;
     u.edge = lanes.edge;
-    for (u.shapes[0..self.len]) |*sh| sh[2][0] *= l.frost;
-    if (self.edge != null) u.shapes[max_shapes - 1][2][0] *= l.frost;
+    const count = self.shapeCount();
+    for (u.shapes[0..count]) |*sh| sh[2][0] *= l.frost;
+    if (self.edge != null or self.panel != null) u.shapes[max_shapes - 1][2][0] *= l.frost;
 }
 
 /// Test seam: the testing backend has no glass program, so `ready` is false there and every
@@ -450,12 +662,12 @@ pub fn ready() bool {
 /// covers, as a frost does, with an anti-aliased edge. False, having drawn nothing, where there
 /// is no program to draw with.
 pub fn draw(self: *const LiquidField, frost: dvui.Texture, covered: dvui.Rect.Physical, sharp: ?dvui.Texture) bool {
-    if (self.len == 0) return true;
+    if (self.shapeCount() == 0) return true;
     if (!enabled()) return false;
     const h = programs.hooks() orelse return false;
     const id = program.ready(h) orelse return false;
     const groups = self.clusters();
-    var u = self.pack(covered, sharp != null, groups.order[0..self.len]);
+    var u = self.pack(covered, sharp != null, groups.order[0..self.shapeCount()]);
     // The window behind the glass, published for this frame.
     u.backdrop[0] = if (opaqueWindow() or self.solid) 1 else 0;
     // And the glass the app's look makes of it this frame (`core.material.publishLook`).
@@ -483,7 +695,7 @@ pub fn draw(self: *const LiquidField, frost: dvui.Texture, covered: dvui.Rect.Ph
 /// until the frame ends. False, having queued nothing, where there is no glass program (`ready`):
 /// draw the picture some other way.
 pub fn drawPicture(self: *const LiquidField, picture: dvui.Texture, covered: dvui.Rect.Physical) bool {
-    if (self.len == 0) return true;
+    if (self.shapeCount() == 0) return true;
     if (!ready()) return false;
     const job = dvui.currentWindow().arena().create(PictureJob) catch return false;
     job.* = .{ .field = self.*, .picture = picture, .covered = covered };
@@ -501,7 +713,7 @@ pub fn drawPicture(self: *const LiquidField, picture: dvui.Texture, covered: dvu
 /// shapes' lenses. Apple's lens pulls only from inside the shape and needs none of it.
 pub fn pictureMargin(self: *const LiquidField) f32 {
     var lens: f32 = 0;
-    for (self.shapes[0..self.len]) |sh| lens = @max(lens, sh.lens);
+    for (0..self.shapeCount()) |i| lens = @max(lens, self.shapeAt(i).lens);
     return liquid_glass.margin(.{ .lens = lens, .refraction = self.refraction }, self.scale);
 }
 
@@ -528,8 +740,8 @@ fn quads(self: *const LiquidField, groups: Clusters, glass: bool, frost: dvui.Te
     for (0..groups.count) |g| {
         const first = groups.first[g];
         const n = groups.size[g];
-        var r = self.shapes[groups.order[first]].rect;
-        for (groups.order[first..][0..n]) |i| r = r.unionWith(self.shapes[i].rect);
+        var r = self.shapeAt(groups.order[first]).rect;
+        for (groups.order[first..][0..n]) |i| r = r.unionWith(self.shapeAt(i).rect);
         r = self.withReach(r);
         if (r.empty()) continue;
         const col: dvui.Color.PMA = .{ .r = if (glass) 255 else 0, .g = first, .b = n, .a = 255 };
@@ -591,13 +803,15 @@ pub fn sampleWith(self: *const LiquidField, p: dvui.Point.Physical, l: glass_loo
     var al2: [2]f32 = @splat(0);
     const rim = self.rimScale(liquid_glass.depthPx(self.look(), self.scale));
     const soft_k = liquid_glass.softness * rim;
-    for (self.shapes[0..self.len]) |sh| {
+    for (0..self.shapeCount()) |shape_index| {
+        const sh = self.shapeAt(shape_index);
+        const is_panel = shape_index == self.len and self.panel != null;
         const c: [2]f32 = .{ sh.rect.x + sh.rect.w / 2, sh.rect.y + sh.rect.h / 2 };
         const half: [2]f32 = .{ sh.rect.w / 2, sh.rect.h / 2 };
         var g: [2]f32 = undefined;
         const lim = @min(half[0], half[1]);
         const radii: [4]f32 = .{ @min(sh.radii[0], lim), @min(sh.radii[1], lim), @min(sh.radii[2], lim), @min(sh.radii[3], lim) };
-        const d = roundBox(.{ p.x - c[0], p.y - c[1] }, half, radii, &g);
+        const d = if (is_panel) panelDistance(self.panel.?, .{ p.x, p.y }, 0, &g) else roundBox(.{ p.x - c[0], p.y - c[1] }, half, radii, &g);
         const mat: [3]f32 = .{ sh.blur, sh.lens, sh.light };
         var al: [2]f32 = .{ 0, 0 };
         if (lanes.edge[3] > 0) {
@@ -621,7 +835,7 @@ pub fn sampleWith(self: *const LiquidField, p: dvui.Point.Physical, l: glass_loo
             al2 = al;
         }
         var o: [2]f32 = g;
-        const f = if (sh.round) d else softBox(.{ p.x, p.y }, c, half, soft_k, &o);
+        const f = if (is_panel) panelDistance(self.panel.?, .{ p.x, p.y }, soft_k, &o) else if (sh.round) d else softBox(.{ p.x, p.y }, c, half, soft_k, &o);
         if (f < f1) {
             f2 = f1;
             o2 = o1;
@@ -751,7 +965,7 @@ fn alongEnd(p: [2]f32, box: [4]f32, rad: [4]f32, toward: [2]f32, ext: f32, ramp:
 
 /// Whether `p` is on the glass.
 pub fn hit(self: *const LiquidField, p: dvui.Point.Physical) bool {
-    return self.len > 0 and self.sample(p).d <= 0;
+    return self.shapeCount() > 0 and self.sample(p).d <= 0;
 }
 
 /// Signed distance to a box of half-size `b` at the origin with corner radii `r` (tl, tr, br, bl;

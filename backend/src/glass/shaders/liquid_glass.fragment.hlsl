@@ -79,6 +79,57 @@ float smin(float a, float b, float k, out float m)
     return min(a, b) - h * h * k * 0.25;
 }
 
+// Rounded intersection (hg_sdf fOpIntersectionRound); it stays within both operands.
+float intersectRound(float a, float b, float r)
+{
+    if (r == 0.0) return max(a, b);
+    return min(-r, max(a, b)) + length(max(float2(r + a, r + b), 0.0));
+}
+
+float panelDistance(float2 p, float soft, out float2 g)
+{
+    float4 box = uData[G + 3 * (MAX_SHAPES - 1)];
+    float4 rad = min(uData[G + 3 * (MAX_SHAPES - 1) + 1], (float4)min(box.z, box.w));
+    int count = int(uData[G + 3 * (MAX_SHAPES - 1) + 2].z);
+    float d = soft > 0.0 ? softBox(p, box, soft, g) : sdRoundBox(p - box.xy, box.zw, rad, g);
+    for (int i = 0; i < count && i < 4; i++) {
+        float4 seam = uData[G + 3 * (MAX_SHAPES - 2 - i)];
+        float4 params = uData[G + 3 * (MAX_SHAPES - 2 - i) + 1];
+        if (params.x == 0.0) continue;
+        float open = clamp(params.x / params.y, 0.0, 1.0);
+        float along = seam.x < 0.5 ? p.y : p.x;
+        float v = (seam.x < 0.5 ? p.x : p.y) - seam.y;
+        float h = params.x / 2.0;
+        float len = seam.w - seam.z;
+        float advance = smoothstep(0.0, 0.6, open);
+        float tip;
+        float direction;
+        if (params.w > 2.5) {
+            float u = along - (seam.z + seam.w) / 2.0;
+            tip = max(len / 2.0 * (1.0 - advance) - abs(u), 0.0);
+            direction = u < 0.0 ? 1.0 : -1.0;
+        } else {
+            float u = params.w < 1.5 ? along - seam.z : seam.w - along;
+            tip = max(u - (len - h) * advance, 0.0);
+            direction = params.w < 1.5 ? 1.0 : -1.0;
+        }
+        float lenSlot = length(float2(v, tip));
+        float slot = lenSlot - h;
+        float2 slotOut = float2(0.0, 0.0);
+        if (lenSlot > 0.0) {
+            slotOut = float2(-v, -tip * direction) / lenSlot;
+            if (seam.x > 0.5) slotOut = slotOut.yx;
+        }
+        float radius = params.z * open;
+        float2 weights = max(float2(radius + d, radius - slot), 0.0);
+        float norm = length(weights);
+        if (radius > 0.0 && norm > 0.0) g = (weights.x * g + weights.y * slotOut) / norm;
+        else if (-slot > d) g = slotOut;
+        d = intersectRound(d, -slot, radius);
+    }
+    return d;
+}
+
 // A soft step in at `a`, then a fall over `w`: the lit edge's line and glow along the inside of
 // the outline (`x` the depth inside it).
 float band(float x, float a, float w)
@@ -140,16 +191,27 @@ float4 main(PSInput input) : SV_Target0
         float4 s0 = uData[G + 3 * i];
         float4 s1 = uData[G + 3 * i + 1];
         float4 s2 = uData[G + 3 * i + 2];
+        bool panel = s2.w < -0.5 || s2.w > 3.5;
+        if (panel) {
+            s0 = uData[G + 3 * (MAX_SHAPES - 1)];
+            s1 = uData[G + 3 * (MAX_SHAPES - 1) + 1];
+            s2 = uData[G + 3 * (MAX_SHAPES - 1) + 2];
+            s2.z = 0.0;
+        }
         float2 g;
         float4 rad = min(s1, (float4)min(s0.z, s0.w));
-        float d = sdRoundBox(p - s0.xy, s0.zw, rad, g);
+        float d;
+        if (panel) d = panelDistance(p, 0.0, g);
+        else d = sdRoundBox(p - s0.xy, s0.zw, rad, g);
         float hs = min(s0.z, s0.w);
         float2 al = float2(0.0, 0.0);
         if (g10.w > 0.0) al = float2(alongEnd(p, s0, rad, g9.xy, g10.w, g8.w), alongEnd(p, s0, rad, -g9.xy, g10.w, g8.w));
         if (d < d1) { d2 = d1; m2 = m1; h2 = h1; y2 = y1; al2 = al1; d1 = d; m1 = s2; h1 = hs; y1 = s0.yw; al1 = al; } else if (d < d2) { d2 = d; m2 = s2; h2 = hs; y2 = s0.yw; al2 = al; }
         float2 o;
         float f = d;
-        if (s2.w < 0.5) {
+        if (panel) {
+            f = panelDistance(p, g1.y, o);
+        } else if (s2.w < 0.5) {
             f = softBox(p, s0, g1.y, o);
         } else {
             o = g;
@@ -166,14 +228,14 @@ float4 main(PSInput input) : SV_Target0
     float2 placeOut = float2(0.0, 0.0);
     float4 e0 = uData[G + 3 * (MAX_SHAPES - 1)];
     float4 e2 = uData[G + 3 * (MAX_SHAPES - 1) + 2];
-    bool cutEdge = e2.w > 2.5;
-    if (e2.w > 1.5) {
+    bool cutEdge = e2.w > 2.5 && e2.w < 3.5;
+    if (e2.w > 1.5 && e2.w < 3.5) {
         float4 e1 = uData[G + 3 * (MAX_SHAPES - 1) + 1];
         float2 ge;
         inPlace = sdRoundBox(p - e0.xy, e0.zw, min(e1, (float4)min(e0.z, e0.w)), ge);
         placeOut = ge;
     }
-    if (e2.w > 1.5 && !cutEdge) {
+    if (e2.w > 1.5 && e2.w < 3.5 && !cutEdge) {
         float2 ge = placeOut;
         float d = EDGE_GAP - inPlace;
         float hs = h1;
