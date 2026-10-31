@@ -33,7 +33,14 @@ pub const WebPluginDir = struct {
 /// The type of `Chrome.sidebar_edge`, for the build option.
 const ChromeEdge = enum { left, right };
 
+/// Initial presentation preferences, used until the person makes a shared choice.
+pub const Look = struct {
+    /// Motion level from 0 (off) to 1 (playful). The OS reduced-motion request wins.
+    motion: ?f32 = null,
+};
+
 pub const Options = struct {
+    look: Look = .{},
     /// Every plugin the application links, fizzy's own among them, each in the executables its
     /// `targets` names — see `build.zig`'s `buildApp`.
     app_plugins: []const @import("sdk.zig").BundledPlugin = &@import("plugins.zig").entries.all,
@@ -490,6 +497,7 @@ pub fn readConfig(b: *std.Build, target: std.Build.ResolvedTarget, opts: Options
     build_opts.addOption(bool, "app_repo_url_set", app_repo_url_set);
     build_opts.addOption([]const u8, "app_issues_url", app_issues_url);
     build_opts.addOption(bool, "velopack_enabled", velopack_enabled);
+    build_opts.addOption(?f32, "look_motion", opts.look.motion);
     // Off, the app runs only the plugins it links (`buildApp`'s list): no plugin dylib is built,
     // and nothing loads at runtime — not fizzy's own dylibs, not the user plugins directory, not
     // the store, not a web page's `?plugin=`. Comptime, so none of it is checked per frame.
@@ -807,6 +815,7 @@ fn native(
         pack_opts.addOption(bool, "app_repo_url_set", cfg.app_repo_url_set);
         pack_opts.addOption([]const u8, "app_issues_url", cfg.app_issues_url);
         pack_opts.addOption(bool, "velopack_enabled", true);
+        pack_opts.addOption(?f32, "look_motion", opts.look.motion);
         pack_opts.addOption(bool, "static_workbench", static_workbench);
         pack_opts.addOption(bool, "static_text", static_text);
         pack_opts.addOption(bool, "static_image", static_image);
@@ -990,22 +999,21 @@ fn addTests(
     //
     // Fizzy has two test layers (see tests/README.md):
     //
-    //   1. Unit tests — pure-logic only (math, palette parsing, layer
-    //      order). The test root imports nothing but std + the pure
-    //      modules under test, so it compiles in well under a second
-    //      and never needs dvui/SDL/assets.
+    //   1. Unit tests — pure logic (math, palette parsing, layer order), without
+    //      windows or native backends. Glass arithmetic also imports dvui's types.
     //
     //   2. Integration tests use dvui's testing backend and exercise
     //      real fizzy drawing functions in a headless Window.
     //
-    // Both share the same `zig build test` and `zig build check`
-    // entry points.
+    // Unit tests use `test` / `check`; integration tests use
+    // `test-integration` / `check-integration`.
 
     // `zig build test` is the CI entry point and must stay self-contained: pure
-    // unit tests only, no dvui/SDL/Velopack/MSVC. Integration tests live under
-    // `zig build test-integration` (Velopack + dvui-testing + comctl32 on Windows
+    // unit tests only, no windows/SDL/Velopack/MSVC. Glass arithmetic uses dvui types.
+    // Integration tests live under `zig build test-integration`
+    // (Velopack + dvui-testing + comctl32 on Windows
     // → needs MSVC SDK on Windows hosts). `zig build test-all` runs both.
-    const test_step = b.step("test", "Run fizzy unit tests (pure-logic only, no dvui/SDL/Velopack)");
+    const test_step = b.step("test", "Run fizzy unit tests (pure-logic only, no windows/SDL/Velopack)");
 
     // `check` mirrors the split so editor compile-error checking matches CI.
     const check_step = b.step("check", "Compile fizzy unit tests without running them");
@@ -1017,7 +1025,7 @@ fn addTests(
     // `addTest` per pure-logic root, each rooted directly at the file under test.
     // Files reached from such a root by relative `@import` (the registry client's
     // registry/compat/download, say) are part of the same module and *are* collected.
-    var unit_test_artifacts: std.ArrayListUnmanaged(*std.Build.Step.Compile) = .empty;
+    var unit_test_artifacts: std.ArrayList(*std.Build.Step.Compile) = .empty;
 
     inline for (.{
         .{ "fizzy-lint-tests", "scripts/lint.zig" },
@@ -1098,6 +1106,7 @@ fn addTests(
         // Hold / slop / tap rules of touch selection. std-only (see TouchHold.zig) — the dvui
         // half is widgets/SelectableText.zig.
         .{ "fizzy-touch-hold-tests", "core/TouchHold.zig" },
+        .{ "fizzy-person-tests", "core/person.zig" },
         // A motion's clock stepped by its frames, a long one held to a step. std-only (see
         // FrameClock.zig); the floats' landing and ghost run on it.
         .{ "fizzy-frame-clock-tests", "backend/src/glass/FrameClock.zig" },
@@ -1124,6 +1133,10 @@ fn addTests(
         // Where a new view goes by the shape of the room, and which way an adaptive split runs.
         // std-only (see placement.zig); the workbench and the docking widget ask it.
         .{ "fizzy-placement-tests", "core/placement.zig" },
+        // Std-only card level hysteresis and visibility during shell size changes.
+        .{ "fizzy-card-level-tests", "core/card_level.zig" },
+        // Keyed layout motion and release arithmetic, independent of drawing.
+        .{ "fizzy-rearrange-tests", "core/rearrange.zig" },
         // A document state as the bytes that differ from another: how a track's checkpoints
         // stay small. std-only (see state_delta.zig); `Tracks` keeps its checkpoints with it.
         .{ "fizzy-state-delta-tests", "app/state_delta.zig" },
@@ -1189,17 +1202,34 @@ fn addTests(
             .filters = test_filters,
         }));
     }
+    const tour_tests = b.addTest(.{
+        .name = "fizzy-tour-tests",
+        .root_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("src/editor/demos/tour.zig"),
+        }),
+        .filters = test_filters,
+    });
+    tour_tests.root_module.addImport("tape", b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.dependency("fizzy_sdk", .{}).path("tape/root.zig"),
+    }));
+    try unit_test_artifacts.append(b.allocator, tour_tests);
+
     // The backend package's std-only tests (window layout, the title-bar hit test, the blur
     // region, the viewport map, the health counters), from its own list, so `zig build test`
     // here still runs them.
     const backend_dep = fizzy_exe.backendDependency(b);
+    const glass_look = b.createModule(.{ .root_source_file = backend_dep.path("src/glass_look.zig") });
     for (@import("fizzy_backend").unit_tests) |t| {
         const root_module = b.createModule(.{
             .target = target,
             .optimize = optimize,
             .root_source_file = backend_dep.path(t.root),
         });
-        if (t.glass_look) root_module.addImport("glass_look", b.createModule(.{ .root_source_file = backend_dep.path("src/glass_look.zig") }));
+        if (t.glass_look) root_module.addImport("glass_look", glass_look);
         try unit_test_artifacts.append(b.allocator, b.addTest(.{
             .name = t.name,
             .root_module = root_module,
@@ -1246,7 +1276,7 @@ fn addTests(
         keymap_module.addImport("tape", b.createModule(.{
             .target = target,
             .optimize = optimize,
-            .root_source_file = b.path("sdk/tape/root.zig"),
+            .root_source_file = b.dependency("fizzy_sdk", .{}).path("tape/root.zig"),
         }));
         try unit_test_artifacts.append(b.allocator, b.addTest(.{
             .name = "fizzy-keymap-tests",
@@ -1328,7 +1358,7 @@ fn addTests(
             .root_module = b.createModule(.{
                 .target = target,
                 .optimize = optimize,
-                .root_source_file = b.path("sdk/remote/fake_fizzy.zig"),
+                .root_source_file = b.dependency("fizzy_sdk", .{}).path("remote/fake_fizzy.zig"),
             }),
         });
         const fake_options = b.addOptions();
@@ -1338,13 +1368,52 @@ fn addTests(
             .root_module = b.createModule(.{
                 .target = target,
                 .optimize = optimize,
-                .root_source_file = b.path("sdk/remote/root.zig"),
+                .root_source_file = b.dependency("fizzy_sdk", .{}).path("remote/root.zig"),
                 .imports = &.{.{ .name = "fake_fizzy_options", .module = fake_options.createModule() }},
             }),
             .filters = test_filters,
         });
         try unit_test_artifacts.append(b.allocator, remote_tests);
     }
+
+    const dvui_testing_dep = sdk.dvuiDependency(b, .{
+        .target = target,
+        .optimize = optimize,
+        .backend = .testing,
+        .accesskit = accesskit,
+    });
+
+    // Shared `core` module for the test build (dvui testing backend variant).
+    const core_module_test = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("core/core.zig"),
+    });
+    const icons_test = core_mod.addImports(
+        b,
+        core_module_test,
+        dvui_testing_dep.module("dvui_testing"),
+        b.dependency("fizzy_sdk", .{}).builder,
+        target,
+        optimize,
+        null,
+        null,
+    );
+
+    // The liquid field's packing and edge-light arithmetic needs dvui's geometry types,
+    // but no Window or native backend. Keep it in `test`, apart from the glass window tests.
+    const liquid_field_module = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("backend/src/glass/liquid_field_tests.zig"),
+    });
+    liquid_field_module.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
+    liquid_field_module.addImport("glass_look", core_module_test.import_table.get("glass_look").?);
+    try unit_test_artifacts.append(b.allocator, b.addTest(.{
+        .name = "fizzy-liquid-field-tests",
+        .root_module = liquid_field_module,
+        .filters = test_filters,
+    }));
 
     for (unit_test_artifacts.items) |unit_test| {
         test_step.dependOn(&b.addRunArtifact(unit_test).step);
@@ -1382,12 +1451,6 @@ fn addTests(
         return;
     }
 
-    const dvui_testing_dep = sdk.dvuiDependency(b, .{
-        .target = target,
-        .optimize = optimize,
-        .backend = .testing,
-        .accesskit = accesskit,
-    });
     const dvui_test_proxy_bridge = sdk.addProxyBridgeModule(
         b,
         target,
@@ -1421,22 +1484,6 @@ fn addTests(
     fizzy_test_module.addImport("app_icon", app_icon_module);
     fizzy_test_module.addImport("build_opts", sdk.buildOptsModule(build_opts));
 
-    // Shared `core` module for the test build (dvui testing backend variant).
-    const core_module_test = b.createModule(.{
-        .target = target,
-        .optimize = optimize,
-        .root_source_file = b.path("core/core.zig"),
-    });
-    const icons_test = core_mod.addImports(
-        b,
-        core_module_test,
-        dvui_testing_dep.module("dvui_testing"),
-        b.dependency("fizzy_sdk", .{}).builder,
-        target,
-        optimize,
-        null,
-        null,
-    );
     fizzy_test_module.addImport("core", core_module_test);
     if (icons_test) |icons| fizzy_test_module.addImport("icons", icons);
 
@@ -1447,13 +1494,13 @@ fn addTests(
         const replay_only = b.createModule(.{
             .target = target,
             .optimize = optimize,
-            .root_source_file = b.path("sdk/replay/root.zig"),
+            .root_source_file = b.dependency("fizzy_sdk", .{}).path("replay/root.zig"),
         });
         replay_only.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
         replay_only.addImport("tape", b.createModule(.{
             .target = target,
             .optimize = optimize,
-            .root_source_file = b.path("sdk/tape/root.zig"),
+            .root_source_file = b.dependency("fizzy_sdk", .{}).path("tape/root.zig"),
         }));
         const replay_tests = b.addTest(.{
             .name = "fizzy-replay-tests",
@@ -1670,6 +1717,7 @@ fn addTests(
     // And the workbench's panes: whether a float lies over one is a reading of the window's
     // subwindows, which a headless frame with a float in it has.
     integration_module.addImport("workbench", workbench_module_test);
+    integration_module.addImport("dashboard", dashboard_module_test);
     integration_module.addAnonymousImport("markdown_sample", .{ .root_source_file = b.path("docs/PLUGINS.md") });
     // The synthetic document with the 48KB table of wrapping cells — the case table-row culling
     // exists for, and the one it could get wrong. Generated by `markdown_sample_tables.py` beside
@@ -2039,7 +2087,7 @@ fn addTests(
         bench_module.addImport("tape", b.createModule(.{
             .target = target,
             .optimize = optimize,
-            .root_source_file = b.path("sdk/tape/root.zig"),
+            .root_source_file = b.dependency("fizzy_sdk", .{}).path("tape/root.zig"),
         }));
         const bench_tape = b.addTest(.{ .name = "fizzy-bench-tape", .root_module = bench_module });
 

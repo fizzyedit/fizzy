@@ -55,7 +55,14 @@ pub const LanguageSupport = struct {
         /// rather than through shared SDK state: preview providers are commonly separate
         /// dylibs, and each `.dylib` gets its own private copy of every SDK global, so a
         /// write from the host's copy is invisible inside the plugin's.
-        previewPane: ?*const fn (state: *anyopaque, ext: []const u8, path: []const u8, bytes: []const u8, id_extra: u64, gpa: std.mem.Allocator) anyerror!void = null,
+        previewPane: ?*const fn (
+            state: *anyopaque,
+            ext: []const u8,
+            path: []const u8,
+            bytes: []const u8,
+            id_extra: u64,
+            gpa: std.mem.Allocator,
+        ) anyerror!void = null,
         /// Scroll the preview for `id_extra` so that 0-based source `line` is in view. Called
         /// just before `previewPane` on the frame a reveal lands (`workbench.revealPosition`),
         /// and not otherwise — a reveal is a one-shot event, so it is its own call rather than an
@@ -65,7 +72,13 @@ pub const LanguageSupport = struct {
         /// line to its own layout; one that can't is free to leave this null, and the raw editor
         /// still moves. Nothing guarantees the pane has ever been drawn for this `id_extra` yet,
         /// so treat it as "remember this and apply it when you next draw".
-        previewReveal: ?*const fn (state: *anyopaque, ext: []const u8, path: []const u8, line: u32, id_extra: u64) void = null,
+        previewReveal: ?*const fn (
+            state: *anyopaque,
+            ext: []const u8,
+            path: []const u8,
+            line: u32,
+            id_extra: u64,
+        ) void = null,
         /// Keep 0-based source `line` at `at` of the preview's height — 0 its top, 1 its bottom —
         /// which is where the caret sits in the source view beside it, so the preview follows the
         /// caret as it moves and as text is typed. Called just before `previewPane`, on the frames
@@ -73,14 +86,26 @@ pub const LanguageSupport = struct {
         /// pane; never alongside a `previewReveal`, which wins. Like a reveal it is one-shot: the
         /// preview scrolls freely between calls, and only the next move of the caret brings it
         /// back. A provider that cannot map a line to its own layout leaves this null.
-        previewFollow: ?*const fn (state: *anyopaque, ext: []const u8, path: []const u8, line: u32, at: f32, id_extra: u64) void = null,
+        previewFollow: ?*const fn (
+            state: *anyopaque,
+            ext: []const u8,
+            path: []const u8,
+            line: u32,
+            at: f32,
+            id_extra: u64,
+        ) void = null,
         /// Non-blocking: called when the text editor opens (or reloads) a document. Intended
         /// for language-server warmup — spawn the server and send `textDocument/didOpen` so
         /// analysis can start before the first hover/completion, rather than paying cold-start
         /// latency on first use. Gate on `ext` yourself and no-op when the file isn't yours.
         /// Must never block; kick off async work as a side effect. `bytes`/`path` are only
         /// valid for the duration of the call — copy anything the background work will need.
-        documentOpened: ?*const fn (state: *anyopaque, ext: []const u8, path: []const u8, bytes: []const u8) void = null,
+        documentOpened: ?*const fn (
+            state: *anyopaque,
+            ext: []const u8,
+            path: []const u8,
+            bytes: []const u8,
+        ) void = null,
         /// Non-blocking: return a cached/ready hover result for `byte_offset` in `bytes`
         /// (the document at `path`). Called every frame the mouse dwells over a token, so it
         /// must never block — kick off async work as a side effect. Three-state return:
@@ -91,11 +116,23 @@ pub const LanguageSupport = struct {
         /// thread, call `sdk.refresh()` so the idle GUI wakes and redraws (mouse may not move
         /// again). `bytes` is the live document text and `path` the document's path, same
         /// convention as `previewPane`.
-        hover: ?*const fn (state: *anyopaque, ext: []const u8, path: []const u8, bytes: []const u8, byte_offset: usize) ?HoverResult = null,
+        hover: ?*const fn (
+            state: *anyopaque,
+            ext: []const u8,
+            path: []const u8,
+            bytes: []const u8,
+            byte_offset: usize,
+        ) ?HoverResult = null,
         /// May block briefly (a few hundred ms) — called once per Ctrl/Cmd+click, not every
         /// frame. Returns the definition location for the symbol at `byte_offset` in `bytes`
         /// (the document at `path`), or null when none is found.
-        gotoDefinition: ?*const fn (state: *anyopaque, ext: []const u8, path: []const u8, bytes: []const u8, byte_offset: usize) ?DefinitionLocation = null,
+        gotoDefinition: ?*const fn (
+            state: *anyopaque,
+            ext: []const u8,
+            path: []const u8,
+            bytes: []const u8,
+            byte_offset: usize,
+        ) ?DefinitionLocation = null,
         /// Non-blocking, same convention as `hover`: return cached/ready completion
         /// candidates for the cursor at `byte_offset` in `bytes` (the document at `path`), or
         /// null when there's nothing to show yet. Called every frame the cursor sits in a
@@ -107,7 +144,13 @@ pub const LanguageSupport = struct {
         /// scrollable dropdown list, plus — for the current one, when its `insert_text` literally
         /// extends what's already typed — the remainder as ghost text after the caret; Up/Down
         /// changes which one is "current" for both.
-        completion: ?*const fn (state: *anyopaque, ext: []const u8, path: []const u8, bytes: []const u8, byte_offset: usize) ?[]const CompletionItem = null,
+        completion: ?*const fn (
+            state: *anyopaque,
+            ext: []const u8,
+            path: []const u8,
+            bytes: []const u8,
+            byte_offset: usize,
+        ) ?[]const CompletionItem = null,
         /// Non-blocking, same convention as `hover`/`completion`: many language servers send
         /// completion candidates with an empty/placeholder `documentation` up front (a lazy-load
         /// optimization — full docs only sent on demand via LSP `completionItem/resolve`).
@@ -120,7 +163,14 @@ pub const LanguageSupport = struct {
         /// which case the caller falls back to whatever `documentation` the original
         /// `CompletionItem` already carried. Called every frame a completion candidate's info
         /// panel would be visible, so it must never block.
-        resolveCompletionDocumentation: ?*const fn (state: *anyopaque, ext: []const u8, path: []const u8, bytes: []const u8, byte_offset: usize, index: usize) ?[]const u8 = null,
+        resolveCompletionDocumentation: ?*const fn (
+            state: *anyopaque,
+            ext: []const u8,
+            path: []const u8,
+            bytes: []const u8,
+            byte_offset: usize,
+            index: usize,
+        ) ?[]const u8 = null,
         /// Non-blocking, same convention as `completion`: return a cached/ready signature
         /// help result for the call the cursor at `byte_offset` in `bytes` (the document at
         /// `path`) currently sits inside, or null when there's nothing to show yet (including
@@ -128,7 +178,13 @@ pub const LanguageSupport = struct {
         /// for rather than the caller filtering it out). When the cache is populated from a
         /// background thread, call `sdk.refresh()` so the idle GUI wakes. Called every frame
         /// the cursor is inside an open call's parens while typing, so it must never block.
-        signatureHelp: ?*const fn (state: *anyopaque, ext: []const u8, path: []const u8, bytes: []const u8, byte_offset: usize) ?SignatureHelpResult = null,
+        signatureHelp: ?*const fn (
+            state: *anyopaque,
+            ext: []const u8,
+            path: []const u8,
+            bytes: []const u8,
+            byte_offset: usize,
+        ) ?SignatureHelpResult = null,
         /// Return true when this provider can format `ext` (including the dot, e.g. ".zig").
         /// Non-blocking and side-effect-free — called far more often than `format` itself (an
         /// owner asks it every frame to decide whether to show/enable a "Format Document" menu

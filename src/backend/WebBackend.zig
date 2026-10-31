@@ -2,7 +2,6 @@ const std = @import("std");
 const builtin = @import("builtin");
 const dvui = @import("dvui");
 const glass = @import("glass");
-const glass_look = @import("glass_look");
 
 pub const kind: dvui.enums.Backend = .web;
 
@@ -509,15 +508,9 @@ export fn add_event(which: u8, int1: u32, int2: u32, float1: f32, float2: f32, t
 }
 
 fn add_event_raw(w: *dvui.Window, which: u8, int1: u32, int2: u32, float1: f32, float2: f32, time_ms: f64) !void {
-    const first = w.events.items.len;
+    const before = w.event_num;
     const time_ns: i128 = @as(i128, @intFromFloat((if (std.math.isFinite(time_ms)) time_ms else wasm.wasm_now()) * 1_000_000.0)) + w.backend.impl.clock_ahead_ns;
-    defer for (w.events.items[first..]) |e| {
-        var buf: [32]u8 = undefined;
-        // The prefix and a u16 event number fit in 32 bytes.
-        // Backend packages cannot import core; match core/input_time.zig key().
-        const key = std.fmt.bufPrint(&buf, "_input_time_{d}", .{e.num}) catch unreachable;
-        dvui.dataSet(w, w.data().id, key, time_ns);
-    };
+    defer glass.input_time.stamp(w, before, time_ns);
 
     have_event = true;
     //event_temps.append(.{
@@ -545,11 +538,18 @@ fn add_event_raw(w: *dvui.Window, which: u8, int1: u32, int2: u32, float1: f32, 
             w.modifiers = web_mod_code_to_dvui(@intCast(int2));
             _ = try w.addEventMouseButton(buttonFromJS(int1), .release);
         },
-        4 => _ = try w.addEventMouseWheel(
-            float1 * dvui.scroll_speed,
-            if (int1 > 0) .vertical else .horizontal,
-            if (int2 == 0) .mouse else .trackpad,
-        ),
+        4 => {
+            _ = try w.addEventMouseWheel(
+                float1 * (if (int2 == 0) @as(f32, 100) else dvui.scroll_speed),
+                if (int1 > 0) .vertical else .horizontal,
+                if (int2 == 0) .mouse else .trackpad,
+            );
+            // Core reads the kind by event number, even in a mixed-device frame.
+            var buf: [32]u8 = undefined;
+            // The prefix and a u16 event number fit in 32 bytes.
+            const key = std.mem.print(&buf, "_wheel_trackpad_{d}", .{w.event_num}) catch unreachable;
+            dvui.dataSet(w, w.data().id, key, int2 != 0);
+        },
         5 => {
             const str = @as([*]u8, @ptrFromInt(int1))[0..int2];
             _ = try w.addEventKey(.{
@@ -786,22 +786,6 @@ pub const MaterialKinds = struct {
 pub fn materialKinds(_: *WebBackend) MaterialKinds {
     return .{};
 }
-
-/// What the web can show (`glass_look.Offer`): every kind, drawn in the canvas, and the person's
-/// `prefers-reduced-transparency`, which makes every glass solid.
-pub fn materialOffer(_: *WebBackend) glass_look.Offer {
-    return .init(.web, .empty, true, page.fizzy_web_reduced_transparency());
-}
-
-/// The page's own functions (`web/fizzy.js`). Only a wasm build has a page; the integration tests
-/// compile this backend natively.
-const page = if (builtin.target.cpu.arch == .wasm32) struct {
-    extern "fizzy" fn fizzy_web_reduced_transparency() bool;
-} else struct {
-    fn fizzy_web_reduced_transparency() bool {
-        return false;
-    }
-};
 
 pub fn begin(_: *WebBackend, arena_in: std.mem.Allocator) !void {
     arena = arena_in;

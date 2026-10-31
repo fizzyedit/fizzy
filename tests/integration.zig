@@ -32,6 +32,26 @@ test "shim brings up a dvui.testing window with usable fizzy globals" {
     try std.testing.expect(fizzy.editor() == ctx.editor);
 }
 
+// Windows' backend arms `ReadDirectoryChangesW` on a directory handle only, so watching a
+// document's file used to fail with `WatchFailed` there (and every external edit went unseen).
+test "an open document's file can be watched" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(dvui.io, .{ .sub_path = "doc.txt", .data = "a" });
+    var root_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const root = root_buf[0..try tmp.dir.realPath(dvui.io, &root_buf)];
+    const path = try std.fs.path.join(gpa, &.{ root, "doc.txt" });
+    defer gpa.free(path);
+
+    var w: fizzy.Editor.DocumentWatcher = .init(gpa);
+    try w.start();
+    defer w.stop();
+    try w.watchPath(path);
+}
+
 // -- menu accelerators -------------------------------------------------------------------------
 
 // The regression that made every plugin menu row show a blank accelerator: a chord that exists
@@ -3065,6 +3085,23 @@ fn expectNoPanel(editor: *fizzy.Editor) !void {
     try std.testing.expect(chromeBounds(editor, "Sidebar") != null);
     try std.testing.expect(chromeBounds(editor, "Panel") == null);
     try std.testing.expect(editor.regionFor(fizzy.sdk.keywords.ide.panel) == null);
+}
+
+test "rail: the undecided-plugin badge counts for the store view and no other" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+    const editor = ctx.editor;
+    editor.app.gpa = std.testing.allocator;
+    defer {
+        for (editor.app.undecided_plugin_ids.items) |id| editor.app.gpa.free(id);
+        editor.app.undecided_plugin_ids.clearAndFree(editor.app.gpa);
+    }
+    try editor.app.trackUndecidedPlugin("one");
+    try editor.app.trackUndecidedPlugin("two");
+
+    const host = fizzy.layout.railHost(editor);
+    try std.testing.expectEqual(@as(usize, 2), host.vtable.undecidedPluginCount(host.ctx, @import("app").store.Store.view_id));
+    try std.testing.expectEqual(@as(usize, 0), host.vtable.undecidedPluginCount(host.ctx, "test.files"));
 }
 
 test "chrome: the defaults are fizzy's own frame, Sidebar left of Main with a Panel" {
@@ -6463,7 +6500,7 @@ test "liquid field: groups are the shapes that touch, each drawn as its own quad
     try std.testing.expectEqual(@as(u8, 2), g.size[0]);
     try std.testing.expectEqual(@as(u8, 1), g.size[1]);
     // The uniforms are the shader's `uData`: its header, then three vec4s a shape.
-    try std.testing.expectEqual(@as(usize, (9 + 3 * LF.max_shapes) * 16), @sizeOf(LF.Uniforms));
+    try std.testing.expectEqual(@as(usize, (11 + 3 * LF.max_shapes) * 16), @sizeOf(LF.Uniforms));
     const u = f.pack(.{ .x = 0, .y = 0, .w = 400, .h = 100 }, false, g.order[0..f.len]);
     try std.testing.expectEqual(@as(f32, 22), u.shapes[1][0][0]);
 }
@@ -6508,6 +6545,28 @@ test "liquid field: fizzy's default look packs to today's uniforms for every rol
             try std.testing.expectEqual(l.diagonal, u.backdrop[2]);
             try std.testing.expectEqual(l.rim, u.rim[3]);
             try std.testing.expectEqual(l.frost * f.shapes[0].blur, u.shapes[0][2][0]);
+        }
+    }
+}
+
+test "liquid field: fizzy's looks pack the lit edge off" {
+    const LF = fizzy.core.LiquidField;
+    const gl = fizzy.core.glass_look;
+    for ([_]f32{ 0.05, 0.5, 1 }) |opacity| {
+        const looks = fizzy.core.material.Looks.fromOpacity(opacity);
+        inline for (comptime std.enums.values(gl.Role)) |which| {
+            var f: LF = .{ .tint = .{ .r = 10, .g = 20, .b = 30, .a = 200 }, .mix = 0.5, .lift = 0.2, .role = which };
+            f.add(LF.Shape.circle(.{ .x = 50, .y = 50 }, 40));
+            const order = [_]u8{0};
+            var u = f.pack(.{ .x = 0, .y = 0, .w = 100, .h = 100 }, false, &order);
+            f.applyLook(&u, looks.get(which));
+            try std.testing.expectEqual([4]f32{ 0, 0, 0, 0 }, u.edge);
+            try std.testing.expectApproxEqAbs(@as(f32, -0.70710678), u.light[0], 1e-6);
+            try std.testing.expectApproxEqAbs(@as(f32, -0.70710678), u.light[1], 1e-6);
+            try std.testing.expectEqual(@as(f32, 0.5), u.light[2]);
+            try std.testing.expectEqual(@as(f32, 0), u.light[3]);
+            try std.testing.expectEqual(@as(f32, 0), u.widths[3]);
+            try std.testing.expectEqual(@as(f32, 0.85), u.widths[0]);
         }
     }
 }
@@ -6583,6 +6642,186 @@ fn peakOf(comptime f: fn (f32, f32) f32, lv: f32) f32 {
     var t: f32 = 0;
     while (t <= 1) : (t += 0.005) peak = @max(peak, f(lv, t));
     return peak;
+}
+
+test "motion: failed migration leaves startup preferences usable and legacy data intact" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(io, ".", gpa);
+    defer gpa.free(root);
+    const settings = try std.fs.path.join(gpa, &.{ root, "settings.zon" });
+    defer gpa.free(settings);
+    const blocked = try std.fs.path.join(gpa, &.{ root, "blocked" });
+    defer gpa.free(blocked);
+    try tmp.dir.writeFile(io, .{ .sub_path = "settings.zon", .data = ".{ .motion = 0.6 }" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "blocked", .data = "a file cannot be a config directory" });
+    ctx.editor.app.gpa = gpa;
+    ctx.editor.person_dir = blocked;
+    ctx.editor.loadPerson(settings);
+    try std.testing.expectEqual(@as(?f32, null), ctx.editor.person.motion);
+    const data = try fizzy.core.fs.read(gpa, io, settings);
+    defer gpa.free(data);
+    try std.testing.expectEqualStrings(".{ .motion = 0.6 }", data);
+    try tmp.dir.deleteFile(io, "blocked");
+    ctx.editor.loadPerson(settings);
+    try std.testing.expectEqual(@as(?f32, 0.6), ctx.editor.person.motion);
+}
+
+test "motion: a profiled instance keeps person.zon under its profile root" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(io, ".", gpa);
+    defer gpa.free(root);
+
+    const profiled = try fizzy.Editor.personDir(gpa, root, "/the/persons/config");
+    defer gpa.free(profiled);
+    try std.testing.expectEqualStrings(root, profiled);
+    try fizzy.core.person.save(io, profiled, .{ .motion = 0.2 });
+    try tmp.dir.access(io, "person.zon", .{});
+
+    const shared = try fizzy.Editor.personDir(gpa, null, "/the/persons/config");
+    defer gpa.free(shared);
+    const want_shared = try std.fs.path.join(gpa, &.{ "/the/persons/config", "fizzyedit" });
+    defer gpa.free(want_shared);
+    try std.testing.expectEqualStrings(want_shared, shared);
+}
+
+test "motion: migration and focus share the person's choice across app configs" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(io, ".", gpa);
+    defer gpa.free(root);
+    const person_dir = try std.fs.path.join(gpa, &.{ root, "person" });
+    defer gpa.free(person_dir);
+    const Migration = @import("app").settings.Migration;
+    try tmp.dir.createDirPath(io, "first");
+    try tmp.dir.createDirPath(io, "second");
+    const first = try std.fs.path.join(gpa, &.{ root, "first", "settings.zon" });
+    defer gpa.free(first);
+    const second = try std.fs.path.join(gpa, &.{ root, "second", "settings.zon" });
+    defer gpa.free(second);
+    try fizzy.core.fs.write(io, first, ".{ .motion = 0.6 }");
+    try Migration.personMotion(gpa, io, first, person_dir);
+    try std.testing.expectEqual(@as(?f32, 0.6), fizzy.core.person.load(io, person_dir).motion);
+    const migrated = try fizzy.core.fs.read(gpa, io, first);
+    defer gpa.free(migrated);
+    try std.testing.expect(std.mem.find(u8, migrated, ".motion =") == null);
+
+    try fizzy.core.person.save(io, person_dir, .{ .motion = 0.2 });
+    try fizzy.core.fs.write(io, second, ".{ .motion = 0.6 }");
+    try Migration.personMotion(gpa, io, second, person_dir);
+    try std.testing.expectEqual(@as(?f32, 0.2), fizzy.core.person.load(io, person_dir).motion);
+
+    const editor = ctx.editor;
+    editor.app.gpa = gpa;
+    editor.person_dir = person_dir;
+    editor.person_mtime = null;
+    editor.reloadPerson();
+    try std.testing.expectEqual(@as(f32, 0.2), fizzy.core.person.motionLevel(editor.person, 1));
+    try fizzy.core.person.save(io, person_dir, .{ .motion = 0.8 });
+    // Coarse filesystem clocks can give consecutive replacements the same timestamp.
+    const shared = try tmp.dir.openFile(io, "person/person.zon", .{ .mode = .read_write });
+    defer shared.close(io);
+    try shared.setTimestamps(io, .{ .modify_timestamp = .{ .new = .{ .nanoseconds = @intCast(editor.person_mtime.? + std.time.ns_per_s) } } });
+    editor.reloadPerson();
+    try std.testing.expectEqual(@as(f32, 0.8), fizzy.core.person.motionLevel(editor.person, 0.3));
+    const M = fizzy.core.motion;
+    M.publish(fizzy.core.person.motionLevel(.{}, 0.3), M.default_speed, false, false, 1);
+    try std.testing.expectEqual(@as(f32, 0.3), M.level());
+    for ([_]f32{ 0.3, 1 }) |app_level| {
+        M.publish(fizzy.core.person.motionLevel(editor.person, app_level), M.default_speed, false, false, 1);
+        try std.testing.expectEqual(@as(f32, 0.8), M.level());
+    }
+    for ([_]?f32{ null, 0, 0.8, 1 }) |level| {
+        M.publish(fizzy.core.person.motionLevel(.{ .motion = level }, 1), M.default_speed, true, false, 1);
+        try std.testing.expect(M.off());
+    }
+}
+
+test "motion: pending shared choices stay in memory until flushed" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir = try tmp.dir.realPathFileAlloc(io, ".", gpa);
+    defer gpa.free(dir);
+    ctx.editor.app.gpa = gpa;
+    ctx.editor.person_dir = dir;
+    try fizzy.core.person.save(io, dir, .{ .motion = 0.2 });
+    ctx.editor.person.motion = 0.8;
+    ctx.editor.markPersonDirty();
+    try std.testing.expectEqual(@as(?f32, 0.2), fizzy.core.person.load(io, dir).motion);
+    ctx.editor.reloadPerson();
+    try std.testing.expectEqual(@as(?f32, 0.8), ctx.editor.person.motion);
+    ctx.editor.savePerson();
+    try std.testing.expectEqual(@as(?f32, 0.8), fizzy.core.person.load(io, dir).motion);
+    try std.testing.expectEqual(@as(?i128, null), ctx.editor.person_save_deadline_ns);
+}
+
+test "motion: settings reset saves null and draws the shared default" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir = try tmp.dir.realPathFileAlloc(std.testing.io, ".", gpa);
+    defer gpa.free(dir);
+    ctx.editor.app.gpa = gpa;
+    ctx.editor.person_dir = dir;
+    ctx.editor.person.motion = 0.8;
+    const frame = struct {
+        fn draw() !dvui.App.Result {
+            var box = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal });
+            defer box.deinit();
+            for (fizzy.Explorer.settings.groups) |group| for (group.items) |item| {
+                if (std.mem.eql(u8, item.key, "motion")) item.draw.?();
+            };
+            return .ok;
+        }
+    }.draw;
+    dvui.debug.captureFrame();
+    defer dvui.debug.clearCaptures(dvui.currentWindow().gpa);
+    _ = try dvui.testing.step(frame);
+    _ = try dvui.testing.step(frame);
+    var reset: ?dvui.Point.Physical = null;
+    for (dvui.debug.lastCapture().?.widgets.items) |widget| {
+        if (widget.text) |text| if (std.mem.eql(u8, text, "Reset to system default")) {
+            reset = widget.rect_border.center();
+        };
+    }
+    _ = try dvui.currentWindow().addEventMouseMotion(.{ .pt = reset orelse return error.TestUnexpectedResult });
+    try dvui.testing.click(.left);
+    _ = try dvui.testing.step(frame);
+    try std.testing.expectEqual(@as(?f32, null), ctx.editor.person.motion);
+    try std.testing.expectEqual(@as(?f32, null), fizzy.core.person.load(std.testing.io, dir).motion);
+    dvui.debug.captureFrame();
+    _ = try dvui.testing.step(frame);
+    _ = try dvui.testing.step(frame);
+    var default_shown = false;
+    var shared_shown = false;
+    var reset_shown = false;
+    for (dvui.debug.lastCapture().?.widgets.items) |widget| {
+        if (widget.text) |text| {
+            if (std.mem.eql(u8, text, "Reset to system default")) reset_shown = true;
+            if (std.mem.startsWith(u8, text, "System default (")) default_shown = true;
+            if (std.mem.eql(u8, text, "Applies to every fizzy app.")) shared_shown = true;
+        }
+    }
+    try std.testing.expect(default_shown);
+    try std.testing.expect(shared_shown);
+    try std.testing.expect(!reset_shown);
 }
 
 test "motion: every curve starts at 0 and lands on 1, at every level" {
@@ -10753,6 +10992,8 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
     try editor.postInit();
     try dvui.testing.settle(headlessFrame);
     try std.testing.expectEqualStrings(root, editor.app.config_folder);
+    // The person's choices stay in the profile too, not in the shared config folder.
+    try std.testing.expectEqualStrings(root, editor.person_dir);
     // A plugin's data folder (`Host.pluginDataFolder`): under the profile, made on the first ask,
     // the same borrowed path after, one per plugin.
     {
@@ -11007,7 +11248,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         defer gpa.free(b);
         const args = struct {
             fn path(p: []const u8) ![]u8 {
-                return gpa.print(".{{ .path = \"{s}\" }}", .{p});
+                return gpa.print(".{{ .path = \"{f}\" }}", .{std.zig.fmtString(p)});
             }
         };
 
@@ -11362,7 +11603,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try std.testing.expectEqualStrings("// top\nconst a = 1;\nconst b = 3;\n", (try read(host, "")).text);
 
         // By path: a document that is open but not the one in front, read and written.
-        const notes_args = try gpa.print(".{{ .path = \"{s}\" }}", .{notes});
+        const notes_args = try gpa.print(".{{ .path = \"{f}\" }}", .{std.zig.fmtString(notes)});
         defer gpa.free(notes_args);
         try std.testing.expect(std.mem.startsWith(u8, (try read(host, notes_args)).text, "# Notes"));
         try std.testing.expect(host.callCommand("text.read", ".{ .path = \"/not/open.txt\" }", host.arena()) == .failed);
@@ -11385,7 +11626,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try dvui.testing.settle(headlessFrame);
 
         // A write changes only what differs, as one edit, and one undo puts back exactly that.
-        const write_args = try gpa.print(".{{ .path = \"{s}\", .text = \"// top\\nconst a = 42;\\nconst b = 3;\\n\" }}", .{main_zig});
+        const write_args = try gpa.print(".{{ .path = \"{f}\", .text = \"// top\\nconst a = 42;\\nconst b = 3;\\n\" }}", .{std.zig.fmtString(main_zig)});
         defer gpa.free(write_args);
         const wrote = host.callCommand("text.write", write_args, host.arena());
         try std.testing.expect(wrote == .ok);
@@ -11401,7 +11642,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         {
             const notes_doc = editor.docFromPath(notes) orelse return error.TestUnexpectedResult;
             const before = (try read(host, notes_args)).text;
-            const notes_write = try gpa.print(".{{ .path = \"{s}\", .text = \"# Notes, by Claude\\n\" }}", .{notes});
+            const notes_write = try gpa.print(".{{ .path = \"{f}\", .text = \"# Notes, by Claude\\n\" }}", .{std.zig.fmtString(notes)});
             defer gpa.free(notes_write);
             const outer = host.act(.{ .kind = .agent, .plugin = "test", .session = 1, .label = "Claude" });
             try std.testing.expect(host.callCommand("text.write", notes_write, host.arena()) == .ok);
@@ -11409,7 +11650,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
             const line = notes_doc.owner.historyLine(notes_doc, host.arena()) orelse return error.TestUnexpectedResult;
             const top = line.entries[line.at - 1].id;
 
-            const stale = try gpa.print(".{{ .path = \"{s}\", .expect = {d} }}", .{ notes, top + 1000 });
+            const stale = try gpa.print(".{{ .path = \"{f}\", .expect = {d} }}", .{ std.zig.fmtString(notes), top + 1000 });
             defer gpa.free(stale);
             switch (host.callCommand("fizzy.undo", stale, host.arena())) {
                 .failed => |m| try std.testing.expect(std.mem.find(u8, m, "by Claude") != null),
@@ -11417,7 +11658,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
             }
             try std.testing.expectEqualStrings("# Notes, by Claude\n", (try read(host, notes_args)).text);
 
-            const named = try gpa.print(".{{ .path = \"{s}\", .expect = {d} }}", .{ notes, top });
+            const named = try gpa.print(".{{ .path = \"{f}\", .expect = {d} }}", .{ std.zig.fmtString(notes), top });
             defer gpa.free(named);
             const undid = host.callCommand("fizzy.undo", named, host.arena());
             try std.testing.expect(undid == .ok);
@@ -11437,7 +11678,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         {
             const front = editor.activeDoc() orelse return error.TestUnexpectedResult;
             const before = (try read(host, "")).text;
-            const front_write = try gpa.print(".{{ .path = \"{s}\", .text = \"// by Claude\\n\" }}", .{main_zig});
+            const front_write = try gpa.print(".{{ .path = \"{f}\", .text = \"// by Claude\\n\" }}", .{std.zig.fmtString(main_zig)});
             defer gpa.free(front_write);
             const outer = host.act(.{ .kind = .agent, .plugin = "test", .session = 1, .label = "Claude" });
             try std.testing.expect(host.callCommand("text.write", front_write, host.arena()) == .ok);
@@ -11464,9 +11705,9 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         {
             const front = editor.activeDoc() orelse return error.TestUnexpectedResult;
             const claude: sdk.Author = .{ .kind = .agent, .plugin = "test", .session = 2, .label = "Claude" };
-            const first = try gpa.print(".{{ .path = \"{s}\", .text = \"// first\\n\" }}", .{main_zig});
+            const first = try gpa.print(".{{ .path = \"{f}\", .text = \"// first\\n\" }}", .{std.zig.fmtString(main_zig)});
             defer gpa.free(first);
-            const second = try gpa.print(".{{ .path = \"{s}\", .text = \"// second\\n\" }}", .{main_zig});
+            const second = try gpa.print(".{{ .path = \"{f}\", .text = \"// second\\n\" }}", .{std.zig.fmtString(main_zig)});
             defer gpa.free(second);
             const before = try gpa.dupe(u8, (try read(host, "")).text);
             defer gpa.free(before);
@@ -11507,7 +11748,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
             defer gpa.free(before);
             const writeAs = struct {
                 fn f(h: *sdk.Host, who: sdk.Author, path: []const u8, body: []const u8) !void {
-                    const args = try h.arena().print(".{{ .path = \"{s}\", .text = \"{s}\" }}", .{ path, body });
+                    const args = try h.arena().print(".{{ .path = \"{f}\", .text = \"{s}\" }}", .{ std.zig.fmtString(path), body });
                     const outer = h.act(who);
                     defer h.endAct(outer);
                     try std.testing.expect(h.callCommand("text.write", args, h.arena()) == .ok);
@@ -11519,7 +11760,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
                 const outer = host.act(claude);
                 defer host.endAct(outer);
                 for ([_][]const u8{ "// claude one\\n", "// claude two\\n" }) |body| {
-                    const args = try host.arena().print(".{{ .path = \"{s}\", .text = \"{s}\" }}", .{ main_zig, body });
+                    const args = try host.arena().print(".{{ .path = \"{f}\", .text = \"{s}\" }}", .{ std.zig.fmtString(main_zig), body });
                     try std.testing.expect(host.callCommand("text.write", args, host.arena()) == .ok);
                 }
             }
@@ -11540,7 +11781,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
             try std.testing.expectEqual(@as(usize, 1), mixed.yours);
             try std.testing.expectEqual(back.to, mixed.to);
 
-            const args = try host.arena().print(".{{ .path = \"{s}\" }}", .{main_zig});
+            const args = try host.arena().print(".{{ .path = \"{f}\" }}", .{std.zig.fmtString(main_zig)});
             const went = host.callCommand("fizzy.goBackBefore", args, host.arena());
             try std.testing.expect(went == .ok);
             try std.testing.expect(std.mem.find(u8, went.ok.?, ".also_taken_back = 1") != null);
@@ -11848,7 +12089,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         }.newDoc;
         const textOf = struct {
             fn textOf(h: *sdk.Host, d: sdk.DocHandle) ![]const u8 {
-                const args = try h.arena().print(".{{ .path = \"{s}\" }}", .{d.owner.documentPath(d)});
+                const args = try h.arena().print(".{{ .path = \"{f}\" }}", .{std.zig.fmtString(d.owner.documentPath(d))});
                 const zon = switch (h.callCommand("text.read", args, h.arena())) {
                     .ok => |r| r orelse return error.TestUnexpectedResult,
                     else => return error.TestUnexpectedResult,
@@ -12017,7 +12258,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         }.newDoc;
         const textOf = struct {
             fn textOf(h: *sdk.Host, d: sdk.DocHandle) ![]const u8 {
-                const args = try h.arena().print(".{{ .path = \"{s}\" }}", .{d.owner.documentPath(d)});
+                const args = try h.arena().print(".{{ .path = \"{f}\" }}", .{std.zig.fmtString(d.owner.documentPath(d))});
                 const zon = switch (h.callCommand("text.read", args, h.arena())) {
                     .ok => |r| r orelse return error.TestUnexpectedResult,
                     else => return error.TestUnexpectedResult,
@@ -12746,7 +12987,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try dvui.testing.settle(headlessFrame);
         const textOf = struct {
             fn textOf(h: *sdk.Host, path: []const u8) ![]const u8 {
-                const args = try h.arena().print(".{{ .path = \"{s}\" }}", .{path});
+                const args = try h.arena().print(".{{ .path = \"{f}\" }}", .{std.zig.fmtString(path)});
                 const zon = switch (h.callCommand("text.read", args, h.arena())) {
                     .ok => |r| r orelse return error.TestUnexpectedResult,
                     else => return error.TestUnexpectedResult,
@@ -12763,7 +13004,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
 
         const out = try gpa.print("{s}/tapes/export-test.tape", .{editor.app.config_folder});
         defer gpa.free(out);
-        const args = try host.arena().print(".{{ .path = \"{s}\", .out = \"{s}\" }}", .{ path, out });
+        const args = try host.arena().print(".{{ .path = \"{f}\", .out = \"{f}\" }}", .{ std.zig.fmtString(path), std.zig.fmtString(out) });
         const result = switch (host.callCommand("fizzy.tracks.export", args, host.arena())) {
             .ok => |r| r orelse return error.TestUnexpectedResult,
             else => |r| {
@@ -12777,7 +13018,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         {
             const ranged = try gpa.print("{s}/tapes/export-range.tape", .{editor.app.config_folder});
             defer gpa.free(ranged);
-            const range_args = try host.arena().print(".{{ .path = \"{s}\", .out = \"{s}\", .from = 2 }}", .{ path, ranged });
+            const range_args = try host.arena().print(".{{ .path = \"{f}\", .out = \"{f}\", .from = 2 }}", .{ std.zig.fmtString(path), std.zig.fmtString(ranged) });
             const range_result = switch (host.callCommand("fizzy.tracks.export", range_args, host.arena())) {
                 .ok => |r| r orelse return error.TestUnexpectedResult,
                 else => return error.TestUnexpectedResult,
@@ -12944,7 +13185,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         const gone_path = gone.owner.documentPath(gone);
         const before_text = try gpa.dupe(u8, try textOf(host, gone_path));
         defer gpa.free(before_text);
-        const gone_args = try host.arena().print(".{{ .path = \"{s}\", .out = \"{s}\" }}", .{ gone_path, out });
+        const gone_args = try host.arena().print(".{{ .path = \"{f}\", .out = \"{f}\" }}", .{ std.zig.fmtString(gone_path), std.zig.fmtString(out) });
         try std.testing.expect(host.callCommand("fizzy.tracks.export", gone_args, host.arena()) == .ok);
         try std.testing.expectEqualStrings(before_text, try textOf(host, gone_path));
         try editor.rawCloseFileID(gone.id);
@@ -13033,7 +13274,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try std.testing.expect(host.callCommand("dashboard.show", "", host.arena()) == .ok);
         for (0..4) |_| _ = try dvui.testing.step(headlessFrame);
         try std.testing.expectEqualStrings("dashboard.view", host.selectionFor(sdk.keywords.ide.sidebar) orelse "");
-        const cards = host.getServiceTyped(sdk.services.dashboard_cards.Api) orelse return error.TestUnexpectedResult;
+        const cards = @import("dashboard").View.provider(host);
         const before = try Reader.read(host);
         try std.testing.expectEqual(@as(usize, 3), before.count);
         try std.testing.expectEqual(@as(usize, 1), before.drawn);

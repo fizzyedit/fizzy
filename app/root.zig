@@ -1,8 +1,8 @@
-//! `app` — framework an application switches on, as opposed to `core` (what an app and a plugin
+//! `app` - framework an application switches on, as opposed to `core` (what an app and a plugin
 //! both draw with) and `sdk` (the contract a plugin is written against).
 //!
 //! The distinction is the dylib boundary, not taste: everything here is compiled into an
-//! application and never into a plugin, so it may depend on things a plugin must never link —
+//! application and never into a plugin, so it may depend on things a plugin must never link -
 //! the network, the filesystem, an installer, `dlopen` itself.
 //!
 //! What lives here is opt-in per app. Fizzy switches all of it on; a smaller app takes what it
@@ -10,16 +10,16 @@
 //!
 //!   `store`  the plugin store: registry catalog, install/update/uninstall, load-failure
 //!            reporting, and the pane that draws all of it. Point it at your own registry with
-//!            `AppInfo.registry_url` — `plugins.yourapp.com` is a config value, not a fork.
+//!            `AppInfo.registry_url` - `plugins.yourapp.com` is a config value, not a fork.
 //!
 //! **An app tells the store about itself once**, through `store.Manager` (see its file), and the
-//! store then talks to nothing else — no `Editor`, no globals belonging to fizzy. That seam is
+//! store then talks to nothing else - no `Editor`, no globals belonging to fizzy. That seam is
 //! what makes this framework rather than fizzy's own source.
 /// What makes an application *this* application rather than fizzy: its name, bundle id, config
 /// directory, version, update feed and plugin registry. Every value arrives from the app's own
 /// `build_opts`, so `AppInfo.current` is the identity of whichever app is being built.
 pub const AppInfo = @import("AppInfo.zig");
-/// The host runtime an application embeds — see the file.
+/// The host runtime an application embeds - see the file.
 pub const App = @import("App.zig");
 
 /// User configuration on disk: `settings.zon` (the app's own record plus every plugin's
@@ -51,7 +51,7 @@ pub const history_transport = @import("history_transport.zig");
 pub const dome = @import("dome.zig");
 pub const dome_rules = @import("dome_rules.zig");
 
-/// Key chords → command ids: the table, its ZON form, chord matching, and the dvui adapter.
+/// Key chords -> command ids: the table, its ZON form, chord matching, and the dvui adapter.
 pub const keymap = struct {
     pub const Keymap = @import("keymap/Keymap.zig");
     pub const key = @import("tape").key;
@@ -62,20 +62,20 @@ pub const keymap = struct {
 
 /// Regions and the splits between them: the whole of how an application divides its window.
 ///
-/// A minimal app is exactly this — regions laid out by dvui's boxes, a split where the user
+/// A minimal app is exactly this - regions laid out by dvui's boxes, a split where the user
 /// should be able to drag one edge, and plugins drawing into whichever region accepts their
 /// keywords. Nothing here knows what an explorer, a panel or a document is; fizzy's own shape
 /// (`src/editor/layout.zig`) is ordinary code on top, and an app writes its own.
 pub const layout = struct {
     pub const Layout = @import("layout/Layout.zig");
     pub const Region = @import("layout/Region.zig");
-    /// A place's views as something to pick from — a tab strip, an icon rail, or anything drawn
+    /// A place's views as something to pick from - a tab strip, an icon rail, or anything drawn
     /// over the same reorder, select and drag-off behaviour.
     pub const Chooser = @import("layout/Chooser.zig");
     pub const Rail = @import("layout/Rail.zig");
     pub const SidePane = @import("layout/SidePane.zig");
     pub const Seed = @import("layout/Seed.zig").Tree;
-    /// One place in a static shape written as data, for `-Dapp-layout=<file>.zon` — a tree of
+    /// One place in a static shape written as data, for `-Dapp-layout=<file>.zon` - a tree of
     /// them is the whole shape. See its own doc comment for what data can and cannot say.
     pub const Shape = @import("layout/Shape.zig");
     pub const Tree = @import("layout/Tree.zig");
@@ -92,12 +92,12 @@ pub const view = struct {
 /// Watching the filesystem for changes the application should react to.
 ///
 /// Opt-in: an app that does not want a folder watcher simply never starts one, and the cost is
-/// zero. Each watcher's job ends at "this settled, off the watcher thread" — what is worth
+/// zero. Each watcher's job ends at "this settled, off the watcher thread" - what is worth
 /// reacting to, and what reacting means, is the app's, which is what `Sink` on each of them is.
 pub const watch = struct {
     /// On-disk changes under the open project folder, coalesced and filtered by the app.
     pub const FolderWatcher = @import("watch/FolderWatcher.zig");
-    /// Changes under the app's own config folder — its settings file, its plugin directory.
+    /// Changes under the app's own config folder - its settings file, its plugin directory.
     pub const SettingsWatcher = @import("watch/SettingsWatcher.zig");
     /// The app's own executable: a rebuild of it restarts the app into the new build.
     pub const ExecutableWatcher = @import("watch/ExecutableWatcher.zig");
@@ -156,12 +156,12 @@ pub const control = struct {
     }
 };
 
-/// Quitting the way the app always quits — unsaved documents asked about first — then starting
+/// Quitting the way the app always quits - unsaved documents asked about first - then starting
 /// again: for a setting the app takes only at launch, and for installing a downloaded `update`.
 /// The app asks with `request`, runs `tick` each frame and `relaunch` at the end of teardown.
 pub const restart = @import("restart.zig");
 
-/// Demos that drive the real app — a tape of timed input played into dvui, which a viewer can
+/// Demos that drive the real app - a tape of timed input played into dvui, which a viewer can
 /// pause, take over, rewind and resume. `Tape` is the format, `Sequencer` the deterministic engine
 /// that replays it, `Script` the high-level way to write one, `Player` + `overlay` the dvui half
 /// (input injection, the pointer and captions a viewer sees), `Stage` what the app fills in.
@@ -174,7 +174,7 @@ pub const automation = struct {
     pub const Player = @import("replay").Player;
     /// Tape input as dvui events: the half of a sequencer's sink every player of tapes shares.
     pub const Input = @import("replay").Input;
-    /// Plays a live tape — input on the app as it is, a step at a time — beside the `Player`.
+    /// Plays a live tape - input on the app as it is, a step at a time - beside the `Player`.
     pub const LiveDriver = @import("replay").LiveDriver;
     /// What is on screen, as text: roles, names, tags, rects (`replay.Snapshot`).
     pub const Snapshot = @import("replay").Snapshot;
@@ -191,7 +191,7 @@ pub const automation = struct {
 /// One application per machine, and a second launch handing its argv to the first.
 ///
 /// The lock, the socket and the argv plumbing are the same for every app; what "open this path"
-/// means is not, which is `singleton.Sink`. The app also sets its own `app_id` — the lock is per
+/// means is not, which is `singleton.Sink`. The app also sets its own `app_id` - the lock is per
 /// application, and two fizzy-based apps must not fight over one.
 pub const single_instance = @import("single_instance/singleton.zig");
 /// `--profile <dir>` / `FIZZY_PROFILE`: one root for the config folder, the plugins, the lock and
@@ -202,7 +202,7 @@ pub const quiet = @import("quiet.zig");
 
 pub const store = struct {
     pub const Store = @import("store/PluginStore.zig");
-    /// A plugin's store page as a document — the owner of `store://…` pages.
+    /// A plugin's store page as a document - the owner of `store://...` pages.
     pub const Page = @import("store/PluginPage.zig");
     pub const Manager = @import("store/PluginManager.zig");
     /// Runtime plugin loading: `dlopen` natively; on the web a wasm side module the page links

@@ -161,7 +161,7 @@ jobs:
         include:
           - { os: ubuntu-latest, name: Linux }
           - { os: windows-latest, name: Windows }
-          - { os: macos-14, name: macOS }
+          - { os: macos-15, name: macOS }
     runs-on: ${{ matrix.os }}
     # macOS runs 26 to 30 minutes on a healthy day; a slow run should not be a failed one.
     timeout-minutes: ${{ matrix.name == 'macOS' && 45 || 30 }}
@@ -256,7 +256,7 @@ jobs:
         # `.github/known-failing-windows.txt`, which fail on main too and ejected passing PRs;
         # anything not listed, by binary and test name, still fails (scripts/ci-known-failing.sh).
         env:
-          KNOWN_FAILING: ${{ github.event_name == 'merge_group' && matrix.name == 'Windows' && '.github/known-failing-windows.txt' || '' }}
+          KNOWN_FAILING: ${{ matrix.name == 'Windows' && '.github/known-failing-windows.txt' || '' }}
         run: |
           if [ -n "$KNOWN_FAILING" ]; then
             bash scripts/ci-retry.sh bash scripts/ci-known-failing.sh "$KNOWN_FAILING" zig build test --summary all
@@ -275,10 +275,10 @@ jobs:
         if: matrix.name != 'Windows'
         shell: bash
         run: |
-          bash scripts/ci-retry.sh zig build check-web
-          scripts/test-web-text-input.sh --embed-only
+          bash scripts/ci-retry.sh zig build web
+          scripts/test-web-text-input.sh
 
-      # `check-web` sets no `-Dapp-layout`, so the web build's layout wiring is a no-op there; this
+      # The build above sets no `-Dapp-layout`, so its layout wiring is a no-op there; this
       # builds wasm with an app-owned `.zon` and `.zig` layout, and fails if that wiring is gone.
       - name: Compile web (wasm) build with a custom layout
         if: matrix.name != 'Windows'
@@ -317,7 +317,7 @@ jobs:
       # The suites for SDL's patches on macOS (FizzyGPU's Metal tests; the rest are Linux's), when
       # SDL's patches or pins changed: see the `sdl` job. Is there a Metal device? The probe says,
       # and the suite then requires Metal, so a runner with one can't skip the Metal tests. (On
-      # macos-14, MTLCreateSystemDefaultDevice() is nil from a command-line tool though
+      # macos-15, MTLCreateSystemDefaultDevice() is nil from a command-line tool though
       # MTLCopyAllDevices() lists the paravirtual GPU, and SDL's Metal driver works; hence the
       # list.)
       - name: Metal probe

@@ -1,6 +1,6 @@
 //! Restarting the application: quitting the way it always quits, then starting again.
 //!
-//! One path for every reason to restart — a setting the app takes only at launch, an update
+//! One path for every reason to restart - a setting the app takes only at launch, an update
 //! downloaded and waiting to be swapped in. `request` posts the app's ordinary quit, so unsaved
 //! documents are asked about first and a quit the user calls off calls the restart off with it.
 //! Once the app has torn down, `relaunch` starts it again: through Velopack when an update is
@@ -90,11 +90,11 @@ pub fn requested() bool {
 }
 
 /// Once a frame, before the app reads the frame's quit events. `quitting`: the app is still in
-/// the middle of a quit — a question about unsaved documents open, saves running.
+/// the middle of a quit - a question about unsaved documents open, saves running.
 ///
 /// The restart's quit goes in ahead of the frame's own, so it is answered like any other: with
 /// nothing unsaved the frame ends closing, and `relaunch` runs at teardown. Still here two frames
-/// on and no longer quitting, the user kept the app open — and called the restart off with it.
+/// on and no longer quitting, the user kept the app open - and called the restart off with it.
 pub fn tick(quitting: bool) void {
     if (comptime !supported) return;
     // An update the user asked for has finished downloading: installing it is a restart.
@@ -112,7 +112,7 @@ pub fn tick(quitting: bool) void {
     quit_frames +|= 1;
 }
 
-/// At the very end of teardown — after the app's windows, its documents and its single-instance
+/// At the very end of teardown - after the app's windows, its documents and its single-instance
 /// listener are gone, so the new instance owns the lock rather than handing its launch to this
 /// one. No-op unless a restart was asked for.
 pub fn relaunch(io: std.Io, gpa: std.mem.Allocator) void {
@@ -136,7 +136,7 @@ pub fn relaunch(io: std.Io, gpa: std.mem.Allocator) void {
 }
 
 /// This executable again, as a process of its own that nothing waits on, on the same profile. On
-/// macOS through `core.darwin_spawn` — std's spawn crashes after any `unsetenv`, and it passes a
+/// macOS through `core.darwin_spawn` - std's spawn crashes after any `unsetenv`, and it passes a
 /// fixed environment, so a profile named by `FIZZY_PROFILE` goes on as the flag. The files this
 /// run was started with are not passed again: the session brings back what is still open.
 fn relaunchSelf(io: std.Io, gpa: std.mem.Allocator) void {
@@ -157,7 +157,7 @@ fn start(io: std.Io, gpa: std.mem.Allocator, handover_to: ?[]const u8, log: ?std
     if (handover_to) |dir| argv.appendSliceAssumeCapacity(&.{ handover_flag, dir });
     // Out of reach of whatever started this instance: a terminal (a build task's `zig build run`)
     // closes once this one quits, and its hangup would take the new one with it. macOS: a session
-    // of its own. Linux: a process group of its own, which std offers where it offers no setsid —
+    // of its own. Linux: a process group of its own, which std offers where it offers no setsid -
     // out of the terminal's foreground group, which is what the hangup is sent to. Windows: a
     // console of its own (no-op for a Release build, which has none), so closing the launcher's
     // console does not close it.
@@ -327,8 +327,8 @@ var give_up_ns: i96 = 0;
 const give_up_after_ns = 30 * std.time.ns_per_s;
 
 /// Once a frame while this instance was started by a handover: true when the caller should try
-/// the single-instance lock — the old instance has let go of it, or has taken too long and it is
-/// tried anyway — and say how that went (`tookLock`).
+/// the single-instance lock - the old instance has let go of it, or has taken too long and it is
+/// tried anyway - and say how that went (`tookLock`).
 pub fn pollReleased(io: std.Io) bool {
     if (comptime !supported) return false;
     const dir = handed_from orelse return false;

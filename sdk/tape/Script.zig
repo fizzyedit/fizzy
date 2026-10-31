@@ -427,6 +427,21 @@ pub fn commandWith(self: *Script, id: []const u8, args: anytype) !void {
 
 const testing = std.testing;
 
+test "a lacked name is left out of the script and an offered name stays" {
+    var s: Script = .init(testing.allocator, "t", "T");
+    try s.keyframe(.{ .root = "demo://t" });
+    try testing.expect(!s.lacksName("missing"));
+    s.lacks = &.{"missing"};
+    for ([_][]const u8{ "missing", "offered" }) |name| {
+        if (s.lacksName(name)) continue;
+        try s.command(name);
+    }
+    var owned = try s.finish();
+    defer owned.deinit();
+    try testing.expectEqual(@as(usize, 3), owned.tape.ops.len);
+    try testing.expectEqualStrings("offered", owned.tape.ops[2].do.command.id);
+}
+
 test "a skip counts the ops pushed between it and its end" {
     var s: Script = .init(testing.allocator, "t", "T");
     try s.keyframe(.{ .root = "demo://t" });

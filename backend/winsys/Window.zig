@@ -49,7 +49,7 @@ pub const Kind = enum { normal, float, menu, dialog, overlay };
 pub const State = enum { normal, minimized, maximized, fullscreen };
 
 /// The kinds of window material, from the plainest to the richest. Today the same five as
-/// `backend/src/glass_look.zig`'s `Kind`; the SDL adapter maps one to the other, and a platform
+/// `backend/src/materials.zig`'s `Kind`; the SDL adapter maps one to the other, and a platform
 /// may add kinds of its own. Whether a platform can draw one is `Platform.Caps.materials`;
 /// asking for one it cannot is not an error: the platform falls back to the nearest plainer
 /// one, and `Platform.windowMaterial` says which it got.

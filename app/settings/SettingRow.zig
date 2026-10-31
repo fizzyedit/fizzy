@@ -2,16 +2,16 @@
 //!
 //! A setting reads as a small self-contained group, VSCode-style:
 //!
-//!     Insert spaces on tab          ← name (`header`), sentence case, bold
-//!     insert_spaces_on_tab          ← the key it has in settings.zon, dim and smaller
-//!     Insert spaces instead of a…   ← description (`description`), wrapped
-//!     [▁▁▁▁▁ control ▁▁▁▁▁]         ← the control, full width
+//!     Insert spaces on tab          <- name (`header`), sentence case, bold
+//!     insert_spaces_on_tab          <- the key it has in settings.zon, dim and smaller
+//!     Insert spaces instead of a...   <- description (`description`), wrapped
+//!     [_____ control _____]         <- the control, full width
 //!
 //! Booleans are the one exception: their checkbox sits *before* the description on one line
 //! (`beginInlineControl`), because a full-width control for two states is all frame and no
 //! information.
 //!
-//! Name and key are both search-highlighted — the settings search matches either, so a row that
+//! Name and key are both search-highlighted - the settings search matches either, so a row that
 //! survived on a key match has to be able to show why.
 //!
 //! `SettingsTree` owns *which* rows appear and in what order; this file owns what one row looks
@@ -41,7 +41,7 @@ pub fn header(name: []const u8, key: []const u8, query: *const fuzzy.Query) void
         tl.deinit();
     }
 
-    // The key is what the user types in settings.zon, so it gets the mono face — and enough
+    // The key is what the user types in settings.zon, so it gets the mono face - and enough
     // dimming that the pane reads as a list of names, not a list of identifiers.
     var tl = dvui.textLayout(@src(), .{ .break_lines = false }, .{
         .background = false,
@@ -64,7 +64,7 @@ pub fn description(text: []const u8) void {
     });
 }
 
-/// The same description on a checkbox's line — vertically centred against the checkbox, and
+/// The same description on a checkbox's line - vertically centred against the checkbox, and
 /// inset far enough to clear it.
 pub fn descriptionInline(text: []const u8) void {
     drawDescription(text, .{
@@ -85,7 +85,7 @@ fn drawDescription(text: []const u8, over: dvui.Options) void {
     tl.deinit();
 }
 
-/// Row for a control that shares its line with the description — the checkbox goes in first, the
+/// Row for a control that shares its line with the description - the checkbox goes in first, the
 /// description wraps in whatever width is left. Caller deinits.
 pub fn beginInlineControl() *dvui.BoxWidget {
     return dvui.box(@src(), .{ .dir = .horizontal }, .{

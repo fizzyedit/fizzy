@@ -3,7 +3,7 @@
 //! each id is spelled as a name every client accepts, and found again when a `tools/call` names it.
 //!
 //! The rule: `.` becomes `__`, any other character outside the set becomes `_`. An id that spells
-//! back to itself (`text.insert` ↔ `text__insert`, which is nearly every id) keeps that name, and
+//! back to itself (`text.insert` <-> `text__insert`, which is nearly every id) keeps that name, and
 //! `unspell` finds it from the name alone. One that does not (it has `__`, or a character outside
 //! the set) keeps its name too unless another id has it; then it gets `_` and six hex digits of its
 //! id's hash, so which id keeps the plain name does not hang on the order plugins load in. A name
@@ -25,7 +25,7 @@ pub const Name = struct {
     }
 };
 
-/// `id` spelled as a name: `.` → `__`, anything outside `[A-Za-z0-9_-]` → `_`, and past `max_len`,
+/// `id` spelled as a name: `.` -> `__`, anything outside `[A-Za-z0-9_-]` -> `_`, and past `max_len`,
 /// cut and suffixed. Empty only for an empty id.
 pub fn plain(id: []const u8) Name {
     return if (fits(id)) spell(id) else suffixed(id, 0);
@@ -62,7 +62,7 @@ pub fn reversible(id: []const u8) bool {
     return std.mem.eql(u8, unspell(name.slice(), &back), id);
 }
 
-/// A name read back as an id: `__` → `.`. Only an id that is `reversible` comes back as it was.
+/// A name read back as an id: `__` -> `.`. Only an id that is `reversible` comes back as it was.
 pub fn unspell(name: []const u8, out: *[max_len]u8) []const u8 {
     var i: usize = 0;
     var n: usize = 0;

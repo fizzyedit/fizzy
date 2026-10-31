@@ -84,7 +84,7 @@ pub fn draw(query: *const fuzzy.Query) void {
         var block = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .margin = .{ .y = 4, .h = 4 } });
         defer block.deinit();
         dvui.labelNoFmt(@src(), "Unplaced", .{}, .{ .font = dvui.Font.theme(.title), .color_text = .{ .color = theme.color(.err, .fill) } });
-        var titles = std.ArrayListUnmanaged(u8).empty;
+        var titles = std.ArrayList(u8).empty;
         for (stray, 0..) |s, i| {
             if (i > 0) titles.appendSlice(arena, ", ") catch break;
             titles.appendSlice(arena, s.title) catch break;
@@ -143,7 +143,7 @@ fn drawRow(editor: *Editor, layout: *Editor.Layout, region: Editor.Region, idx: 
     const line: []const u8 = if (contents.len == 0)
         (if (assigned) "Empty" else "Nothing matches")
     else blk: {
-        var titles = std.ArrayListUnmanaged(u8).empty;
+        var titles = std.ArrayList(u8).empty;
         for (contents, 0..) |s, i| {
             if (i > 0) titles.appendSlice(arena, ", ") catch break;
             titles.appendSlice(arena, s.title) catch break;

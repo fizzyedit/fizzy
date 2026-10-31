@@ -215,8 +215,4 @@ void fizzy_native_viewport_presented(void *nswindow) {
     if (layer) layer.presentsWithTransaction = NO;
 }
 
-/* The person's Reduce transparency (Accessibility, Display), which makes every window and every
- * glass solid (`SDLBackend.materialOffer`). Read once a frame: a property AppKit keeps. */
-int fizzy_native_reduce_transparency(void) {
-    return [[NSWorkspace sharedWorkspace] accessibilityDisplayShouldReduceTransparency] ? 1 : 0;
-}
+

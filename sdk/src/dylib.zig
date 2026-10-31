@@ -39,7 +39,8 @@ const wikilink_service = @import("services/wikilink.zig");
 /// `gpa` is always the app allocator. `arg_b`/`arg_c` are two generic injection slots whose
 /// meaning is defined by the receiving plugin's `set_globals` (they are *not* fixed roles).
 /// The conventions in this tree:
-///   - third-party (`exportEntry`): `arg_b` = the `*Host`, `arg_c` = unused (a plugin owns its state)
+///   - third-party (`exportEntry`): `arg_b` = the `*Host`, `arg_c` = unused (a plugin owns its
+///   state)
 ///   - workbench / code: `arg_b` = `*Host`, `arg_c` = the plugin's own state
 ///   - pixi: `arg_b` = the plugin's `*State`, `arg_c` = `*Packer` (historical; takes no host here)
 pub const SetGlobalsFn = *const fn (
@@ -394,7 +395,12 @@ pub fn semverFromTriplet(t: VersionTriplet) std.SemanticVersion {
 ///   pub const std_options: std.Options = sdk.dylib.stdOptions(opts.id);
 pub fn stdOptions(comptime id: []const u8) std.Options {
     const Impl = struct {
-        fn logFn(comptime level: std.log.Level, comptime scope: @EnumLiteral(), comptime format: []const u8, args: anytype) void {
+        fn logFn(
+            comptime level: std.log.Level,
+            comptime scope: @EnumLiteral(),
+            comptime format: []const u8,
+            args: anytype,
+        ) void {
             // A wasm side module has no stderr of its own (std's default sink wants a
             // threaded Io); the host's panel is the only sink there.
             if (comptime @import("builtin").target.cpu.arch != .wasm32) dvui.App.logFn(level, scope, format, args);

@@ -41,7 +41,7 @@ pub const VTable = struct {
     /// The colour under the frame at `opacity`, `fill` over the material where the host makes its
     /// surface of one; null where it makes none and the app draws its own base.
     material_base: *const fn (ptr: *anyopaque, fill: dvui.Color, opacity: f32) ?dvui.Color,
-    /// Whether the person asked the host to close it (its close button, ⌘W), read each frame. A
+    /// Whether the person asked the host to close it (its close button, CmdW), read each frame. A
     /// host whose close is the app's quit (a main window, which dvui's app runner closes) says
     /// false.
     close_requested: *const fn (ptr: *anyopaque) bool,
@@ -71,7 +71,7 @@ pub fn closeRequested(self: ViewHost) bool {
     return self.vtable.close_requested(self.ptr);
 }
 
-/// A host's vtable from a type's methods of the same names: `T.begin(*T)`, `T.end(*T)`, … .
+/// A host's vtable from a type's methods of the same names: `T.begin(*T)`, `T.end(*T)`, ... .
 pub fn vtableOf(comptime T: type) *const VTable {
     const S = struct {
         fn self(ptr: *anyopaque) *T {

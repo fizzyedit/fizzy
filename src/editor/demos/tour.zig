@@ -7,6 +7,7 @@
 //! fresh one. The explorer is pressed open only if it is not showing already. A snapshot holds the window's
 //! arrangement too (`Demo.Snapshot`), so a seek back across a split or a float puts the window
 //! back as it was then, rather than replaying from the keyframe.
+const std = @import("std");
 const Tape = @import("tape").Tape;
 const Script = @import("tape").Script;
 const catalog = @import("catalog.zig");
@@ -138,7 +139,7 @@ pub fn build(s: *Script) !void {
     // Only what this OS draws: a material it lacks is left out, with its caption.
     const materials = [_]struct { kind: []const u8, name: []const u8, caption: ?[]const u8, ms: u32 }{
         .{ .kind = "liquid", .name = "Liquid Glass", .caption = null, .ms = 1800 },
-        .{ .kind = "frost", .name = "frost", .caption = "…frosted…", .ms = 1400 },
+        .{ .kind = "frost", .name = "frosted glass", .caption = "…frosted…", .ms = 1400 },
         .{ .kind = "blur", .name = "blur", .caption = "…blurred…", .ms = 1400 },
         .{ .kind = "transparent", .name = "clear glass", .caption = "…clear, or opaque. Settings › Window keeps your choice.", .ms = 1200 },
         .{ .kind = "none", .name = "opaque", .caption = null, .ms = 1200 },
@@ -198,4 +199,25 @@ pub fn build(s: *Script) !void {
         .ms = 4000,
     });
     s.pause(3600);
+}
+
+test "a frost-first tour names the frosted glass it shows" {
+    var s: Script = .init(std.testing.allocator, "tour", "Tour");
+    s.lacks = &.{"liquid"};
+    try build(&s);
+    var owned = try s.finish();
+    defer owned.deinit();
+    const tape = owned.tape;
+    const chapter = for (tape.chapters) |ch| {
+        if (std.mem.eql(u8, ch.title, "Materials")) break ch;
+    } else return error.TestUnexpectedResult;
+    const command = for (tape.ops) |op| {
+        if (op.at >= chapter.at and op.do == .command) break op.do.command;
+    } else return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("fizzy.windowMaterial", command.id);
+    try std.testing.expectEqualStrings(".{ .kind = \"frost\" }", command.args);
+    const caption = for (tape.captions) |c| {
+        if (c.at >= chapter.at) break c;
+    } else return error.TestUnexpectedResult;
+    try std.testing.expect(std.mem.find(u8, caption.text, "one material, frosted glass here…") != null);
 }

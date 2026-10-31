@@ -1,4 +1,4 @@
-//! Buffering and filtering for `FolderWatcher` — the half that runs on nightwatch's thread —
+//! Buffering and filtering for `FolderWatcher` - the half that runs on nightwatch's thread -
 //! and the walk that decides which folders it watches.
 //!
 //! Split out and std-only on purpose. `FolderWatcher.zig` reaches `fizzy.zig` and `dvui`, so it
@@ -17,7 +17,7 @@ const builtin = @import("builtin");
 /// a watch leaves alone.
 ///
 /// Pure string work: no allocation, no filesystem, no host call, so it is safe to run on the
-/// watcher's own thread. With `dotName` it is not the authoritative ignore check — fizzy's
+/// watcher's own thread. With `dotName` it is not the authoritative ignore check - fizzy's
 /// `IgnoreRules` is, and that runs later on the UI thread. It exists so a `git checkout` or a
 /// build churning a cache directory can't fill the ring before anyone gets to apply the real
 /// rules.
@@ -56,7 +56,7 @@ pub const max_dir_watches: u32 = 16384;
 /// Folders a watch never descends into, by name: hidden ones (`.git`, `.zig-cache`, `.venv`,
 /// `.bun`) and the dependency trees a tool writes, `node_modules` and `zig-pkg`. They hold most
 /// of a project's directories and none of what a person edits. Anything else a project chooses
-/// to ignore (`target`, `zig-out`, …) is still watched, and `IgnoreRules` drops its events.
+/// to ignore (`target`, `zig-out`, ...) is still watched, and `IgnoreRules` drops its events.
 pub fn skipWatchDir(name: []const u8) bool {
     if (name.len == 0 or name[0] == '.') return true;
     return std.mem.eql(u8, name, "node_modules") or std.mem.eql(u8, name, "zig-pkg");
@@ -211,7 +211,7 @@ pub const Watches = struct {
     }
 
     /// `dir` was created, and is watched only now: whatever was made in it before then had
-    /// no event, so it is announced — unless `announced`, when the backend already did (a
+    /// no event, so it is announced - unless `announced`, when the backend already did (a
     /// folder moved in from outside the tree, which inotify reports with all it holds).
     // anytype: Native watch backends and test contexts supply add/remove/created/say callbacks.
     pub fn appeared(self: *Watches, io: std.Io, dir: []const u8, announced: bool, ctx: anytype) void {
@@ -701,7 +701,7 @@ pub const Doorbell = struct {
 /// Nothing here allocates, and that is the whole point: the producer runs on a thread nightwatch
 /// owns, where reaching for a shared allocator is exactly what the other watcher adapters in
 /// this directory are careful never to do. When the buffer fills, the overflow is *reported*
-/// (`truncated`) rather than absorbed — a branch switch emits events by the tens of thousands,
+/// (`truncated`) rather than absorbed - a branch switch emits events by the tens of thousands,
 /// and the useful answer for a consumer at that point is "rescan", not a longer list it still
 /// has to walk.
 pub fn Ring(comptime Kind: type, comptime Object: type) type {
@@ -717,7 +717,7 @@ pub fn Ring(comptime Kind: type, comptime Object: type) type {
             object: Object,
         };
 
-        /// Flat backing store for paths — one arena rather than a fixed slot per event, so a
+        /// Flat backing store for paths - one arena rather than a fixed slot per event, so a
         /// handful of deep paths can't crowd out everything else and no path length is a
         /// special case.
         paths: []u8,
@@ -738,7 +738,7 @@ pub fn Ring(comptime Kind: type, comptime Object: type) type {
         }
 
         /// Nothing to report. Distinct from `count == 0`, which is also true for a batch whose
-        /// every event was dropped — and that batch still has to go out.
+        /// every event was dropped - and that batch still has to go out.
         pub fn empty(self: *const Self) bool {
             return self.count == 0 and !self.truncated;
         }
@@ -1271,7 +1271,7 @@ test "a folder leaving the tree gives back its watches and what was waiting belo
     w.walk(testing.io, &b);
     w.settled = true;
 
-    // `src-x` sorts between `src` and `src/…`; it must survive `src` going.
+    // `src-x` sorts between `src` and `src/...`; it must survive `src` going.
     try t.tmp.dir.createDirPath(testing.io, "src-x");
     w.appeared(testing.io, t.path("src-x"), false, &b);
     const src = t.own("src");
@@ -1427,7 +1427,7 @@ test "inside and the segment check need a separator after the folder" {
 
 test "a walk that stops partway owes the folder only what it hadn't said" {
     // P holds files and D and E; the walk says P's entries, walks D whole, then runs out at
-    // E. Resumed, it must say what is in E — and nothing in P or D again.
+    // E. Resumed, it must say what is in E - and nothing in P or D again.
     var t: TestTree = .{ .tmp = undefined };
     try t.init();
     defer t.tmp.cleanup();
@@ -1451,7 +1451,7 @@ test "a walk that stops partway owes the folder only what it hadn't said" {
     w.retry();
     w.catchUp(testing.io, &b);
     try testing.expect(w.whole());
-    // P: f.txt, D, E; D: d1, g.txt; E: e1, h.txt — seven, each once.
+    // P: f.txt, D, E; D: d1, g.txt; E: e1, h.txt - seven, each once.
     try testing.expectEqual(@as(usize, 7), b.created_files + b.created_dirs);
     try testing.expect(said_first < 7);
     // Only what wasn't watched was tried: the refused folder and what is below it.
@@ -1547,7 +1547,7 @@ test "running out of memory anywhere leaves no watch untracked" {
     defer t.tmp.cleanup();
     try t.tmp.dir.createDirPath(testing.io, "new/sub");
     try t.tmp.dir.writeFile(testing.io, .{ .sub_path = "new/f.txt", .data = "" });
-    // Fail the first, then the second, … allocation of a whole session: walk, a folder that
+    // Fail the first, then the second, ... allocation of a whole session: walk, a folder that
     // appears, a rename, a folder going. Whatever fails, every live watch is one `paths`
     // holds (so it can be removed), and nothing leaks.
     var fail_at: usize = 0;

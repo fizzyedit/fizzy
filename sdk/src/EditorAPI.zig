@@ -114,7 +114,8 @@ pub const SaveState = struct {
 };
 
 /// Resolved canvas zoom/pan control style (mouse: scroll zooms, middle-button pans;
-/// trackpad: scroll pans, ctrl/cmd+scroll zooms). Matches `core.widgets.CanvasWidget.PanZoomScheme`.
+/// trackpad: scroll pans, ctrl/cmd+scroll zooms). Matches
+/// `core.widgets.CanvasWidget.PanZoomScheme`.
 pub const PanZoomScheme = enum { mouse, trackpad };
 
 /// One of the things carried together in the app's view drag (`beginViewDragMany`): a row of a
@@ -179,7 +180,13 @@ pub const VTable = struct {
     /// Installed into the dylib's `core.dialogs.host_chrome` at load.
     dialogWindow: *const fn (ctx: *anyopaque) dvui.Dialog.DisplayFn,
     /// The host's `core.dialogs.frostPane`, for a plugin's own floating surfaces.
-    frostPane: *const fn (ctx: *anyopaque, id: dvui.Id, rect: dvui.Rect.Physical, corners: dvui.CornerRect, scale: f32) bool,
+    frostPane: *const fn (
+        ctx: *anyopaque,
+        id: dvui.Id,
+        rect: dvui.Rect.Physical,
+        corners: dvui.CornerRect,
+        scale: f32,
+    ) bool,
     /// Whether the OS window is currently maximized (always false on web).
     isMaximized: *const fn (ctx: *anyopaque) bool,
     /// Runtime macOS detection (uses `navigator.platform` on web, `os.tag` on native).
@@ -254,7 +261,13 @@ pub const VTable = struct {
     /// `open_side` opens into a new grouping when the path is not already open; it is ignored
     /// when the target is open anywhere, which just focuses it where it lives (mirroring the
     /// file tree's "Open to the side"). Returns false when no plugin can open `path` at all.
-    revealPosition: *const fn (ctx: *anyopaque, path: []const u8, line: u32, character: u32, open_side: bool) anyerror!bool,
+    revealPosition: *const fn (
+        ctx: *anyopaque,
+        path: []const u8,
+        line: u32,
+        character: u32,
+        open_side: bool,
+    ) anyerror!bool,
     /// The split governing the region matching these keywords, or null when the app's layout
     /// declared no such split — a normal answer, not an error.
     ///
@@ -298,9 +311,10 @@ pub const VTable = struct {
     /// `beginViewDrag` for several things lifted together, from `from` (where they were — the
     /// selected rows together): `items`, the first the one in hand, carried in the one glass, which
     /// shows them all. Let go on a place, it takes them all (`RegionSpec.Drop.others`). With
-    /// anything in it no place takes (`Carried.id` empty), no place takes any of it: it is carried as the rest are, and only the plugin that
-    /// lifted it takes it back — reading the drag as its own while it is over it
-    /// (`viewDragSurface`); let go anywhere else, nothing moves. The items are copied.
+    /// anything in it no place takes (`Carried.id` empty), no place takes any of it: it is carried
+    /// as the rest are, and only the plugin that lifted it takes it back — reading the drag as its
+    /// own while it is over it (`viewDragSurface`); let go anywhere else, nothing moves. The items
+    /// are copied.
     beginViewDragMany: *const fn (ctx: *anyopaque, items: []const Carried, from: dvui.Rect.Physical) void,
     /// The region's own chooser — the tab strip a plugin draws for it — is at `bounds` this
     /// frame. While a view is carried it is chrome, not content: over it the drop is into the
@@ -600,11 +614,13 @@ pub fn isRemotePath(self: EditorAPI, path: []const u8) bool {
 }
 
 pub fn openOrFocusFileAtGrouping(self: EditorAPI, path: []const u8, grouping: u64) !?usize {
-    return self.vtable.openOrFocusFileAtGrouping(self.ctx, path, grouping) catch |err| self.failed("openOrFocusFileAtGrouping", err);
+    return self.vtable.openOrFocusFileAtGrouping(self.ctx, path, grouping) catch |err|
+        self.failed("openOrFocusFileAtGrouping", err);
 }
 
 pub fn revealPosition(self: EditorAPI, path: []const u8, line: u32, character: u32, open_side: bool) !bool {
-    return self.vtable.revealPosition(self.ctx, path, line, character, open_side) catch |err| self.failed("revealPosition", err);
+    return self.vtable.revealPosition(self.ctx, path, line, character, open_side) catch |err|
+        self.failed("revealPosition", err);
 }
 
 pub fn beginRegion(self: EditorAPI, spec: RegionSpec) ?RegionSpec.Token {

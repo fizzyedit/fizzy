@@ -1,6 +1,6 @@
 //! Watches the app's own executable, so a rebuild of it restarts the app into the new build
-//! (`restart`), keeping every document (`KeptDocuments`). The loop a plugin has — build, and the
-//! running app picks it up — for the app itself: for anyone working on fizzy from source, and for
+//! (`restart`), keeping every document (`KeptDocuments`). The loop a plugin has - build, and the
+//! running app picks it up - for the app itself: for anyone working on fizzy from source, and for
 //! an agent iterating on it (plans/RESTART_AND_CRASHES_PLAN.md, step 2).
 //!
 //! The same shape as `SettingsWatcher`: nightwatch's thread sets a flag and wakes the app, and
@@ -43,7 +43,7 @@ pending: Stamp = .{},
 /// This executable and its stamp as the process started (`noteLaunch`).
 var launch: struct { path_buf: [std.fs.max_path_bytes]u8 = undefined, path_len: usize = 0, stamp: ?Stamp = null } = .{};
 
-/// First thing in `main`: the executable this process was started from, as it is now — before the
+/// First thing in `main`: the executable this process was started from, as it is now - before the
 /// window, the GPU and the plugins, during which a build can land. `init` compares against it.
 pub fn noteLaunch(io: std.Io) void {
     if (comptime !have_impl) return;

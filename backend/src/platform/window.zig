@@ -3,7 +3,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const dvui = @import("dvui");
-const glass_look = @import("glass_look");
 const Backend = @import("backend");
 const c = Backend.c;
 const objc = @import("objc");
@@ -19,6 +18,8 @@ const NSRect = extern struct { origin: NSPoint, size: NSSize };
 
 // NSWindowStyleMaskFullSizeContentView = 1 << 15 — content view extends under titlebar so vibrancy can cover it.
 const NSWindowStyleMaskFullSizeContentView: c_ulong = 1 << 15;
+/// The vibrancy material fizzy's windows wear on macOS: the main window's, and a popped-out float's.
+pub const ns_visual_effect_material: c_long = 15;
 
 // The window monitor (`FizzyWindowMonitor.m`), which follows the window through Spaces and zooms.
 extern fn fizzy_macos_window_in_fullscreen_space(cocoa_window: ?*anyopaque) c_int;
@@ -95,13 +96,13 @@ pub const WindowGlassLook = struct {
 };
 
 /// Make one of fizzy's titled windows (`raw_ptr`, its `NSWindow`) a window of Liquid Glass — over
-/// the clear lens a body of frost, the plain blur (the vibrancy `material` it wore before, as
-/// `glass_look.resolve` gives it) and the window's colour, fading out across a clearing bevel along
+/// the clear lens a body of frost, the plain blur (the vibrancy it wore before,
+/// `ns_visual_effect_material`) and the window's colour, fading out across a clearing bevel along
 /// its edge, a compact toolbar's corners — where the OS has it (macOS 26). Once per window.
 /// Whether it is.
-pub fn liquidGlass(raw_ptr: *anyopaque, material: c_long) bool {
+pub fn liquidGlass(raw_ptr: *anyopaque) bool {
     if (comptime builtin.target.os.tag != .macos) return false;
-    return fizzy_macos_window_liquid_glass(raw_ptr, material) != 0;
+    return fizzy_macos_window_liquid_glass(raw_ptr, ns_visual_effect_material) != 0;
 }
 
 /// `window`'s Liquid Glass this frame (`liquidGlass`). Whether it has any: false, and nothing set,
@@ -466,25 +467,24 @@ pub fn nativeTitleBar(window: *c.SDL_Window, color: dvui.Color, text: dvui.Color
 /// A window the backend dresses itself (`nativeTitleBar`) made of material `kind` (`core.material`'s
 /// order: 0 none, 1 transparent, 2 blur, 3 frost, 4 liquid), its backdrop `color` over it — the
 /// window's colour at what the material makes of its opacity, alpha and all (`SDLBackend`'s
-/// `materialBase`) — (`SDLBackend.dressWindows`), its vibrancy the `NSVisualEffectMaterial` the
-/// backend resolved (`glass_look.resolve`). macOS; Windows (Acrylic) and Linux (the compositor's
+/// `materialBase`) — (`SDLBackend.dressWindows`). macOS; Windows (Acrylic) and Linux (the compositor's
 /// blur) are to follow it.
-pub fn plainMaterial(window: *c.SDL_Window, kind: u8, color: dvui.Color, material: c_long) void {
+pub fn plainMaterial(window: *c.SDL_Window, kind: u8, color: dvui.Color) void {
     if (comptime builtin.target.os.tag != .macos) return;
     const raw_ptr = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null) orelse return;
     const f = color.toRGBA();
-    fizzy_macos_window_plain_material(raw_ptr, kind, @as(f64, @floatFromInt(f[0])) / 255, @as(f64, @floatFromInt(f[1])) / 255, @as(f64, @floatFromInt(f[2])) / 255, @as(f64, @floatFromInt(f[3])) / 255, material);
+    fizzy_macos_window_plain_material(raw_ptr, kind, @as(f64, @floatFromInt(f[0])) / 255, @as(f64, @floatFromInt(f[1])) / 255, @as(f64, @floatFromInt(f[2])) / 255, @as(f64, @floatFromInt(f[3])) / 255, ns_visual_effect_material);
 }
 extern fn fizzy_macos_window_plain_material(nswindow: ?*anyopaque, kind: c_int, r: f64, g: f64, b: f64, a: f64, blur_material: c_long) void;
 
 /// A window whose title and colour the app draws itself (fizzy's, `app_dresses_windows`) made of
 /// material `kind` (as `plainMaterial`'s): its OS material only — Liquid Glass, vibrancy or none —
-/// rounded as the app's windows are (a compact toolbar, macOS 26), its vibrancy `material` (as
-/// `plainMaterial`'s). The colour is the app's to draw (`SDLBackend.dressWindows`).
-pub fn appMaterial(window: *c.SDL_Window, kind: u8, material: c_long) void {
+/// rounded as the app's windows are (a compact toolbar, macOS 26). The colour is the app's to draw
+/// (`SDLBackend.dressWindows`).
+pub fn appMaterial(window: *c.SDL_Window, kind: u8) void {
     if (comptime builtin.target.os.tag != .macos) return;
     const raw_ptr = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null) orelse return;
-    fizzy_macos_window_material(raw_ptr, kind, 1, material);
+    fizzy_macos_window_material(raw_ptr, kind, 1, ns_visual_effect_material);
 }
 extern fn fizzy_macos_window_material(nswindow: ?*anyopaque, kind: c_int, toolbar: c_int, blur_material: c_long) void;
 extern fn fizzy_macos_window_app_material(nswindow: ?*anyopaque) c_int;
@@ -553,9 +553,9 @@ pub fn setBackground(win: *dvui.Window, color: dvui.Color) void {
 
             // What the window is made of — Liquid Glass, vibrancy or none — is the backend's, by the
             // window material, as a plain dvui app's is (`SDLBackend.dressWindows`, `appMaterial`).
-            // On dvui's own SDL3 backend nothing dresses it or resolves its body: Liquid Glass where
-            // the OS has it, else fizzy's vibrancy, over the body `glass_look.resolve` gives at `.best`.
-            if (comptime !own_backend) appMaterial(win.backend.impl.window, if (fizzy_macos_liquid_glass_available() != 0) 4 else 3, glass_look.NativeBody.full_screen_ui);
+            // On dvui's own SDL3 backend nothing dresses it: Liquid Glass where the OS has it, else
+            // fizzy's vibrancy, as it always had.
+            if (comptime !own_backend) appMaterial(win.backend.impl.window, if (fizzy_macos_liquid_glass_available() != 0) 4 else 3);
 
             skin(raw_ptr.?, color, dvui.themeGet().dark);
             // Every float's own window too, and each opened from now on (`SDLBackend.viewportGlass`):

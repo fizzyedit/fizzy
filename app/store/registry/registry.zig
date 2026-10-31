@@ -2,17 +2,17 @@
 //! `catalog/<abi_fingerprint>/releases.json` documents, plus a fetch + parse path for each.
 //!
 //! The catalog is split into two tiers to keep per-session bandwidth bounded regardless of how
-//! much release history a plugin has accumulated (see PLAN.md § store export):
-//!   * `summary.json` — every registered plugin's browse-list metadata (id/name/description/
+//! much release history a plugin has accumulated (see PLAN.md section store export):
+//!   * `summary.json` - every registered plugin's browse-list metadata (id/name/description/
 //!     author/homepage/tags/date_added/latest_version), independent of this host's Fizzy build.
-//!   * `<abi_fingerprint>/releases.json` — scoped to exactly one ABI fingerprint, so it holds at
+//!   * `<abi_fingerprint>/releases.json` - scoped to exactly one ABI fingerprint, so it holds at
 //!     most one release per plugin (the newest the store has for that fingerprint) instead of
 //!     every version ever published. The client only ever needs its own host fingerprint's shard.
 //!
 //! Both are aggregated server-side from each author's manifest (see PLAN.md) and served
 //! read-only over HTTPS; this module never writes either.
 //!
-//! Pure of dvui/globals — callers pass `allocator` and a `std.Io`. The parse half is
+//! Pure of dvui/globals - callers pass `allocator` and a `std.Io`. The parse half is
 //! unit-tested; the network half (`fetchSummary`/`fetchReleaseShard`) is exercised by the
 //! Chunk 5/7 E2E.
 const std = @import("std");
@@ -25,14 +25,14 @@ pub const Download = struct {
 };
 
 /// One plugin's browse-list metadata, from `catalog/summary.json`. Carries no per-release
-/// download info — that's what `ReleaseShard` is for — but does carry `latest_version`, the
+/// download info - that's what `ReleaseShard` is for - but does carry `latest_version`, the
 /// highest version the author has *ever* published across every fingerprint, so the store can
 /// still show "store v{latest}" for a plugin even when this host has no compatible build yet.
 pub const SummaryEntry = struct {
     id: []const u8 = "",
     name: []const u8 = "",
     description: []const u8 = "",
-    /// Cosmetic, self-asserted display credit — the author's own claim about themselves, which
+    /// Cosmetic, self-asserted display credit - the author's own claim about themselves, which
     /// the aggregator will fall back to reading out of their `manifest.json`. Never a trust
     /// signal; pair it with `publisher` when showing attribution.
     author: []const u8 = "",
@@ -63,16 +63,16 @@ pub const Summary = struct {
     }
 };
 
-/// One plugin's release for the *one* `abi_fingerprint` a `ReleaseShard` is scoped to — the
+/// One plugin's release for the *one* `abi_fingerprint` a `ReleaseShard` is scoped to - the
 /// newest the store has for that fingerprint. Unlike the old single-file index, there is no
 /// per-release `abi_fingerprint` field here: it's implied by which shard this came from, and no
-/// client-side "pick the newest compatible" step is needed — the shard is already resolved.
+/// client-side "pick the newest compatible" step is needed - the shard is already resolved.
 pub const ShardRelease = struct {
     version: []const u8 = "",
     min_sdk_version: []const u8 = "",
     fizzy_sdk_version: []const u8 = "",
     published: []const u8 = "",
-    /// `os-arch` → binary. Dynamic JSON object, so parsed via `std.json.ArrayHashMap`.
+    /// `os-arch` -> binary. Dynamic JSON object, so parsed via `std.json.ArrayHashMap`.
     downloads: std.json.ArrayHashMap(Download) = .{},
 
     /// The binary for `os_arch` (e.g. `compat.hostKey()`), or null when this release has none.
@@ -89,7 +89,7 @@ pub const ShardRelease = struct {
     /// `min_sdk_version` check. Callers must gate on this before offering an install or update
     /// (see `PluginStore.releaseSdkSatisfied`).
     ///
-    /// An unparseable value reads as "no requirement" — the load-time check is still the
+    /// An unparseable value reads as "no requirement" - the load-time check is still the
     /// backstop, and a malformed field must not silently hide every build of a plugin.
     pub fn minSdk(self: ShardRelease) ?std.SemanticVersion {
         if (self.min_sdk_version.len == 0) return null;
@@ -101,13 +101,13 @@ pub const ReleaseShard = struct {
     schema: u32 = 0,
     generated: []const u8 = "",
     abi_fingerprint: []const u8 = "",
-    /// Plugin id → its one release for this fingerprint. Dynamic JSON object.
+    /// Plugin id -> its one release for this fingerprint. Dynamic JSON object.
     releases: std.json.ArrayHashMap(ShardRelease) = .{},
 
-    /// A shard with no releases at all — used when this host's fingerprint has no shard file
+    /// A shard with no releases at all - used when this host's fingerprint has no shard file
     /// yet (a brand-new Fizzy SDK generation nobody has republished for) or the shard fetch
     /// failed; every plugin then correctly shows "no compatible build in store" rather than the
-    /// whole catalog failing (only `summary.json` failing to load is a hard catalog failure —
+    /// whole catalog failing (only `summary.json` failing to load is a hard catalog failure -
     /// see `store.Catalog`).
     pub const empty: ReleaseShard = .{};
 
@@ -134,9 +134,9 @@ pub fn parseReleaseShard(allocator: std.mem.Allocator, bytes: []const u8) !std.j
 }
 
 /// HTTPS GET + parse a catalog document. The catalog is served from a CDN, so a plain GET can
-/// return a stale cached copy — a plugin published minutes ago wouldn't show until the edge
+/// return a stale cached copy - a plugin published minutes ago wouldn't show until the edge
 /// cache expired. To make Refresh always reflect the latest publish, we defeat caching two ways:
-/// a unique cache-busting query param (distinct URL → guaranteed edge miss) plus `no-cache`
+/// a unique cache-busting query param (distinct URL -> guaranteed edge miss) plus `no-cache`
 /// request headers.
 fn fetchJson(comptime T: type, allocator: std.mem.Allocator, io: std.Io, url: []const u8) !std.json.Parsed(T) {
     var client: std.http.Client = .{ .allocator = allocator, .io = io };

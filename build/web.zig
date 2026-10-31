@@ -107,8 +107,6 @@ pub fn framework(b: *std.Build, optimize: std.lang.OptimizeMode) Framework {
     );
     // The motion clock the backend's `nanoTime` runs on (`glass.MotionClock`).
     web_backend.addImport("glass", core_module_web.import_table.get("glass").?);
-    // What the web offers of the window materials (`materialOffer`).
-    web_backend.addImport("glass_look", core_module_web.import_table.get("glass_look").?);
     return .{
         .dvui_dep = dvui_web_dep,
         .dvui = dvui_web,
@@ -175,6 +173,7 @@ pub fn build(
         "FizzyWebKeyBuffer",
         "FizzyWebKeyBound",
         "FizzyWebSetFormFactor",
+        "FizzyWebSetKeyboardInset",
         "FizzyWebImageAlloc",
         "FizzyWebImageReady",
         "FizzyWebImageFailed",

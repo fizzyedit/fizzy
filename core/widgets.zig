@@ -214,9 +214,19 @@ pub fn filterRow(src: std.lang.SourceLocation, placeholder: []const u8, opts: dv
         .expand = .horizontal,
         .background = false,
     });
-    defer entry.deinit();
+    defer textEntryDeinit(entry);
     _ = textEntryMenu(entry);
     return entry.getText();
+}
+
+/// Finish a text field and scroll its enclosing area on focus, growth or keyboard movement.
+/// Replaces the entry's `deinit`; the pointer is invalid afterwards.
+pub fn textEntryDeinit(te: *dvui.TextEntryWidget) void {
+    var wd = te.data().*;
+    const focused = wd.id == dvui.focusedWidgetId();
+    te.deinit();
+    // The entry's own scroll area must be closed before scrolling the enclosing area.
+    @import("keyboard.zig").scrollIntoView(&wd, focused);
 }
 
 /// A context menu's surface, opened at the point the pointer was pressed. Every right-click

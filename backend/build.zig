@@ -12,12 +12,13 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     const test_step = b.step("test", "Run the backend's std-only tests");
+    const glass_look = b.createModule(.{ .root_source_file = b.path("src/glass_look.zig") });
     for (unit_tests) |t| {
         const compile = b.addTest(.{
             .name = t.name,
             .root_module = b.createModule(.{ .root_source_file = b.path(t.root), .target = target, .optimize = optimize }),
         });
-        if (t.glass_look) compile.root_module.addImport("glass_look", b.createModule(.{ .root_source_file = b.path("src/glass_look.zig") }));
+        if (t.glass_look) compile.root_module.addImport("glass_look", glass_look);
         test_step.dependOn(&b.addRunArtifact(compile).step);
     }
 
@@ -288,8 +289,6 @@ pub fn platformModule(dep: *std.Build.Dependency, dvui_mod: *std.Build.Module, b
     });
     m.addImport("dvui", dvui_mod);
     m.addImport("backend", backend_mod);
-    // The OS bodies' numbers (`glass_look.NativeBody`), for a backend that resolves none.
-    m.addImport("glass_look", glassLookModule(dep));
     switch (opts.target.result.os.tag) {
         .macos => if (objcModule(dep, opts)) |objc| m.addImport("objc", objc),
         .windows => if (win32Module(dep)) |win32| m.addImport("win32", win32),

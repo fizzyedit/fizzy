@@ -1569,7 +1569,7 @@ test "a folder bigger than one frame's share is indexed whole" {
     const count = 20_000;
     var name_buf: [32]u8 = undefined;
     for (0..count) |i| {
-        const name = try std.fmt.bufPrint(&name_buf, "bulk/n{d}.txt", .{i});
+        const name = try std.mem.print(&name_buf, "bulk/n{d}.txt", .{i});
         if (i == 0) try fx.tmp.dir.createDirPath(std.testing.io, "bulk");
         try fx.tmp.dir.writeFile(std.testing.io, .{ .sub_path = name, .data = "" });
     }

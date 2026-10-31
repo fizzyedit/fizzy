@@ -8,23 +8,13 @@ const builtin = @import("builtin");
 const dvui = @import("dvui");
 const c = @import("backend").c;
 const win32 = @import("win32");
-const glass_look = @import("glass_look");
 const titlebar = @import("titlebar.zig");
 const TitleBarButton = titlebar.TitleBarButton;
 
 // Windows 11 (Build 22621+): System backdrop and extended frame for title bar drawing.
 const DWMWA_SYSTEMBACKDROP_TYPE: u32 = 38; // Windows 11 SDK
-/// `DWMSBT_NONE`: no system backdrop, where the backend resolved no body.
-pub const no_backdrop: u32 = 1;
-
-/// The `DWM_SYSTEMBACKDROP_TYPE` the main window, a float's and a menu's wear: the bodies the
-/// backend resolved this frame (`SDLBackend.begin`, `glass_look.resolve`), applied here as they
-/// are, never chosen. Acrylic, the nicest at `.best`, for a backend that resolves none.
-pub var backdrops: struct {
-    main: u32 = glass_look.NativeBody.acrylic,
-    float: u32 = glass_look.NativeBody.acrylic,
-    menu: u32 = glass_look.NativeBody.acrylic,
-} = .{};
+const DWMSBT_MAINWINDOW: u32 = 2; // Mica
+const DWMSBT_TRANSIENTWINDOW: u32 = 3; // Acrylic (frosted glass) — more visible blur than Mica
 /// Which of the backdrop's two tints DWM draws, and the frame's: the app's theme, not the system's.
 const DWMWA_USE_IMMERSIVE_DARK_MODE: u32 = 20;
 /// Windows 11 rounds a framed window's corners by default; asked for, so a frame the app draws
@@ -41,11 +31,10 @@ pub fn applyChrome(win: *dvui.Window) void {
     const cur_style = win32.ui.windows_and_messaging.GetWindowLongPtrW(hwnd_h, win32.ui.windows_and_messaging.GWL_STYLE);
     const zoomed = win32.ui.windows_and_messaging.IsZoomed(hwnd_h) != 0;
     const first = win32_styled_hwnd != hwnd;
-    // Nothing SDL changes back, and the same body: nothing to do.
-    if (!first and cur_style & WS_SYSMENU == 0 and zoomed == win32_styled_zoomed and backdrops.main == win32_styled_backdrop) return;
+    // Nothing SDL changes back: nothing to do.
+    if (!first and cur_style & WS_SYSMENU == 0 and zoomed == win32_styled_zoomed) return;
     win32_styled_hwnd = hwnd;
     win32_styled_zoomed = zoomed;
-    win32_styled_backdrop = backdrops.main;
 
     if (first) {
         // Once per window: the subclass that keeps the frame extended (re-applied in
@@ -81,12 +70,13 @@ pub fn applyChrome(win: *dvui.Window) void {
         // native modal dialogs (SDL_ShowOpenFileDialog / tinyfd) when that window is the dialog owner.
     }
 
-    // Windows 11: the backdrop the backend resolved (`backdrops`), so the title bar and extended
-    // frame show it. Requires Build 22621+.
+    // Windows 11: Apply Acrylic (frosted glass) backdrop so title bar and extended frame show blur. Requires Build 22621+.
+    // DWMSBT_TRANSIENTWINDOW = Acrylic is more visible than Mica; use MAINWINDOW for subtler Mica.
+    const backdrop_type: u32 = DWMSBT_TRANSIENTWINDOW;
     _ = win32.graphics.dwm.DwmSetWindowAttribute(
         hwnd_h,
         @as(win32.graphics.dwm.DWMWINDOWATTRIBUTE, @fromBackingInt(@intCast(DWMWA_SYSTEMBACKDROP_TYPE))),
-        &backdrops.main,
+        &backdrop_type,
         @sizeOf(u32),
     );
 
@@ -193,34 +183,6 @@ pub fn clearCaptionColors(win: *dvui.Window) void {
 /// maximized when its chrome was last applied: a maximize or restore re-applies the frame.
 var win32_styled_hwnd: ?*anyopaque = null;
 var win32_styled_zoomed: bool = false;
-/// The backdrop last applied to it (`backdrops.main`): a new one re-applies the chrome.
-var win32_styled_backdrop: u32 = no_backdrop;
-
-/// Whether the person turned Windows' Transparency effects off (Personalization, Colors), which
-/// makes every window and every glass solid (`SDLBackend.materialOffer`). Read from the registry
-/// once, and again after the system says a setting changed (`WM_SETTINGCHANGE`).
-pub fn transparencyOff() bool {
-    if (comptime builtin.target.os.tag != .windows) return false;
-    if (transparency_off) |off| return off;
-    const reg = win32.system.registry;
-    var enabled: u32 = 1;
-    var size: u32 = @sizeOf(u32);
-    const err = reg.RegGetValueW(
-        reg.HKEY_CURRENT_USER,
-        std.unicode.utf8ToUtf16LeStringLiteral("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"),
-        std.unicode.utf8ToUtf16LeStringLiteral("EnableTransparency"),
-        reg.RRF_RT_REG_DWORD,
-        null,
-        &enabled,
-        &size,
-    );
-    // No value is Windows' default: transparency on.
-    const off = err == .NO_ERROR and enabled == 0;
-    transparency_off = off;
-    return off;
-}
-/// `transparencyOff`'s last answer; null until read, and after a setting changed.
-var transparency_off: ?bool = null;
 
 /// One-shot WM_NCMOUSELEAVE tracking is armed (`armNcMouseLeaveTracking`).
 var hover_tracking: bool = false;
@@ -319,19 +281,18 @@ fn win32MicaSubclassProc(
 ) callconv(.winapi) win32.foundation.LRESULT {
     _ = uIdSubclass;
     _ = dwRefData;
-    // Transparency effects may have been turned on or off: read again (`transparencyOff`).
-    if (uMsg == win32.ui.windows_and_messaging.WM_SETTINGCHANGE) transparency_off = null;
     // DWM requires the frame extension to be applied in WM_ACTIVATE (and when composition changes)
     // for the backdrop to show correctly instead of staying opaque.
-    // Re-apply backdrop type on activate/deactivate so the window keeps its backdrop when unfocused
+    // Re-apply backdrop type on activate/deactivate so the window stays acrylic when unfocused
     // instead of dimming to opaque (default DWM behavior for inactive windows).
     if (uMsg == win32.ui.windows_and_messaging.WM_ACTIVATE or
         uMsg == win32.ui.windows_and_messaging.WM_DWMCOMPOSITIONCHANGED)
     {
+        const backdrop_type: u32 = DWMSBT_TRANSIENTWINDOW;
         _ = win32.graphics.dwm.DwmSetWindowAttribute(
             hWnd,
             @as(win32.graphics.dwm.DWMWINDOWATTRIBUTE, @fromBackingInt(@intCast(DWMWA_SYSTEMBACKDROP_TYPE))),
-            &backdrops.main,
+            &backdrop_type,
             @sizeOf(u32),
         );
         _ = win32.graphics.dwm.DwmExtendFrameIntoClientArea(hWnd, &win32_mica_margins);
@@ -517,7 +478,7 @@ pub fn viewportChrome(hwnd: *anyopaque, main_hwnd: ?*anyopaque, dark: bool, radi
             if (icon != 0) _ = wm.SendMessageW(h, wm.WM_SETICON, kind, icon);
         }
     }
-    return applyViewportBackdrop(h, backdrops.float);
+    return applyViewportBackdrop(h);
 }
 
 const viewport_ws_sysmenu: isize = 0x00080000;
@@ -563,7 +524,7 @@ pub fn viewportMenuChrome(hwnd: *anyopaque, dark: bool, radius_pt: f32) bool {
         const SWP_FRAMECHANGED: u32 = 0x0020;
         _ = wm.SetWindowPos(h, null, 0, 0, 0, 0, @bitCast(SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED));
     }
-    const ok = applyViewportBackdrop(h, backdrops.menu);
+    const ok = applyViewportBackdrop(h);
     // Drawn active from the start: it will never be sent an activation of its own.
     _ = wm.SendMessageW(h, wm.WM_NCACTIVATE, 1, 0);
     return ok;
@@ -588,7 +549,7 @@ fn menuSubclassProc(
         ss.styleNew &= ~@as(u32, @intCast(viewport_ws_sysmenu));
     }
     if (uMsg == wm.WM_DWMCOMPOSITIONCHANGED) if (hWnd) |h| {
-        _ = applyViewportBackdrop(h, backdrops.menu);
+        _ = applyViewportBackdrop(h);
     };
     if (uMsg == wm.WM_NCDESTROY) _ = win32.ui.shell.RemoveWindowSubclass(hWnd, menuSubclassProc, menu_subclass_id);
     return win32.ui.shell.DefSubclassProc(hWnd, uMsg, wParam, lParam);
@@ -672,10 +633,11 @@ fn carrySubclassProc(
     return win32.ui.shell.DefSubclassProc(hWnd, uMsg, wParam, lParam);
 }
 
-/// The backdrop (`backdrops`), and the frame extended over the whole window for it to show through —
-/// again on every activation, as DWM wants (and as `win32MicaSubclassProc` does for the main window).
-fn applyViewportBackdrop(h: win32.foundation.HWND, backdrop: u32) bool {
-    const hr = win32.graphics.dwm.DwmSetWindowAttribute(h, @fromBackingInt(@intCast(DWMWA_SYSTEMBACKDROP_TYPE)), &backdrop, @sizeOf(u32));
+/// The backdrop, and the frame extended over the whole window for it to show through — again on
+/// every activation, as DWM wants (and as `win32MicaSubclassProc` does for the main window).
+fn applyViewportBackdrop(h: win32.foundation.HWND) bool {
+    const backdrop_type: u32 = DWMSBT_TRANSIENTWINDOW;
+    const hr = win32.graphics.dwm.DwmSetWindowAttribute(h, @fromBackingInt(@intCast(DWMWA_SYSTEMBACKDROP_TYPE)), &backdrop_type, @sizeOf(u32));
     _ = win32.graphics.dwm.DwmExtendFrameIntoClientArea(h, &win32_mica_margins);
     return hr >= 0;
 }
@@ -740,7 +702,7 @@ fn viewportSubclassProc(
         return win32.ui.shell.DefSubclassProc(hWnd, wm.WM_NCLBUTTONDOWN, @intCast(HTCAPTION), lp);
     }
     if (uMsg == wm.WM_ACTIVATE or uMsg == wm.WM_DWMCOMPOSITIONCHANGED) {
-        if (hWnd) |h| _ = applyViewportBackdrop(h, backdrops.float);
+        if (hWnd) |h| _ = applyViewportBackdrop(h);
     }
     // SDL sets the window's style again as it likes (`viewportChrome`): never the system menu.
     if (uMsg == wm.WM_STYLECHANGING and @as(isize, @bitCast(wParam)) == @backingInt(wm.GWL_STYLE)) {

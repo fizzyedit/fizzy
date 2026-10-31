@@ -547,16 +547,15 @@ fn gpuTotals() ?fizzy.core.profile.Gpu {
     return out;
 }
 
-/// What the backend can show (`core.material.Offer`), from its own answer; from a backend that
-/// gives no offer, the kinds it says it shows (`none` alone from one that does not say).
-fn materialOffered() fizzy.core.material.Offer {
-    if (comptime @hasDecl(dvui.backend, "materialOffer")) return dvui.currentWindow().backend.impl.materialOffer();
+/// The kinds of window material the backend can show (`core.material.Kinds`), from its own answer,
+/// field for field; `none` alone from a backend that does not say.
+fn materialOffered() fizzy.core.material.Kinds {
     var k: fizzy.core.material.Kinds = .{};
     if (comptime @hasDecl(dvui.backend, "materialKinds")) {
         const b = dvui.currentWindow().backend.impl.materialKinds();
         inline for (@typeInfo(fizzy.core.material.Kinds).@"struct".field_names) |f| @field(k, f) = @field(b, f);
     }
-    return .{ .target = .other, .kinds = k, .program = glass_program };
+    return k;
 }
 
 /// Why the backend cannot draw `kind`, one static line for a tooltip; null when it can. The
@@ -568,7 +567,7 @@ pub fn materialMissing(kind: fizzy.core.material.Kind) ?[]const u8 {
             inline else => |k| @field(dvui.backend.MaterialKind, @tagName(k)),
         });
     }
-    return if (materialOffered().kinds.has(kind)) null else "Not available with this backend";
+    return if (materialOffered().has(kind)) null else "Not available with this backend";
 }
 
 /// Whether the backend draws the app's glass program (`core.programs`), which in-app Liquid Glass
@@ -618,19 +617,14 @@ fn frameOnce() !dvui.App.Result {
     // frame (`core.material`): before `Popout`, whose OS glass is offered only for `liquid`. The
     // setting asks (Liquid Glass by default, so each platform shows the richest glass it has, or
     // an opaque window), and is never rewritten by what this platform draws;
-    // `FIZZY_GLASS` (`none`, `transparent`, `blur`, `frost`, `liquid`) overrides it. The OS's
-    // reduce transparency makes it opaque (`core.material.resolve`); the kind is the same whatever
-    // body the app asks, so no looks.
-    const editor = fizzy.editor();
-    const offer = materialOffered();
-    const asked: fizzy.core.material.Material = .{ .kind = materialAsked() };
-    const window_material: fizzy.core.material.Material = .{ .kind = fizzy.core.material.resolve(asked, .main, .regular, offer, null).kind };
+    // `FIZZY_GLASS` (`none`, `transparent`, `blur`, `frost`, `liquid`) overrides it.
+    const window_material = (fizzy.core.material.Material{ .kind = materialAsked() }).effective(materialOffered());
     fizzy.core.material.publish(window_material);
     // The glass the app draws itself: the window's, or the person's own choice as the app's
     // renderer can draw it, whatever the windows are made of. The window's under `FIZZY_GLASS`,
-    // while a demo has the window material (`Demo.material_saved`), whose tape shows one look, and
-    // while the OS reduces transparency.
-    const own_in_app = if (offer.reduce_transparency or materialOverride() != null or editor.demo.material_saved != null) null else editor.app.settings.in_app_material;
+    // and while a demo has the window material (`Demo.material_saved`), whose tape shows one look.
+    const editor = fizzy.editor();
+    const own_in_app = if (materialOverride() != null or editor.demo.material_saved != null) null else editor.app.settings.in_app_material;
     fizzy.core.material.publishInApp(if (own_in_app) |kind|
         (fizzy.core.material.Material{ .kind = kind }).effective(fizzy.core.material.inAppKinds(glass_program))
     else
@@ -645,7 +639,6 @@ fn frameOnce() !dvui.App.Result {
             inline else => |k| @field(dvui.backend.MaterialKind, @tagName(k)),
         }, dvui.backend.window_material.opacity);
     }
-    if (comptime @hasDecl(dvui.backend, "setWindowBody")) dvui.backend.setWindowBody(window_material.body);
     // A float asked out of the main window, or back into it, goes before anything is drawn
     // (`Editor.Popout`: on by default on macOS, `FIZZY_POPOUT` elsewhere).
     Editor.Popout.beginFrame(&fizzy.editor().app.layout);

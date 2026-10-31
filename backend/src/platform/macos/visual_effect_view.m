@@ -1190,7 +1190,7 @@ static NSView *windowGlassPart(NSWindow *window, int k) {
 }
 
 /* The plain blur behind a window of Liquid Glass, in its body: the vibrancy fizzy's windows wore
- * before (the body `glass_look.resolve` gives the window). Never in the way of a press. */
+ * before (`platform.window.ns_visual_effect_material`). Never in the way of a press. */
 @interface FizzyWindowBlurView : NSVisualEffectView
 @end
 

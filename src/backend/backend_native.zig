@@ -340,9 +340,9 @@ fn menuTitle(_: ?*anyopaque, ref: platform.menu.Ref) ?[*:0]const u8 {
 pub fn rebuildDynamicNativeMenus() void {
     if (builtin.target.os.tag != .macos) return;
     const host = &fizzy.editor().app.host;
-    var menus: std.ArrayListUnmanaged(platform.menu.ExtraMenu) = .empty;
+    var menus: std.ArrayList(platform.menu.ExtraMenu) = .empty;
     defer menus.deinit(alloc());
-    var items: std.ArrayListUnmanaged(platform.menu.ExtraItem) = .empty;
+    var items: std.ArrayList(platform.menu.ExtraItem) = .empty;
     defer items.deinit(alloc());
     for (host.menus.items) |mc| {
         if (mc.hidden) continue;

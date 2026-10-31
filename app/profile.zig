@@ -1,12 +1,12 @@
 //! A profile: one directory holding everything an app keeps for a person between runs, so a run
-//! can be pointed somewhere else entirely — a sandbox for a test or an agent, a portable install
+//! can be pointed somewhere else entirely - a sandbox for a test or an agent, a portable install
 //! on a stick, two configurations side by side.
 //!
 //! `--profile <dir>` (or `--profile=<dir>`) on the command line, else `FIZZY_PROFILE` in the
 //! environment, names it. Under it:
 //!
 //!   <dir>/              the config folder: settings.zon, keybinds.zon, recents.zon, layout.zon,
-//!                       secrets, palettes/ — everything `App.config_folder` holds
+//!                       secrets, palettes/ - everything `App.config_folder` holds
 //!   <dir>/plugins/      the plugins directory, as it is under the config folder; a plugin's own
 //!                       `zig build` installs here too when `FIZZY_PROFILE` is set
 //!                       (`sdk/plugin_sdk.zig`)
@@ -17,7 +17,7 @@
 //! forwards its arguments to the person's everyday instance, or to a run with another profile.
 //!
 //! Without one, nothing changes: the platform's config folder and the system temp directory.
-//! Native only — a browser tab has neither argv nor an environment.
+//! Native only - a browser tab has neither argv nor an environment.
 const std = @import("std");
 
 /// The command-line flag that names a profile.
@@ -25,7 +25,7 @@ pub const flag = "--profile";
 /// The environment variable that names one when the flag is absent.
 pub const env_var = "FIZZY_PROFILE";
 
-/// The profile this run uses — absolute, normalized — or null for the platform's own places.
+/// The profile this run uses - absolute, normalized - or null for the platform's own places.
 /// Set once at startup, by `single_instance.earlyStartup`, before anything reads a path.
 pub var root: ?[]const u8 = null;
 
@@ -37,8 +37,8 @@ pub const Extracted = struct {
     rest: []const []const u8,
 };
 
-/// Take the profile flag out of `argv` — `--profile <dir>` or `--profile=<dir>`, the last one
-/// winning — so the directory is never mistaken for a path to open, or forwarded to another
+/// Take the profile flag out of `argv` - `--profile <dir>` or `--profile=<dir>`, the last one
+/// winning - so the directory is never mistaken for a path to open, or forwarded to another
 /// instance as one. `argv[0]` stays first. `rest` is allocated with `gpa` and borrows `argv`'s
 /// strings. A trailing `--profile` with nothing after it is dropped and names nothing.
 pub fn extract(gpa: std.mem.Allocator, argv: []const []const u8) !Extracted {
@@ -73,7 +73,7 @@ pub fn runtimeDir(gpa: std.mem.Allocator, profile_root: []const u8) ![]u8 {
 }
 
 /// The single-instance lock's name for a run with `profile_root`: the app's own id with a short
-/// hash of the root appended, so each profile has a lock of its own — on Windows, where the lock
+/// hash of the root appended, so each profile has a lock of its own - on Windows, where the lock
 /// is a named pipe with no directory to put it in, as much as on Unix. Caller owns.
 pub fn lockId(gpa: std.mem.Allocator, app_id: []const u8, profile_root: []const u8) ![:0]u8 {
     const h: u32 = @truncate(std.hash.Wyhash.hash(0, profile_root));
@@ -103,7 +103,7 @@ test "extract takes the profile out of argv, in either spelling" {
     try testing.expectEqual(@as(?[]const u8, null), c.profile);
     try testing.expectEqual(@as(usize, 3), c.rest.len);
 
-    // A trailing flag, or an empty value, names nothing — and is not left behind as a path.
+    // A trailing flag, or an empty value, names nothing - and is not left behind as a path.
     const d = try extract(gpa, &.{ "fizzy", "/work", "--profile" });
     defer gpa.free(d.rest);
     try testing.expectEqual(@as(?[]const u8, null), d.profile);

@@ -15,7 +15,7 @@
 // sharp picture at 1, the uniforms as one array. On the web the same, by the names
 // `core.gfx.programs` gives them (the generator renames them).
 
-#define G 9
+#define G 11
 #define MAX_SHAPES 16
 // How far past its place's outline the outside of the place begins, in pixels: far enough that no
 // sliver of it shows inside, near enough that a shape at the outline still runs into it.
@@ -79,6 +79,30 @@ float smin(float a, float b, float k, out float m)
     return min(a, b) - h * h * k * 0.25;
 }
 
+// A soft step in at `a`, then a fall over `w`: the lit edge's line and glow along the inside of
+// the outline (`x` the depth inside it).
+float band(float x, float a, float w)
+{
+    return smoothstep(a - 0.5, a + 0.5, x) * exp(-max(0.0, x - a) / max(w, 1e-3));
+}
+
+// How far the light runs on from the place of the box (centre and half size `s0`, corner radii
+// `rad`) that faces `L`, the unit vector toward the light: 1 there, falling in a smoothstep to 0 at
+// `ext` pixels, over the last `ramp` of them (at least one pixel, so a hard cut is still anti-aliased).
+// The place is the point of the outline whose normal is `L`: on the corner's arc, or, where `L` is
+// square to an axis, on the side facing it at p's own place along it. The chord stands for the
+// distance along the outline (at a radius of 50 it is short by 1 pixel).
+float alongEnd(float2 p, float4 s0, float4 rad, float2 L, float ext, float ramp)
+{
+    float2 q = float2(L.x < 0.0 ? -1.0 : 1.0, L.y < 0.0 ? -1.0 : 1.0);
+    float r = q.x < 0.0 ? (q.y < 0.0 ? rad.x : rad.w) : (q.y < 0.0 ? rad.y : rad.z);
+    float2 inner = max(s0.zw - r, 0.0);
+    float2 P = s0.xy + q * inner + r * L;
+    if (abs(L.x) < 1e-3) P.x = clamp(p.x, s0.x - inner.x, s0.x + inner.x) + r * L.x;
+    if (abs(L.y) < 1e-3) P.y = clamp(p.y, s0.y - inner.y, s0.y + inner.y) + r * L.y;
+    return 1.0 - smoothstep(max(ext - max(ramp, 1.0), 0.0), ext, length(p - P));
+}
+
 float noise(float2 p)
 {
     return frac(52.9829189 * frac(dot(p, float2(0.06711056, 0.00583715))));
@@ -96,8 +120,10 @@ float4 main(PSInput input) : SV_Target0
     float4 g4 = uData[4];
     float4 g5 = uData[5]; // dither; the lens: its band's share of the shape, its bend, its shade
     float4 g7 = uData[7]; // the look's curves (`glass_look.Look`): the wash at the shape's top and at its bottom, the sweep, the luminance ceiling (1: off)
-    float4 g8 = uData[8]; // how dark the window's hairline edge is
-    float4 g6 = uData[6]; // opaque window (+1) and the light turned to the top right (+2); the lens: dispersion, a drop's diagonal light (0: a window's hairline), the band's cap
+    float4 g8 = uData[8]; // how dark the window's hairline edge is; the lit edge's line width, glow width, and the length of its falloff ramp
+    float4 g9 = uData[9]; // the light: the unit vector toward it, its height, the far side's share
+    float4 g10 = uData[10]; // the lit edge: line, glow, shade, and how far the light runs along the outline (0: the lit edge is off, the drop's edge reads only the light)
+    float4 g6 = uData[6]; // opaque window (+1); the lens: dispersion, a drop's diagonal light (0: a window's hairline), the band's cap
     // Apple's lens (`glass_look.inApp`): the picture pulled inward from a band near the rim,
     // magnified and, past a bend of 1, folded there. Off, the earlier glass: pulled from outside.
     bool inward = g5.y > 0.0;
@@ -108,14 +134,19 @@ float4 main(PSInput input) : SV_Target0
     // Each nearest shape's vertical extent: its centre and half height, for the wash and the sweep.
     float2 y1 = float2(0.0, 1.0); float2 y2 = float2(0.0, 1.0);
     float f1 = 1e9; float f2 = 1e9; float2 o1 = float2(0.0, 0.0); float2 o2 = float2(0.0, 0.0);
+    // Each nearest shape's reach of light from its lit place and from the far one (`alongEnd`).
+    float2 al1 = float2(0.0, 0.0); float2 al2 = float2(0.0, 0.0);
     for (int i = first; i < first + count && i < MAX_SHAPES; i++) {
         float4 s0 = uData[G + 3 * i];
         float4 s1 = uData[G + 3 * i + 1];
         float4 s2 = uData[G + 3 * i + 2];
         float2 g;
-        float d = sdRoundBox(p - s0.xy, s0.zw, min(s1, (float4)min(s0.z, s0.w)), g);
+        float4 rad = min(s1, (float4)min(s0.z, s0.w));
+        float d = sdRoundBox(p - s0.xy, s0.zw, rad, g);
         float hs = min(s0.z, s0.w);
-        if (d < d1) { d2 = d1; m2 = m1; h2 = h1; y2 = y1; d1 = d; m1 = s2; h1 = hs; y1 = s0.yw; } else if (d < d2) { d2 = d; m2 = s2; h2 = hs; y2 = s0.yw; }
+        float2 al = float2(0.0, 0.0);
+        if (g10.w > 0.0) al = float2(alongEnd(p, s0, rad, g9.xy, g10.w, g8.w), alongEnd(p, s0, rad, -g9.xy, g10.w, g8.w));
+        if (d < d1) { d2 = d1; m2 = m1; h2 = h1; y2 = y1; al2 = al1; d1 = d; m1 = s2; h1 = hs; y1 = s0.yw; al1 = al; } else if (d < d2) { d2 = d; m2 = s2; h2 = hs; y2 = s0.yw; al2 = al; }
         float2 o;
         float f = d;
         if (s2.w < 0.5) {
@@ -146,7 +177,7 @@ float4 main(PSInput input) : SV_Target0
         float2 ge = placeOut;
         float d = EDGE_GAP - inPlace;
         float hs = h1;
-        if (d < d1) { d2 = d1; m2 = m1; h2 = h1; y2 = y1; d1 = d; m1 = e2; h1 = hs; y1 = e0.yw; } else if (d < d2) { d2 = d; m2 = e2; h2 = hs; y2 = e0.yw; }
+        if (d < d1) { d2 = d1; m2 = m1; h2 = h1; y2 = y1; al2 = al1; d1 = d; m1 = e2; h1 = hs; y1 = e0.yw; al1 = float2(0.0, 0.0); } else if (d < d2) { d2 = d; m2 = e2; h2 = hs; y2 = e0.yw; al2 = float2(0.0, 0.0); }
         float2 o = -ge;
         if (d < f1) { f2 = f1; o2 = o1; f1 = d; o1 = o; } else if (d < f2) { f2 = d; o2 = o; }
     }
@@ -164,6 +195,9 @@ float4 main(PSInput input) : SV_Target0
     float2 outv = lerp(o1, o2, wf);
     // Cut: where the place's outline is nearer than the shapes' own, the glass's edge is the cut.
     if (cutEdge && inPlace > F) { F = inPlace; outv = placeOut; }
+    // The light's reach along the outline, blended as the shapes are; none where the way out
+    // folds in (a neck), which is no outline.
+    float2 along = lerp(al1, al2, wm) * min(length(outv), 1.0);
     float soft = max(0.0, -F);
     float steepR = exp(-soft / g1.z);
     float steepL = exp(-soft / g1.w);
@@ -256,10 +290,10 @@ float4 main(PSInput input) : SV_Target0
             c.rgb *= capped / max(lum, 1e-4);
         }
     }
-    // The way the edge faces, against a light from the top left.
-    // From the top left, or turned a quarter to the top right (`LiquidField.light_across`, +2 on the
-    // opaque window's flag): on every look, a window's hairline as much as a drop's diagonal.
-    float2 lightDir = g6.x > 1.5 ? float2(0.70710678, -0.70710678) : float2(-0.70710678, -0.70710678);
+    // The way the edge faces, against the look's light (`glass_look.Look.light_angle`, the top left
+    // by default; `LiquidField.light_across` turns it a quarter): on every look, a window's
+    // hairline as much as a drop's diagonal.
+    float2 lightDir = g9.xy;
     float dg = g6.z;
     float facing = dot(outv, lightDir);
     float toward = max(facing, 0.0);
@@ -276,19 +310,24 @@ float4 main(PSInput input) : SV_Target0
     float px = g2.z * 1.25;
     float af = abs(facing);
     bool diagonal = inward && dg > 0.0;
-    float edge_dark = diagonal ? dg * (1.0 - smoothstep(0.2, 0.7, af)) * exp(-max(0.0, -D) / (2.0 * px))
+    // The lit edge (`g10.x`, below) is the one rim where it is on: neither of these draws.
+    bool litEdge = g10.x > 0.0;
+    float edge_dark = litEdge ? 0.0 : diagonal ? dg * (1.0 - smoothstep(0.2, 0.7, af)) * exp(-max(0.0, -D) / (2.0 * px))
                                : g8.x * (1.0 - smoothstep(0.0, 0.5 * px, -D));
     // As much as the edge has formed (`lens`), as its bend, clearing and light are: glass that is
     // barely a lens yet — a drop sunk into its place's edge — draws no dark line round itself.
     float shade = inward ? max(g5.w * t * t, edge_dark) * min(lens, 1.0) : 0.0;
     float4 o = float4(c.rgb * (under * (1.0 - shade)), under * (1.0 - shade) + shade);
 // The lift and the rim's light (`drawLift`), brightest facing the top left.
-    float spec = inward ? (diagonal ? dg * smoothstep(0.75, 1.0, af) : 0.25)
+    // A drop's light: where the edge faces the light, and on along the outline as far as the look's
+    // `rim_extent` carries it from its lit corners (a straight side under a diagonal light faces it
+    // at 0.707, below the start, so it is dark by design).
+    float spec = inward ? (diagonal ? dg * max(smoothstep(0.75, 1.0, af), max(along.x, along.y)) : 0.25)
                         : 0.45 * (toward * sqrt(toward) + 0.75 * away * sqrt(away)) + 0.06;
     float line_ = diagonal ? exp(-max(0.0, -D) / px)
              : inward ? smoothstep(0.25 * px, 0.5 * px, -D) * (1.0 - smoothstep(1.2 * px, 1.6 * px, -D))
                         : exp(-max(0.0, -D) / g2.z);
-    float lit = line_ * spec + (inward ? 0.0 : 0.04 * steepL * toward);
+    float lit = litEdge ? 0.0 : line_ * spec + (inward ? 0.0 : 0.04 * steepL * toward);
     // Down the shape (`v`, 0 at its top): the wash falls from `wash_top` to `wash_bottom`, and the
     // sweep, a specular band over the top ~38%, is strongest at the top edge.
     float2 ys = lerp(y1, y2, wm);
@@ -299,6 +338,22 @@ float4 main(PSInput input) : SV_Target0
     // was see-through — over the explorer, which is the window's OS glass — and the glass all but
     // vanished there, rim and all, where Liquid Glass keeps its bright rim over anything.
     o.rgb += (float3)clamp(lift + lens * g2.w * lit, 0.0, 1.0);
+    // The lit edge (`LiquidField.sample` mirrors it): a sharp line at the outline and a glow inside
+    // it on the sides toward the light, `rim_back` of it on the far sides, a dark band on the sides
+    // square to it. The line also runs on along the outline from the lit places (`along`). As much
+    // as the edge has formed (`lens`), as the old edge is. The picture is `cov` over all of it,
+    // below.
+    if (litEdge) {
+        float2 n2 = dot(outv, outv) > 1e-8 ? normalize(outv) : float2(0.0, 0.0);
+        float f = dot(n2, g9.xy);
+        float pw = lerp(8.0, 1.0, g9.z);
+        float litE = pow(max(f, 0.0), pw) + g9.w * pow(max(-f, 0.0), pw);
+        float edgeOn = min(lens, 1.0);
+        float rimLine = g10.x * max(litE, max(along.x, g9.w * along.y)) * band(-D, 0.0, g8.y) * edgeOn;
+        float glow = g10.y * litE * band(-D, g8.y, g8.z) * edgeOn;
+        float shadeE = g10.z * (1.0 - abs(f)) * band(-D, 0.0, 2.0 * px) * edgeOn;
+        o.rgb = o.rgb * (1.0 - shadeE) + (rimLine + glow);
+    }
     o = clamp(o, 0.0, 1.0);
     // Light over a see-through picture carries its own alpha: brighter than its alpha, a pixel is
     // no colour premultiplied, and the frost captured from this frame next (`rgb / a`) blew it up
