@@ -88,6 +88,32 @@ class KickoffTests(unittest.TestCase):
                 self.assertEqual(not failures, ok, failures)
                 self.values[name] = saved
 
+    def test_in_bounds_rejects_each_non_path_entry(self):
+        entries = ("core/Foo.zig (generated)", '"core/Foo.zig"', "core/Foo.zig trailing words",
+                   "core/Foo.zig\textra", "(core/Foo.zig)", "not-a-path")
+        with tempfile.TemporaryDirectory() as directory:
+            body = Path(directory) / "body"
+            for entry in entries:
+                with self.subTest(entry=entry):
+                    self.values["In bounds"] = "build.zig, " + entry
+                    body.write_text(self.body())
+                    result = subprocess.run([str(SCRIPT), str(body)], capture_output=True, text=True)
+                    self.assertEqual(result.returncode, 2, result.stderr)
+                    self.assertIn(entry, result.stderr)
+            self.values["In bounds"] = ", ".join(entries)
+            failures = kickoff.validate(self.body(), self.fields)
+            for entry in entries:
+                self.assertTrue(any(entry in failure for failure in failures), entry)
+
+    def test_empty_branch_is_rejected(self):
+        self.values["Branch"] = ""
+        with tempfile.TemporaryDirectory() as directory:
+            body = Path(directory) / "body"
+            body.write_text(self.body())
+            result = subprocess.run([str(SCRIPT), str(body)], capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Branch: missing field or empty value", result.stderr)
+
     def test_spec_not_in_a_comment(self):
         for note in ("Spec in the first comment.", "See comments for the tests.", "spec is in a comment"):
             with self.subTest(note=note):
