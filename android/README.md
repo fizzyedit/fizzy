@@ -19,17 +19,24 @@ requires a POSIX shell; only Linux packaging has been exercised. A debug keystor
 
 ```sh
 export ANDROID_HOME=$HOME/android/sdk
-zig build apk -Dandroid-sdk=$ANDROID_HOME -Dandroid-arch=x86_64   # the emulator on an x86_64 host
-zig build apk -Dandroid-sdk=$ANDROID_HOME                         # a phone (aarch64, the default)
+scripts/zb build apk -Dandroid-sdk=$ANDROID_HOME -Dandroid-arch=x86_64   # the emulator on an x86_64 host
+scripts/zb build apk -Dandroid-sdk=$ANDROID_HOME                         # a phone (aarch64, the default)
 ```
 
-dvui's `sdl3` dependency is lazy: the first `zig build apk` configures, fetches it and configures
+`scripts/zb build android -Dandroid-sdk=$ANDROID_HOME -Dandroid-arch=x86_64` builds only the
+native library, installed at `zig-out/android/x86_64/libfizzy_hello.so` (or `android/arm64-v8a/`
+for aarch64). It does not require Java, APK signing, or an emulator. Neither Android step is
+part of a default desktop build.
+
+dvui's `sdl3` dependency is lazy: the first `scripts/zb build apk` configures, fetches it and configures
 again. Other options: `-Dandroid-ndk`, `-Dandroid-build-tools`, `-Dandroid-platform`, `-Dandroid-keystore`. The app id is `dev.fizzy.hello` (`build/bundle_id.zig`).
 
 ## Run in the emulator (pop-os)
 
 The x86_64 emulator needs hardware acceleration, so `/dev/kvm` must be writable by you:
-`sudo usermod -aG kvm $USER`, then log in again.
+`sudo usermod -aG kvm $USER`, then log in again. First run
+`$ANDROID_HOME/emulator/emulator -accel-check`: if `/dev/kvm` is absent, the host needs KVM
+exposed before group permissions can help. A display is optional with `-no-window`.
 
 ```sh
 SDK=$ANDROID_HOME
@@ -38,9 +45,14 @@ $SDK/cmdline-tools/latest/bin/avdmanager create avd -n fizzy -k "system-images;a
 $SDK/emulator/emulator -avd fizzy -no-snapshot &         # add -no-window -gpu swiftshader_indirect headless
 $SDK/platform-tools/adb install -r zig-out/fizzy-hello.apk
 $SDK/platform-tools/adb shell am start -n dev.fizzy.hello/dev.fizzyedit.hello.FizzyActivity
-$SDK/platform-tools/adb shell input tap 540 1200         # the tap button
-$SDK/platform-tools/adb exec-out screencap -p > hello.png
+$SDK/platform-tools/adb exec-out screencap -p > hello-before.png
+# Read the button position from hello-before.png; coordinates vary with the AVD.
+$SDK/platform-tools/adb shell input tap <button-x> <button-y>
+$SDK/platform-tools/adb exec-out screencap -p > hello-after.png
 ```
+
+Confirm that the displayed tap count increases by one in the second screenshot; a different
+image alone does not prove that touch input reached the button.
 
 ## Pitfalls
 
