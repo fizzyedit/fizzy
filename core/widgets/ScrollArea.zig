@@ -131,7 +131,8 @@ pub fn init(src: std.builtin.SourceLocation, init_opts: dvui.ScrollAreaWidget.In
 
     const dragging = dvui.currentWindow().dragging;
     if (dragging.state == .prestart) self.press_point = dragging.pt;
-    for (dvui.events()) |e| {
+    for (dvui.events()) |*e| {
+        if (!dvui.eventMatch(e, .{ .id = c.data().id, .r = c.init_opts.event_rect orelse c.data().borderRectScale().r })) continue;
         if (e.evt == .mouse and e.evt.mouse.action == .press and e.evt.mouse.button.touch())
             self.press_point = e.evt.mouse.p;
     }
@@ -1684,4 +1685,99 @@ test "the take-over catch-up is not a velocity spike (a fling leaves at the fing
         try std.testing.expect(t_release_coasted);
         try std.testing.expectApproxEqAbs(step / 0.016, t_release_velocity, 0.01);
     }
+}
+
+test "a press elsewhere during take-over leaves the carried travel at 8 points" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    t_use_dvui = false;
+    t_top = 100;
+    defer t_top = 0;
+    t_touch_text = true;
+    defer t_touch_text = false;
+    try dvui.testing.settle(testFrame);
+    const cw = dvui.currentWindow();
+    _ = try cw.addEventPointer(.{ .button = .touch0, .action = .press, .xynorm = .{ .x = 0.1, .y = 0.5 } });
+    try frameAfter(16);
+    _ = try cw.addEventTouchMotion(.touch0, 0.1, 0.48, 0, -0.02);
+    // A second finger presses above this area, inside the same window in the take-over frame.
+    _ = try cw.addEventPointer(.{ .button = .touch1, .action = .press, .xynorm = .{ .x = 0.5, .y = 0.1 } });
+    try frameAfter(16);
+    try std.testing.expectApproxEqAbs(@as(f32, 8), t_viewport_y, 0.01);
+}
+
+// Written and read only by the release-speed tests and their callback on the test thread.
+var t_speed_case: enum { band, unscrollable, nested } = .band;
+var t_speed: dvui.Point = .{};
+var t_speed_position: dvui.Point = .{};
+var t_speed_over: f32 = 0;
+var t_parent_position: f32 = 0;
+
+fn speedFrame() !dvui.App.Result {
+    var parent = ScrollArea.init(@src(), .{ .horizontal = .none, .vertical_bar = .hide }, .{ .expand = .both });
+    if (t_speed_case == .nested) {
+        var child = ScrollArea.init(@src(), .{ .horizontal = .none, .vertical_bar = .hide }, .{ .min_size_content = .{ .w = 300, .h = 200 } });
+        _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 100, .h = 2000 } });
+        child.deinit();
+        t_speed.y = child.touch.y.last_debug.vel;
+        t_speed_position = child.si.viewport.topLeft();
+        t_speed_over = child.overscroll().y;
+        _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 100, .h = 2000 } });
+    } else {
+        _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 100, .h = 2000 } });
+        // Release is handled in deinit, before the next frame advances the coast.
+        parent.deinit();
+        t_speed = .{ .x = parent.touch.x.last_debug.vel, .y = parent.touch.y.last_debug.vel };
+        t_speed_position = parent.si.viewport.topLeft();
+        t_speed_over = parent.overscroll().y;
+        return .ok;
+    }
+    t_parent_position = parent.si.viewport.y;
+    parent.deinit();
+    return .ok;
+}
+
+fn releaseSpeedCase(kind: @TypeOf(t_speed_case)) !void {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    t_speed_case = kind;
+    try dvui.testing.settle(speedFrame);
+    const cw = dvui.currentWindow();
+    var y: f32 = 0.2;
+    var x: f32 = 0.5;
+    _ = try cw.addEventPointer(.{ .button = .touch0, .action = .press, .xynorm = .{ .x = x, .y = y } });
+    _ = try speedFrame();
+    _ = try cw.end(.{});
+    try cw.begin(cw.frame_time_ns + 16 * std.time.ns_per_ms);
+    for (0..4) |_| {
+        if (kind == .unscrollable) x += 10.0 / 300.0 else y += 10.0 / 400.0;
+        _ = try cw.addEventTouchMotion(.touch0, x, y, if (kind == .unscrollable) 10.0 / 300.0 else 0, if (kind == .unscrollable) 0 else 10.0 / 400.0);
+        input_time.set(cw, cw.event_num, cw.frame_time_ns);
+        _ = try speedFrame();
+        _ = try cw.end(.{});
+        try cw.begin(cw.frame_time_ns + 16 * std.time.ns_per_ms);
+    }
+    _ = try cw.addEventPointer(.{ .button = .touch0, .action = .release, .xynorm = .{ .x = x, .y = y } });
+    input_time.set(cw, cw.event_num, cw.frame_time_ns);
+    _ = try speedFrame();
+    try std.testing.expectApproxEqAbs(@as(f32, -625), if (kind == .unscrollable) t_speed.x else t_speed.y, 0.01);
+    try std.testing.expectEqual(@as(f32, 0), if (kind == .unscrollable) t_speed_position.x else t_speed_position.y);
+    if (kind == .band) {
+        try std.testing.expect(t_speed_over < 0 and t_speed_over > -40);
+    } else if (kind == .nested) {
+        try std.testing.expectEqual(@as(f32, 0), t_speed_over);
+        try std.testing.expectApproxEqAbs(@as(f32, -20), t_parent_position, 0.01);
+    }
+}
+
+test "past an end the band releases at the finger speed of minus 625 points per second" {
+    try releaseSpeedCase(.band);
+}
+
+test "an unscrollable axis releases at the finger speed of minus 625 points per second" {
+    try releaseSpeedCase(.unscrollable);
+}
+
+test "a nested area at its start releases at the finger speed of minus 625 points per second" {
+    try releaseSpeedCase(.nested);
 }
