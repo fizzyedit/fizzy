@@ -1,109 +1,77 @@
-//! Which window materials a platform can draw, and why not the others: the one answer the
-//! backend's `materialKinds` and an app's material setting both read, so a material is offered,
+//! Why a window material is missing on a platform: one line for each kind a target does not offer,
+//! read from the same `Offer` the resolver reads (`glass_look.resolve`), so a material is offered,
 //! listed and drawn by the same rule on every platform.
 //!
-//! std-only, with tests (`build.zig`'s `unit_tests`); `SDLBackend` fills in what it found
-//! at run time (`Platform`).
+//! std-only, with tests (`build.zig`'s `unit_tests`); `SDLBackend` fills the offer from what it found
+//! at run time (`materialOffer`).
 const std = @import("std");
+const glass_look = @import("glass_look");
+const Kind = glass_look.Kind;
+const Offer = glass_look.Offer;
 
-/// The kinds of window material, from the plainest to the richest, field for field with fizzy's
-/// `core.material.Kind`.
-pub const Kind = enum(u8) { none, transparent, blur, frost, liquid };
-
-/// What the running platform can do, as the backend found it.
-pub const Platform = struct {
-    os: std.Target.Os.Tag,
-    /// The OS draws Liquid Glass: macOS 26 and later.
-    liquid_glass: bool = false,
-    /// The compositor blurs behind a window: Wayland with `ext-background-effect-v1` or KDE's
-    /// `org_kde_kwin_blur` (`wayland_blur`).
-    compositor_blur: bool = false,
-    /// DWM draws a system backdrop (Acrylic) behind a window: Windows 11 22H2 and later, which
-    /// `win32_titlebar.backdropOffered` asks it.
-    dwm_backdrop: bool = false,
-};
-
-/// Why `kind` cannot be drawn on `platform`, one line for a tooltip; null when it can. The text
-/// is static.
-pub fn missing(platform: Platform, kind: Kind) ?[]const u8 {
-    if (kind == .none) return null;
-    return switch (platform.os) {
-        .macos => switch (kind) {
-            .liquid => if (platform.liquid_glass) null else "Not available before macOS 26: needs Liquid Glass",
-            else => null,
-        },
-        .windows => switch (kind) {
-            .blur => "Not available on Windows: its blur is Acrylic, under Frost",
-            .liquid => "Not available on Windows: needs Liquid Glass, which only macOS 26 draws",
-            .frost => if (platform.dwm_backdrop) null else "Not available before Windows 11 22H2: needs DWM's Acrylic backdrop",
-            else => null,
-        },
-        .linux => switch (kind) {
-            .transparent => null,
-            .blur => if (platform.compositor_blur) null else "Not available on Linux yet: needs compositor blur",
-            // TODO(fizzyedit/plans#27, linux-blur): frost over the compositor's blur.
-            .frost => "Not available on Linux yet: needs frost over compositor blur",
-            .liquid => "Not available on Linux: needs Liquid Glass, which only macOS 26 draws",
-            .none => unreachable, // Answered above.
-        },
-        else => "Not available on this platform",
-    };
+/// Why `kind` cannot be drawn with `offer`, one line for a tooltip; null when it can. The text is
+/// static.
+pub fn missing(offer: Offer, kind: Kind) ?[]const u8 {
+    if (offer.kinds.has(kind)) return null;
+    return reasons.get(offer.target).get(kind) orelse "Not available on this platform";
 }
 
-/// The kind drawn for `asked` on `platform`: `asked` where it is offered, else the richest glass
-/// below it that is, else `none`. A clear window is drawn only when asked for: it is not glass,
-/// and in glass's place it reads as a broken window.
-pub fn effective(platform: Platform, asked: Kind) Kind {
-    if (missing(platform, asked) == null) return asked;
-    var k = @backingInt(asked);
-    while (k > @backingInt(Kind.blur)) {
-        k -= 1;
-        if (missing(platform, @fromBackingInt(k)) == null) return @fromBackingInt(k);
+const Reasons = std.EnumMap(Kind, []const u8);
+
+/// What each target says of a kind it lacks; a kind with none, "Not available on this platform".
+const reasons: std.EnumArray(glass_look.Target, Reasons) = .initDefault(.init(.{}), .{
+    .macos = .init(.{
+        .liquid = "Not available before macOS 26: needs Liquid Glass",
+    }),
+    .windows = .init(.{
+        .blur = "Not available on Windows: its blur is Acrylic, under Frost",
+        .frost = "Not available before Windows 11 22H2: needs DWM's Acrylic backdrop",
+        .liquid = "Not available on Windows: needs Liquid Glass, which only macOS 26 draws",
+    }),
+    .linux = .init(.{
+        .blur = "Not available on Linux yet: needs compositor blur",
+        // TODO(fizzyedit/plans#27, linux-blur): frost over the compositor's blur.
+        .frost = "Not available on Linux yet: needs frost over compositor blur",
+        .liquid = "Not available on Linux: needs Liquid Glass, which only macOS 26 draws",
+    }),
+});
+
+// The offers the backend made before `Offer` (each OS and what it found), and what `missing` said
+// of each kind on each: the tooltips must not move.
+test "every tooltip is as it was for every platform" {
+    const Case = struct { offer: Offer, says: [5]?[]const u8 };
+    const mac_liquid = "Not available before macOS 26: needs Liquid Glass";
+    const win_blur = "Not available on Windows: its blur is Acrylic, under Frost";
+    const win_frost = "Not available before Windows 11 22H2: needs DWM's Acrylic backdrop";
+    const win_liquid = "Not available on Windows: needs Liquid Glass, which only macOS 26 draws";
+    const linux_blur = "Not available on Linux yet: needs compositor blur";
+    const linux_frost = "Not available on Linux yet: needs frost over compositor blur";
+    const linux_liquid = "Not available on Linux: needs Liquid Glass, which only macOS 26 draws";
+    const other = "Not available on this platform";
+    const every: glass_look.Natives = .init(.{ .appkit = true, .appkit_glass = true, .dwm = true, .compositor_blur = true });
+    const cases = [_]Case{
+        //                                                                    none  clear  blur        frost        liquid
+        .{ .offer = .init(.macos, .initOne(.appkit), true, false), .says = .{ null, null, null, null, mac_liquid } },
+        .{ .offer = .init(.macos, .init(.{ .appkit = true, .appkit_glass = true }), true, false), .says = .{ null, null, null, null, null } },
+        .{ .offer = .init(.windows, .empty, true, false), .says = .{ null, null, win_blur, win_frost, win_liquid } },
+        .{ .offer = .init(.windows, .initOne(.dwm), true, false), .says = .{ null, null, win_blur, null, win_liquid } },
+        .{ .offer = .init(.windows, every, true, false), .says = .{ null, null, win_blur, null, win_liquid } },
+        .{ .offer = .init(.linux, .empty, true, false), .says = .{ null, null, linux_blur, linux_frost, linux_liquid } },
+        .{ .offer = .init(.linux, .initOne(.compositor_blur), true, false), .says = .{ null, null, null, linux_frost, linux_liquid } },
+        .{ .offer = .init(.other, every, true, false), .says = .{ null, other, other, other, other } },
+    };
+    for (cases) |case| {
+        for (std.enums.values(Kind), case.says) |kind, says| {
+            const said = missing(case.offer, kind);
+            if (says) |s| try std.testing.expectEqualStrings(s, said orelse return error.TestExpectedReason) else try std.testing.expectEqual(@as(?[]const u8, null), said);
+        }
     }
-    return .none;
 }
 
 test "a kind not offered falls back to the richest glass below it, never to a clear window" {
-    try std.testing.expectEqual(Kind.frost, effective(.{ .os = .macos }, .liquid));
-    try std.testing.expectEqual(Kind.frost, effective(.{ .os = .windows, .dwm_backdrop = true }, .liquid));
-    try std.testing.expectEqual(Kind.none, effective(.{ .os = .windows, .dwm_backdrop = true }, .blur));
-    try std.testing.expectEqual(Kind.none, effective(.{ .os = .windows }, .liquid));
-    try std.testing.expectEqual(Kind.none, effective(.{ .os = .linux }, .liquid));
-    try std.testing.expectEqual(Kind.none, effective(.{ .os = .linux }, .frost));
-    try std.testing.expectEqual(Kind.blur, effective(.{ .os = .linux, .compositor_blur = true }, .liquid));
-    try std.testing.expectEqual(Kind.transparent, effective(.{ .os = .linux }, .transparent));
-    try std.testing.expectEqual(Kind.none, effective(.{ .os = .freestanding }, .transparent));
-}
-
-test "opaque is drawn everywhere" {
-    for ([_]std.Target.Os.Tag{ .macos, .windows, .linux, .freestanding }) |os| {
-        try std.testing.expect(missing(.{ .os = os }, .none) == null);
-    }
-}
-
-test "macOS draws every kind, Liquid Glass from macOS 26" {
-    try std.testing.expect(missing(.{ .os = .macos, .liquid_glass = true }, .liquid) == null);
-    try std.testing.expect(missing(.{ .os = .macos }, .liquid) != null);
-    for ([_]Kind{ .transparent, .blur, .frost }) |k| try std.testing.expect(missing(.{ .os = .macos }, k) == null);
-}
-
-test "Windows draws clear, and frost where DWM has the Acrylic backdrop" {
-    const old: Platform = .{ .os = .windows };
-    try std.testing.expect(missing(old, .transparent) == null);
-    try std.testing.expect(missing(old, .frost) != null);
-    const p: Platform = .{ .os = .windows, .liquid_glass = true, .compositor_blur = true, .dwm_backdrop = true };
-    try std.testing.expect(missing(p, .transparent) == null);
-    try std.testing.expect(missing(p, .frost) == null);
-    try std.testing.expect(missing(p, .blur) != null);
-    try std.testing.expect(missing(p, .liquid) != null);
-}
-
-test "Linux draws clear, and blur only where the compositor blurs, each missing kind saying why" {
-    try std.testing.expect(missing(.{ .os = .linux }, .transparent) == null);
-    try std.testing.expect(missing(.{ .os = .linux }, .blur) != null);
-    try std.testing.expect(missing(.{ .os = .linux, .compositor_blur = true }, .blur) == null);
-    for ([_]Kind{ .frost, .liquid }) |k| {
-        const why = missing(.{ .os = .linux, .compositor_blur = true }, k) orelse return error.TestUnexpectedResult;
-        try std.testing.expect(std.mem.startsWith(u8, why, "Not available on Linux"));
-    }
+    const M = glass_look.Material;
+    try std.testing.expectEqual(Kind.frost, (M{ .kind = .liquid }).effective(Offer.init(.macos, .initOne(.appkit), true, false).kinds).kind);
+    try std.testing.expectEqual(Kind.none, (M{ .kind = .blur }).effective(Offer.init(.windows, .initOne(.dwm), true, false).kinds).kind);
+    try std.testing.expectEqual(Kind.blur, (M{ .kind = .liquid }).effective(Offer.init(.linux, .initOne(.compositor_blur), true, false).kinds).kind);
+    try std.testing.expectEqual(Kind.none, (M{ .kind = .transparent }).effective(Offer.init(.other, .empty, true, false).kinds).kind);
 }
