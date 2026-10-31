@@ -2,4 +2,3 @@
 # run without failing the job (scripts/ci-known-failing.sh). One per line, as the runner names
 # it: `<test binary>: <test name> | work#N`, the issue that owns the fix. A listed test that
 # passes is reported in the job summary: remove its line then.
-fizzy-control-server-tests: Server.test.an upgraded connection carries bytes both ways until the app closes it | work#553
