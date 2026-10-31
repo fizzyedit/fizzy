@@ -5,6 +5,7 @@
 //!
 //! std-only, like the server that carries it.
 const std = @import("std");
+const builtin = @import("builtin");
 const Io = std.Io;
 
 const Link = @This();
@@ -38,7 +39,7 @@ gone: std.atomic.Value(bool) = .init(false),
 /// Set when either of the connection's tasks ends, or by `abort`: the supervising task then cancels
 /// both, which frees one blocked in the socket.
 ended: Io.Event = .unset,
-/// The connection's socket, once its task has one, under `lock`: `abort` shuts it down.
+/// The connection's socket, under `lock`: `abort` shuts it down on POSIX.
 stream: ?Io.net.Stream = null,
 
 pub fn init(gpa: std.mem.Allocator, io: Io, wake: *const fn () void) Link {
@@ -86,9 +87,13 @@ pub fn close(self: *Link) void {
 /// leave the writer blocked and `close` unheard. UI thread.
 pub fn abort(self: *Link) void {
     self.close();
-    self.lock.lockUncancelable(self.io);
-    defer self.lock.unlock(self.io);
-    if (self.stream) |s| s.shutdown(self.io, .both) catch {};
+    // Windows shutdown can wait forever behind a pending receive. Its supervisor cancels
+    // both socket tasks when `ended` is set; POSIX still needs shutdown to wake its reader.
+    if (comptime builtin.target.os.tag != .windows) {
+        self.lock.lockUncancelable(self.io);
+        defer self.lock.unlock(self.io);
+        if (self.stream) |s| s.shutdown(self.io, .both) catch {};
+    }
     self.ended.set(self.io);
 }
 

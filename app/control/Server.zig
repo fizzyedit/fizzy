@@ -78,6 +78,7 @@ streams: std.ArrayList(*Stream) = .empty,
 /// How many: read without the lock, so a frame with no stream takes none (`streamsNaming`'s
 /// callers ask this first).
 stream_count: std.atomic.Value(usize) = .init(0),
+link_watch: if (builtin.is_test) ?*Watchdog else void = if (builtin.is_test) null else {},
 
 /// A connection that asked for events: what it wants, and what is waiting to be written to it.
 pub const Stream = struct {
@@ -560,12 +561,13 @@ fn headerValue(head: *std.http.Server.Request, arena: std.mem.Allocator, name: [
 /// task of its own writes what the app queues on it. Ends when the peer goes, the app closes the
 /// link, or the server stops; the link is finished last, whichever, and not touched after.
 fn serveLink(self: *Server, link: *Link, stream: Io.net.Stream, reader: *Io.Reader, writer: *Io.Writer, token: []const u8) void {
+    if (builtin.is_test) if (self.link_watch) |dog| dog.server_stage.store(.upgrading, .release);
     defer link.finish();
     link.lock.lockUncancelable(self.io);
     link.stream = stream;
     link.lock.unlock(self.io);
-    // Cleared before `finish`, under the lock `abort` shuts the socket down in: the connection
-    // closes it as soon as this returns.
+    // Cleared before `finish`, under the lock POSIX `abort` shuts the socket down in:
+    // the connection closes it as soon as this returns.
     defer {
         link.lock.lockUncancelable(self.io);
         link.stream = null;
@@ -574,45 +576,61 @@ fn serveLink(self: *Server, link: *Link, stream: Io.net.Stream, reader: *Io.Read
     writer.print("HTTP/1.1 101 Switching Protocols\r\nconnection: Upgrade\r\nupgrade: {s}\r\n\r\n", .{token}) catch return;
     writer.flush() catch return;
     var sender = self.io.concurrent(writeLink, .{ self, link, stream, writer }) catch return;
-    defer sender.cancel(self.io);
-    // Where `shutdown` wakes a blocked read (`writeLink` and `Link.abort` both call it), the read
-    // runs here, as it did before the receiver task.
+    defer {
+        if (builtin.is_test) if (self.link_watch) |dog| dog.server_stage.store(.canceling_sender, .release);
+        sender.cancel(self.io);
+        if (builtin.is_test) if (self.link_watch) |dog| dog.server_stage.store(.finished, .release);
+    }
+    // On POSIX, shutdown wakes the reader so it can run in the supervising task.
     if (comptime builtin.target.os.tag != .windows) return readLink(self, link, reader);
     var receiver = self.io.concurrent(readLink, .{ self, link, reader }) catch return;
-    defer receiver.cancel(self.io);
+    defer {
+        if (builtin.is_test) if (self.link_watch) |dog| dog.server_stage.store(.canceling_receiver, .release);
+        receiver.cancel(self.io);
+    }
     // Either task ending, `Link.abort` or the server cancelling this task ends the connection;
     // cancelling the tasks is what frees one blocked in the socket, which `shutdown` does not do
     // on Windows.
+    if (builtin.is_test) if (self.link_watch) |dog| dog.server_stage.store(.waiting_ended, .release);
     link.ended.wait(self.io) catch {};
 }
 
 /// Push what the peer sends into `link` until it goes, the link refuses more, or the server stops.
 fn readLink(self: *Server, link: *Link, reader: *Io.Reader) void {
     defer link.ended.set(self.io);
+    defer if (builtin.is_test) if (self.link_watch) |dog| dog.reader_stage.store(.finished, .release);
     while (!self.stopping.load(.acquire)) {
+        if (builtin.is_test) if (self.link_watch) |dog| dog.reader_stage.store(.receiving, .release);
         const bytes = reader.peekGreedy(1) catch return;
         link.push(bytes) catch return;
         reader.toss(bytes.len);
     }
 }
 
-/// Write what the app queues on `link` until it closes it or a write fails, then shut the socket
-/// down.
+/// Write what the app queues on `link` until it closes it or a write fails.
 fn writeLink(self: *Server, link: *Link, stream: Io.net.Stream, writer: *Io.Writer) void {
     defer link.ended.set(self.io);
+    defer if (builtin.is_test) if (self.link_watch) |dog| dog.writer_stage.store(.finished, .release);
     while (true) {
         // Read first: what was queued before `close` is still written.
         const closing = link.closing.load(.acquire);
         if (link.drain() catch break) |bytes| {
             defer link.gpa.free(bytes);
+            if (builtin.is_test) if (self.link_watch) |dog| dog.writer_stage.store(.writing, .release);
             writer.writeAll(bytes) catch break;
             writer.flush() catch break;
             continue;
         }
         if (closing) break;
+        if (builtin.is_test) if (self.link_watch) |dog| dog.writer_stage.store(.waiting_outbox, .release);
         link.out_ready.wait(self.io) catch break;
     }
-    stream.shutdown(self.io, .both) catch {};
+    // Windows shutdown can block behind the receiver's pending receive. Signal `ended`
+    // instead: serveLink cancels both tasks before the connection closes the socket.
+    if (comptime builtin.target.os.tag != .windows) {
+        if (builtin.is_test) if (self.link_watch) |dog| dog.writer_stage.store(.shutting_down, .release);
+        stream.shutdown(self.io, .both) catch {};
+    }
 }
 
 /// Write events to the connection until the client goes, falls too far behind, or the server
@@ -698,12 +716,33 @@ fn noWake() void {}
 /// of its own that a step can set.
 const Watchdog = struct {
     const limit_ms = 60_000;
+    const Stage = enum(u8) {
+        idle,
+        upgrading,
+        waiting_ended,
+        canceling_receiver,
+        canceling_sender,
+        receiving,
+        writing,
+        waiting_outbox,
+        shutting_down,
+        connecting,
+        reading_head,
+        reading_reply,
+        waiting_eof,
+        eof_timeout,
+        finished,
+    };
 
     gpa: std.mem.Allocator,
     io: Io,
     name: []const u8,
     done: Io.Event = .unset,
     thread: std.Thread = undefined,
+    server_stage: std.atomic.Value(Stage) = .init(.idle),
+    reader_stage: std.atomic.Value(Stage) = .init(.idle),
+    writer_stage: std.atomic.Value(Stage) = .init(.idle),
+    peer_stage: std.atomic.Value(Stage) = .init(.idle),
 
     /// Starts a watch on the test `name` (`@src().fn_name`); the test ends it with `stop`.
     fn start(gpa: std.mem.Allocator, io: Io, name: []const u8) !*Watchdog {
@@ -724,6 +763,12 @@ const Watchdog = struct {
         self.done.waitTimeout(self.io, .{ .duration = .{ .raw = .fromMilliseconds(limit_ms), .clock = .awake } }) catch |err| switch (err) {
             error.Timeout => {
                 std.debug.print("\nfizzy-control-server-tests: {s} still running after {d} s: a client or the server is blocked; aborting\n", .{ self.name, limit_ms / 1000 });
+                std.debug.print("link stages: server={s}, reader={s}, writer={s}, peer={s}\n", .{
+                    @tagName(self.server_stage.load(.acquire)),
+                    @tagName(self.reader_stage.load(.acquire)),
+                    @tagName(self.writer_stage.load(.acquire)),
+                    @tagName(self.peer_stage.load(.acquire)),
+                });
                 std.process.abort();
             },
             // Nothing cancels this thread; a cancellation would mean the test is already ending.
@@ -1300,8 +1345,11 @@ const UpgradePeer = struct {
     head_len: usize = 0,
     reply: [4]u8 = undefined,
     ended: bool = false,
+    watch: ?*Watchdog = null,
+    eof_done: Io.Event = .unset,
 
     fn run(self: *UpgradePeer) void {
+        if (self.watch) |dog| dog.peer_stage.store(.connecting, .release);
         const addr = Io.net.UnixAddress.init(self.path) catch return;
         const stream = addr.connect(self.io) catch return;
         defer stream.close(self.io);
@@ -1311,6 +1359,7 @@ const UpgradePeer = struct {
         w.interface.flush() catch return;
         var rbuf: [256]u8 = undefined;
         var r = stream.reader(self.io, &rbuf);
+        if (self.watch) |dog| dog.peer_stage.store(.reading_head, .release);
         while (self.head_len < self.head.len) {
             const n = r.interface.readSliceShort(self.head[self.head_len..][0..1]) catch return;
             if (n == 0) return;
@@ -1318,9 +1367,24 @@ const UpgradePeer = struct {
             if (std.mem.endsWith(u8, self.head[0..self.head_len], "\r\n\r\n")) break;
         }
         if (self.leave) return;
+        if (self.watch) |dog| dog.peer_stage.store(.reading_reply, .release);
         r.interface.readSliceAll(&self.reply) catch return;
+        if (self.watch) |dog| dog.peer_stage.store(.waiting_eof, .release);
+        var eof = self.io.concurrent(readEnd, .{ self, &r.interface }) catch return;
+        defer eof.cancel(self.io);
+        self.eof_done.waitTimeout(self.io, .{ .duration = .{ .raw = .fromMilliseconds(2000), .clock = .awake } }) catch {
+            if (self.watch) |dog| dog.peer_stage.store(.eof_timeout, .release);
+            return;
+        };
+        if (self.watch) |dog| dog.peer_stage.store(.finished, .release);
+    }
+
+    fn readEnd(self: *UpgradePeer, reader: *Io.Reader) void {
+        defer self.eof_done.set(self.io);
         var more: [1]u8 = undefined;
-        self.ended = if (r.interface.readSliceShort(&more)) |n| n == 0 else |_| true;
+        // Cancellation and read failures do not prove that the server closed the connection.
+        const n = reader.readSliceShort(&more) catch return;
+        self.ended = n == 0;
     }
 };
 
@@ -1350,7 +1414,8 @@ test "an upgraded connection carries bytes both ways until the app closes it" {
     try server.start();
     defer server.stop();
 
-    var peer: UpgradePeer = .{ .io = io, .path = path };
+    server.link_watch = dog;
+    var peer: UpgradePeer = .{ .io = io, .path = path, .watch = dog };
     const thread = try std.Thread.spawn(.{}, UpgradePeer.run, .{&peer});
     var taken: std.ArrayList(*Request) = .empty;
     defer taken.deinit(gpa);
