@@ -2,7 +2,7 @@
 //!
 //! Uses the DVUI App pattern: declaring `dvui_app` + `main` lets DVUI's web
 //! backend auto-export `dvui_init` / `dvui_deinit` / `dvui_update`
-//! (see `dvui-dev/src/backends/web.zig:890`). This matches graphl and DVUI's
+//! (see `fizzyedit/dvui/src/backends/web.zig:890`). This matches graphl and DVUI's
 //! own `examples/app.zig` rather than the manual export style.
 //!
 //! Lifecycle is delegated to `fizzy.Entry` (`AppInit` / `AppFrame` / `AppDeinit`) via

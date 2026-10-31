@@ -2,7 +2,7 @@
 # Make a Claude Code cloud session (Linux) able to build fizzy.
 #
 # A cloud environment's GitHub proxy lets only fizzyedit/fizzy's own URLs through, so `zig build`
-# cannot fetch the other repos fizzy depends on (dvui-dev, zf, assetpack, ...). The `deps-cache`
+# cannot fetch the other repos fizzy depends on (fizzyedit/dvui, zf, assetpack, ...). The `deps-cache`
 # workflow (.github/workflows/deps-cache.yml) puts the Zig package cache those builds need, and
 # this script, on a rolling release of this repo. The script installs Zig and unpacks that cache,
 # after which `zig build` finds every dependency already fetched.

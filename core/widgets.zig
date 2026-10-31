@@ -33,7 +33,7 @@ pub const TreeWidget = @import("widgets/TreeWidget.zig");
 pub const TreeSelection = @import("widgets/TreeSelection.zig");
 /// Local copies of upstream dvui's `DockingWidget` (+ its `DockLayout` tree) and `BlurBackdrop`,
 /// taken at the current pin so the split-tree/blur work can be iterated here before anything is
-/// proposed upstream. Keep the diff against `dvui-dev/src/{widgets/DockingWidget.zig,
+/// proposed upstream. Keep the diff against `fizzyedit/dvui/src/{widgets/DockingWidget.zig,
 /// widgets/DockingWidget/Layout.zig,BlurBackdrop.zig}` readable.
 pub const DockingWidget = @import("widgets/DockingWidget.zig");
 pub const DockLayout = DockingWidget.Layout;

@@ -9,7 +9,7 @@
 //! last `window_s` through `Fling.releaseWindowed`, and coasts on one decay per second.
 //!
 //! Local copy of upstream behaviour, kept so it can be deleted once dvui has it (plans#51):
-//! `dvui-dev 3d90fdd src/widgets/ScrollContainerWidget.zig` — the touch branch of `processEvent`
+//! `fizzyedit/dvui 3d90fdd src/widgets/ScrollContainerWidget.zig` — the touch branch of `processEvent`
 //! (a press stops the coast), `processMotionScroll` (drag and propagation to the parent) and
 //! `processVelocityAfter` (the coast). Names and order are kept so a diff reads cleanly.
 //!
