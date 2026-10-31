@@ -200,21 +200,21 @@ float4 main(PSInput input) : SV_Target0
         }
         float2 g;
         float4 rad = min(s1, (float4)min(s0.z, s0.w));
-        float d = sdRoundBox(p - s0.xy, s0.zw, rad, g);
+        float d;
         if (panel) d = panelDistance(p, 0.0, g);
+        else d = sdRoundBox(p - s0.xy, s0.zw, rad, g);
         float hs = min(s0.z, s0.w);
         float2 al = float2(0.0, 0.0);
         if (g10.w > 0.0) al = float2(alongEnd(p, s0, rad, g9.xy, g10.w, g8.w), alongEnd(p, s0, rad, -g9.xy, g10.w, g8.w));
         if (d < d1) { d2 = d1; m2 = m1; h2 = h1; y2 = y1; al2 = al1; d1 = d; m1 = s2; h1 = hs; y1 = s0.yw; al1 = al; } else if (d < d2) { d2 = d; m2 = s2; h2 = hs; y2 = s0.yw; al2 = al; }
         float2 o;
         float f = d;
-        if (s2.w < 0.5) {
+        if (panel) {
+            f = panelDistance(p, g1.y, o);
+        } else if (s2.w < 0.5) {
             f = softBox(p, s0, g1.y, o);
         } else {
             o = g;
-        }
-        if (panel) {
-            f = panelDistance(p, g1.y, o);
         }
         if (f < f1) { f2 = f1; o2 = o1; f1 = f; o1 = o; } else if (f < f2) { f2 = f; o2 = o; }
     }

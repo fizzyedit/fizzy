@@ -356,9 +356,6 @@ fn dumpPanelCoverage() !void {
 }
 
 test "a closed panel is its parent" {
-    comptime {
-        _ = &LiquidField.drawOutlines;
-    }
     const seams = [_]Seam{
         .{ .axis = .horizontal, .at = 30, .reach = 12 },
         .{ .axis = .vertical, .at = 150, .reach = 12 },
@@ -397,7 +394,6 @@ test "no bump at the seam while it opens" {
 }
 
 test "a through seam's pieces are rounded rects" {
-    try dumpPanelCoverage();
     const seams = [_]Seam{.{ .axis = .vertical, .at = 200, .gap = 12, .reach = 12 }};
     const f = panelField(&seams);
     try checkPieces(&f);
@@ -485,4 +481,46 @@ test "a drop still runs into a panel" {
     try testing.expect(panelSample(&f, 200, -4).coverage > 0.5);
     f.merge_px = 0;
     try testing.expectEqual(@as(f32, 0), panelSample(&f, 200, -4).coverage);
+}
+
+test "panel coverage evidence" {
+    try dumpPanelCoverage();
+}
+
+test "a drop cannot animate the panel material" {
+    var f = panelField(&.{});
+    f.panel.?.blur = 0.7;
+    f.panel.?.lens = 0.8;
+    f.add(.{ .rect = .{ .x = 500, .y = 0, .w = 20, .h = 20 }, .blur = 0.1, .lens = 0.2 });
+    const before = panelSample(&f, 100, 40);
+    f.shapes[0].blur = 0.9;
+    f.shapes[0].lens = 1.2;
+    const after = panelSample(&f, 100, 40);
+    try testing.expectEqual(before, after);
+    const groups = f.clusters();
+    const u = f.pack(panel_rect, false, groups.order[0..2]);
+    try testing.expectApproxEqAbs(@as(f32, 0.7), u.shapes[15][2][0], 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 0.8), u.shapes[15][2][1], 0.001);
+}
+
+test "nested seam tolerates coordinate rounding" {
+    const seams = [_]Seam{
+        .{ .axis = .horizontal, .at = 60, .gap = 12, .reach = 12 },
+        .{ .axis = .vertical, .at = 200, .span = .{ 0, 60.000004 }, .gap = 12, .reach = 12 },
+    };
+    const f = panelField(&seams);
+    const u = f.pack(panel_rect, false, &.{0});
+    try testing.expectEqual(@as(f32, 1), u.shapes[13][2][0]);
+    try testing.expectEqual(@as(f32, 1), u.shapes[13][1][3]);
+}
+
+test "panel outlines draw in a frame" {
+    var window = try dvui.testing.init(.{ .allocator = testing.allocator });
+    defer window.deinit();
+    const seams = [_]Seam{
+        .{ .axis = .horizontal, .at = 60, .gap = 12, .reach = 12 },
+        .{ .axis = .vertical, .at = 200, .span = .{ 0, 60 }, .gap = 12, .reach = 12 },
+    };
+    const f = panelField(&seams);
+    f.drawOutlines(.white);
 }

@@ -78,10 +78,13 @@ pub const Seam = struct {
     }
 };
 
+/// A shared material across the pieces, with directional edge lighting but no pointer light.
 pub const Panel = struct {
     rect: dvui.Rect.Physical,
     /// Top-left, top-right, bottom-right, bottom-left.
     radii: [4]f32 = @splat(0),
+    blur: f32 = 1,
+    lens: f32 = 1,
     /// Borrowed until drawing completes; at most max_seams, hosts first.
     seams: []const Seam,
 };
@@ -89,7 +92,7 @@ pub const Panel = struct {
 const ResolvedSeam = struct {
     span: [2]f32,
     radius: f32,
-    flags: u2 = 3,
+    ends: enum(u2) { start = 1, end = 2, both = 3 } = .both,
     host: ?usize = null,
 };
 
@@ -103,9 +106,12 @@ fn resolveSeam(p: Panel, i: usize) ResolvedSeam {
     std.debug.assert(r.span[0] < r.span[1]);
     for (p.seams[0..i], 0..) |host, j| {
         if (host.axis == seam.axis) continue;
-        if (r.span[0] != host.at and r.span[1] != host.at) continue;
+        // Physical pixel coordinates computed by different layouts can differ by a few ulps.
+        const tolerance = 4 * std.math.floatEps(f32) * @max(1, @abs(host.at));
+        const at_start = @abs(r.span[0] - host.at) <= tolerance;
+        if (!at_start and @abs(r.span[1] - host.at) > tolerance) continue;
         r.host = j;
-        r.flags = if (r.span[0] == host.at) 2 else 1;
+        r.ends = if (at_start) .end else .start;
         r.radius = std.math.lerp(radius, @min(radius, host.gap / 2), std.math.clamp(host.gap / host.reach, 0, 1));
         break;
     }
@@ -134,14 +140,14 @@ fn panelDistance(p: Panel, point: [2]f32, soft: f32, g: *[2]f32) f32 {
         const advance = smoothstep(0, 0.6, open); // Pinch before the cut corners finish rounding.
         var tip: f32 = 0;
         var direction: f32 = 0;
-        if (rs.flags == 3) {
+        if (rs.ends == .both) {
             const u = along - (rs.span[0] + rs.span[1]) / 2;
             tip = @max(len / 2 * (1 - advance) - @abs(u), 0);
             direction = if (u < 0) 1 else -1;
         } else {
-            const u = if (rs.flags == 1) along - rs.span[0] else rs.span[1] - along;
+            const u = if (rs.ends == .start) along - rs.span[0] else rs.span[1] - along;
             tip = @max(u - (len - half_gap) * advance, 0);
-            direction = if (rs.flags == 1) 1 else -1;
+            direction = if (rs.ends == .start) 1 else -1;
         }
         const length = @sqrt(v * v + tip * tip);
         const slot = length - half_gap;
@@ -165,7 +171,7 @@ fn panelDistance(p: Panel, point: [2]f32, soft: f32, g: *[2]f32) f32 {
 /// Asserts out can hold every piece (at most 1 + max_seams for non-crossing seams).
 pub fn pieces(p: Panel, out: []Shape) []Shape {
     std.debug.assert(p.seams.len <= max_seams and out.len > 0);
-    out[0] = .{ .rect = p.rect, .radii = p.radii };
+    out[0] = .{ .rect = p.rect, .radii = p.radii, .blur = p.blur, .lens = p.lens };
     var n: usize = 1;
     for (p.seams, 0..) |seam, si| {
         const rs = resolveSeam(p, si);
@@ -230,8 +236,7 @@ pub fn drawOutlines(self: *const LiquidField, color: dvui.Color) void {
 fn shapeAt(self: *const LiquidField, i: usize) Shape {
     if (i < self.len) return self.shapes[i];
     const p = self.panel.?;
-    const first: Shape = if (self.len > 0) self.shapes[0] else .{ .rect = p.rect };
-    return .{ .rect = p.rect, .radii = p.radii, .blur = first.blur, .lens = first.lens };
+    return .{ .rect = p.rect, .radii = p.radii, .blur = p.blur, .lens = p.lens };
 }
 
 fn shapeCount(self: *const LiquidField) usize {
@@ -356,6 +361,7 @@ pub fn clusters(self: *const LiquidField) Clusters {
     for (0..self.shapeCount()) |i| for (i + 1..self.shapeCount()) |j| {
         const a = self.shapeAt(i).rect.outsetAll(reach);
         const b = self.shapeAt(j).rect.outsetAll(reach);
+        // Tangent drops must share the panel group so its boundary can form a neck.
         if (self.panel != null and (i == self.len or j == self.len)) {
             if (a.x > b.x + b.w or b.x > a.x + a.w or a.y > b.y + b.h or b.y > a.y + a.h) continue;
         } else if (a.intersect(b).empty()) continue;
@@ -504,7 +510,7 @@ pub fn pack(self: *const LiquidField, covered: dvui.Rect.Physical, has_sharp: bo
             const rs = resolveSeam(p, i);
             u.shapes[max_shapes - 2 - i] = .{
                 .{ if (seam.axis == .vertical) 0 else 1, seam.at, rs.span[0], rs.span[1] },
-                .{ seam.gap, seam.reach, rs.radius, @floatFromInt(rs.flags) },
+                .{ seam.gap, seam.reach, rs.radius, @floatFromInt(@backingInt(rs.ends)) },
                 .{ if (rs.host) |h| @floatFromInt(h + 1) else 0, 0, 0, 0 },
             };
         };
@@ -626,8 +632,7 @@ pub fn applyLook(self: *const LiquidField, u: *Uniforms, l: glass_look.Look) voi
     u.widths = .{ l.edge_dark, lanes.widths[0], lanes.widths[1], lanes.widths[2] };
     u.light = lanes.light;
     u.edge = lanes.edge;
-    const limit: usize = if (self.panel != null) max_shapes - 1 else max_shapes;
-    const count = @min(self.shapeCount(), limit);
+    const count = self.shapeCount();
     for (u.shapes[0..count]) |*sh| sh[2][0] *= l.frost;
     if (self.edge != null or self.panel != null) u.shapes[max_shapes - 1][2][0] *= l.frost;
 }
@@ -806,8 +811,7 @@ pub fn sampleWith(self: *const LiquidField, p: dvui.Point.Physical, l: glass_loo
         var g: [2]f32 = undefined;
         const lim = @min(half[0], half[1]);
         const radii: [4]f32 = .{ @min(sh.radii[0], lim), @min(sh.radii[1], lim), @min(sh.radii[2], lim), @min(sh.radii[3], lim) };
-        var d = roundBox(.{ p.x - c[0], p.y - c[1] }, half, radii, &g);
-        if (is_panel) d = panelDistance(self.panel.?, .{ p.x, p.y }, 0, &g);
+        const d = if (is_panel) panelDistance(self.panel.?, .{ p.x, p.y }, 0, &g) else roundBox(.{ p.x - c[0], p.y - c[1] }, half, radii, &g);
         const mat: [3]f32 = .{ sh.blur, sh.lens, sh.light };
         var al: [2]f32 = .{ 0, 0 };
         if (lanes.edge[3] > 0) {
@@ -831,10 +835,7 @@ pub fn sampleWith(self: *const LiquidField, p: dvui.Point.Physical, l: glass_loo
             al2 = al;
         }
         var o: [2]f32 = g;
-        var f = if (sh.round) d else softBox(.{ p.x, p.y }, c, half, soft_k, &o);
-        if (is_panel) {
-            f = panelDistance(self.panel.?, .{ p.x, p.y }, soft_k, &o);
-        }
+        const f = if (is_panel) panelDistance(self.panel.?, .{ p.x, p.y }, soft_k, &o) else if (sh.round) d else softBox(.{ p.x, p.y }, c, half, soft_k, &o);
         if (f < f1) {
             f2 = f1;
             o2 = o1;
