@@ -18,6 +18,7 @@ pub const motion = @import("motion.zig");
 pub const FrameClock = @import("FrameClock.zig");
 pub const MotionClock = @import("MotionClock.zig");
 pub const input_time = @import("input_time.zig");
+pub const wheel_kind = @import("wheel_kind.zig");
 pub const prof = @import("prof.zig");
 
 // The glass's own test root (`build/app.zig`, on dvui's testing backend): the frost's capture
@@ -27,4 +28,5 @@ test {
     _ = liquid_blob;
     _ = MotionClock;
     _ = input_time;
+    _ = wheel_kind;
 }
