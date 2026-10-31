@@ -228,7 +228,7 @@ def run(job, job_dir, out, keep):
     thread = threading.Thread(target=heartbeat, daemon=True)
     thread.start()
     result = dict(protocol=1, job_id=job['id'], slot_id=slot_id, agent_kind=kind,
-                  model=os.environ.get('SLOT_MODEL', ''), os=os.environ.get('SLOT_OS', sys.platform),
+                  model=os.environ.get('SLOT_MODEL', ''), os=os.environ.get('SLOT_OS') or {'win32': 'windows', 'darwin': 'macos'}.get(sys.platform, sys.platform),
                   status='done', started_at=started, title=job.get('issue', {}).get('title', job['id']),
                   pr_body='', review=None, decline=None, gates=[], changed=dict(files=0, added=0, deleted=0))
     try:
