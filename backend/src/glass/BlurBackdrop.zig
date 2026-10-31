@@ -41,6 +41,10 @@ const Texture = dvui.Texture;
 
 const BlurBackdrop = @This();
 
+/// Bench only: repeat each pane's capture and draw. Entry sets it once on the UI thread.
+/// Real runs use 1; the extra draws run first.
+pub var repeat: u8 = 1;
+
 /// Physical-pixel rect this backdrop covers. Set by `init`.
 rect: Rect.Physical = .{},
 /// Fizzy addition: the physical pixels the last capture actually copied — `rect` snapped to whole
@@ -1255,9 +1259,18 @@ pub const FrostJob = struct {
         // Here, not at `queuePane`: a swap's photograph is drawn over the view after the view
         // has queued its glass, and is on the target by now.
         if (self.kept and changedUnder(self.backdrop.rect)) self.backdrop.markDirty();
-        // The capture, now that everything below this pane is on the target (again, if it was
-        // replayed into another target already this frame: `deinit`).
+        for (1..repeat) |_| {
+            self.backdrop.markDirty();
+            self.backdrop.deinit();
+            self.drawOnce();
+        }
+        // Each extra capture clears dirty; the final repetition also owes a capture.
+        if (repeat > 1) self.backdrop.markDirty();
         self.backdrop.deinit();
+        self.drawOnce();
+    }
+
+    fn drawOnce(self: *FrostJob) void {
         // Through the glass program where there is one: the same pane in one pass a pixel.
         if (self.field) |field| {
             const tex = self.backdrop.small orelse return;

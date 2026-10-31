@@ -1,0 +1,11 @@
+.{
+    .at_start = .{
+        .frame_times = .{ .p50_us = 0, .p99_us = 0 },
+        .peak_frame = .{ .target_switches = 0, .program_px = 0 },
+    },
+    .at_end = .{
+        .frame_times = .{ .p50_us = 1800, .p99_us = 2300 },
+        .peak_frame = .{ .target_switches = 216, .program_px = 7560000 },
+    },
+    .work_times = .{ .p50_us = 600 },
+}

@@ -27,6 +27,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const dvui = @import("dvui");
+const core = @import("core");
 const Demo = @import("Demo.zig");
 
 const log = std.log.scoped(.verdict);
@@ -64,6 +65,9 @@ pub const Expect = struct {
     max_peak_draws: ?u32 = null,
     max_peak_passes: ?u32 = null,
     max_peak_target_switches: ?u32 = null,
+    max_peak_program_px: ?u32 = null,
+    /// The profiler's work per frame at p50, microseconds.
+    max_work_p50_us: ?u32 = null,
     /// The slowest frame time a run may have at the 99th percentile, µs; null: no limit. Times
     /// wobble with the machine: for a run on known hardware, never a hosted runner.
     max_frame_p99_us: ?u32 = null,
@@ -113,6 +117,8 @@ pub const Verdict = struct {
     /// SDL's errors and warnings from launch to exit, shutdown included.
     sdl_errors: u32 = 0,
     sdl_warnings: u32 = 0,
+    /// Host profiler work at the tape's end, microseconds; zero while it was off.
+    work_times: if (has_health) dvui.backend.Health.FrameTimes else struct {} = .{},
     expect: Expect = .{},
 };
 
@@ -287,6 +293,13 @@ fn end(how: []const u8) bool {
     result.ended = how;
     result.wall_ms = @intCast(@divTrunc(std.Io.Clock.awake.now(io).nanoseconds - start_ns, std.time.ns_per_ms));
     result.at_end = health();
+    if (comptime has_health) {
+        const profiler = core.profile.host();
+        var work_ns: [core.profile.history_len]u32 = undefined;
+        const n = profiler.history_filled;
+        @memcpy(work_ns[0..n], profiler.history_work[0..n]);
+        result.work_times = dvui.backend.Health.percentiles(work_ns[0..n]);
+    }
     state = .ended;
     log.info("'{s}' {s}; quitting for the verdict", .{ result.tape, result.ended });
     return true;
@@ -334,6 +347,7 @@ pub fn finish(leaks: ?bool) u8 {
             over(expect.max_peak_passes, e.peak_frame.passes) or
             over(expect.max_peak_target_switches, e.peak_frame.target_switches) or
             over(expect.max_frame_p99_us, e.frame_times.p99_us)) fail(.budget);
+        if (benchFailure(expect, e.peak_frame.program_px, result.work_times.p50_us)) |f| fail(f);
     }
 
     result.failures = failures[0..failure_count];
@@ -362,4 +376,22 @@ pub fn finish(leaks: ?bool) u8 {
 fn over(limit: ?u32, value: u32) bool {
     const max = limit orelse return false;
     return value > max;
+}
+
+fn benchFailure(limits: Expect, program_px: u32, work_p50_us: u32) ?Failure {
+    if (over(limits.max_peak_program_px, program_px) or
+        over(limits.max_work_p50_us, work_p50_us)) return .budget;
+    return null;
+}
+
+test "program pixels over the expectation fail the run" {
+    const limits: Expect = .{ .max_peak_program_px = 1000 };
+    try std.testing.expectEqual(@as(?Failure, .budget), benchFailure(limits, 1001, 0));
+    try std.testing.expectEqual(@as(?Failure, null), benchFailure(limits, 1000, 0));
+}
+
+test "work over the expectation fails the run" {
+    const limits: Expect = .{ .max_work_p50_us = 4000 };
+    try std.testing.expectEqual(@as(?Failure, .budget), benchFailure(limits, 0, 4001));
+    try std.testing.expectEqual(@as(?Failure, null), benchFailure(limits, 0, 4000));
 }

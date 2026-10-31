@@ -66,6 +66,9 @@ pub const Counts = struct {
     passes: u32 = 0,
     /// Indexed draws issued, after consecutive draws that could merge did.
     draws: u32 = 0,
+    /// Draws through a custom program, and the physical pixels their vertex bounds cover.
+    program_draws: u32 = 0,
+    program_px: u32 = 0,
     /// Times the destination changed from one target (or the window) to another.
     target_switches: u32 = 0,
     /// Texture creations and updates uploaded.
@@ -325,4 +328,12 @@ test "a snapshot round-trips through ZON" {
     try std.testing.expectEqual(s.frame_times, back.frame_times);
     try std.testing.expectEqual(s.last_frame, back.last_frame);
     try std.testing.expectEqualStrings(s.first_sdl_error, back.first_sdl_error);
+}
+
+test "a program draw counts its pixels" {
+    var counts: Counts = .{};
+    counts.add(.{ .program_draws = 1, .program_px = 10 * 10 });
+    counts.add(.{ .program_draws = 1, .program_px = 20 * 5 });
+    try std.testing.expectEqual(@as(u32, 2), counts.program_draws);
+    try std.testing.expectEqual(@as(u32, 200), counts.program_px);
 }

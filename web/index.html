@@ -145,6 +145,8 @@
         persist: params.get("persist") !== "0",
         worker: worker === "1" ? true : worker === "0" ? false : undefined,
         form: form === "phone" ? "mobile" : form ?? undefined,
+        glassBench: params.get("glass_bench") ?? undefined,
+        glassRepeat: params.get("glass_repeat") ?? undefined,
         plugins: params.getAll("plugin"),
         open: params.getAll("open"),
         show: params.get("show") ?? undefined,

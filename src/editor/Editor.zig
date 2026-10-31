@@ -35,6 +35,7 @@ const restart = @import("app").restart;
 
 const Entry = fizzy.Entry;
 const Editor = @This();
+pub const GlassBench = @import("GlassBench.zig");
 pub const App = @import("app").App;
 pub const ExtensionConflict = App.ExtensionConflict;
 pub const PendingPluginFlags = App.PendingPluginFlags;
@@ -113,6 +114,7 @@ pub const Workspaces = @import("Workspaces.zig");
 
 /// The host runtime — everything an application on fizzy runs unchanged.
 app: App,
+glass_bench: ?GlassBench.Config = null,
 
 /// File-management workbench (per-branch explorer decorations, …)
 workbench: Workbench,
@@ -5077,6 +5079,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     }
     editor.saveWindowRatiosGuarded();
 
+    GlassBench.draw(editor.glass_bench);
     _ = editor.app.arena.reset(.retain_capacity);
 
     if (editor.app.pending_app_close) {

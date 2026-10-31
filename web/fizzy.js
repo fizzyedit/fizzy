@@ -217,6 +217,8 @@ let activeCopy = null;
  *   Default: in a worker on Chromium only. Never in a worker with `imports`.
  * @property {"desktop" | "tablet" | "mobile"} [form] - The form factor to take, in place of the
  *   device's (`core.platform.formFactor()`). Anything else is ignored.
+ * @property {string} [glassBench] - Visit-local glass benchmark scene.
+ * @property {number|string} [glassRepeat] - Glass benchmark repeat factor (1..32).
  * @property {HTMLElement} [fullscreenElement] - What View › Toggle Full Screen shows full screen.
  *   Default: the canvas's parent, so an embed fills the screen and the page around it does not.
  * @property {string[]} [plugins] - Ids of plugins to load from `plugins/<id>/<id>.wasm` beside the
@@ -1168,6 +1170,8 @@ export class Fizzy {
         wasmModule: module || null,
         webJsUrl: new URL("web.js?cache-buster=TEMPLATE_HASH_WITH_PADDING__ITS_64_BYTES_LONG_THE_SAME_AS_SHA256", import.meta.url).href,
         size: size(),
+        glassBench: opts.glassBench,
+        glassRepeat: opts.glassRepeat,
         prefs: prefs(),
         storage,
         storageName,
@@ -1442,6 +1446,11 @@ export class Fizzy {
           // The main-thread loop never sent the device to the editor, so Firefox and Safari
           // (which take this path) were always `.desktop`: send it now and on change.
           applyFormMain();
+          if (opts.glassBench && app.instance.exports.FizzyWebGlassBench) {
+            const bytes = new TextEncoder().encode(opts.glassBench);
+            const ptr = app.allocBuffer(app.instance.exports.arena_u8, bytes);
+            app.instance.exports.FizzyWebGlassBench(ptr, bytes.length, Number(opts.glassRepeat) || 1);
+          }
           for (const ev of ["resize", "orientationchange"]) window.addEventListener(ev, applyFormMain);
           for (const q of ["(pointer: coarse)", "(hover: none)"]) {
             window.matchMedia(q).addEventListener("change", applyFormMain);

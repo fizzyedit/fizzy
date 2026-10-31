@@ -1,0 +1,4 @@
+.{
+    .{ .gpu = "fixture-over", .max_pane_us = 1, .max_list_work_us = 1 },
+    .{ .gpu = "foxnne-phone", .max_list_work_us = 4000 },
+}

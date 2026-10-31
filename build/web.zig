@@ -173,6 +173,7 @@ pub fn build(
         "FizzyWebKeyBuffer",
         "FizzyWebKeyBound",
         "FizzyWebSetFormFactor",
+        "FizzyWebGlassBench",
         "FizzyWebSetKeyboardInset",
         "FizzyWebImageAlloc",
         "FizzyWebImageReady",

@@ -670,6 +670,11 @@ async function start(init) {
     app.setCanvas(env.canvas);
     applyForm();
     app.run();
+    if (init.glassBench && wasmInstance.exports.FizzyWebGlassBench) {
+        const bytes = utf8encode(init.glassBench);
+        const ptr = app.allocBuffer(wasmInstance.exports.arena_u8, bytes);
+        wasmInstance.exports.FizzyWebGlassBench(ptr, bytes.length, Number(init.glassRepeat) || 1);
+    }
     dvuiApp = app;
     app.requestRender();
     postMessage({ type: "ready" });

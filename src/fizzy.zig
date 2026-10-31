@@ -70,3 +70,8 @@ else if (@hasDecl(@import("backend"), "c"))
     @import("backend/backend_native.zig")
 else
     @import("backend/backend_web.zig");
+
+test {
+    _ = @import("editor/GlassBench.zig");
+    _ = @import("editor/verdict.zig");
+}

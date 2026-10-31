@@ -1680,6 +1680,14 @@ fn addTests(
         }
     }
 
+    const editor_tests = b.addTest(.{
+        .name = "fizzy-editor-tests",
+        .root_module = fizzy_test_module,
+        .filters = test_filters,
+    });
+    test_integration_step.dependOn(&b.addRunArtifact(editor_tests).step);
+    check_integration_step.dependOn(&editor_tests.step);
+
     const integration_module = b.addModule("fizzy-integration-tests", .{
         .target = target,
         .optimize = optimize,

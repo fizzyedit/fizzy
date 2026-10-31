@@ -88,6 +88,7 @@ deletes its own child there and never touches the rest.
 | `touch_plugin` | the plugin's own `zig build` in `plugins/text`, after a change to `plugins/text/src/Settings.zig` | `rebuild_time` |
 | `incr_app`, `incr_core`, `incr_plugin` | the same changes against a running `zig build -fincremental --watch`: time from the edit to the next Build Summary | `rebuild_time_incremental` |
 | `plugin_roundtrip` | the headless half of a plugin hot reload: change a plugin, build its dylib, install it into a profile | `build_install_time` |
+| `glass_bench_*` | `scripts/glass-bench.sh <gpu-name>`: fixed grid at repeat 1 and 9, or scrolling list at repeat 1 | `glass_pane_us` (grid), `work_p50_us`, `frame_p50_us`, `frame_p99_us`, `target_switches_peak`, `program_px_peak`; extra key `gpu` |
 | `test_build` | `zig build check` cold: compiles the unit tests without running them | `wall_time`, `compiler_peak_rss` |
 
 The change a rebuild makes is an appended `pub const perf_compile_probe_N = N;`: new content, so
@@ -170,3 +171,8 @@ once per recording. This is a bounded history sample, not a continuous recording
 `--store DIR`, `$FIZZY_PERF_STORE`, then `$XDG_DATA_HOME/fizzy/perf` (defaulting to
 `~/.local/share/fizzy/perf`) select the store as for `perf-compile`. The script prints the same
 lines it appends and rejects reports without retained frame rows.
+
+The glass benchmark accepts `--store DIR`, `$FIZZY_PERF_STORE` and `--no-store` as above.
+Set `FIZZY_BIN` to the built executable if it is not on PATH. Its GPU budgets live in
+`tests/tapes/glass-bench.budget.zon`; an unknown GPU records a baseline without a time gate.
+The list measures every row, including those outside the viewport, until the virtual-list arm ships.

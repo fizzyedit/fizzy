@@ -195,6 +195,12 @@ export fn FizzyWebSetFormFactor(coarse: bool, w_css: f32, h_css: f32, override: 
     return @backingInt(platform.formFactor());
 }
 
+/// Visit-local benchmark options, applied once after the editor starts on the UI thread.
+export fn FizzyWebGlassBench(ptr: [*]const u8, len: usize, factor: u32) void {
+    fizzy.editor().glass_bench = @import("../editor/GlassBench.zig").parse(ptr[0..len]);
+    core.widgets.BlurBackdrop.repeat = if (factor >= 1 and factor <= 32) @intCast(factor) else 1;
+}
+
 /// Called by the page (through the worker) when the on-screen keyboard opens, moves or closes:
 /// how far it covers the bottom of the page, in points. The canvas is not resized for it.
 export fn FizzyWebSetKeyboardInset(bottom: f32) void {
