@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import threading
@@ -36,6 +37,18 @@ def clean_env():
             and not k.upper().endswith('_TOKEN')}
 
 
+def rmtree(path, ignore_errors=False):
+    def fix(func, p, *_):
+        os.chmod(p, stat.S_IWRITE)  # git objects are read-only on Windows
+        func(p)
+    kw = {'onexc': fix} if sys.version_info >= (3, 12) else {'onerror': fix}
+    try:
+        shutil.rmtree(path, **kw)
+    except OSError:
+        if not ignore_errors:
+            raise
+
+
 def git(repo, *args, env=None):
     # Command-line config also covers clone/checkout before local config exists.
     return subprocess.check_output(['git', '-c', 'core.hooksPath=' + str(repo.parent / 'empty-hooks'),
@@ -56,7 +69,7 @@ def checkout(job, job_dir, home):
             source = (job_dir / bundle).resolve()
             git(home, 'init', '--bare', str(work))
             git(work, 'bundle', 'verify', str(source))
-            shutil.rmtree(work)
+            rmtree(work)
         else:
             source = home / 'mirror.git'
             if not source.exists():
@@ -70,7 +83,7 @@ def checkout(job, job_dir, home):
             raise BrokenSlot('HEAD differs from base.sha')
         return work
     except (OSError, subprocess.CalledProcessError) as exc:
-        shutil.rmtree(work, ignore_errors=True)
+        rmtree(work, ignore_errors=True)
         raise BrokenSlot('fetch/checkout failed') from exc
 
 
@@ -140,7 +153,12 @@ def stop_tree(proc):
 
 def execute(command, repo, log, deadline, prompt=None, shell=False):
     options = {'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == 'nt' else {'start_new_session': True}
-    with subprocess.Popen(command, cwd=repo, env=clean_env(), shell=shell,
+    env = clean_env()
+    if not shell and isinstance(command, list):
+        exe = shutil.which(command[0], path=env.get('PATH') or env.get('Path'))
+        if exe:
+            command = [exe, *command[1:]]
+    with subprocess.Popen(command, cwd=repo, env=env, shell=shell,
                           stdin=subprocess.PIPE if prompt is not None else subprocess.DEVNULL,
                           stdout=log, stderr=subprocess.STDOUT, **options) as proc:
         try:
@@ -299,7 +317,7 @@ def run(job, job_dir, out, keep):
         stop.set()
         thread.join()
         if not keep:
-            shutil.rmtree(work)
+            rmtree(work)
 
 
 def main(argv=None):

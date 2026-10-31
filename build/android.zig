@@ -5,11 +5,14 @@ const builtin = @import("builtin");
 const sdk = @import("sdk.zig");
 
 pub fn add(b: *std.Build) void {
+    const android_step = b.step("android", "Build the Android hello native library (needs -Dandroid-sdk)");
     const apk_step = b.step("apk", "Build zig-out/fizzy-hello.apk (needs -Dandroid-sdk)");
     // Options only, never the environment: see `build.zig`. Without the SDK the step says so, and
     // dvui's Android dependencies are never configured for a desktop build.
     const sdk_dir = b.option([]const u8, "android-sdk", "The Android SDK directory (platform 35, build-tools 35.0.0, NDK 27.2.12479018)") orelse {
-        apk_step.dependOn(&b.addFail("zig build apk: pass -Dandroid-sdk=<Android SDK directory>").step);
+        const missing_sdk = b.addFail("Android build: pass -Dandroid-sdk=<Android SDK directory>");
+        android_step.dependOn(&missing_sdk.step);
+        apk_step.dependOn(&missing_sdk.step);
         return;
     };
     const arch = b.option(enum { aarch64, x86_64 }, "android-arch", "aarch64 (phones, the default) or x86_64 (the emulator on an x86_64 host)") orelse .aarch64;
@@ -90,6 +93,8 @@ pub fn add(b: *std.Build) void {
         "-ldl",
         "-lm",
     });
+
+    android_step.dependOn(&b.addInstallFile(so, b.fmt("android/{s}/libfizzy_hello.so", .{abi})).step);
 
     // SDL's Java side (the same source the native side is built from), dexed with FizzyActivity,
     // beside the manifest and the library.
