@@ -49,12 +49,14 @@ nested: bool,
 /// The places of interest this frame (`notches`).
 notch_list: []const Fling.Notch = &.{},
 snap_with: ?Snap = null,
+lead: ?Lead = null,
 // Saved before children can advance or end dvui's drag on take-over.
 press_point: ?dvui.Point.Physical = null,
 finger_delta: dvui.Point = .{},
 
 /// Per-area state that outlives a frame: a fling per axis and whether a finger is dragging.
 const Touch = struct {
+    pad: f32 = 0,
     x: Fling = .{},
     y: Fling = .{},
     dragging: bool = false,
@@ -127,7 +129,23 @@ pub const tuning: Fling.Tuning = .{
     .idle_s = 0.08,
 };
 
+/// A piece outside the area that takes part of its vertical scroll: a top sheet.
+pub const Lead = struct {
+    ctx: *anyopaque,
+    /// How far the piece is open, 0 .. `range`, in points.
+    extent: *const fn (ctx: *anyopaque) f32,
+    range: *const fn (ctx: *anyopaque) f32,
+    /// Open (`by` < 0) or shut (`by` > 0) by up to `|by|`; returns the length used, never negative.
+    take: *const fn (ctx: *anyopaque, by: f32) f32,
+};
+pub const With = struct { lead: ?Lead = null };
+
 pub fn init(src: std.builtin.SourceLocation, init_opts: dvui.ScrollAreaWidget.InitOpts, opts: dvui.Options) ScrollArea {
+    return initWith(src, init_opts, opts, .{});
+}
+
+/// `init` with fizzy's own options; `init` is `initWith(.., .{})`.
+pub fn initWith(src: std.builtin.SourceLocation, init_opts: dvui.ScrollAreaWidget.InitOpts, opts: dvui.Options, with: With) ScrollArea {
     // lint-allow(raw-scroll-area): Wrapper implementation delegates layout to dvui.
     const area = dvui.scrollArea(src, init_opts, opts);
     const c = &area.scroll.?;
@@ -140,6 +158,9 @@ pub fn init(src: std.builtin.SourceLocation, init_opts: dvui.ScrollAreaWidget.In
         .touch = dvui.dataGetPtrDefault(null, c.data().id, "_touch", Touch, .{}),
         .bands = !have_parent and c.init_opts.frame_viewport == null and !c.init_opts.lock_visible,
     };
+
+    if (self.bands) self.lead = with.lead;
+    if (self.lead) |lead_piece| _ = lead_piece.extent(lead_piece.ctx);
 
     const dragging = dvui.currentWindow().dragging;
     if (dragging.state == .prestart) self.press_point = dragging.pt;
@@ -214,7 +235,10 @@ pub fn init(src: std.builtin.SourceLocation, init_opts: dvui.ScrollAreaWidget.In
     self.settle(was_coasting_x and t.seg_x.kind != .coast and t.over.x == 0, (was_coasting_y and t.seg_y.kind != .coast or was_seating and !t.seating) and t.over.y == 0);
     if (was_moving_x) t.glide_at.x = self.si.viewport.x;
     if (was_moving_y) t.glide_at.y = self.si.viewport.y;
-    if (c.init_opts.frame_viewport == null) c.frame_viewport = self.si.viewport.topLeft().plus(t.over);
+    if (c.init_opts.frame_viewport == null) {
+        c.frame_viewport = self.si.viewport.topLeft().plus(t.over);
+        if (self.lead) |piece| c.frame_viewport.y -= piece.extent(piece.ctx);
+    }
     return self;
 }
 
@@ -295,12 +319,16 @@ pub fn deinit(self: *ScrollArea) void {
     // A nested child's propagated motion sets this (parent) area's velocity through dvui's
     // `processMotionScroll`; clear it so dvui's coast never runs beside ours.
     self.si.velocity = .{};
+    var drawn = self.si.viewport.topLeft().plus(t.over);
+    t.pad = if (self.lead) |piece| piece.extent(piece.ctx) else 0;
+    drawn.y -= t.pad;
     if (was_dragging) {
-        const moved = self.si.viewport.topLeft().plus(t.over).diff(t.last_viewport);
+        const moved = drawn.diff(t.last_viewport);
         profile.scrollJump(moved.x, @abs(self.finger_delta.x) + 2);
         profile.scrollJump(moved.y, @abs(self.finger_delta.y) + 2);
     }
-    t.last_viewport = self.si.viewport.topLeft().plus(t.over);
+    t.last_viewport = drawn;
+    if (t.pad > 0) _ = dvui.spacer(@src(), .{ .min_size_content = .{ .h = t.pad } });
     self.area.deinit();
 }
 
@@ -454,7 +482,7 @@ fn processMotionScroll(self: *ScrollArea, motion: dvui.Point.Physical, scale: f3
             (motion.y > 0 and si.viewport.y > 0) or
             (motion.y < 0 and si.viewport.y < si.scrollMax(.vertical)))
         {
-            moved.y = drag(&si.viewport.y, &t.pull.y, &t.over.y, si.scrollMax(.vertical), si.viewport.h, -motion.y / scale, self.bands);
+            moved.y = self.moveY(-motion.y / scale);
         } else if (@abs(motion.y) > @abs(motion.x)) {
             propagate = true;
         }
@@ -481,6 +509,31 @@ fn processMotionScroll(self: *ScrollArea, motion: dvui.Point.Physical, scale: f3
         }
     }
     return moved;
+}
+
+// All finger travel crosses the page/sheet seam here; autonomous motion uses the page alone.
+fn moveY(self: *ScrollArea, by: f32) f32 {
+    const si = self.si;
+    const t = self.touch;
+    const piece = self.lead orelse return drag(&si.viewport.y, &t.pull.y, &t.over.y, si.scrollMax(.vertical), si.viewport.h, by, self.bands);
+    const before = si.viewport.y + t.over.y - piece.extent(piece.ctx);
+    const page_max = @max(0, si.scrollMax(.vertical) - t.pad);
+    var left = by;
+    if (left > 0) {
+        if (t.pull.y < 0) {
+            const used = @min(left, -t.pull.y);
+            _ = drag(&si.viewport.y, &t.pull.y, &t.over.y, page_max + piece.extent(piece.ctx), si.viewport.h, used, true);
+            left -= used;
+        }
+        left -= piece.take(piece.ctx, left);
+    } else if (left < 0) {
+        const used = @min(-left, si.viewport.y + @max(0, t.pull.y));
+        _ = drag(&si.viewport.y, &t.pull.y, &t.over.y, page_max + piece.extent(piece.ctx), si.viewport.h, -used, true);
+        left += used;
+        left += piece.take(piece.ctx, left);
+    }
+    if (left != 0) _ = drag(&si.viewport.y, &t.pull.y, &t.over.y, page_max + piece.extent(piece.ctx), si.viewport.h, left, true);
+    return si.viewport.y + t.over.y - piece.extent(piece.ctx) - before;
 }
 
 /// Move one axis for a finger that moved the content `by`, and return how far the content moved on

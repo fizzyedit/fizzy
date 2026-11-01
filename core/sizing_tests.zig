@@ -15,6 +15,7 @@ test {
     _ = @import("widgets/ContextWidget.zig");
     // Touch drag and fling of a scroll area.
     _ = @import("widgets/ScrollArea.zig");
+    _ = @import("widgets/top_sheet_tests.zig");
     // Hold to select, tap to clear, on a text layout.
     _ = @import("widgets/SelectableText.zig");
     // A tab's hand beside a split's arrow, and a tapped tab's hover look.

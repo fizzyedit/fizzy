@@ -43,6 +43,7 @@ pub const Popover = @import("widgets/Popover.zig");
 pub const ContextWidget = @import("widgets/ContextWidget.zig");
 /// `dvui.scrollArea` with a phone's touch drag and fling (see the file for what differs).
 pub const ScrollArea = @import("widgets/ScrollArea.zig");
+pub const TopSheet = @import("widgets/TopSheet.zig");
 /// A scrolling list of rows of different heights that draws only the rows in view, anchored to a
 /// row so rows added or measured above the reader never move it (see `HeightIndex`).
 pub const VirtualList = @import("widgets/VirtualList.zig");
