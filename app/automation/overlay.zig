@@ -1197,7 +1197,7 @@ test "a caption's card is made of the material tooltips, menus and popovers wear
         fn fieldOf(id: dvui.Id) ?bool {
             const job = dvui.dataGetPtr(null, id, "_frost_job", core.widgets.BlurBackdrop.FrostJob) orelse return null;
             if (job.rect.w <= 0) return null;
-            return job.field != null;
+            return job.fields.len > 0;
         }
         /// A window of its own each, so no frost is left over from the other's frame.
         fn drawnAt(b: f32, ready: bool) !void {

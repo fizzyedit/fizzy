@@ -994,7 +994,7 @@ pub const form_ms: f32 = 525;
 /// the frost replaces what it covers, so a shadow drawn first survives only outside), then this,
 /// then the contents. The caller paints no fill of its own — the tint is the fill.
 pub fn frostPane(id: dvui.Id, rect: Rect.Physical, corners: dvui.CornerRect, scale: f32, pane: Pane) void {
-    queuePane(id, rect, corners, scale, pane, null);
+    queuePane(id, rect, corners, scale, pane, &.{});
 }
 
 /// Fizzy addition: `field`'s shapes as one pane of glass, run together where they are close
@@ -1002,7 +1002,21 @@ pub fn frostPane(id: dvui.Id, rect: Rect.Physical, corners: dvui.CornerRect, sca
 /// own edges. Only where the glass program is (`LiquidField.ready`); otherwise draw panes.
 pub fn fieldPane(id: dvui.Id, field: LiquidField, scale: f32, pane: Pane) void {
     if (field.len == 0) return;
-    queuePane(id, field.bounds(), .{}, scale, pane, field);
+    queuePane(id, field.bounds(), .{}, scale, pane, &.{field});
+}
+
+/// `fieldPane` for several fields over ONE capture: the union of their bounds is copied and
+/// blurred once, and each field draws from it (the layer of `core.glass`). The fields are copied
+/// into the window's arena, so the slice need not outlive the call.
+pub fn fieldsPane(id: dvui.Id, fields: []const LiquidField, scale: f32, pane: Pane) void {
+    var rect: Rect.Physical = .{};
+    var any = false;
+    for (fields) |f| {
+        if (f.len == 0) continue;
+        rect = if (any) rect.unionWith(f.bounds()) else f.bounds();
+        any = true;
+    }
+    if (any) queuePane(id, rect, .{}, scale, pane, fields);
 }
 
 /// The antialiasing fringe, in physical pixels, that a pane's ink may reach past the clip and
@@ -1016,7 +1030,7 @@ pub fn inkWithin(ink: Rect.Physical, clip: Rect.Physical, margin_px: f32) bool {
         ink.y <= clip.y + clip.h + margin_px and ink.y + ink.h >= clip.y - margin_px;
 }
 
-fn queuePane(id: dvui.Id, rect: Rect.Physical, corners: dvui.CornerRect, scale: f32, pane: Pane, field: ?LiquidField) void {
+fn queuePane(id: dvui.Id, rect: Rect.Physical, corners: dvui.CornerRect, scale: f32, pane: Pane, fields: []const LiquidField) void {
     const job = dvui.dataGetPtrDefault(null, id, "_frost_job", FrostJob, .{});
     const backdrop = dvui.dataGetPtrDefault(null, id, "_frost", BlurBackdrop, .{});
     dvui.dataSetDeinitFunction(null, id, "_frost", &releaseTexture);
@@ -1087,7 +1101,7 @@ fn queuePane(id: dvui.Id, rect: Rect.Physical, corners: dvui.CornerRect, scale: 
         // The edge comes in with the blur, so a barely-frosted pane has barely an edge.
         .lens = lens,
         .refraction = pane.refraction,
-        .field = field,
+        .fields = if (fields.len > 0) dvui.currentWindow().arena().dupe(LiquidField, fields) catch &.{} else &.{},
         .clear = pane.clear,
         .kept = pane.witness != null,
     };
@@ -1218,7 +1232,7 @@ test "marks past the span's room widen its last rect" {
 }
 /// What `frostPane` hands to the replay. Lives in the data store under the owner's id (`_frost_job`),
 /// so the pointer is good until the frame ends. `pub` for the tests that check which glass a
-/// surface asked for: `field` set is the program's, null the rounded rect's.
+/// surface asked for: `fields` set is the program's, null the rounded rect's.
 pub const FrostJob = struct {
     backdrop: *BlurBackdrop = undefined,
     corners: dvui.CornerRect = .{},
@@ -1232,8 +1246,8 @@ pub const FrostJob = struct {
     /// How far the bevel refracts (`Pane.refraction`).
     refraction: f32 = 1,
     /// Shapes run together, drawn by the glass program, instead of the one rounded rect
-    /// (`fieldPane`).
-    field: ?LiquidField = null,
+    /// (`fieldPane`, `fieldsPane`); empty is the plain pane. All draw from the one capture.
+    fields: []const LiquidField = &.{},
     /// Clear glass (`Pane.clear`): the picture before the blur.
     clear: bool = false,
     /// Read only when its witness changes (`Pane.witness`), or what is under it changed in a way
@@ -1259,22 +1273,24 @@ pub const FrostJob = struct {
         // replayed into another target already this frame: `deinit`).
         self.backdrop.deinit();
         // Through the glass program where there is one: the same pane in one pass a pixel.
-        if (self.field) |field| {
+        if (self.fields.len > 0) {
             const tex = self.backdrop.small orelse return;
-            var f = field;
-            f.scale = self.scale;
-            f.tint = self.tint;
-            f.mix = self.mix;
-            f.lift = self.lift;
-            f.refraction = self.refraction;
-            // Each shape's edge as far as the pane's has formed (and the motion level allows).
-            for (f.shapes[0..f.len]) |*sh| {
-                sh.lens *= self.lens;
-                if (self.clear) sh.blur = 0;
-            }
             const sharp = self.backdrop.sharpTexture();
             const distinct = if (sharp) |t| t.ptr != tex.ptr else false;
-            _ = f.draw(tex, self.backdrop.coverage(), if (distinct) sharp else null);
+            for (self.fields) |field| {
+                var f = field;
+                f.scale = self.scale;
+                f.tint = self.tint;
+                f.mix = self.mix;
+                f.lift = self.lift;
+                f.refraction = self.refraction;
+                // Each shape's edge as far as the pane's has formed (and the motion level allows).
+                for (f.shapes[0..f.len]) |*sh| {
+                    sh.lens *= self.lens;
+                    if (self.clear) sh.blur = 0;
+                }
+                _ = f.draw(tex, self.backdrop.coverage(), if (distinct) sharp else null);
+            }
             return;
         }
         if (self.drawField()) return;
