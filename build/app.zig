@@ -1980,6 +1980,36 @@ fn addTests(
         bench_step.dependOn(&run_bench.step);
     }
 
+    // The full list benchmark prints timings; integration runs the same scenarios at 1k rows.
+    inline for (.{ false, true }) |smoke| {
+        const bench_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("tests/bench/bench_list.zig"),
+        });
+        bench_module.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
+        bench_module.addImport("core", core_module_test);
+        const bench_options = b.addOptions();
+        bench_options.addOption(bool, "smoke", smoke);
+        bench_module.addOptions("bench_list_options", bench_options);
+        const bench_list = b.addTest(.{
+            .name = if (smoke) "fizzy-bench-list-smoke" else "fizzy-bench-list",
+            .root_module = bench_module,
+            .filters = &.{if (smoke) "bench-list smoke" else "bench-list: variable-height rows"},
+        });
+        bench_list.root_module.link_libcpp = !target_is_windows_msvc;
+        if (target.result.os.tag == .windows)
+            bench_list.root_module.linkSystemLibrary("comctl32", .{});
+        const run_list = b.addRunArtifact(bench_list);
+        if (smoke) {
+            test_integration_step.dependOn(&run_list.step);
+            check_integration_step.dependOn(&bench_list.step);
+        } else {
+            run_list.has_side_effects = true;
+            b.step("bench-list", "Benchmark variable-height list frame and index costs").dependOn(&run_list.step);
+        }
+    }
+
     // `zig build bench-replay` — what a demo seek costs: the player replaying a recording-shaped
     // tape over the text editor's widget, silently (`Player.frames`) and a displayed frame at a
     // time as it used to. Same rules and harness as `bench-text`.
