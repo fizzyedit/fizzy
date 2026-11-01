@@ -404,8 +404,10 @@ fn wheelEvent(self: *ScrollArea, e: *dvui.Event) void {
     e.handle(@src(), c.data());
     self.touch.wheel_ns = dvui.frameTimeNS();
     self.touch.wheel_settle = true;
-    self.touch.rest_pending = true;
-    self.touch.wheel_dir = std.math.sign(by);
+    if (dir == .vertical) {
+        self.touch.rest_pending = true;
+        self.touch.wheel_dir = std.math.sign(by);
+    }
     dvui.timer(self.data().id, wheel_rest_ms * 1000);
     self.touch.x.cancel();
     self.touch.y.cancel();
@@ -778,6 +780,10 @@ var t_peak: f32 = 0;
 var t_snap: ?Snap = null;
 /// Viewport before deinit handles wheel events, written by testFrame on the test thread.
 var t_wheel_origin: f32 = 0;
+/// Set by horizontal wheel tests and read by wheel and testFrame on the test thread.
+var t_wheel_horizontal: bool = false;
+/// Written by testFrame after wheel handling on the test thread.
+var t_rest_glide: ?f32 = null;
 
 fn testFrame() !dvui.App.Result {
     if (t_motion_off) glass.motion.publish(0, 0.5, false, false, 1);
@@ -790,7 +796,7 @@ fn testFrame() !dvui.App.Result {
         _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 100, .h = 20000 } });
         t_viewport_y = scroll.si.viewport.y;
     } else {
-        var scroll = ScrollArea.init(@src(), .{ .horizontal = .none, .vertical_bar = .hide }, .{ .expand = .both, .margin = .{ .y = t_top } });
+        var scroll = ScrollArea.init(@src(), .{ .horizontal = if (t_wheel_horizontal) .auto else .none, .vertical_bar = .hide }, .{ .expand = .both, .margin = .{ .y = t_top } });
         scroll.notches(t_notches);
         if (t_snap) |provider| scroll.snap(provider);
         if (t_glide_to) |to| scroll.glideTo(.vertical, to);
@@ -810,6 +816,7 @@ fn testFrame() !dvui.App.Result {
         defer {
             t_wheel_origin = si.viewport.y;
             scroll.deinit();
+            t_rest_glide = scroll.touch.glide_y;
             t_release_velocity = scroll.touch.y.last_debug.vel;
             t_release_coasted = scroll.touch.y.last_debug.coasted;
         }
@@ -838,7 +845,7 @@ fn testFrame() !dvui.App.Result {
             text.deinit();
             return .ok;
         }
-        const child = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 100, .h = 20000 } });
+        const child = dvui.spacer(@src(), .{ .min_size_content = .{ .w = if (t_wheel_horizontal) 1000 else 100, .h = 20000 } });
         t_snapping = dvui.snapToPixels();
         t_draw_scale = child.rectScale().s;
         const y = child.rectScale().r.y;
@@ -1672,7 +1679,7 @@ test "fast returns stay catchable in short panes at every motion rate" {
 /// Script a wheel event with its per-event kind, as the backends do.
 fn wheel(by: f32, kind: dvui.enums.MouseType) !void {
     const cw = dvui.currentWindow();
-    _ = try cw.addEventMouseWheel(-by, .vertical, kind);
+    _ = try cw.addEventMouseWheel(-by, if (t_wheel_horizontal) .horizontal else .vertical, kind);
     glass.wheel_kind.set(cw, cw.event_num, kind);
 }
 
@@ -2139,6 +2146,13 @@ fn wheelRestCase(start: f32, by: f32, kind: dvui.enums.MouseType, target: f32) !
     t_jump_to = start;
     try frameAfter(16);
     try wheel(by, kind);
+    if (t_wheel_horizontal) {
+        try frameAfter(0);
+        try frameAfter(200);
+        try frameAfter(0);
+        try std.testing.expectEqual(start, t_viewport_y);
+        try std.testing.expectEqual(@as(?f32, null), t_rest_glide);
+    }
     // Rest selects its target in deinit; the glide starts one frame later in init.
     // Thirty-six frames spanning 600 ms at 60 Hz.
     for (0..12) |_| {
@@ -2232,4 +2246,12 @@ test "nothing outside capture moves" {
     t_notches = &.{ .{ .at = 0, .on_rest = true }, .{ .at = 1000, .on_rest = true } };
     defer t_notches = &.{};
     try wheelRestCase(0, 500, .mouse, 500);
+}
+
+test "a horizontal wheel does not start a vertical rest" {
+    t_notches = rest_notches;
+    defer t_notches = &.{};
+    t_wheel_horizontal = true;
+    defer t_wheel_horizontal = false;
+    try wheelRestCase(100, 80, .trackpad, 100);
 }
