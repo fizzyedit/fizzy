@@ -167,6 +167,7 @@ var blend_override: ?u2 = null;
 var target_is_fb = false;
 
 cursor_last: dvui.enums.Cursor = .wait,
+field_hints_last: ?u32 = null,
 /// Added to the page's clock by `nanoTime`: how far a demo's silent frames have moved the app's
 /// clock on (`app.automation.Player.frames`). Only grows.
 clock_ahead_ns: i128 = 0,
@@ -253,6 +254,7 @@ pub const wasm = if (!builtin.is_test) struct {
     pub extern "dvui" fn wasm_programMaxVec4() u32;
 
     pub extern "dvui" fn wasm_cursor(name: [*]const u8, name_len: usize) void;
+    pub extern "dvui" fn wasm_field_hints(bits: u32) void;
     pub extern "dvui" fn wasm_text_input(x: f32, y: f32, w: f32, h: f32) void;
     pub extern "dvui" fn wasm_open_url(ptr: [*]const u8, len: usize, new_window: bool) void;
     pub extern "dvui" fn wasm_preferred_color_scheme() u8;
@@ -356,6 +358,7 @@ pub const wasm = if (!builtin.is_test) struct {
     }
 
     pub fn wasm_cursor(_: [*]const u8, _: usize) void {}
+    pub fn wasm_field_hints(_: u32) void {}
     pub fn wasm_text_input(_: f32, _: f32, _: f32, _: f32) void {}
     pub fn wasm_open_url(_: [*]const u8, _: usize, _: bool) void {}
     pub fn wasm_preferred_color_scheme() u8 {
@@ -1176,7 +1179,12 @@ pub fn textureDestroyTarget(_: *WebBackend, texture: dvui.Texture.Target) void {
     gpu_totals.destroyed +%= 1;
 }
 
-pub fn textInputRect(_: *WebBackend, rect: ?dvui.Rect.Natural) void {
+pub fn textInputRect(self: *WebBackend, rect: ?dvui.Rect.Natural) void {
+    const hints = if (glass.field_hints.current()) |h| glass.field_hints.bits(h) else std.math.maxInt(u32);
+    if (self.field_hints_last != hints) {
+        wasm.wasm_field_hints(hints);
+        self.field_hints_last = hints;
+    }
     if (rect) |r| {
         wasm.wasm_text_input(r.x, r.y, r.w, r.h);
     } else {

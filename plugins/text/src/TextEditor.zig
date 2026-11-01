@@ -277,6 +277,7 @@ fn drawEditor(doc: *Document, ext: []const u8, id_extra: u64, gpa: std.mem.Alloc
 
     var te: TextEntryWidget = undefined;
     te.init(@src(), .{
+        .hints = .{ .kind = if (std.mem.eql(u8, ext, ".md") or std.mem.eql(u8, ext, ".markdown")) .text else .code },
         .multiline = true,
         .break_lines = false,
         // `TextLayoutWidget`'s cache_layout skip-ahead (`cacheLayoutNext`) jumps `insert_pt`
