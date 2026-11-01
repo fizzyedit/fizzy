@@ -14391,6 +14391,7 @@ const GlassLayerFrame = struct {
     const glass = fizzy.core.glass;
     const id: dvui.Id = @fromBackingInt(@intCast(802));
     var n_items: usize = 30;
+    var use_widget: bool = false;
     var viewport_y: f32 = 0;
     var max_diff: f32 = 0;
     var drawn: usize = 0;
@@ -14407,10 +14408,13 @@ const GlassLayerFrame = struct {
         var rects: [64]dvui.Rect.Physical = undefined;
         var expected: usize = 0;
         for (0..n_items) |i| {
-            var box = dvui.box(@src(), .{}, .{ .id_extra = i, .expand = .horizontal, .min_size_content = .{ .w = 100, .h = 50 }, .margin = .all(5) });
-            defer box.deinit();
-            const r = box.data().borderRectScale().r;
-            try std.testing.expect(l.add(.{ .shape = .{ .box = .{ .rect = r, .radii = @splat(8) } } }));
+            const opts: dvui.Options = .{ .id_extra = i, .expand = .horizontal, .min_size_content = .{ .w = 100, .h = 50 }, .margin = .all(5), .corners = .all(8) };
+            var card = fizzy.core.widgets.Glass.init(@src(), .{}, opts);
+            var box: ?*dvui.BoxWidget = null;
+            if (use_widget) card.install() else box = dvui.box(@src(), .{}, opts);
+            defer if (box) |b| b.deinit() else card.deinit();
+            const r = if (box) |b| b.data().borderRectScale().r else card.data().borderRectScale().r;
+            if (!use_widget) try std.testing.expect(l.add(.{ .shape = .{ .box = .{ .rect = r, .radii = @splat(8) } } }));
             if (glass.reaches(r)) {
                 rects[expected] = r;
                 expected += 1;
@@ -14428,11 +14432,22 @@ const GlassLayerFrame = struct {
 };
 
 test "fling: the glass never trails its item" {
+    GlassLayerFrame.use_widget = false;
+    try glassFling();
+}
+
+test "a scrolled Glass row is drawn where it is, every frame" {
+    GlassLayerFrame.use_widget = true;
+    defer GlassLayerFrame.use_widget = false;
+    try glassFling();
+}
+
+fn glassFling() !void {
     var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
     defer t.deinit();
     const F = GlassLayerFrame;
     fizzy.core.LiquidField.readyInTest(true);
-    F.n_items = 30;
+    F.n_items = if (F.use_widget) 20 else 30;
     F.max_diff = 0;
     F.drawn = 0;
     const cw = dvui.currentWindow();
@@ -14498,4 +14513,108 @@ test "a layer inside a scroll area is clipped to it" {
     try std.testing.expectEqual(1, drawn.len);
     try std.testing.expectEqual(card, drawn[0]);
     try std.testing.expectEqual(card.h / 2, card.intersect(command.clip).h);
+}
+
+const GlassWidgetFrame = struct {
+    const glass = fizzy.core.glass;
+    const Glass = fizzy.core.widgets.Glass;
+    var expected: dvui.Rect.Physical = .{};
+    var scale: f32 = 1;
+    var clip: dvui.Rect.Physical = .{};
+    var child_drew: bool = false;
+    var jobs_before: usize = 0;
+    var clipped: bool = false;
+
+    fn child(_: ?*anyopaque) void {
+        child_drew = glass.drawnDetails().jobs == jobs_before + 1 and glass.drawnRects().len == 1;
+    }
+
+    fn single() !dvui.App.Result {
+        jobs_before = glass.drawnDetails().jobs;
+        var card = Glass.init(@src(), .{}, .{ .expand = .both, .corners = .all(8) });
+        card.install();
+        const rs = card.data().borderRectScale();
+        expected = rs.r;
+        scale = rs.s;
+        dvui.deferRender(null, child);
+        card.deinit();
+        return .ok;
+    }
+
+    fn joined() !dvui.App.Result {
+        var l = glass.layer(GlassLayerFrame.id, .{ .merge = 12 });
+        scale = dvui.parentGet().screenRectScale(.{}).s;
+        for (0..2) |i| {
+            var card = Glass.init(@src(), .{ .group = 1 }, .{ .id_extra = i, .min_size_content = .{ .w = 100, .h = 50 } });
+            card.install();
+            card.deinit();
+        }
+        l.end();
+        return .ok;
+    }
+
+    fn clippedChild(_: ?*anyopaque) void {
+        const clips = glass.drawnDetails().clips;
+        clipped = clips.len == 1 and std.meta.eql(clip, clips[0]);
+    }
+
+    fn nested() !dvui.App.Result {
+        var l = glass.layer(GlassLayerFrame.id, .{});
+        defer l.end();
+        var outer = fizzy.core.widgets.ScrollArea.init(@src(), .{ .horizontal = .none }, .{ .expand = .both });
+        defer outer.deinit();
+        var inner = fizzy.core.widgets.ScrollArea.init(@src(), .{ .horizontal = .none }, .{ .rect = .{ .x = 20, .y = 30, .w = 150, .h = 100 } });
+        defer inner.deinit();
+        clip = dvui.clipGet();
+        var card = Glass.init(@src(), .{}, .{ .min_size_content = .{ .w = 100, .h = 50 } });
+        card.install();
+        try std.testing.expect(!std.meta.eql(l.clip().?, clip));
+        try std.testing.expectEqual(clip, glass.current().clip().?);
+        dvui.deferRender(null, clippedChild);
+        card.deinit();
+        // Its replay is queued under the enclosing layer, carrying the scroll clip.
+        const cw = dvui.currentWindow();
+        const commands = cw.defer_render.?.normal.items;
+        try std.testing.expectEqual(clip, commands[commands.len - 1].clip);
+        return .ok;
+    }
+};
+
+test "a Glass box adds its laid-out rect and corners" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 200 } });
+    defer t.deinit();
+    fizzy.core.LiquidField.readyInTest(true);
+    _ = try dvui.testing.step(GlassWidgetFrame.single);
+    try std.testing.expectEqualSlices(dvui.Rect.Physical, &.{GlassWidgetFrame.expected}, fizzy.core.glass.drawnRects());
+    try std.testing.expectEqual(@as([4]f32, @splat(8 * GlassWidgetFrame.scale)), fizzy.core.glass.drawnDetails().radii[0]);
+}
+
+test "a Glass with no layer opens its own, under its children" {
+    var t = try dvui.testing.init(.{});
+    defer t.deinit();
+    fizzy.core.LiquidField.readyInTest(true);
+    GlassWidgetFrame.child_drew = false;
+    _ = try dvui.testing.step(GlassWidgetFrame.single);
+    try std.testing.expect(GlassWidgetFrame.child_drew);
+    try std.testing.expect(!fizzy.core.glass.current().active());
+}
+
+test "two Glass widgets in one layer and group join" {
+    var t = try dvui.testing.init(.{});
+    defer t.deinit();
+    fizzy.core.LiquidField.readyInTest(true);
+    _ = try dvui.testing.step(GlassWidgetFrame.joined);
+    const drawn = fizzy.core.glass.drawnDetails();
+    try std.testing.expectEqual(1, drawn.fields);
+    try std.testing.expectEqual(2, drawn.shapes);
+    try std.testing.expectEqual(12 * GlassWidgetFrame.scale, drawn.merge);
+}
+
+test "a Glass in a nested scroll area opens its own layer with that clip" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 200 } });
+    defer t.deinit();
+    fizzy.core.LiquidField.readyInTest(true);
+    GlassWidgetFrame.clipped = false;
+    _ = try dvui.testing.step(GlassWidgetFrame.nested);
+    try std.testing.expect(GlassWidgetFrame.clipped);
 }

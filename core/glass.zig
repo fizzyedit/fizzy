@@ -35,6 +35,7 @@ pub const Box = struct {
 
 pub const Shape = union(enum) {
     box: Box,
+    panel: LiquidField.Panel,
 };
 
 /// One piece of glass in a layer.
@@ -111,13 +112,21 @@ pub fn layer(id: dvui.Id, opts: LayerOptions) Layer {
         .pane = pane,
         .scale = dvui.parentGet().screenRectScale(.{}).s,
         .subwindow = dvui.subwindowCurrentId(),
+        .clip = dvui.clipGet(),
+        .previous = current().job,
         .prev_rendering = dvui.renderingSet(false),
         .prev_queues = cw.defer_render,
     };
+    dvui.dataSet(null, job.subwindow, "core.glass.layer", @as(?*Job, job));
     cw.defer_render = &job.queues;
     // First in the span's queue, so under every item; the items fill `job.items` as they lay out.
     dvui.deferRender(job, Job.drawGlass);
     return .{ .job = job };
+}
+
+/// The innermost open layer of this subwindow, or an empty layer. Valid only this frame.
+pub fn current() Layer {
+    return .{ .job = dvui.dataGet(null, dvui.subwindowCurrentId(), "core.glass.layer", ?*Job) orelse null };
 }
 
 pub const Layer = struct {
@@ -128,11 +137,21 @@ pub const Layer = struct {
         return self.job != null;
     }
 
+    /// The physical clip under which this layer opened, or null for an empty layer.
+    pub fn clip(self: Layer) ?dvui.Rect.Physical {
+        return if (self.job) |job| job.clip else null;
+    }
+
     /// An item of this frame, right after its widget lays out. False on an empty layer: the caller
     /// paints its fallback.
     pub fn add(self: *Layer, item: Item) bool {
         const job = self.job orelse return false;
-        job.items.append(dvui.currentWindow().arena(), item) catch return false;
+        const arena = dvui.currentWindow().arena();
+        var owned = item;
+        if (owned.shape == .panel) {
+            owned.shape.panel.seams = arena.dupe(LiquidField.Seam, item.shape.panel.seams) catch return false;
+        }
+        job.items.append(arena, owned) catch return false;
         return true;
     }
 
@@ -142,6 +161,7 @@ pub const Layer = struct {
         const cw = dvui.currentWindow();
         std.debug.assert(cw.defer_render == &job.queues);
         std.debug.assert(dvui.subwindowCurrentId() == job.subwindow);
+        dvui.dataSet(null, job.subwindow, "core.glass.layer", job.previous);
         cw.defer_render = job.prev_queues;
         _ = dvui.renderingSet(job.prev_rendering);
         dvui.deferRender(job, Job.replay);
@@ -154,6 +174,8 @@ const Job = struct {
     pane: BlurBackdrop.Pane,
     scale: f32,
     subwindow: dvui.Id,
+    clip: dvui.Rect.Physical,
+    previous: ?*Job,
     prev_rendering: bool,
     prev_queues: ?*dvui.RenderQueues,
     queues: dvui.RenderQueues = .{},
@@ -172,22 +194,32 @@ const Job = struct {
         var fields: std.ArrayList(LiquidField) = .empty;
         var groups: std.ArrayList(u16) = .empty;
         for (job.items.items) |item| {
-            const box = item.shape.box;
+            const box: Box = switch (item.shape) {
+                .box => |b| b,
+                .panel => |p| .{ .rect = p.rect, .radii = p.radii },
+            };
             if (!reaches(box.rect)) continue;
-            // Only a group's newest field is open: the one before it is full.
+            // Only a group's newest field is open; earlier ones have filled or taken a panel.
             var open: ?usize = null;
             var i = fields.items.len;
             while (i > 0) {
                 i -= 1;
-                if (groups.items[i] == item.group and fields.items[i].len < field_items) {
-                    open = i;
-                    break;
-                }
+                if (groups.items[i] != item.group) continue;
+                if (fields.items[i].len < field_items and
+                    (item.shape != .panel or fields.items[i].panel == null)) open = i;
+                break;
             }
             if (open == null) {
                 fields.append(arena, job.newField(item.group)) catch return;
                 groups.append(arena, item.group) catch return;
                 open = fields.items.len - 1;
+            }
+            if (item.shape == .panel) {
+                var panel = item.shape.panel;
+                panel.blur = item.blur;
+                panel.lens = item.lens;
+                fields.items[open.?].panel = panel;
+                continue;
             }
             fields.items[open.?].add(.{
                 .rect = box.rect,
@@ -208,7 +240,10 @@ const Job = struct {
             const bs = dialogs.surfaceShadow();
             const s = job.scale;
             for (job.items.items) |item| {
-                const box = item.shape.box;
+                const box: Box = switch (item.shape) {
+                    .box => |b| b,
+                    .panel => |p| .{ .rect = p.rect, .radii = p.radii },
+                };
                 if (!reaches(box.rect.insetAll(-bs.fade * s))) continue;
                 record.shadow();
                 const r = box.radii;
@@ -246,6 +281,9 @@ const record = if (builtin.is_test) struct {
     var field_lens: [8]usize = undefined;
     var field_merge: [8]f32 = undefined;
     var fields: usize = 0;
+    var panels: usize = 0;
+    var radii: [64][4]f32 = undefined;
+    var clips: [64]dvui.Rect.Physical = undefined;
     var rects: [64]dvui.Rect.Physical = undefined;
     var order: [128]Tag = undefined;
     var order_len: usize = 0;
@@ -256,6 +294,7 @@ const record = if (builtin.is_test) struct {
         glass_shapes = 0;
         shadow_shapes = 0;
         fields = 0;
+        panels = 0;
         order_len = 0;
     }
     fn log(tag: Tag) void {
@@ -266,6 +305,7 @@ const record = if (builtin.is_test) struct {
         glass_shapes = 0;
         shadow_shapes = 0;
         fields = 0;
+        panels = 0;
         jobs += 1;
         log(.glass);
     }
@@ -275,8 +315,13 @@ const record = if (builtin.is_test) struct {
             field_merge[fields] = f.merge_px;
         }
         fields += 1;
+        if (f.panel != null) panels += 1;
         for (f.shapes[0..f.len]) |sh| {
-            if (glass_shapes < rects.len) rects[glass_shapes] = sh.rect;
+            if (glass_shapes < rects.len) {
+                rects[glass_shapes] = sh.rect;
+                radii[glass_shapes] = sh.radii;
+                clips[glass_shapes] = dvui.clipGet();
+            }
             glass_shapes += 1;
         }
     }
@@ -526,4 +571,66 @@ test "groups do not join" {
     try std.testing.expectEqual(12 * scale, record.field_merge[1]);
     try std.testing.expectEqual(2, record.field_lens[2]);
     try std.testing.expectEqual(0, record.field_merge[2]);
+}
+
+/// Replay details for headless widget tests; valid until the next replay.
+pub fn drawnDetails() struct { radii: []const [4]f32, clips: []const dvui.Rect.Physical, jobs: usize, fields: usize, shapes: usize, merge: f32 } {
+    if (!builtin.is_test) @compileError("drawnDetails is for tests");
+    const n = @min(record.glass_shapes, record.rects.len);
+    return .{ .jobs = record.jobs, .radii = record.radii[0..n], .clips = record.clips[0..n], .fields = record.fields, .shapes = record.glass_shapes, .merge = if (record.fields > 0) record.field_merge[0] else 0 };
+}
+
+fn currentFrame() !dvui.App.Result {
+    try std.testing.expect(!current().active());
+    var outer = layer(test_id, .{});
+    try std.testing.expectEqual(outer.job, current().job);
+    var inner = layer(test_id, .{});
+    try std.testing.expectEqual(inner.job, current().job);
+    inner.end();
+    try std.testing.expectEqual(outer.job, current().job);
+    outer.end();
+    try std.testing.expect(!current().active());
+    return .ok;
+}
+
+test "current is the innermost layer, and none after end" {
+    var t = try dvui.testing.init(.{});
+    defer t.deinit();
+    resetTest();
+    _ = try dvui.testing.step(currentFrame);
+    _ = try dvui.testing.step(currentFrame);
+}
+
+fn panelFrame() !dvui.App.Result {
+    record.reset();
+    var l = layer(test_id, .{ .merge = 12 });
+    var seams = [_]LiquidField.Seam{
+        .{ .axis = .vertical, .at = 50, .reach = 8 },
+        .{ .axis = .horizontal, .at = 60, .reach = 8 },
+    };
+    try std.testing.expect(l.add(.{ .shape = .{ .panel = .{ .rect = .{ .x = 10, .y = 10, .w = 100, .h = 100 }, .radii = @splat(8), .seams = &seams } }, .group = 1 }));
+    // The layer owns its seams even when the caller reuses its buffer before replay.
+    seams[0].at = 70;
+    try std.testing.expectEqual(50, l.job.?.items.items[0].shape.panel.seams[0].at);
+    for (0..2) |i| try std.testing.expect(l.add(.{ .shape = .{ .box = .{ .rect = testRect(i) } }, .group = 1 }));
+    l.end();
+    try std.testing.expectEqual(1, record.fields);
+    try std.testing.expectEqual(1, record.panels);
+    try std.testing.expectEqual(2, record.glass_shapes);
+    l = layer(test_id, .{ .merge = 12 });
+    for (0..2) |_| try std.testing.expect(l.add(.{ .shape = .{ .panel = .{ .rect = testRect(0), .seams = &seams } }, .group = 1 }));
+    try std.testing.expect(l.add(.{ .shape = .{ .box = .{ .rect = testRect(1) } }, .group = 1 }));
+    l.end();
+    try std.testing.expectEqual(2, record.fields);
+    try std.testing.expectEqual(2, record.panels);
+    try std.testing.expectEqual(0, record.field_lens[0]);
+    try std.testing.expectEqual(1, record.field_lens[1]);
+    return .ok;
+}
+
+test "a panel item becomes the field's panel" {
+    var t = try dvui.testing.init(.{});
+    defer t.deinit();
+    resetTest();
+    _ = try dvui.testing.step(panelFrame);
 }
