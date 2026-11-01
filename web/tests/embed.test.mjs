@@ -220,9 +220,11 @@ globalThis.Worker = class {
 };
 const workerCanvas = document.createElement("canvas");
 workerCanvas.parentElement = new Element();
+const focusBefore = (window.listeners.focus ?? []).length;
 await new Promise((resolve, reject) => {
   new Fizzy({ canvas: workerCanvas, worker: true, persist: false, onReady: resolve, onError: reject }).run();
 });
+assert.equal((window.listeners.focus ?? []).length - focusBefore, 2, "worker mode adds only startWorker's two window focus listeners");
 assert.equal(earlyTextInputs, 1, "worker text input is handled during setup");
 assert.equal(filterClears, 1, "entering text input clears the initialized filter");
 assert.equal(document.body.children[0].style.left, "10px", "early text input positions the hidden input");
