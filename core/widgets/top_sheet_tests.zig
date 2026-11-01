@@ -221,3 +221,103 @@ test "one sheet, two pages" {
     try std.testing.expectEqual(@as(f32, 0), pages[0].viewport.y);
     try std.testing.expectEqual(@as(f32, 300), pages[1].viewport.y);
 }
+
+test "a fast flick shuts the sheet and carries on into the page" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    reset(180);
+    try dvui.testing.settle(testFrame);
+    try touchDown();
+    for (0..3) |_| try touchMove(-20);
+    try lift();
+    var crossed = false;
+    var prior_move: f32 = 20;
+    for (0..300) |_| {
+        const before = drawn_top;
+        const e = sheet.extent;
+        try frameAfter(16);
+        const moved = @abs(drawn_top - before);
+        if (e > 0 and sheet.extent == 0) {
+            crossed = true;
+            try std.testing.expect(@abs(moved - prior_move) < prior_move * 0.1);
+        }
+        prior_move = moved;
+    }
+    try std.testing.expect(crossed);
+    try std.testing.expectEqual(@as(f32, 0), sheet.extent);
+    try std.testing.expect(offset > 300);
+}
+
+test "a coast down from a part-open sheet opens it" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    reset(60);
+    try dvui.testing.settle(testFrame);
+    try touchDown();
+    for (0..3) |_| try touchMove(20);
+    try lift();
+    for (0..300) |_| try frameAfter(16);
+    try std.testing.expectEqual(@as(f32, 180), sheet.extent);
+    try std.testing.expectEqual(@as(f32, 0), offset);
+    try std.testing.expectEqual(@as(f32, 0), over);
+}
+
+test "a coast down a long page does not open the sheet" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    reset(0);
+    try dvui.testing.settle(testFrame);
+    pages[0].viewport.y = 600;
+    try dvui.testing.settle(testFrame);
+    try touchDown();
+    for (0..3) |_| try touchMove(20);
+    try lift();
+    var bounced = false;
+    for (0..300) |_| {
+        try frameAfter(16);
+        bounced = bounced or over < 0;
+        try std.testing.expectEqual(@as(f32, 0), sheet.extent);
+    }
+    try std.testing.expect(bounced);
+    try std.testing.expectEqual(@as(f32, 0), offset);
+    try std.testing.expectEqual(@as(f32, 0), over);
+}
+
+test "a pull that catches a coast goes on into the sheet" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    for ([_]f32{ 24, 36 }) |speed| {
+        reset(0);
+        try dvui.testing.settle(testFrame);
+        pages[0].viewport.y = 300;
+        try dvui.testing.settle(testFrame);
+        try touchDown();
+        for (0..4) |_| try touchMove(speed);
+        try lift();
+        if (speed == 24) {
+            try std.testing.expect(offset > 0);
+            try touchDown();
+            for (0..18) |_| {
+                const before = drawn_top;
+                try touchMove(20);
+                try std.testing.expectEqual(@as(f32, 20), drawn_top - before);
+            }
+        } else {
+            var frames: usize = 0;
+            while (over > -20 and frames < 300) : (frames += 1) try frameAfter(16);
+            try std.testing.expect(over <= -20);
+            const caught = -over;
+            const before = drawn_top;
+            try touchDown();
+            try std.testing.expectEqual(caught, sheet.extent);
+            try std.testing.expectEqual(@as(f32, 0), over);
+            try std.testing.expectEqual(before, drawn_top);
+            try touchMoves(60, 20);
+            try std.testing.expectEqual(caught + 60, sheet.extent);
+            try std.testing.expectEqual(@as(f32, 0), over);
+        }
+        for (0..10) |_| try frameAfter(16);
+        try lift();
+        for (0..300) |_| try frameAfter(16);
+    }
+}
