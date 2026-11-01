@@ -257,10 +257,6 @@ export class Fizzy {
     const opts = this.opts;
     const storageName = this.storageName;
     let focusEpoch = 0;
-    window.addEventListener("focus", () => {
-      focusEpoch++;
-      if (dvuiApp) dvuiApp.requestRender();
-    });
     const fileKey = (path) => path === "fizzyedit.person" ? path : storageName + ".file:" + path;
     const persists = opts.persist !== false;
     const onReady = opts.onReady ?? (() => {});
@@ -1383,6 +1379,10 @@ export class Fizzy {
         onError(`Failed to load the editor (${err instanceof Error ? err.message : String(err)}).`);
       });
     } else {
+      window.addEventListener("focus", () => {
+        focusEpoch++;
+        if (dvuiApp) dvuiApp.requestRender();
+      });
       const wasmUrl = new URL("web.wasm?cache-buster=TEMPLATE_HASH_WITH_PADDING__ITS_64_BYTES_LONG_THE_SAME_AS_SHA256", import.meta.url).href;
       waitForLayout()
         .then(() => {
