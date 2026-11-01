@@ -12,6 +12,8 @@
 test {
     _ = @import("glass.zig");
     _ = @import("widgets/Split.zig");
+    // An over-long seams slice is clamped to what the field draws.
+    _ = @import("widgets/Glass.zig");
     _ = @import("widgets/ContextWidget.zig");
     // Touch drag and fling of a scroll area.
     _ = @import("widgets/ScrollArea.zig");
