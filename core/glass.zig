@@ -33,6 +33,8 @@ pub const Box = struct {
     round: bool = false,
 };
 
+pub const Morph = @import("glass_morph.zig");
+
 pub const Shape = union(enum) {
     box: Box,
     panel: LiquidField.Panel,
