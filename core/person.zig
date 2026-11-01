@@ -7,6 +7,21 @@ pub const Person = struct {
     motion: ?f32 = null,
 };
 
+/// Whether a failed save is news: the first failure after a success is; the retries of the same failure are not.
+pub const SaveStreak = struct {
+    failing: bool = false,
+
+    pub fn failed(s: *SaveStreak) bool {
+        const first = !s.failing;
+        s.failing = true;
+        return first;
+    }
+
+    pub fn saved(s: *SaveStreak) void {
+        s.failing = false;
+    }
+};
+
 /// Missing or invalid preferences leave the application's defaults in effect.
 pub fn load(io: std.Io, dir: []const u8) Person {
     // Preferences contain one scalar; bounded scratch also bounds malformed input.
@@ -65,4 +80,13 @@ test "preferences round trip, invalid files, and atomic replacement" {
     try std.testing.expectEqual(@as(f32, 0.3), motionLevel(.{}, 0.3));
     try std.testing.expectEqual(@as(f32, 0.8), motionLevel(load(io, dir), 0.3));
     try std.testing.expectEqual(@as(f32, 0.8), motionLevel(load(io, dir), 1));
+}
+
+test "a failing save reports once per streak until a save succeeds" {
+    var s: SaveStreak = .{};
+    try std.testing.expect(s.failed());
+    try std.testing.expect(!s.failed());
+    try std.testing.expect(!s.failed());
+    s.saved();
+    try std.testing.expect(s.failed());
 }
