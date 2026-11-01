@@ -628,6 +628,7 @@ async function start(init) {
 
     // What `web.js` does on the page, done by the page.
     imports.wasm_cursor = (ptr, len) => postMessage({ type: "cursor", name: app.stringFromPointer(ptr, len) });
+    imports.wasm_field_hints = (bits) => postMessage({ type: "fieldHints", bits });
     const textInput = imports.wasm_text_input;
     let lastTextRect = "";
     imports.wasm_text_input = (x, y, w, h) => {

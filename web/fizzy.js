@@ -7,6 +7,20 @@
 // Stamped by the build (`build/web.zig`): the hash of what it loads, and the storage name
 // (`-Dweb-storage`).
 
+// Apply the focused field's keyboard policy to the worker's hidden input.
+export function fieldHints(el, bits) {
+  if ((bits >>> 0) === 0xFFFFFFFF) {
+    for (const name of ["autocorrect", "spellcheck", "inputmode", "enterkeyhint"]) el.removeAttribute(name);
+    el.setAttribute("autocapitalize", "none");
+    return;
+  }
+  el.setAttribute("autocorrect", bits & 64 ? "on" : "off");
+  el.setAttribute("spellcheck", bits & 64 ? "true" : "false");
+  el.setAttribute("autocapitalize", bits & 128 ? "sentences" : "none");
+  el.setAttribute("inputmode", ["text", "text", "url", "email", "numeric", "search"][bits & 7]);
+  el.setAttribute("enterkeyhint", ["enter", "send", "done", "next", "search"][(bits >>> 3) & 7]);
+}
+
 // Pixel deltas are CSS pixels. Only discrete notches are normalized to ticks.
 // The backend uses 80 points per tick for continuous input on the web.
 export function wheelTicks(ev, state) {
@@ -1224,6 +1238,7 @@ export class Fizzy {
           case "cursor":
             canvas.style.cursor = m.name;
             break;
+          case "fieldHints": fieldHints(hidden, m.bits); break;
           case "textInput":
             if ((textInputRect.length === 0) !== (m.rect.length === 0)) inputFilter.clear();
             textInputRect = m.rect;

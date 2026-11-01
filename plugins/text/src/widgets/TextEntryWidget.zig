@@ -4,6 +4,7 @@ const builtin = @import("builtin");
 const std = @import("std");
 const dvui = @import("dvui");
 const sdk = @import("fizzy_sdk");
+const field_hints = @import("core").field_hints;
 const perf = @import("core").perf;
 const palette = @import("core").palette;
 const tc = @import("../textcore/textcore.zig");
@@ -287,6 +288,7 @@ pub const InitOptions = struct {
 
     pub const TreeSitterOption = TreeSitterHighlight;
 
+    hints: ?field_hints.Hints = null,
     text: TextOption = .{ .internal = .{} },
     tree_sitter: ?TreeSitterHighlight = null,
     /// Faded text shown when the textEntry is empty
@@ -1366,6 +1368,7 @@ pub fn drawBeforeText(self: *TextEntryWidget) void {
 
     if (focused) {
         dvui.wantTextInput(self.data().borderRectScale().r.toNatural());
+        if (self.init_opts.hints) |hints| field_hints.publish(hints);
     }
 
     // set clip back to what textLayout had, so we don't draw over the scrollbars

@@ -51,6 +51,8 @@ pub const anim = @import("anim.zig");
 pub const motion = @import("glass").motion;
 /// The clock motion runs on, and the wall time of the frame for what means real time.
 pub const MotionClock = @import("glass").MotionClock;
+/// Keyboard policy for the focused field, shared through the dvui window for one frame.
+pub const field_hints = @import("glass").field_hints;
 /// Event times on the wall clock, shared through the dvui window (plugin images included).
 pub const input_time = @import("glass").input_time;
 /// A motion's clock stepped by its frames, so a long frame holds it rather than skipping it on.
