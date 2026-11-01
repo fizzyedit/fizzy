@@ -283,6 +283,7 @@ pub fn deinit(self: *ScrollArea) void {
         t.pull = .{};
         const now = dvui.frameTimeNS();
         release(&t.x, &t.seg_x, self.si.viewport.x, &t.over.x, self.si.viewport.w, now);
+        t.coast_aimed = false;
         release(&t.y, &t.seg_y, self.si.viewport.y, &t.over.y, self.si.viewport.h, now);
         if (t.over.y == 0) self.aimOrSeat();
         // The release may contain no motion, so it must schedule the first coast, settle or seat frame itself.
@@ -538,7 +539,6 @@ fn aimOrSeat(self: *ScrollArea) void {
             }
         }
     }
-    t.coast_aimed = false;
     if (t.y.coasting) {
         if (Fling.aim(y, t.y.vel, tuning, buf[0..n])) |a| {
             t.seg_y.decay = a.decay;
@@ -676,6 +676,7 @@ fn advance(self: *ScrollArea, fling: *Fling, seg: *Segment, pos: *f32, over: *f3
                         return;
                     }
                     seg.* = .{ .kind = .coast, .start_ns = seg.start_ns + @as(i128, @intFromFloat(cross * std.time.ns_per_s)), .origin = pos.*, .vel = at.vel };
+                    if (seg == &self.touch.seg_y) self.touch.coast_aimed = false;
                     fling.coasting = true;
                     fling.vel = at.vel;
                     continue;
@@ -2280,6 +2281,47 @@ test "a touch coast that runs out between rest notches settles" {
         dvui.currentWindow().extra_frames_needed = 0;
         _ = try testFrame();
         try std.testing.expectEqual(@as(u8, 0), dvui.currentWindow().extra_frames_needed);
+    }
+}
+
+test "a release past an edge does not inherit an earlier aimed coast" {
+    const aimed_at = try restAfter(&.{}, 10, 10) + 40;
+    var free: f32 = 0;
+    for (0..2) |run| {
+        var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+        defer t.deinit();
+        t_use_dvui = false;
+        t_notches = &.{.{ .at = aimed_at, .capture = 1000 }};
+        defer t_notches = &.{};
+        _ = try swipeAt(10, 10);
+        for (0..120) |_| try frameAfter(16);
+        try std.testing.expectApproxEqAbs(aimed_at, t_viewport_y, 0.5);
+
+        t_notches = &.{};
+        t_jump_to = 0;
+        try dvui.testing.settle(testFrame);
+        try dragBy(150, 10, true, 10);
+        try dragBy(-140, 20, false, 0);
+        try std.testing.expect(t_over_y < 0);
+        const stops = [_]Fling.Notch{
+            .{ .at = free - 20, .on_rest = true, .capture = 200, .pass_speed = 100 },
+            .{ .at = free + 40, .on_rest = true, .capture = 200, .pass_speed = 100 },
+        };
+        if (run == 1) t_notches = &stops;
+        try lift();
+        var coasted = false;
+        for (0..180) |_| {
+            try frameAfter(16);
+            coasted = coasted or t_viewport_y > 0;
+        }
+        try std.testing.expect(coasted);
+        if (run == 0) {
+            free = t_viewport_y;
+            try std.testing.expect(free > 20);
+        } else {
+            try std.testing.expectApproxEqAbs(stops[0].at, t_viewport_y, 0.5);
+            try std.testing.expect(!t_moving);
+        }
     }
 }
 
