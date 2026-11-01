@@ -198,7 +198,9 @@ const Job = struct {
                 .box => |b| b,
                 .panel => |p| .{ .rect = p.rect, .radii = p.radii },
             };
-            if (!reaches(box.rect)) continue;
+            // Quadratic smooth min lowers distance by at most merge_px / 4, so joined ink is that close to some piece; reaches adds the 1 px fringe.
+            const reach = if (item.group != 0) job.opts.merge * job.scale / 4 else 0;
+            if (!reaches(box.rect.insetAll(-reach))) continue;
             // Only a group's newest field is open; earlier ones have filled or taken a panel.
             var open: ?usize = null;
             var i = fields.items.len;
@@ -553,6 +555,43 @@ fn groupsFrame() !dvui.App.Result {
     }
     l.end();
     return .ok;
+}
+
+test "merged glass reaching into the clip is kept" {
+    const Frame = struct {
+        var far = false;
+
+        fn draw() !dvui.App.Result {
+            record.reset();
+            const s = dvui.parentGet().screenRectScale(.{}).s;
+            const b: f32 = if (far) 100 - (12 * s / 4 + 2) else 98;
+            const clip = dvui.clipGet();
+            dvui.clipSet(.{ .x = 0, .y = 100, .w = 500, .h = 300 });
+            var l = layer(test_id, .{ .merge = 12 });
+            for ([_]f32{ 20, 70 }) |x| {
+                try std.testing.expect(l.add(.{
+                    .shape = .{ .box = .{ .rect = .{ .x = x, .y = b - 30, .w = 60, .h = 30 }, .radii = @splat(8) } },
+                    .group = test_group,
+                }));
+            }
+            l.end();
+            dvui.clipSet(clip);
+            return .ok;
+        }
+    };
+    var t = try dvui.testing.init(.{});
+    defer t.deinit();
+    resetTest();
+    test_group = 1;
+    _ = try dvui.testing.step(Frame.draw);
+    try std.testing.expectEqual(2, record.glass_shapes);
+    Frame.far = true;
+    _ = try dvui.testing.step(Frame.draw);
+    try std.testing.expectEqual(0, record.glass_shapes);
+    Frame.far = false;
+    test_group = 0;
+    _ = try dvui.testing.step(Frame.draw);
+    try std.testing.expectEqual(0, record.glass_shapes);
 }
 
 test "groups do not join" {
