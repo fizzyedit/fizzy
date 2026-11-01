@@ -7988,6 +7988,28 @@ test "demo: the Revert to before pill gives the session back, and the bar's clos
     try std.testing.expect(demo_stage.kept and !demo_stage.begun);
 }
 
+test "demo: the Revert pill is the size of its layer" {
+    var t = try demoCtx();
+    defer deinitDemo(&t);
+
+    demo_player.load(try demoTape(), .{});
+    try stepDemoUntil(.ended, 400);
+    // Let the bar finish opening and the layer settle to its minimum size.
+    for (0..20) |_| _ = try dvui.testing.step(demoFrame);
+    const td = dvui.tagGet("demo.revert") orelse return error.TestUnexpectedResult;
+    const rect = for (dvui.currentWindow().subwindows.stack.items) |sw| {
+        if (sw.id == td.id) break sw.rect_pixels;
+    } else return error.TestUnexpectedResult;
+
+    // Half a pixel allows rounding at each edge; two pixels allow it across the size.
+    try std.testing.expect(rect.x <= td.rect.x + 0.5);
+    try std.testing.expect(rect.y <= td.rect.y + 0.5);
+    try std.testing.expect(rect.x + rect.w >= td.rect.x + td.rect.w - 0.5);
+    try std.testing.expect(rect.y + rect.h >= td.rect.y + td.rect.h - 0.5);
+    try std.testing.expect(rect.w <= td.rect.w + 2);
+    try std.testing.expect(rect.h <= td.rect.h + 2);
+}
+
 test "demo: real pointer motion does not move the tape's pointer while it plays" {
     var t = try demoCtx();
     defer deinitDemo(&t);
