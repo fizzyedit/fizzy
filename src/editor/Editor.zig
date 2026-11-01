@@ -222,6 +222,8 @@ person_app_active: bool = false,
 person_focus_epoch: u32 = 0,
 /// Pending shared preference save deadline; null when clean.
 person_save_deadline_ns: ?i128 = null,
+/// Whether the current shared preference save failure has been reported.
+person_save_streak: core.person.SaveStreak = .{},
 
 /// Whether any plugin asked to keep painting this frame — one poll of every plugin's
 /// `needsContinuousRepaint`, sampled in `tick` and read by everything that needs the answer.
@@ -4434,10 +4436,13 @@ pub fn markPersonDirty(editor: *Editor) void {
 /// Flushes the local shared preference choice to disk.
 pub fn savePerson(editor: *Editor) void {
     core.person.save(dvui.io, editor.person_dir, editor.person) catch |err| {
-        dvui.log.err("Could not save person preferences: {s}", .{@errorName(err)});
+        if (editor.person_save_streak.failed()) {
+            dvui.log.err("Could not save person preferences: {s}", .{@errorName(err)});
+        }
         editor.person_save_deadline_ns = core.perf.nanoTimestamp() + Settings.autosave_timeout_ns;
         return;
     };
+    editor.person_save_streak.saved();
     editor.person_mtime = editor.personMtime();
     editor.person_save_deadline_ns = null;
 }
