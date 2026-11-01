@@ -3556,6 +3556,7 @@ pub fn addEvent(self: *SDLBackend, win: *dvui.Window, event: c.SDL_Event) !bool 
                     mouse_type = if (min == 1.0) .mouse else .trackpad;
                 }
                 ret = try win.addEventMouseWheel(-ticks_x * dvui.scroll_speed * mac_wheel_scale, .horizontal, mouse_type);
+                glass.wheel_kind.set(win, win.event_num, mouse_type);
             }
             if (ticks_y != 0) {
                 if (mouse_type == .unknown) {
@@ -3563,6 +3564,7 @@ pub fn addEvent(self: *SDLBackend, win: *dvui.Window, event: c.SDL_Event) !bool 
                     mouse_type = if (min == 1.0) .mouse else .trackpad;
                 }
                 ret = try win.addEventMouseWheel(ticks_y * dvui.scroll_speed * mac_wheel_scale, .vertical, mouse_type);
+                glass.wheel_kind.set(win, win.event_num, mouse_type);
             }
             return ret;
         },
