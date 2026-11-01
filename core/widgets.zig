@@ -477,3 +477,6 @@ pub fn tabCloseButtonOptions(over: dvui.Options) dvui.Options {
         .ninepatch_press = &dvui.Ninepatch.none,
     }));
 }
+
+/// A layout box with a glass face under its children.
+pub const Glass = @import("widgets/Glass.zig");
