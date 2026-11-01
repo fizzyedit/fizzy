@@ -1113,6 +1113,8 @@ fn addTests(
         // Variable-height row bookkeeping for a virtualized list. std-only, so anchors, measurements
         // and width changes are tested without a Window.
         .{ "fizzy-height-index-tests", "core/HeightIndex.zig" },
+        // Field row stacking and control width. std-only so the layout rule needs no Window.
+        .{ "fizzy-field-row-layout-tests", "core/field_row_layout.zig" },
         // Ring buffering and dot-segment filtering for the folder watcher. std-only so it can
         // be tested here; FolderWatcher.zig itself needs a live editor.
         .{ "fizzy-folder-events-tests", "app/watch/folder_events.zig" },
