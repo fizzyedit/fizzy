@@ -906,10 +906,11 @@ fn drawRevert(player: *Player, whole: dvui.Rect, p: f32) void {
         tr.revert = .{};
         return;
     }
-    const w: f32 = 156;
-    const h: f32 = 30;
-    const rect: dvui.Rect = .{ .x = whole.x + whole.w - w, .y = whole.y - h - 6, .w = w, .h = h };
-    const fw = layer(@src(), .{ .rect = rect, .name = "DemoRevert" }, .{});
+    const fw = layer(@src(), .{ .name = "DemoRevert" }, .{
+        .from = dvui.windowRectScale().pointToPhysical(.{ .x = whole.x + whole.w, .y = whole.y - 6 }),
+        .from_gravity_x = 0,
+        .from_gravity_y = 0,
+    });
     defer fw.deinit();
     var pill = dvui.box(@src(), .{ .dir = .horizontal }, cardOptions(.{ .x = 12, .y = 5, .w = 12, .h = 5 }));
     defer pill.deinit();
