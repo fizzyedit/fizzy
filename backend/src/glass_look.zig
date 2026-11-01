@@ -99,14 +99,14 @@ pub fn band(shorter_half: f32) Band {
 // ── The OS's glass ──────────────────────────────────────────────────────────────────────────────
 
 /// Liquid Glass's variants and styles, as measured on macOS 26.5 (`visual_effect_view.m`).
-pub const Material = struct {
+pub const Variant = struct {
     /// `_variant`: 11 the clear lens, 2 the glass's own frost.
     variant: i32,
     /// `NSGlassEffectViewStyle`: 1 Clear (light frost), 0 Regular (heavier).
     style: i32,
 };
-pub const lens_material: Material = .{ .variant = 11, .style = 1 };
-pub const frost_material: Material = .{ .variant = 2, .style = 1 };
+pub const lens_material: Variant = .{ .variant = 11, .style = 1 };
+pub const frost_material: Variant = .{ .variant = 2, .style = 1 };
 
 /// The OS's glass for a drop, the carried view: the lens whole, bending the surface behind it; over
 /// it frost at `over_share` and the window's colour `fill` opaque over that — both fading out
@@ -115,8 +115,8 @@ pub const frost_material: Material = .{ .variant = 2, .style = 1 };
 /// colour only at the top, as the app's glass does (`Look.mix`): coming in sooner it was a disc of
 /// colour over the surface being dragged across, not rougher glass (the user).
 pub const Native = struct {
-    under: Material,
-    over: Material,
+    under: Variant,
+    over: Variant,
     over_share: f32,
     fill: f32,
     glass: f32,
@@ -175,8 +175,8 @@ pub fn native(opacity: f32) Native {
 /// desktop whatever is under it, and faded across the bevel over an opaque colour it was a ring of
 /// desktop inside the edge.
 pub const Window = struct {
-    under: Material,
-    over: Material,
+    under: Variant,
+    over: Variant,
     /// Glass frost over the lens, in the body.
     frost: f32,
     /// The plain blur over the frost, in the body.
@@ -389,6 +389,9 @@ pub const Looks = struct {
     card: Look,
     bar: Look,
     lens: Look,
+    /// The OS body the app asks for each window it shows (`resolve`): the nicest the OS offers
+    /// unless the app says otherwise; the person's own ask (`Material.body`) wins over it.
+    body: std.EnumArray(WindowRole, Body) = .initFill(.best),
 
     /// fizzy's: `forDrops`, `forText` and `forLens` of the app's glass at the window's opacity;
     /// cards and bars are a drop's until an app says otherwise.
@@ -455,6 +458,241 @@ pub fn base(opacity: f32, material: bool) Base {
     if (!material) return .{ .material = false, .alpha = 1, .lighten = 0 };
     const o = @min(opacity, 1);
     return .{ .material = true, .alpha = o, .lighten = (1 - o) * 4 };
+}
+
+// ── What a window is made of ────────────────────────────────────────────────────────────────────
+
+/// What the app's windows are made of, or the glass it draws itself (`core.material`).
+pub const Material = struct {
+    kind: Kind = .none,
+    /// How much of the theme's window colour covers what is behind, 0 (clear) to 1. Ignored by
+    /// `none`; `transparent` at 1 looks as `none` does.
+    opacity: f32 = 1,
+    /// The ask for the OS body under a window (`resolve`), over the app's.
+    // TODO(seam): the person's `os_material` setting fills this (M-B); nothing sets it yet.
+    body: Body = .best,
+
+    /// `kind` where `offered` has it, else the richest glass below it that `offered` has, else
+    /// `none`. A clear window only when asked for: in glass's place it reads as a broken window.
+    pub fn effective(self: Material, offered: Kinds) Material {
+        if (offered.has(self.kind)) return self;
+        var m = self;
+        var k = @backingInt(self.kind);
+        while (k > @backingInt(Kind.blur)) {
+            k -= 1;
+            m.kind = @fromBackingInt(k);
+            if (offered.has(m.kind)) return m;
+        }
+        m.kind = .none;
+        return m;
+    }
+};
+
+/// From the plainest to the richest, as the settings list them: what `Material.effective` falls
+/// back through.
+pub const Kind = enum(u8) { none, transparent, blur, frost, liquid };
+
+/// The kinds a backend offers. A backend offers a kind only if every surface it puts glass on can
+/// show it: a backend whose OS windows can only frost offers no `liquid`, so glass drawn in the app
+/// frosts too and the look stays one.
+pub const Kinds = packed struct {
+    none: bool = true,
+    transparent: bool = false,
+    blur: bool = false,
+    frost: bool = false,
+    liquid: bool = false,
+
+    pub fn has(self: Kinds, kind: Kind) bool {
+        return switch (kind) {
+            inline else => |k| @field(self, @tagName(k)),
+        };
+    }
+
+    fn unionWith(self: Kinds, other: Kinds) Kinds {
+        const Bits = @typeInfo(Kinds).@"struct".backing_integer.?;
+        return @bitCast(@as(Bits, @bitCast(self)) | @as(Bits, @bitCast(other)));
+    }
+};
+
+/// Why the app's own renderer cannot draw `kind` as in-app glass, one static line for a tooltip;
+/// null when it can. Frost and blur are drawn over the app's own frame on every backend; Liquid
+/// Glass needs the glass program (`glass_program`: the backend draws `programs`).
+pub fn inAppMissing(kind: Kind, glass_program: bool) ?[]const u8 {
+    return switch (kind) {
+        .liquid => if (glass_program) null else "Not available with this renderer: needs the glass program",
+        .none, .transparent, .blur, .frost => null,
+    };
+}
+
+/// The kinds the app's own renderer draws as in-app glass (`inAppMissing`).
+pub fn inAppKinds(glass_program: bool) Kinds {
+    var kinds: Kinds = .{};
+    inline for (comptime std.enums.values(Kind)) |k| @field(kinds, @tagName(k)) = inAppMissing(k, glass_program) == null;
+    return kinds;
+}
+
+/// What an OS window is for, which picks the body the OS puts under it (`resolve`): the main
+/// window, a float popped out of it, a menu or dialog in a window of its own, the carried view.
+pub const WindowRole = enum { main, float, menu, carry };
+
+/// How heavy a glass is, Apple's ladder: an enum, as the OS offers steps rather than a dial.
+pub const Thickness = enum { ultra_thin, thin, regular, thick, chrome };
+
+/// The character of OS body asked for, which each target maps to one it has: the nicest it offers
+/// for the window's role (`best`), the windows and desktop behind blurred (`see_through`), or a
+/// calm tint of the desktop's wallpaper (`tinted`: Mica on Windows). A target without the asked one
+/// falls to the nearest it has, never to clear.
+pub const Body = enum { best, see_through, tinted };
+
+/// An OS material for a window's body, one tag per OS, in that OS's own numbers. The backend puts
+/// the one `resolve` gives on the window, and never picks one itself.
+pub const NativeBody = union(enum) {
+    /// An `NSVisualEffectMaterial` (macOS).
+    appkit: c_long,
+    /// `NSGlassEffectView` (macOS 26), over the vibrancy `under` where the glass shows none.
+    appkit_glass: struct { style: GlassStyle = .regular, under: c_long },
+    /// A `DWM_SYSTEMBACKDROP_TYPE` (Windows 11 22H2).
+    dwm: u32,
+    /// The compositor's blur behind the window (Wayland, KWin on X11).
+    compositor_blur,
+    /// CSS `backdrop-filter` on the canvas (the web).
+    css_backdrop,
+    /// `Window.setBackgroundBlurRadius` (Android 12).
+    android_blur,
+
+    pub const Tag = std.meta.Tag(NativeBody);
+    pub const GlassStyle = enum { regular, clear };
+
+    pub const full_screen_ui: c_long = 15;
+    pub const window_background: c_long = 12;
+    pub const mica: u32 = 2;
+    pub const acrylic: u32 = 3;
+
+    /// The `NSVisualEffectMaterial` this body is or stands on; null for another OS's.
+    pub fn appkitMaterial(self: NativeBody) ?c_long {
+        return switch (self) {
+            .appkit => |m| m,
+            .appkit_glass => |g| g.under,
+            else => null,
+        };
+    }
+};
+
+/// Which OS bodies there are on this machine.
+pub const Natives = std.EnumSet(NativeBody.Tag);
+
+/// Where the app runs, as the catalogue reads it (`Offer`).
+pub const Target = enum {
+    macos,
+    windows,
+    linux,
+    web,
+    other,
+
+    pub fn fromOs(os: std.Target.Os.Tag) Target {
+        return switch (os) {
+            .macos => .macos,
+            .windows => .windows,
+            .linux => .linux,
+            else => .other,
+        };
+    }
+};
+
+/// What a target can show, filled once by the backend from what it found (`init`) and read by
+/// `resolve` and every tooltip that says why a kind is missing.
+pub const Offer = struct {
+    target: Target,
+    kinds: Kinds = .{},
+    native: Natives = .empty,
+    /// The glass program runs (`inAppKinds`).
+    program: bool = false,
+    /// The person's OS setting to reduce transparency: every window and every glass solid.
+    reduce_transparency: bool = false,
+
+    /// The bodies each target can have at all: what a backend found past this is not used.
+    const possible: std.EnumArray(Target, Natives) = .init(.{
+        .macos = .init(.{ .appkit = true, .appkit_glass = true }),
+        .windows = .initOne(.dwm),
+        .linux = .initOne(.compositor_blur),
+        .web = .initOne(.css_backdrop),
+        .other = .empty,
+    });
+    /// The window kinds each body lets a window show.
+    const gives: std.EnumArray(NativeBody.Tag, Kinds) = .init(.{
+        .appkit = .{ .blur = true, .frost = true },
+        .appkit_glass = .{ .liquid = true },
+        .dwm = .{ .frost = true },
+        .compositor_blur = .{ .blur = true },
+        .css_backdrop = .{},
+        .android_blur = .{},
+    });
+    /// The targets whose windows can be clear, showing what is behind as it is.
+    const clear_windows: std.EnumSet(Target) = .init(.{ .macos = true, .windows = true, .linux = true });
+    /// The targets whose window is a canvas the app draws every kind in itself.
+    const in_canvas: std.EnumSet(Target) = .initOne(.web);
+
+    /// The offer of `target` with the bodies the backend `found`, the kinds read from the catalogue.
+    pub fn init(target: Target, found: Natives, program: bool, reduce_transparency: bool) Offer {
+        const has = found.intersectWith(possible.get(target));
+        var kinds: Kinds = .{ .transparent = clear_windows.contains(target) };
+        if (in_canvas.contains(target)) kinds = .{ .transparent = true, .blur = true, .frost = true, .liquid = true };
+        var it = has.iterator();
+        while (it.next()) |n| kinds = kinds.unionWith(gives.get(n));
+        return .{ .target = target, .kinds = kinds, .native = has, .program = program, .reduce_transparency = reduce_transparency };
+    }
+};
+
+/// What a window or a glass is drawn as (`resolve`).
+pub const Resolved = struct {
+    /// The kind shown: the asked one where offered, else the richest below it (`Material.effective`).
+    kind: Kind,
+    /// The OS material put under the window; null where the OS puts none (the app draws the body).
+    body: ?NativeBody,
+    /// What the app draws in the window, on top of the body or instead of it.
+    draws: Draws,
+    /// The app's lit edge over the OS body (materials §2, option (a)).
+    // TODO(seam): `Looks.forTarget` (materials M-C) sets it where it draws the edge over a body.
+    edge: bool = false,
+
+    pub const Draws = enum { program, face, solid };
+};
+
+/// What the OS window of `role` is made of when `asked` (the person's kind and body) on `offer`,
+/// at `thickness`, with the app's asks in `looks` (null, none). The person's OS setting to reduce
+/// transparency beats everything: no OS body, an opaque window, solid glass. Then the person's
+/// body beats the app's, which beats the target's nicest. The kind falls back as
+/// `Material.effective` does.
+pub fn resolve(asked: Material, role: WindowRole, thickness: Thickness, offer: Offer, looks: ?*const Looks) Resolved {
+    // TODO(seam): the person's `tinted_strong` (Mica Alt) is chosen by thickness here.
+    _ = thickness;
+    if (offer.reduce_transparency) return .{ .kind = .none, .body = null, .draws = .solid };
+    const kind = asked.effective(offer.kinds).kind;
+    const app: Body = if (looks) |l| l.body.get(role) else .best;
+    const want: Body = if (asked.body != .best) asked.body else app;
+    return .{
+        .kind = kind,
+        .body = bodyFor(offer.native, role, want, kind),
+        .draws = if (kind == .none) .solid else if (offer.program) .program else .face,
+    };
+}
+
+/// The body the role's window wears for `want`. macOS and Windows put theirs under every window,
+/// whatever the kind (an opaque window covers it); the compositor's blur is asked only for `blur`.
+fn bodyFor(has: Natives, role: WindowRole, want: Body, kind: Kind) ?NativeBody {
+    if (has.contains(.appkit)) {
+        const material = if (want == .tinted) NativeBody.window_background else NativeBody.full_screen_ui;
+        if (kind == .liquid and has.contains(.appkit_glass)) return .{ .appkit_glass = .{ .under = material } };
+        return .{ .appkit = material };
+    }
+    // The carried view shows the app's glass alone on Windows: DWM's backdrop fills the whole
+    // window, a region or not, and a drop is round.
+    if (has.contains(.dwm) and role != .carry) return .{ .dwm = switch (want) {
+        .best, .see_through => NativeBody.acrylic,
+        .tinted => NativeBody.mica,
+    } };
+    if (has.contains(.compositor_blur) and kind == .blur) return .compositor_blur;
+    return null;
 }
 
 fn smoothstep(x: f32) f32 {
@@ -619,6 +857,136 @@ test "fizzy's looks keep every new curve at its identity" {
         try std.testing.expectEqual(looks.drop, looks.card);
         try std.testing.expectEqual(looks.drop, looks.bar);
     }
+}
+
+test "effective falls back to the richest glass offered below the one asked" {
+    const mac_old: Kinds = .{ .transparent = true, .blur = true, .frost = true };
+    try std.testing.expectEqual(Kind.frost, (Material{ .kind = .liquid }).effective(mac_old).kind);
+    try std.testing.expectEqual(Kind.blur, (Material{ .kind = .blur }).effective(mac_old).kind);
+    const windows: Kinds = .{ .transparent = true, .frost = true };
+    try std.testing.expectEqual(Kind.frost, (Material{ .kind = .liquid }).effective(windows).kind);
+    try std.testing.expectEqual(Kind.none, (Material{ .kind = .liquid }).effective(.{}).kind);
+    try std.testing.expectEqual(@as(f32, 0.4), (Material{ .kind = .liquid, .opacity = 0.4 }).effective(windows).opacity);
+    try std.testing.expectEqual(Body.tinted, (Material{ .kind = .liquid, .body = .tinted }).effective(windows).body);
+}
+
+test "glass not offered falls back to opaque, never to a clear window" {
+    const windows: Kinds = .{ .transparent = true, .frost = true };
+    try std.testing.expectEqual(Kind.none, (Material{ .kind = .blur }).effective(windows).kind);
+    const linux: Kinds = .{ .transparent = true };
+    inline for (.{ Kind.blur, Kind.frost, Kind.liquid }) |k| {
+        try std.testing.expectEqual(Kind.none, (Material{ .kind = k }).effective(linux).kind);
+    }
+    try std.testing.expectEqual(Kind.transparent, (Material{ .kind = .transparent }).effective(linux).kind);
+    try std.testing.expectEqual(Kind.blur, (Material{ .kind = .liquid }).effective(.{ .transparent = true, .blur = true }).kind);
+}
+
+test "in-app glass draws every kind where the glass program is, Liquid Glass only there" {
+    const with: Kinds = inAppKinds(true);
+    inline for (comptime std.enums.values(Kind)) |k| try std.testing.expect(with.has(k));
+    const without: Kinds = inAppKinds(false);
+    try std.testing.expect(!without.has(.liquid));
+    try std.testing.expect(without.has(.frost));
+    try std.testing.expectEqual(Kind.frost, (Material{ .kind = .liquid }).effective(without).kind);
+    try std.testing.expect(inAppMissing(.liquid, false) != null);
+}
+
+/// The targets fizzy runs on, as their backends fill the offer.
+const fixtures = struct {
+    const mac15: Offer = .init(.macos, .initOne(.appkit), true, false);
+    const mac26: Offer = .init(.macos, .init(.{ .appkit = true, .appkit_glass = true }), true, false);
+    const win10: Offer = .init(.windows, .empty, true, false);
+    const win11: Offer = .init(.windows, .initOne(.dwm), true, false);
+    const x11: Offer = .init(.linux, .empty, true, false);
+    const wayland: Offer = .init(.linux, .initOne(.compositor_blur), true, false);
+    const web: Offer = .init(.web, .empty, true, false);
+    const all = [_]Offer{ mac15, mac26, win10, win11, x11, wayland, web };
+};
+
+test "the catalogue: each target's kinds come from the bodies it has" {
+    const k = struct {
+        fn of(o: Offer) [5]bool {
+            var out: [5]bool = undefined;
+            for (std.enums.values(Kind), &out) |kind, *b| b.* = o.kinds.has(kind);
+            return out;
+        }
+    }.of;
+    //                                    none  clear blur   frost  liquid
+    try std.testing.expectEqual([5]bool{ true, true, true, true, false }, k(fixtures.mac15));
+    try std.testing.expectEqual([5]bool{ true, true, true, true, true }, k(fixtures.mac26));
+    try std.testing.expectEqual([5]bool{ true, true, false, false, false }, k(fixtures.win10));
+    try std.testing.expectEqual([5]bool{ true, true, false, true, false }, k(fixtures.win11));
+    try std.testing.expectEqual([5]bool{ true, true, false, false, false }, k(fixtures.x11));
+    try std.testing.expectEqual([5]bool{ true, true, true, false, false }, k(fixtures.wayland));
+    try std.testing.expectEqual([5]bool{ true, true, true, true, true }, k(fixtures.web));
+    // A body a target cannot have is not taken from a backend that says it found one.
+    const odd: Offer = .init(.windows, .init(.{ .appkit_glass = true, .compositor_blur = true, .dwm = true }), true, false);
+    try std.testing.expectEqual(k(fixtures.win11), k(odd));
+    try std.testing.expect(!odd.native.contains(.appkit_glass));
+}
+
+test "every target, kind and role resolves to today's body and rung" {
+    const full_screen_ui: NativeBody = .{ .appkit = NativeBody.full_screen_ui };
+    const glass: NativeBody = .{ .appkit_glass = .{ .under = NativeBody.full_screen_ui } };
+    const acrylic: NativeBody = .{ .dwm = NativeBody.acrylic };
+    for (fixtures.all) |offer| {
+        for (std.enums.values(Kind)) |asked| {
+            for (std.enums.values(WindowRole)) |role| {
+                const r = resolve(.{ .kind = asked }, role, .regular, offer, null);
+                try std.testing.expectEqual((Material{ .kind = asked }).effective(offer.kinds).kind, r.kind);
+                try std.testing.expectEqual(if (r.kind == .none) Resolved.Draws.solid else .program, r.draws);
+                try std.testing.expect(!r.edge);
+                const want: ?NativeBody = switch (offer.target) {
+                    .macos => if (r.kind == .liquid) glass else full_screen_ui,
+                    .windows => if (offer.native.contains(.dwm) and role != .carry) acrylic else null,
+                    .linux => if (r.kind == .blur) .compositor_blur else null,
+                    .web, .other => null,
+                };
+                try std.testing.expectEqual(want, r.body);
+            }
+        }
+    }
+    // Without the glass program the app draws the meshed face.
+    const no_program: Offer = .init(.web, .empty, false, false);
+    try std.testing.expectEqual(Resolved.Draws.face, resolve(.{ .kind = .frost }, .main, .regular, no_program, null).draws);
+}
+
+test "with the OS's reduce transparency on, every window and glass is solid, whatever the app asks" {
+    var looks = Looks.fromOpacity(0.5);
+    looks.body = .initFill(.tinted);
+    for (fixtures.all) |base_offer| {
+        var offer = base_offer;
+        offer.reduce_transparency = true;
+        for (std.enums.values(Kind)) |asked| {
+            for (std.enums.values(WindowRole)) |role| {
+                const r = resolve(.{ .kind = asked, .body = .see_through }, role, .chrome, offer, &looks);
+                try std.testing.expectEqual(Resolved{ .kind = .none, .body = null, .draws = .solid }, r);
+            }
+        }
+    }
+}
+
+test "the person's body beats the app's, which beats the target's nicest" {
+    var looks = Looks.fromOpacity(0.5);
+    looks.body.set(.main, .tinted);
+    const win11 = fixtures.win11;
+    const frost: Material = .{ .kind = .frost };
+    // The app asks Mica for its main window; floats keep the nicest.
+    try std.testing.expectEqual(NativeBody{ .dwm = NativeBody.mica }, resolve(frost, .main, .regular, win11, &looks).body.?);
+    try std.testing.expectEqual(NativeBody{ .dwm = NativeBody.acrylic }, resolve(frost, .float, .regular, win11, &looks).body.?);
+    // A tint is Mica at every thickness.
+    try std.testing.expectEqual(NativeBody{ .dwm = NativeBody.mica }, resolve(frost, .main, .thick, win11, &looks).body.?);
+    // The person's ask wins over the app's.
+    const see_through: Material = .{ .kind = .frost, .body = .see_through };
+    try std.testing.expectEqual(NativeBody{ .dwm = NativeBody.acrylic }, resolve(see_through, .main, .regular, win11, &looks).body.?);
+    const tinted: Material = .{ .kind = .frost, .body = .tinted };
+    try std.testing.expectEqual(NativeBody{ .dwm = NativeBody.mica }, resolve(tinted, .float, .regular, win11, null).body.?);
+    // A target without a tint falls to the nearest body it has, never to clear.
+    try std.testing.expectEqual(NativeBody.compositor_blur, resolve(.{ .kind = .blur, .body = .tinted }, .main, .regular, fixtures.wayland, &looks).body.?);
+    // Reduce transparency beats both.
+    var reduced = win11;
+    reduced.reduce_transparency = true;
+    try std.testing.expectEqual(@as(?NativeBody, null), resolve(tinted, .main, .regular, reduced, &looks).body);
 }
 
 test "51.7 degrees packs toward the top left" {

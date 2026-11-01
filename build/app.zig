@@ -1169,12 +1169,10 @@ fn addTests(
         // The screen as changes on a base: keys that stay put, and what changed between two.
         .{ "fizzy-control-screen-diff-tests", "app/control/screen_diff.zig" },
         // One material on two sliders: what every glass is at the window's opacity and roughness,
-        // the OS's form and the app's. std-only (see glass_look.zig); `LiquidField` and `Popout`
-        // apply it.
+        // the OS's form and the app's; and what each window is made of, the one resolver over
+        // what the target offers. std-only (see glass_look.zig); `LiquidField`, `Popout` and the
+        // backend apply it.
         .{ "fizzy-glass-look-tests", "backend/src/glass_look.zig" },
-        // What the app's windows are made of, and the fallback to what the backend can show.
-        // std-only but for `publish`/`get`, which reach dvui and are not under test here.
-        .{ "fizzy-material-tests", "core/material.zig" },
         // An orb's geometry: shapes, how one becomes another, the polygons the no-glass path fills
         // (plans/LIQUID_EDGE_PLAN.md, "The orb system"). std-only.
         .{ "fizzy-orb-geometry-tests", "core/orb_geometry.zig" },
@@ -1224,14 +1222,17 @@ fn addTests(
     // region, the viewport map, the health counters), from its own list, so `zig build test`
     // here still runs them.
     const backend_dep = fizzy_exe.backendDependency(b);
+    const glass_look = b.createModule(.{ .root_source_file = backend_dep.path("src/glass_look.zig") });
     for (@import("fizzy_backend").unit_tests) |t| {
+        const root_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = backend_dep.path(t.root),
+        });
+        if (t.glass_look) root_module.addImport("glass_look", glass_look);
         try unit_test_artifacts.append(b.allocator, b.addTest(.{
             .name = t.name,
-            .root_module = b.createModule(.{
-                .target = target,
-                .optimize = optimize,
-                .root_source_file = backend_dep.path(t.root),
-            }),
+            .root_module = root_module,
             .filters = test_filters,
         }));
     }

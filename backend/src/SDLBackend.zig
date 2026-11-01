@@ -102,8 +102,8 @@ sdl_quit: bool = true,
 clear_window_on_begin: bool = false,
 /// See `mainPicture`.
 main_picture: ?viewport_map.Rect = null,
-/// What this platform can draw (`materialPlatform`), probed once a frame: cleared in `begin`.
-material_platform: ?materials.Platform = null,
+/// What this platform can show (`materialOffer`), probed once a frame: cleared in `begin`.
+material_offer: ?glass_look.Offer = null,
 /// The main window's frame goes down where its picture is (`mainPicture`): a plain dvui app's,
 /// whose picture is also below the title bar (`platform.macos_monitor.titlebarStrip`). Its frame
 /// target lays it there (`plain_frame`, `pictureInWindow`); the backend moves what is drawn
@@ -1133,9 +1133,9 @@ var plain_dressed: ?[2]dvui.Color = null;
 var plain_material: ?WindowMaterial = null;
 var plain_base: dvui.Color = .{};
 
-/// The kinds of window material, field for field with fizzy's `core.material.Kind`: from the
-/// plainest to the richest, what `effectiveMaterial` falls back through (`materials.effective`).
-pub const MaterialKind = materials.Kind;
+/// The kinds of window material, fizzy's `core.material.Kind`: from the plainest to the richest,
+/// what `effectiveMaterial` falls back through (`glass_look.Material.effective`).
+pub const MaterialKind = glass_look.Kind;
 
 pub const WindowMaterial = struct {
     kind: MaterialKind = .none,
@@ -1167,7 +1167,7 @@ pub fn setWindowLook(color: dvui.Color, opacity: f32) void {
     window_material.opacity = opacity;
 }
 
-/// `window_material` as this backend can show it (`materials.effective`: the richest glass at or
+/// `window_material` as this backend can show it (`glass_look.Material.effective`: the richest glass at or
 /// below it, else opaque; clear only when asked), its colour less opaque in a light theme (`light_tint`) where the app gave none of its own.
 pub fn effectiveMaterial(self: *SDLBackend) WindowMaterial {
     return self.materialAt(window_material.opacity);
@@ -1182,7 +1182,7 @@ pub fn materialAt(self: *SDLBackend, window_opacity: f32) WindowMaterial {
     // 0.7 dark, 0.3 light), which fizzy's people set apart, and fizzy hands its own over with its
     // colour; a plain app has the one value.
     const opacity = if (window_material.color != null or dvui.themeGet().dark) window_opacity else window_opacity * light_tint;
-    const drawn = materials.effective(self.materialPlatform(), window_material.kind);
+    const drawn = (glass_look.Material{ .kind = window_material.kind }).effective(self.materialOffer().kinds).kind;
     // Glass keeps a little of the window's colour (`material_min_opacity`); a clear or opaque
     // window may have none.
     const is_glass = drawn != .none and drawn != .transparent;
@@ -1457,29 +1457,32 @@ pub fn pointerHeld(_: *SDLBackend) bool {
 }
 
 pub fn materialKinds(self: *SDLBackend) MaterialKinds {
-    const p = self.materialPlatform();
+    const offered = self.materialOffer().kinds;
     var kinds: MaterialKinds = .{};
-    inline for (comptime std.enums.values(MaterialKind)) |k| @field(kinds, @tagName(k)) = materials.missing(p, k) == null;
+    inline for (comptime std.enums.values(MaterialKind)) |k| @field(kinds, @tagName(k)) = offered.has(k);
     return kinds;
 }
 
 /// Why `material` cannot be drawn here, one static line for a tooltip; null when it can
 /// (`materials.missing`).
 pub fn materialMissing(self: *SDLBackend, material: MaterialKind) ?[]const u8 {
-    return materials.missing(self.materialPlatform(), material);
+    return materials.missing(self.materialOffer(), material);
 }
 
-/// What this platform can draw this frame: the OS's Liquid Glass, the compositor's blur.
-fn materialPlatform(self: *SDLBackend) materials.Platform {
-    if (self.material_platform) |p| return p;
-    const p: materials.Platform = .{
-        .os = builtin.target.os.tag,
-        .liquid_glass = liquidGlassAvailable(),
+/// What this platform can show this frame (`glass_look.Offer`): the OS bodies it found (AppKit's
+/// vibrancy, its Liquid Glass, DWM's backdrops, the compositor's blur). The kinds are the catalogue's.
+pub fn materialOffer(self: *SDLBackend) glass_look.Offer {
+    if (self.material_offer) |o| return o;
+    const found: glass_look.Natives = .init(.{
+        .appkit = true,
+        .appkit_glass = liquidGlassAvailable(),
+        .dwm = platform.win32_titlebar.backdropOffered(self.window),
         .compositor_blur = platform.linux_titlebar.blurOffered(self.window),
-        .dwm_backdrop = platform.win32_titlebar.backdropOffered(self.window),
-    };
-    self.material_platform = p;
-    return p;
+    });
+    // TODO(seam): the reduce-transparency sources feed the last argument (materials §11, M-A PR C).
+    const o: glass_look.Offer = .init(.fromOs(builtin.target.os.tag), found, true, false);
+    self.material_offer = o;
+    return o;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -3002,7 +3005,7 @@ pub fn prefersReducedMotion(_: *@This()) bool {
 
 pub fn begin(self: *SDLBackend, arena: std.mem.Allocator) !void {
     self.arena = arena;
-    self.material_platform = null;
+    self.material_offer = null;
     if (self.begin_hook) |hook| hook(self);
     // Its step for this frame taken (`begin_hook`): where the main window's picture is now.
     self.main_picture = if (platform.window.windowSpacePicture(self.window)) |p| .{ .x = p.x, .y = p.y, .w = p.w, .h = p.h } else null;
