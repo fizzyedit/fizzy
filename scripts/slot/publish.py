@@ -51,7 +51,7 @@ def push(job, out, result, branch, expected=None):
                '-c', 'user.email=publish@fizzy.invalid']
         run(*git, 'checkout', '--detach', job['base']['sha'], cwd=tree)
         run(*git, 'am', '--3way', '--committer-date-is-author-date', str(out / 'change.mbox'), cwd=tree)
-        # The push subprocess's captured output is deliberately never surfaced.
+        # Push stderr is surfaced only with the token and any URL credentials removed.
         url = f'https://x-access-token:{token}@github.com/{FIZZY}.git'
         head = run(*git, 'rev-parse', 'HEAD', cwd=tree).decode().strip()
         remote = subprocess.run([*git, 'ls-remote', url, f'refs/heads/{branch}'], capture_output=True)
@@ -68,7 +68,9 @@ def push(job, out, result, branch, expected=None):
         p = subprocess.run([*git, 'push', lease, url, f'HEAD:refs/heads/{branch}'],
                            cwd=tree, capture_output=True)
         if p.returncode:
-            raise ValueError('push refused (branch exists or head moved)')
+            detail = p.stderr.decode(errors='replace').replace(token, '***')
+            detail = re.sub(r'://[^@/\s]*@', '://***@', detail).strip()[-600:]
+            raise ValueError('push refused (branch exists or head moved): ' + detail)
 
 
 def publish(job_dir, out):
