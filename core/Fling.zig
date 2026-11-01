@@ -87,6 +87,9 @@ pub const Notch = struct {
     capture: f32 = 64,
     /// Release speeds at or above this pass the notch (units/s).
     pass_speed: f32 = 1500,
+    /// A detent: a coast that reaches this notch at or below this speed (units/s) ends on it,
+    /// whatever its release speed and capture. 0: none.
+    detent: f32 = 0,
     /// Also settle here when wheel or trackpad scrolling rests within `capture`.
     on_rest: bool = false,
 };
@@ -100,12 +103,21 @@ pub fn landing(origin: f32, v: f32, t: Tuning) f32 {
     return origin + (v - std.math.sign(v) * t.stop) / t.decay;
 }
 
-/// The notch a release at `origin` with `v` lands within reach of, and the decay that ends the
+/// First catches the nearest detent ahead reached at or below its speed, up to the landing.
+/// Otherwise, the notch a release at `origin` with `v` lands within reach of, and the decay that ends the
 /// coast on it exactly, or null for a release that passes: too fast, or no notch ahead within
 /// its capture of the landing. The nearest to the landing wins.
 pub fn aim(origin: f32, v: f32, t: Tuning, notches: []const Notch) ?Aim {
     if (@abs(v) <= t.stop) return null;
     const end = landing(origin, v, t);
+    var detent: ?Notch = null;
+    for (notches) |n| {
+        const distance = @abs(n.at - origin);
+        if ((n.at - origin) * v <= 0 or distance > @abs(end - origin) or n.detent <= 0) continue;
+        if (@abs(v) - t.decay * distance > n.detent) continue;
+        if (detent == null or distance < @abs(detent.?.at - origin)) detent = n;
+    }
+    if (detent) |n| return .{ .at = n.at, .decay = (@abs(v) - t.stop) / @abs(n.at - origin) };
     var best: ?Notch = null;
     for (notches) |n| {
         if ((n.at - origin) * v <= 0 or @abs(end - n.at) > n.capture or @abs(v) >= n.pass_speed) continue;
@@ -372,4 +384,27 @@ test "the nearest notch to the landing wins" {
     try std.testing.expectEqual(@as(f32, 280), aim(0, 600, t, &.{ .{ .at = 330 }, .{ .at = 280 } }).?.at);
     try std.testing.expectEqual(@as(?f32, 280), nearest(290, &.{ .{ .at = 330 }, .{ .at = 280 } }));
     try std.testing.expectEqual(@as(?f32, null), nearest(400, &.{.{ .at = 330 }}));
+}
+
+test "a detent stops a coast that reaches it slowly" {
+    const t: Tuning = .{ .decay = 2, .stop = 20 };
+    try std.testing.expectEqual(@as(f32, 200), aim(0, 600, t, &.{.{ .at = 200, .capture = 0, .detent = 300 }}).?.at);
+}
+
+test "a fast arrival passes a detent" {
+    const t: Tuning = .{ .decay = 2, .stop = 20 };
+    try std.testing.expectEqual(@as(?Aim, null), aim(0, 600, t, &.{.{ .at = 100, .capture = 0, .detent = 300 }}));
+}
+
+test "the first detent along the path wins" {
+    const t: Tuning = .{ .decay = 2, .stop = 20 };
+    try std.testing.expectEqual(@as(f32, 200), aim(0, 600, t, &.{ .{ .at = 100, .capture = 0, .detent = 300 }, .{ .at = 200, .capture = 0, .detent = 300 } }).?.at);
+    try std.testing.expectEqual(@as(f32, 200), aim(0, 600, t, &.{ .{ .at = 280, .capture = 64 }, .{ .at = 200, .capture = 0, .detent = 300 } }).?.at);
+}
+
+test "detent 0 is N1" {
+    const t: Tuning = .{ .decay = 2, .stop = 20 };
+    const a = aim(0, 600, t, &.{.{ .at = 280, .capture = 64 }}).?;
+    try std.testing.expectEqual(@as(f32, 280), a.at);
+    try std.testing.expectApproxEqAbs(@as(f32, 580.0 / 280.0), a.decay, 1e-6);
 }

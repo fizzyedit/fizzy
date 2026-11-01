@@ -60,8 +60,11 @@ const Touch = struct {
     dragging: bool = false,
     wheel_ns: i128 = 0,
     wheel_settle: bool = false,
+    /// A wheel event or touch coast is waiting to settle at rest.
     rest_pending: bool = false,
+    /// Direction of the last wheel event or touch coast.
     wheel_dir: f32 = 0,
+    coast_aimed: bool = false,
     glide_x: ?f32 = null,
     glide_y: ?f32 = null,
     glide_at: dvui.Point = .{},
@@ -189,10 +192,17 @@ pub fn init(src: std.builtin.SourceLocation, init_opts: dvui.ScrollAreaWidget.In
     // The coast moves the content before it is laid out, so a frame draws where the clock is at
     // that frame. Moved after the children, it would draw where the clock was one gap ago, and
     // an uneven gap would show as an uneven step.
+    const coast_velocity_y = t.seg_y.vel;
     if (!t.dragging) {
         self.glideStep();
         self.coast();
         self.seatStep();
+    }
+    if (was_coasting_y and t.seg_y.kind == .none and !t.dragging and !t.coast_aimed and
+        t.over.y == 0 and self.si.viewport.y > 0 and self.si.viewport.y < self.si.scrollMax(.vertical))
+    {
+        t.rest_pending = true;
+        t.wheel_dir = std.math.sign(coast_velocity_y);
     }
     if (t.wheel_settle and dvui.frameTimeNS() - t.wheel_ns >= wheel_rest_ms * std.time.ns_per_ms and
         !t.dragging and t.finger == .none and !t.anyMoving())
@@ -528,8 +538,12 @@ fn aimOrSeat(self: *ScrollArea) void {
             }
         }
     }
+    t.coast_aimed = false;
     if (t.y.coasting) {
-        if (Fling.aim(y, t.y.vel, tuning, buf[0..n])) |a| t.seg_y.decay = a.decay;
+        if (Fling.aim(y, t.y.vel, tuning, buf[0..n])) |a| {
+            t.seg_y.decay = a.decay;
+            t.coast_aimed = true;
+        }
     } else if (Fling.nearest(y, buf[0..n])) |at| {
         // A lift with no coast is slow or paused: the seat starts from rest.
         t.seating = true;
@@ -541,7 +555,7 @@ fn aimOrSeat(self: *ScrollArea) void {
 fn wheelRest(self: *ScrollArea) void {
     const t = self.touch;
     if (!t.rest_pending or dvui.frameTimeNS() - t.wheel_ns < wheel_rest_ms * std.time.ns_per_ms or
-        t.dragging or t.finger != .none or t.anyMoving()) return;
+        t.dragging or t.finger != .none or t.over.y != 0 or t.anyMoving()) return;
     t.rest_pending = false;
     const y = self.si.viewport.y;
     const max = self.si.scrollMax(.vertical);
@@ -2232,4 +2246,76 @@ test "nothing outside capture moves" {
     t_notches = &.{ .{ .at = 0, .on_rest = true }, .{ .at = 1000, .on_rest = true } };
     defer t_notches = &.{};
     try wheelRestCase(0, 500, .mouse, 500);
+}
+
+test "a slow coast stops on a detent, a fast arrival passes" {
+    const free = try restAfter(&.{}, 10, 10);
+    const at = free - 40;
+    try std.testing.expectApproxEqAbs(at, try restAfter(&.{.{ .at = at, .capture = 0, .detent = 200 }}, 10, 10), 0.5);
+    try std.testing.expect(t_peak <= at + 0.01);
+    try std.testing.expectApproxEqAbs(free, try restAfter(&.{.{ .at = at, .capture = 0, .detent = 50 }}, 10, 10), 0.01);
+}
+
+test "a touch coast that runs out between rest notches settles" {
+    const free = try restAfter(&.{}, 10, 10);
+    for ([_][2]f32{ .{ free - 100, free + 100 }, .{ free - 60, free + 140 } }, 0..) |pair, index| {
+        var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+        defer t.deinit();
+        t_use_dvui = false;
+        const stops = [_]Fling.Notch{
+            .{ .at = pair[0], .on_rest = true, .capture = 200, .pass_speed = 100 },
+            .{ .at = pair[1], .on_rest = true, .capture = 200, .pass_speed = 100 },
+        };
+        t_notches = &stops;
+        defer t_notches = &.{};
+        const r = try swipeAt(10, 10);
+        const coast_end_s = @log(@abs(t_release_velocity) / tuning.stop) / tuning.decay;
+        const end_ns = t_release_time + @as(i128, @intFromFloat(coast_end_s * std.time.ns_per_s));
+        const target = pair[if (index == 0) @as(usize, 1) else 0];
+        while (dvui.currentWindow().frame_time_ns < end_ns + 300 * std.time.ns_per_ms) try frameAfter(16);
+        try std.testing.expect(r < free);
+        try std.testing.expectApproxEqAbs(target, t_viewport_y, 0.5);
+        for (0..10) |_| try frameAfter(16);
+        try std.testing.expect(!t_moving);
+        dvui.currentWindow().extra_frames_needed = 0;
+        _ = try testFrame();
+        try std.testing.expectEqual(@as(u8, 0), dvui.currentWindow().extra_frames_needed);
+    }
+}
+
+test "a coast into the top bounces and does not settle" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    t_use_dvui = false;
+    t_notches = &.{.{ .at = 60, .on_rest = true, .capture = 200 }};
+    defer t_notches = &.{};
+    try dvui.testing.settle(testFrame);
+    try dragBy(-300, 10, true, 10);
+    try lift();
+    for (0..10) |_| try frameAfter(16);
+    try dragBy(150, 30, true, 0);
+    try lift();
+    var bounced = false;
+    for (0..120) |_| {
+        try frameAfter(16);
+        bounced = bounced or t_over_y < 0;
+    }
+    try std.testing.expect(bounced);
+    for (0..63) |_| {
+        try frameAfter(16);
+        try std.testing.expectEqual(@as(f32, 0), t_viewport_y);
+        try std.testing.expectEqual(@as(f32, 0), t_over_y);
+        try std.testing.expect(!t_moving);
+    }
+}
+
+test "the brief's closed detent: a slow flick stops, a fast one passes" {
+    const stops = [_]Fling.Notch{
+        .{ .at = 0, .on_rest = true, .capture = 180 },
+        .{ .at = 180, .on_rest = true, .capture = 180, .detent = 400 },
+    };
+    try std.testing.expectEqual(@as(f32, 180), try restAfter(&stops, 10, 2));
+    const free = try restAfter(&.{}, 40, 4);
+    try std.testing.expect(free > 180);
+    try std.testing.expectApproxEqAbs(free, try restAfter(&stops, 40, 4), 0.01);
 }
