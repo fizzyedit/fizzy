@@ -10,10 +10,12 @@ pub const InitOptions = struct {
     group: u16 = 0,
     role: ?glass_look.Role = null,
     merge: f32 = 0,
-    /// Physical window coordinates, borrowed for this frame; hosts precede nested seams.
+    /// Physical window coordinates, borrowed for this frame; hosts precede nested seams. Only
+    /// the first `LiquidField.max_seams` are used; the rest are dropped.
     seams: []const LiquidField.Seam = &.{},
     blur: f32 = 1,
     lens: f32 = 1,
+    /// 0…1: how much light the rim catches, as `LiquidField.Shape`.
     light: f32 = 0,
 };
 
@@ -36,7 +38,8 @@ pub fn install(self: *Glass) void {
     const corners = opts.cornersGet().finalize(opts.themeGet()).scale(rs.s, dvui.CornerRect.Physical);
     const radii: [4]f32 = .{ corners.tl.radius(), corners.tr.radius(), corners.br.radius(), corners.bl.radius() };
     const o = self.init_opts;
-    self.material = if (o.seams.len > 0) .{ .rect = rs.r, .radii = radii, .seams = o.seams, .blur = o.blur, .lens = o.lens } else null;
+    const seams = o.seams[0..@min(o.seams.len, LiquidField.max_seams)];
+    self.material = if (seams.len > 0) .{ .rect = rs.r, .radii = radii, .seams = seams, .blur = o.blur, .lens = o.lens } else null;
     var layer = glass.current();
     if (!layer.active() or !std.meta.eql(layer.clip().?, dvui.clipGet())) {
         self.owned_layer = glass.layer(self.data().id, .{ .role = o.role, .merge = o.merge });
@@ -72,4 +75,22 @@ pub fn panel(self: *Glass) ?LiquidField.Panel {
 pub fn deinit(self: *Glass) void {
     self.owned_layer.end();
     self.box.deinit();
+}
+
+var t_seam_count: usize = 0;
+
+fn seamsFrame() !dvui.App.Result {
+    const over: [LiquidField.max_seams + 3]LiquidField.Seam = @splat(.{ .axis = .vertical, .at = 10, .reach = 4 });
+    var g = Glass.init(@src(), .{ .seams = &over }, .{ .expand = .both });
+    g.install();
+    defer g.deinit();
+    t_seam_count = if (g.panel()) |p| p.seams.len else 0;
+    return .ok;
+}
+
+test "an over-long seams slice is clamped to max_seams" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 200, .h = 100 } });
+    defer t.deinit();
+    try dvui.testing.settle(seamsFrame);
+    try std.testing.expectEqual(LiquidField.max_seams, t_seam_count);
 }
