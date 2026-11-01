@@ -11,7 +11,7 @@
 //!     }, .{ .expand = .both });
 //!     defer list.deinit();
 //!     while (list.next()) |i| {        // the rows in view plus overscan, in order
-//!         var row = list.row(i);       // a box; its size is the measurement
+//!         var row = list.row(i);       // a box; use row.key for ids and lookups
 //!         defer row.deinit();
 //!         drawMessage(i);
 //!     }
@@ -78,6 +78,10 @@ pub const InitOptions = struct {
     /// list trusts that the rows are as they were and does not ask for every key each frame. Null
     /// asks for every key each frame: right for a short list, costly for 20,000 rows.
     revision: ?u64 = null,
+    /// `estimate` is the row's height at `width`, not a guess: rows are never measured, and a
+    /// width change re-estimates them (HeightIndex re-estimates rows it never measured).
+    /// A row whose height changes without its key changing needs a new key.
+    exact: bool = false,
     /// Keep the view on the last row while the reader is at the bottom.
     follow_end: bool = false,
     /// Pixels drawn beyond each edge of the view. dvui forgets a widget's size when it goes
@@ -85,9 +89,9 @@ pub const InitOptions = struct {
     overscan: f32 = 200,
 };
 
-/// The height assumed for the view on the first frame, before the scroll area has one.
+/// First-frame placement height before the scroll area has a viewport; not a measurement size.
 const first_frame_height: f32 = 600;
-/// The width assumed for estimates before the scroll area has a viewport.
+/// First-frame placement width; heights are recorded only when the real viewport matches it.
 const first_frame_width: f32 = 400;
 
 /// A reader within this many viewport heights of the first row is near the start.
@@ -98,6 +102,7 @@ opts: InitOptions,
 range: ?HeightIndex.Range,
 next_index: usize,
 view_h: f32,
+settled: bool,
 trail_drawn: bool = false,
 /// A measurement moved a row's height, so the next frame places rows differently.
 measured_change: bool = false,
@@ -107,7 +112,6 @@ pub fn init(src: std.builtin.SourceLocation, opts: InitOptions, widget_opts: dvu
     const source: HeightIndex.Source = .{ .ctx = opts.ctx, .key = opts.key, .estimate = opts.estimate };
 
     const width = if (st.si.viewport.w > 0) st.si.viewport.w else if (st.index.width > 0) st.index.width else first_frame_width;
-    if (st.si.viewport.h > 0) st.view_h = st.si.viewport.h;
     const view_h = if (st.view_h > 0) st.view_h else first_frame_height;
     var count = opts.count;
     st.index.reconcile(st.gpa, source, count, width, opts.revision) catch |err| {
@@ -124,8 +128,13 @@ pub fn init(src: std.builtin.SourceLocation, opts: InitOptions, widget_opts: dvu
     st.si.scrollToOffset(.vertical, y);
     st.frame_y = st.si.viewport.y;
 
+    const scroll = ScrollArea.init(src, .{ .scroll_info = &st.si, .horizontal = .none }, widget_opts);
+    const now = st.si.viewport;
+    const settled = now.w > 0 and now.h > 0 and @abs(now.w - width) < 0.5;
+    if (settled) st.view_h = now.h;
     var self: VirtualList = .{
-        .scroll = ScrollArea.init(src, .{ .scroll_info = &st.si, .horizontal = .none }, widget_opts),
+        .scroll = scroll,
+        .settled = settled,
         .opts = opts,
         .range = if (count == 0) null else st.index.visibleRange(st.frame_y, view_h, opts.overscan),
         .next_index = 0,
@@ -155,7 +164,7 @@ pub fn deinit(self: *VirtualList) void {
     } else if (st.anchor == null) {
         st.anchor = st.index.anchorAt(st.frame_y);
     }
-    if (self.measured_change) dvui.refresh(null, @src(), id);
+    if (!self.settled or self.measured_change) dvui.refresh(null, @src(), id);
 }
 
 /// The next row to draw, or null after the last.
@@ -187,6 +196,7 @@ pub fn row(self: *VirtualList, index: usize) Row {
     return .{
         .list = self,
         .index = index,
+        .key = idx.keys.items[index],
         .outer = outer,
         .box = inner,
         .first_frame = dvui.firstFrame(inner.data().id),
@@ -198,6 +208,8 @@ pub fn row(self: *VirtualList, index: usize) Row {
 pub const Row = struct {
     list: *VirtualList,
     index: usize,
+    /// The row's key, for ids and lookups inside the row: use it, not `index`, which shifts on prepend.
+    key: u64,
     outer: *dvui.BoxWidget,
     /// The box the caller draws into; its size is the measurement, whatever the outer box is
     /// pinned to.
@@ -209,6 +221,7 @@ pub const Row = struct {
         const id = self.box.data().id;
         self.box.deinit();
         self.outer.deinit();
+        if (!self.list.settled or self.list.opts.exact) return;
         // The box has put its natural size, margins included, where dvui keeps min sizes.
         const size = dvui.minSizeGet(id) orelse return;
         const index = &self.list.opts.state.index;
@@ -260,6 +273,11 @@ const Messages = struct {
     track_key: u64 = 0,
     track_y: ?f32 = null,
 
+    zero: bool = false,
+    exact: bool = false,
+    width: f32 = 0,
+    keys_seen: [500]struct { index: usize, key: u64 } = undefined,
+
     const line_h = 20;
 
     fn lines(id: u64) usize {
@@ -276,6 +294,11 @@ const Messages = struct {
     }
 
     fn frame(self: *Messages) !dvui.App.Result {
+        const zero_box = if (self.zero) dvui.box(@src(), .{}, .{
+            .min_size_content = .{},
+            .max_size_content = .{ .w = 0, .h = 0 },
+        }) else null;
+        defer if (zero_box) |box| box.deinit();
         var list = VirtualList.init(@src(), .{
             .state = &self.state,
             .count = self.count,
@@ -283,7 +306,12 @@ const Messages = struct {
             .key = key,
             .estimate = estimate,
             .follow_end = self.follow_end,
-        }, .{ .expand = .both });
+            .exact = self.exact,
+        }, if (self.width > 0) .{
+            .expand = .vertical,
+            .min_size_content = .width(self.width),
+            .max_size_content = .width(self.width),
+        } else .{ .expand = .both });
         defer list.deinit();
         self.drawn = 0;
         self.top_y = std.math.floatMax(f32);
@@ -292,6 +320,7 @@ const Messages = struct {
             var r = list.row(i);
             defer r.deinit();
             if (self.drawn < self.box_ids.len) self.box_ids[self.drawn] = r.box.data().id;
+            self.keys_seen[self.drawn] = .{ .index = i, .key = r.key };
             self.drawn += 1;
             const id = self.first_id + i * self.stride;
             const short = self.short_first and r.first_frame;
@@ -539,4 +568,86 @@ test "scrolling up after a width change never moves the reader's row" {
             tracking = true;
         }
     }
+}
+
+test "a frame laid out at 0 by 0 records nothing" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    var m: Messages = .{ .count = 500 };
+    defer m.state.deinit();
+    try settleOn(&m);
+    m.state.scrollTo(300);
+    try settleOn(&m);
+    var heights: [500]f32 = undefined;
+    var states: [500]HeightIndex.State = undefined;
+    for (&heights, &states, 0..) |*height, *state, i| {
+        height.* = m.state.index.heightAt(i);
+        state.* = m.state.index.stateAt(i);
+    }
+    m.zero = true;
+    _ = try dvui.testing.step(currentFrame);
+    m.zero = false;
+    try settleOn(&m);
+    for (heights, states, 0..) |height, state, i| {
+        if (state == .measured) {
+            try testing.expectEqual(HeightIndex.State.measured, m.state.index.stateAt(i));
+            try testing.expectApproxEqAbs(height, m.state.index.heightAt(i), 0.5);
+        }
+    }
+    try testing.expectEqual(@as(u64, 300), m.top_key);
+}
+
+test "the first frame at a width other than the guess records nothing" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    var m: Messages = .{ .first_id = 100, .count = 500 };
+    defer m.state.deinit();
+    current = &m;
+    _ = try dvui.testing.step(currentFrame);
+    try testing.expect(m.drawn > 0);
+    for (m.keys_seen[0..m.drawn]) |seen| {
+        try testing.expectEqual(HeightIndex.State.estimated, m.state.index.stateAt(seen.index));
+    }
+    try settleOn(&m);
+    for (m.keys_seen[0..m.drawn]) |seen| {
+        try testing.expectEqual(HeightIndex.State.measured, m.state.index.stateAt(seen.index));
+    }
+    try testing.expectEqual(m.first_id, m.top_key);
+}
+
+test "exact rows are never measured" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 500, .h = 400 } });
+    defer t.deinit();
+    var m: Messages = .{ .count = 500, .exact = true };
+    defer m.state.deinit();
+    try settleOn(&m);
+    m.nudge = 20 * 3 * Messages.line_h;
+    _ = try dvui.testing.step(currentFrame);
+    m.nudge = 0;
+    try settleOn(&m);
+    for (0..m.count) |i| {
+        try testing.expectEqual(HeightIndex.State.estimated, m.state.index.stateAt(i));
+        try testing.expectEqual(Messages.estimate(&m, i, m.state.index.width), m.state.index.heightAt(i));
+    }
+    for ([_]f32{ 360, 0 }) |width| {
+        m.width = width;
+        _ = try dvui.testing.step(currentFrame);
+        for (0..m.count) |i| {
+            try testing.expectEqual(HeightIndex.State.estimated, m.state.index.stateAt(i));
+            try testing.expectEqual(Messages.estimate(&m, i, m.state.index.width), m.state.index.heightAt(i));
+        }
+    }
+}
+
+test "Row.key is the row's key" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    var m: Messages = .{ .first_id = 100, .count = 500 };
+    defer m.state.deinit();
+    try settleOn(&m);
+    for (m.keys_seen[0..m.drawn]) |seen| try testing.expectEqual(m.first_id + seen.index, seen.key);
+    m.first_id -= 50;
+    m.count += 50;
+    try settleOn(&m);
+    for (m.keys_seen[0..m.drawn]) |seen| try testing.expectEqual(m.first_id + seen.index, seen.key);
 }
