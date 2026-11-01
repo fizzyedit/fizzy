@@ -15,7 +15,7 @@
 //!
 //! How it hooks in without touching dvui: this wrapper claims the area's touch motion events
 //! (`handle`, as dvui does) *before* the area's own `deinit`, which skips handled events, so
-//! `si.velocity` stays 0 and dvui's coast never runs. Web wheel events retain their input kind: notches glide and trackpad deltas apply directly.
+//! `si.velocity` stays 0 and dvui's coast never runs. Wheel events retain their input kind: notches glide and trackpad deltas apply directly.
 //! Keys and the bars are dvui's. A motion the area cannot take is passed to the enclosing scroll
 //! container's own `processMotionScroll`, so a dvui parent still scrolls (with dvui's coast).
 //!
@@ -48,6 +48,7 @@ bands: bool,
 nested: bool,
 /// The places of interest this frame (`notches`).
 notch_list: []const Fling.Notch = &.{},
+snap_with: ?Snap = null,
 // Saved before children can advance or end dvui's drag on take-over.
 press_point: ?dvui.Point.Physical = null,
 finger_delta: dvui.Point = .{},
@@ -57,6 +58,10 @@ const Touch = struct {
     x: Fling = .{},
     y: Fling = .{},
     dragging: bool = false,
+    wheel_ns: i128 = 0,
+    wheel_settle: bool = false,
+    rest_pending: bool = false,
+    wheel_dir: f32 = 0,
     glide_x: ?f32 = null,
     glide_y: ?f32 = null,
     glide_at: dvui.Point = .{},
@@ -106,6 +111,9 @@ pub const seat: Spring.Tune = .{ .hz = 3, .playful_damping = 1 };
 /// 50 to 100 ms.
 pub const window_s: f32 = 0.1;
 
+/// Milliseconds after the last wheel event before pixel settling and rest snapping.
+pub const wheel_rest_ms = 120;
+
 /// Viewport points per second. `decay` 2 leaves 13.5% of the speed after one second, iOS's
 /// `UIScrollView.DecelerationRate.normal` (0.998 per ms), at every speed.
 pub const tuning: Fling.Tuning = .{
@@ -134,8 +142,10 @@ pub fn init(src: std.builtin.SourceLocation, init_opts: dvui.ScrollAreaWidget.In
     if (dragging.state == .prestart) self.press_point = dragging.pt;
     for (dvui.events()) |*e| {
         if (!dvui.eventMatch(e, .{ .id = c.data().id, .r = c.init_opts.event_rect orelse c.data().borderRectScale().r })) continue;
-        if (e.evt == .mouse and e.evt.mouse.action == .press and e.evt.mouse.button.touch())
+        if (e.evt == .mouse and e.evt.mouse.action == .press and e.evt.mouse.button.touch()) {
             self.press_point = e.evt.mouse.p;
+            if (!self.touch.dragging) self.touch.finger = e.evt.mouse.button;
+        }
     }
 
     // Preserve the caller's pixel snapping during motion: glyphs need whole device pixels
@@ -184,6 +194,12 @@ pub fn init(src: std.builtin.SourceLocation, init_opts: dvui.ScrollAreaWidget.In
         self.coast();
         self.seatStep();
     }
+    if (t.wheel_settle and dvui.frameTimeNS() - t.wheel_ns >= wheel_rest_ms * std.time.ns_per_ms and
+        !t.dragging and t.finger == .none and !t.anyMoving())
+    {
+        t.wheel_settle = false;
+        self.settle(true, true);
+    }
     // A bounce ends its coast past an edge; only in-range axes settle onto pixels.
     self.settle(was_coasting_x and t.seg_x.kind != .coast and t.over.x == 0, (was_coasting_y and t.seg_y.kind != .coast or was_seating and !t.seating) and t.over.y == 0);
     if (was_moving_x) t.glide_at.x = self.si.viewport.x;
@@ -202,9 +218,21 @@ pub fn overscroll(self: *const ScrollArea) dvui.Point {
 /// Places a touch scroll comes to rest on, in content points down from the top, for this frame
 /// (the slice must outlive `deinit`). A slow flick that would land near one is carried onto it;
 /// a lift near one, with no flick, settles onto it; a fast flick passes. Decided at the release
-/// alone: a finger on the content, the wheel and `scrollTo` never see them. None by default.
+/// alone, unless `on_rest` also enables wheel rests. None by default.
 pub fn notches(self: *ScrollArea, n: []const Fling.Notch) void {
     self.notch_list = n;
+}
+
+/// Snap points made on demand (a list's row tops), used with `notches`.
+pub const Snap = struct {
+    ctx: *anyopaque,
+    /// The snap point at or before `at` (`dir` < 0) or at or after it (`dir` > 0), or null.
+    near: *const fn (ctx: *anyopaque, at: f32, dir: f32) ?Fling.Notch,
+};
+
+/// Snap points for this frame, beside `notches`; they also count as `on_rest`. None by default.
+pub fn snap(self: *ScrollArea, s: Snap) void {
+    self.snap_with = s;
 }
 
 pub fn data(self: *const ScrollArea) *dvui.WidgetData {
@@ -235,6 +263,9 @@ pub fn deinit(self: *ScrollArea) void {
         }
     }
 
+    for (dvui.events()) |e| {
+        if (e.evt == .mouse and e.evt.mouse.action == .release and e.evt.mouse.button == t.finger) t.finger = .none;
+    }
     if (released) {
         t.dragging = false;
         _ = t.x.releaseWindowedAt(tuning, window_s, release_ns);
@@ -247,6 +278,8 @@ pub fn deinit(self: *ScrollArea) void {
         // The release may contain no motion, so it must schedule the first coast, settle or seat frame itself.
         if (t.anyMoving()) dvui.refresh(null, @src(), self.data().id);
     }
+
+    self.wheelRest();
 
     // A nested child's propagated motion sets this (parent) area's velocity through dvui's
     // `processMotionScroll`; clear it so dvui's coast never runs beside ours.
@@ -354,10 +387,8 @@ fn wheelEvent(self: *ScrollArea, e: *dvui.Event) void {
         .wheel_y => .vertical,
         else => return,
     };
-    var buf: [32]u8 = undefined;
-    // The prefix and a u16 event number fit in 32 bytes; the web backend writes this key.
-    const key = std.mem.print(&buf, "_wheel_trackpad_{d}", .{e.num}) catch unreachable;
-    const trackpad = dvui.dataGet(null, dvui.currentWindow().data().id, key, bool) orelse return;
+    const kind = glass.wheel_kind.get(e.num) orelse return;
+    const trackpad = kind != .mouse;
     if (!dvui.eventMatch(e, .{ .id = c.data().id, .r = c.init_opts.event_rect orelse c.data().borderRectScale().r })) return;
     const by = -switch (e.evt.mouse.action) {
         .wheel_x => |n| n,
@@ -371,6 +402,11 @@ fn wheelEvent(self: *ScrollArea, e: *dvui.Event) void {
     const max = self.si.scrollMax(dir);
     if (max <= 0 or (by < 0 and at <= 0) or (by > 0 and at >= max)) return;
     e.handle(@src(), c.data());
+    self.touch.wheel_ns = dvui.frameTimeNS();
+    self.touch.wheel_settle = true;
+    self.touch.rest_pending = true;
+    self.touch.wheel_dir = std.math.sign(by);
+    dvui.timer(self.data().id, wheel_rest_ms * 1000);
     self.touch.x.cancel();
     self.touch.y.cancel();
     if (self.touch.seg_x.kind == .coast) self.touch.seg_x = .{};
@@ -475,12 +511,22 @@ fn aimOrSeat(self: *ScrollArea) void {
     const t = self.touch;
     const y = self.si.viewport.y;
     const max = self.si.scrollMax(.vertical);
-    var buf: [max_notches]Fling.Notch = undefined;
+    var buf: [max_notches + 2]Fling.Notch = undefined;
     var n: usize = 0;
     for (self.notch_list) |notch| {
-        if (notch.at < 0 or notch.at > max or n == buf.len) continue;
+        if (notch.at < 0 or notch.at > max or n == max_notches) continue;
         buf[n] = notch;
         n += 1;
+    }
+    if (self.snap_with) |provider| {
+        const at = if (t.y.coasting) Fling.landing(y, t.y.vel, tuning) else y;
+        for ([_]f32{ -1, 1 }) |dir| {
+            if (provider.near(provider.ctx, at, dir)) |notch| {
+                if (notch.at < 0 or notch.at > max) continue;
+                buf[n] = notch;
+                n += 1;
+            }
+        }
     }
     if (t.y.coasting) {
         if (Fling.aim(y, t.y.vel, tuning, buf[0..n])) |a| t.seg_y.decay = a.decay;
@@ -490,6 +536,37 @@ fn aimOrSeat(self: *ScrollArea) void {
         t.seat_at = at;
         t.seat_spring = .{ .pos = .{ .y = y - at }, .placed = true };
     }
+}
+
+fn wheelRest(self: *ScrollArea) void {
+    const t = self.touch;
+    if (!t.rest_pending or dvui.frameTimeNS() - t.wheel_ns < wheel_rest_ms * std.time.ns_per_ms or
+        t.dragging or t.finger != .none or t.anyMoving()) return;
+    t.rest_pending = false;
+    const y = self.si.viewport.y;
+    const max = self.si.scrollMax(.vertical);
+    var a: ?Fling.Notch = null;
+    var b: ?Fling.Notch = null;
+    for (self.notch_list) |notch| {
+        if (notch.on_rest) restCandidate(notch, y, max, &a, &b);
+    }
+    if (self.snap_with) |provider| {
+        for ([_]f32{ -1, 1 }) |dir| {
+            if (provider.near(provider.ctx, y, dir)) |notch| restCandidate(notch, y, max, &a, &b);
+        }
+    }
+    if ((a != null and a.?.at == y) or (b != null and b.?.at == y)) return;
+    const target = if (a) |lo| (if (b) |hi| blk: {
+        const f = (y - lo.at) / (hi.at - lo.at);
+        break :blk if ((t.wheel_dir > 0 and f > 0.35) or (t.wheel_dir < 0 and f > 0.65)) hi else lo;
+    } else lo) else b orelse return;
+    if (@abs(y - target.at) <= target.capture) self.glideTo(.vertical, target.at);
+}
+
+fn restCandidate(n: Fling.Notch, y: f32, max: f32, a: *?Fling.Notch, b: *?Fling.Notch) void {
+    if (n.at < 0 or n.at > max) return;
+    if (n.at <= y and (a.* == null or n.at > a.*.?.at)) a.* = n;
+    if (n.at >= y and (b.* == null or n.at < b.*.?.at)) b.* = n;
 }
 
 /// Carry a seating viewport onto its notch, on the frame clock.
@@ -697,6 +774,10 @@ var t_rows: [400]dvui.Point.Physical = undefined;
 /// The notches the test area sets, and the highest viewport it reached while `restAfter` ran.
 var t_notches: []const Fling.Notch = &.{};
 var t_peak: f32 = 0;
+/// Set by snap tests and read by testFrame on the test thread.
+var t_snap: ?Snap = null;
+/// Viewport before deinit handles wheel events, written by testFrame on the test thread.
+var t_wheel_origin: f32 = 0;
 
 fn testFrame() !dvui.App.Result {
     if (t_motion_off) glass.motion.publish(0, 0.5, false, false, 1);
@@ -711,6 +792,7 @@ fn testFrame() !dvui.App.Result {
     } else {
         var scroll = ScrollArea.init(@src(), .{ .horizontal = .none, .vertical_bar = .hide }, .{ .expand = .both, .margin = .{ .y = t_top } });
         scroll.notches(t_notches);
+        if (t_snap) |provider| scroll.snap(provider);
         if (t_glide_to) |to| scroll.glideTo(.vertical, to);
         if (t_glide_by) |by| scroll.glideBy(.vertical, by);
         t_glide_to = null;
@@ -726,6 +808,7 @@ fn testFrame() !dvui.App.Result {
             if (si.viewport.y < 0 or si.viewport.y > si.scrollMax(.vertical)) t_range_broken = true;
         }
         defer {
+            t_wheel_origin = si.viewport.y;
             scroll.deinit();
             t_release_velocity = scroll.touch.y.last_debug.vel;
             t_release_coasted = scroll.touch.y.last_debug.coasted;
@@ -1586,14 +1669,11 @@ test "fast returns stay catchable in short panes at every motion rate" {
     }
 }
 
-/// Script a web wheel event with its per-event kind, as the web backend does.
-fn webWheel(by: f32, trackpad: bool) !void {
+/// Script a wheel event with its per-event kind, as the backends do.
+fn wheel(by: f32, kind: dvui.enums.MouseType) !void {
     const cw = dvui.currentWindow();
-    _ = try cw.addEventMouseWheel(-by, .vertical, if (trackpad) .trackpad else .mouse);
-    var buf: [32]u8 = undefined;
-    // The prefix and a u16 event number fit in 32 bytes.
-    const key = std.mem.print(&buf, "_wheel_trackpad_{d}", .{cw.event_num}) catch unreachable;
-    dvui.dataSet(cw, cw.data().id, key, trackpad);
+    _ = try cw.addEventMouseWheel(-by, .vertical, kind);
+    glass.wheel_kind.set(cw, cw.event_num, kind);
 }
 
 test "web trackpad pixels and momentum apply once and stop with the events" {
@@ -1603,17 +1683,17 @@ test "web trackpad pixels and momentum apply once and stop with the events" {
     try dvui.testing.settle(testFrame);
     _ = try dvui.currentWindow().addEventMouseMotion(.{ .pt = .{ .x = 150, .y = 200 } });
     for (0..10) |_| {
-        try webWheel(10, true);
+        try wheel(10, .trackpad);
         try frameAfter(16);
     }
     try std.testing.expectApproxEqAbs(@as(f32, 100), t_viewport_y, 0.01);
     for ([_]f32{ 8, 4, 2, 1, 0.25 }) |by| {
-        try webWheel(by, true);
+        try wheel(by, .trackpad);
         try frameAfter(16);
     }
     try std.testing.expectApproxEqAbs(@as(f32, 115.25), t_viewport_y, 0.01);
     for (0..30) |_| try frameAfter(16);
-    try std.testing.expectApproxEqAbs(@as(f32, 115.25), t_viewport_y, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 115.25), t_viewport_y, 0.5);
 }
 
 test "a web mouse notch glides 100 points reaching 95 percent in 150 ms" {
@@ -1623,7 +1703,7 @@ test "a web mouse notch glides 100 points reaching 95 percent in 150 ms" {
         t_use_dvui = false;
         try dvui.testing.settle(testFrame);
         _ = try dvui.currentWindow().addEventMouseMotion(.{ .pt = .{ .x = 150, .y = 200 } });
-        try webWheel(100, false);
+        try wheel(100, .mouse);
         try frameAfter(0);
         try std.testing.expectApproxEqAbs(@as(f32, 0), t_viewport_y, 0.01);
         const cw = dvui.currentWindow();
@@ -1649,8 +1729,8 @@ test "mixed web wheel kinds keep each event's behavior in one frame" {
     t_use_dvui = false;
     try dvui.testing.settle(testFrame);
     _ = try dvui.currentWindow().addEventMouseMotion(.{ .pt = .{ .x = 150, .y = 200 } });
-    try webWheel(10, true);
-    try webWheel(100, false);
+    try wheel(10, .trackpad);
+    try wheel(100, .mouse);
     try frameAfter(16);
     try std.testing.expectApproxEqAbs(@as(f32, 10), t_viewport_y, 0.01);
     for (0..60) |_| try frameAfter(16);
@@ -1954,4 +2034,202 @@ test "snapping inside the area is the same while gliding and at rest" {
         try std.testing.expectEqual(snapping, t_snapping);
     }
     try std.testing.expectEqual(@as(f32, 400), t_viewport_y);
+}
+
+fn wheelStart() !void {
+    t_use_dvui = false;
+    try dvui.testing.settle(testFrame);
+    _ = try dvui.currentWindow().addEventMouseMotion(.{ .pt = .{ .x = 150, .y = 200 } });
+}
+
+fn wheelFrames(count: usize) !void {
+    for (0..count) |_| try frameAfter(16);
+}
+
+test "a desktop mouse notch glides and a trackpad delta does not" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    try wheelStart();
+    try wheel(80, .mouse);
+    try frameAfter(0);
+    try std.testing.expectEqual(@as(f32, 0), t_viewport_y);
+    for (0..10) |_| try frameAfter(15);
+    try frameAfter(0);
+    try std.testing.expect(t_viewport_y >= 76);
+    try wheel(7, .trackpad);
+    try frameAfter(0);
+    try std.testing.expectApproxEqAbs(t_wheel_origin + 7, t_viewport_y, 0.001);
+    const at = t_viewport_y;
+    try wheelFrames(6);
+    try std.testing.expectApproxEqAbs(at, t_viewport_y, 0.001);
+}
+
+test "three notches in 40 ms end at three steps" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    try wheelStart();
+    for (0..3) |_| {
+        try wheel(80, .mouse);
+        try frameAfter(20);
+    }
+    for (0..60) |_| {
+        try frameAfter(16);
+        try std.testing.expect(t_viewport_y <= 240);
+    }
+    try std.testing.expectEqual(@as(f32, 240), t_viewport_y);
+}
+
+test "a notch at the end moves nothing and never bands" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    try wheelStart();
+    t_jump_to = t_max_y;
+    try frameAfter(16);
+    try wheel(80, .mouse);
+    for (0..60) |_| {
+        try frameAfter(16);
+        try std.testing.expectEqual(t_max_y, t_viewport_y);
+        try std.testing.expectEqual(@as(f32, 0), t_over_y);
+    }
+}
+
+test "slow trackpad motion keeps snapping and rests on a pixel" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    t.backend.size_pixels = .{ .w = 900, .h = 1200 };
+    try wheelStart();
+    for (1..21) |k| {
+        try wheel(0.37, .trackpad);
+        try frameAfter(16);
+        try std.testing.expect(t_snapping);
+        try std.testing.expectApproxEqAbs(@as(f32, @floatFromInt(k)) * 0.37, t_viewport_y, 0.001);
+    }
+    try frameAfter(130);
+    try frameAfter(0);
+    try std.testing.expectApproxEqAbs(@round(t_raw_y), t_raw_y, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 7.4), t_viewport_y, 1.0 / 3.0);
+}
+
+test "a notch glide that ends between pixels rests on one" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    t.backend.size_pixels = .{ .w = 900, .h = 1200 };
+    try wheelStart();
+    try wheel(0.37, .trackpad);
+    try frameAfter(16);
+    try wheel(80, .mouse);
+    try wheelFrames(26);
+    try std.testing.expectApproxEqAbs(@round(t_raw_y), t_raw_y, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 80.37), t_viewport_y, 1.0 / 3.0);
+}
+
+test "a wheel event without a kind is dvui's" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    try wheelStart();
+    _ = try dvui.currentWindow().addEventMouseWheel(-10, .vertical, null);
+    try frameAfter(16);
+    try std.testing.expectEqual(@as(f32, 10), t_viewport_y);
+}
+
+fn wheelRestCase(start: f32, by: f32, kind: dvui.enums.MouseType, target: f32) !void {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    try wheelStart();
+    t_jump_to = start;
+    try frameAfter(16);
+    try wheel(by, kind);
+    // Rest selects its target in deinit; the glide starts one frame later in init.
+    // Thirty-six frames spanning 600 ms at 60 Hz.
+    for (0..12) |_| {
+        try frameAfter(17);
+        try frameAfter(17);
+        try frameAfter(16);
+    }
+    try frameAfter(0);
+    try std.testing.expectApproxEqAbs(target, t_viewport_y, 0.5);
+}
+
+const rest_notches: []const Fling.Notch = &.{
+    .{ .at = 0, .capture = 200, .on_rest = true },
+    .{ .at = 200, .capture = 200, .on_rest = true },
+};
+
+test "a wheel rest finishes what it started" {
+    t_notches = rest_notches;
+    defer t_notches = &.{};
+    try wheelRestCase(0, 100, .mouse, 200);
+    try wheelRestCase(0, 60, .mouse, 0);
+}
+
+test "a wheel rest going up keeps to the 65 percent line" {
+    t_notches = rest_notches;
+    defer t_notches = &.{};
+    try wheelRestCase(200, -60, .mouse, 200);
+    try wheelRestCase(200, -80, .mouse, 0);
+}
+
+test "a trackpad rest settles too" {
+    t_notches = rest_notches;
+    defer t_notches = &.{};
+    try wheelRestCase(0, 100, .trackpad, 200);
+}
+
+test "a notch without on_rest never moves after the wheel" {
+    t_notches = &.{ .{ .at = 0, .capture = 200 }, .{ .at = 200, .capture = 200 } };
+    defer t_notches = &.{};
+    try wheelRestCase(0, 100, .mouse, 100);
+}
+
+test "a press during the rest wait postpones it" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    t_notches = rest_notches;
+    defer t_notches = &.{};
+    try wheelStart();
+    try wheel(100, .trackpad);
+    try frameAfter(60);
+    _ = try dvui.currentWindow().addEventPointer(.{ .button = .touch0, .action = .press, .xynorm = .{ .x = 0.5, .y = 0.5 } });
+    try wheelFrames(20);
+    try std.testing.expectEqual(@as(f32, 100), t_viewport_y);
+}
+
+test "a rest settles within 0.6 s of the last wheel event" {
+    t_notches = rest_notches;
+    defer t_notches = &.{};
+    try wheelRestCase(0, 100, .mouse, 200);
+}
+
+fn rowSnap(_: *anyopaque, at: f32, dir: f32) ?Fling.Notch {
+    const row = if (dir < 0) @floor(at / 100) else @ceil(at / 100);
+    return .{ .at = row * 100, .capture = 100, .pass_speed = std.math.inf(f32) };
+}
+
+test "a flick lands on a snap point" {
+    var ctx: u8 = 0;
+    t_snap = .{ .ctx = &ctx, .near = rowSnap };
+    defer t_snap = null;
+    for ([_]f32{ 3, 30 }) |step| {
+        var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+        defer t.deinit();
+        t_use_dvui = false;
+        _ = try swipeAt(step, 8);
+        try wheelFrames(400);
+        try std.testing.expect(t_viewport_y > 0);
+        try std.testing.expectEqual(@round(t_viewport_y / 100) * 100, t_viewport_y);
+    }
+}
+
+test "a wheel rest uses snap points" {
+    var ctx: u8 = 0;
+    t_snap = .{ .ctx = &ctx, .near = rowSnap };
+    defer t_snap = null;
+    try wheelRestCase(0, 130, .mouse, 100);
+    try wheelRestCase(0, 140, .mouse, 200);
+}
+
+test "nothing outside capture moves" {
+    t_notches = &.{ .{ .at = 0, .on_rest = true }, .{ .at = 1000, .on_rest = true } };
+    defer t_notches = &.{};
+    try wheelRestCase(0, 500, .mouse, 500);
 }

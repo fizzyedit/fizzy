@@ -87,6 +87,8 @@ pub const Notch = struct {
     capture: f32 = 64,
     /// Release speeds at or above this pass the notch (units/s).
     pass_speed: f32 = 1500,
+    /// Also settle here when wheel or trackpad scrolling rests within `capture`.
+    on_rest: bool = false,
 };
 
 /// The decay a coast needs to end on a notch.
