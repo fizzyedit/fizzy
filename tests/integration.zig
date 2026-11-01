@@ -7989,8 +7989,15 @@ test "demo: the Revert to before pill gives the session back, and the bar's clos
 }
 
 test "demo: the Revert pill is the size of its layer" {
+    try expectRevertPillSized(1);
+    try expectRevertPillSized(2);
+}
+
+/// The pill at `scale` is the size of its layer and of its words, not a fixed 156 by 30.
+fn expectRevertPillSized(scale: f32) !void {
     var t = try demoCtx();
     defer deinitDemo(&t);
+    dvui.currentWindow().content_scale = scale;
 
     demo_player.load(try demoTape(), .{});
     try stepDemoUntil(.ended, 400);
@@ -8008,6 +8015,13 @@ test "demo: the Revert pill is the size of its layer" {
     try std.testing.expect(rect.y + rect.h >= td.rect.y + td.rect.h - 0.5);
     try std.testing.expect(rect.w <= td.rect.w + 2);
     try std.testing.expect(rect.h <= td.rect.h + 2);
+
+    // The old pill was a fixed 156 by 30 whatever the scale; sized from its words it grows with it.
+    try std.testing.expect(td.rect.w != 156 or td.rect.h != 30);
+    if (scale > 1) {
+        try std.testing.expect(td.rect.w > 156);
+        try std.testing.expect(td.rect.h > 30);
+    }
 }
 
 test "demo: real pointer motion does not move the tape's pointer while it plays" {
