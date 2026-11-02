@@ -46,6 +46,11 @@ fn reset(e: f32) !void {
 fn press(x: f32, y: f32) !void {
     finger = .{ .x = x, .y = y };
     _ = try dvui.currentWindow().addEventPointer(.{ .button = .touch0, .action = .press, .xynorm = .{ .x = x / 300, .y = y / 400 } });
+    for (dvui.events()) |*e| {
+        if (e.evt == .mouse and e.evt.mouse.action == .press and e.evt.mouse.button == .touch0) {
+            e.evt.mouse.p = finger.scale(scale, dvui.Point.Physical);
+        }
+    }
     try frameAfter(16);
 }
 
@@ -70,6 +75,7 @@ fn lift() !void {
 fn finish(target: f32) !void {
     for (0..36) |_| try frameAfter(16);
     try std.testing.expectEqual(target, sheet.extent);
+    try std.testing.expect(sheet.target == null);
     try dvui.testing.settle(testFrame);
     dvui.currentWindow().extra_frames_needed = 0;
     try frameAfter(16);
@@ -107,7 +113,20 @@ test "a drag that starts on a bar button pulls, and the button does not click" {
     defer t.deinit();
     try reset(0);
     try press(30, 15);
-    for (0..6) |_| try move(0, 15);
+    for (1..7) |i| {
+        try move(0, 15);
+        try std.testing.expectEqual(@as(f32, @floatFromInt(i * 15)), sheet.extent);
+        try std.testing.expectEqual(@as(f32, 400), offset);
+    }
+    try lift();
+    try std.testing.expectEqual(@as(usize, 0), clicks);
+    try reset(0);
+    try press(30, 15);
+    try move(0, 1);
+    try std.testing.expectEqual(@as(f32, 0), sheet.extent);
+    try move(0, 14);
+    try std.testing.expectEqual(@as(f32, 15), sheet.extent);
+    for (0..5) |_| try move(0, 15);
     try std.testing.expectEqual(@as(f32, 90), sheet.extent);
     try lift();
     try std.testing.expectEqual(@as(usize, 0), clicks);

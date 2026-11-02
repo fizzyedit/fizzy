@@ -105,7 +105,9 @@ fn step(state: *State) void {
     }
 }
 
-/// Draw bar children between init and deinit. Unhandled touch travel pulls the sheet;
+/// A box for a bar, edge band, or open sheet's handle strip. Draw children between init
+/// and deinit: their unhandled events bubble here. A touch past dvui's drag threshold
+/// pulls extent 1:1 when |dy| > 1.25 |dx|, including travel before the threshold;
 /// a tap on empty space toggles it. A child button yields its press at the drag threshold.
 pub const Handle = struct {
     box: *dvui.BoxWidget,
@@ -149,6 +151,13 @@ pub const Handle = struct {
         const touch = self.touch;
         for (dvui.events()) |*e| {
             if (e.evt != .mouse or e.evt.mouse.button != touch.finger) continue;
+            // A button yields capture at the threshold, but dvui only retargets later
+            // events. Let this unhandled motion bubble on the same frame as the yield.
+            if (!e.handled and e.evt.mouse.action == .motion) {
+                if (e.target_widgetId) |id| {
+                    if (!dvui.captured(id)) e.target_widgetId = null;
+                }
+            }
             if (!dvui.eventMatchSimple(e, wd)) continue;
             const me = e.evt.mouse;
             switch (me.action) {
