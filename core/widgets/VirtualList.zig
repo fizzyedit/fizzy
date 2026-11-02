@@ -125,10 +125,11 @@ pub fn init(src: std.builtin.SourceLocation, opts: InitOptions, widget_opts: dvu
     const y = if (opts.follow_end and st.pinned)
         st.index.endY(view_h)
     else if (st.anchor) |a| st.index.resolve(a) orelse st.frame_y else st.frame_y;
+    const left = st.si.viewport.y;
     st.si.scrollToOffset(.vertical, y);
     st.frame_y = st.si.viewport.y;
 
-    const scroll = ScrollArea.init(src, .{ .scroll_info = &st.si, .horizontal = .none }, widget_opts);
+    const scroll = ScrollArea.initWith(src, .{ .scroll_info = &st.si, .horizontal = .none }, widget_opts, .{ .shift = st.frame_y - left });
     const now = st.si.viewport;
     const settled = now.w > 0 and now.h > 0 and @abs(now.w - width) < 0.5;
     if (settled) st.view_h = now.h;
@@ -650,4 +651,53 @@ test "Row.key is the row's key" {
     m.count += 50;
     try settleOn(&m);
     for (m.keys_seen[0..m.drawn]) |seen| try testing.expectEqual(m.first_id + seen.index, seen.key);
+}
+
+fn flickFrame(ms: u64) !void {
+    const cw = dvui.currentWindow();
+    _ = try current.frame();
+    _ = try cw.end(.{});
+    try cw.begin(cw.frame_time_ns + @as(i128, ms) * std.time.ns_per_ms);
+}
+
+test "a coast through rows of different heights only slows down" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    var m: Messages = .{ .count = 2000 };
+    defer m.state.deinit();
+    try settleOn(&m);
+    m.state.scrollTo(1500);
+    try settleOn(&m);
+
+    const cw = dvui.currentWindow();
+    const h = cw.data().rect.h;
+    var y: f32 = 0.2;
+    _ = try cw.addEventPointer(.{ .button = .touch0, .action = .press, .xynorm = .{ .x = 0.5, .y = y } });
+    try flickFrame(16);
+    // Six moves at 60 Hz establish a coast back through unmeasured rows.
+    for (0..6) |_| {
+        y += 40 / h;
+        _ = try cw.addEventTouchMotion(.touch0, 0.5, y, 0, 40 / h);
+        try flickFrame(16);
+    }
+    _ = try cw.addEventPointer(.{ .button = .touch0, .action = .release, .xynorm = .{ .x = 0.5, .y = y } });
+    try flickFrame(16);
+
+    var previous_key = m.top_key;
+    var previous_y = m.top_y;
+    var previous_step = std.math.floatMax(f32);
+    var checked: usize = 0;
+    for (0..60) |_| {
+        try flickFrame(16);
+        if (m.top_key == previous_key) {
+            const step = m.top_y - previous_y;
+            try testing.expect(step > 0);
+            try testing.expect(step <= previous_step + 0.5);
+            previous_step = step;
+            checked += 1;
+        }
+        previous_key = m.top_key;
+        previous_y = m.top_y;
+    }
+    try testing.expect(checked > 0);
 }
