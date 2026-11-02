@@ -94,6 +94,7 @@
    "--add-dir",
    "~/.cache/fizzy-build-slots"
   ],
+  "default_model": "gemini-3.8-flash",
   "model_flag": "--model",
   "prompt": "arg",
   "prompt_prefix": "-p=",
