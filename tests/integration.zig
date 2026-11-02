@@ -10968,6 +10968,20 @@ const HeardEvents = struct {
     }
 };
 
+/// Steps frames until `doc`'s save has landed. Its encode and write run on a worker
+/// (`DocumentIo.save`), so no count of frames bounds it on a busy machine. Gives up after 10 s.
+fn stepUntilSaved(editor: *fizzy.Editor, doc: sdk.DocHandle) !void {
+    const give_up = fizzy.core.perf.nanoTimestamp() + 10 * std.time.ns_per_s;
+    // A Save As starts at the next frame's top, in processPendingSaveAs.
+    _ = try dvui.testing.step(headlessFrame);
+    while (editor.docSaving(doc)) {
+        if (fizzy.core.perf.nanoTimestamp() > give_up) return error.NeverSaved;
+        // A cancelled sleep may skip the pause; the deadline still bounds the wait.
+        std.Io.sleep(dvui.io, .fromMilliseconds(1), .awake) catch {};
+        _ = try dvui.testing.step(headlessFrame);
+    }
+}
+
 fn headlessFrame() !dvui.App.Result {
     return fizzy.Entry.AppFrame();
 }
@@ -11310,11 +11324,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         const save_args = try args.path(b);
         defer gpa.free(save_args);
         try std.testing.expect(call(host, "fizzy.saveAs", save_args) == .ok);
-        for (0..50) |_| {
-            _ = try dvui.testing.step(headlessFrame);
-            const d = editor.activeDoc() orelse continue;
-            if (std.mem.eql(u8, d.owner.documentPath(d), b)) break;
-        }
+        try stepUntilSaved(editor, doc);
         const saved = editor.activeDoc() orelse return error.TestUnexpectedResult;
         try std.testing.expectEqualStrings(b, saved.owner.documentPath(saved));
         const written = try tmp.dir.readFileAlloc(dvui.io, "project/b.txt", gpa, .limited(1024));
@@ -11842,10 +11852,8 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         // closes once it lands.
         try std.testing.expect(doc.owner.isDirty(doc));
         try fizzy.Editor.Dialogs.UnsavedClose.saveAndClose(doc.id);
-        for (0..50) |_| {
-            _ = try dvui.testing.step(headlessFrame);
-            if (editor.docFromPath(main_zig) == null) break;
-        }
+        try stepUntilSaved(editor, doc);
+        try dvui.testing.settle(headlessFrame);
         try std.testing.expect(editor.docFromPath(main_zig) == null);
         const on_disk = try std.Io.Dir.cwd().readFileAlloc(dvui.io, main_zig, gpa, .limited(1024));
         defer gpa.free(on_disk);
@@ -11867,10 +11875,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
             try std.testing.expect(host.callCommand("text.insert", ".{ .text = \"one\\n\", .line = 1 }", host.arena()) == .ok);
             try editor.save();
             try std.testing.expect(host.callCommand("text.insert", ".{ .text = \"two\\n\", .line = 2 }", host.arena()) == .ok);
-            for (0..100) |_| {
-                _ = try dvui.testing.step(headlessFrame);
-                if (!editor.docSaving(c_doc)) break;
-            }
+            try stepUntilSaved(editor, c_doc);
             const written = try std.Io.Dir.cwd().readFileAlloc(dvui.io, c_txt, gpa, .limited(1024));
             defer gpa.free(written);
             try std.testing.expectEqualStrings("one\n", written);
@@ -12452,10 +12457,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try editor.undo();
         try dvui.testing.settle(headlessFrame);
         try editor.save();
-        for (0..100) |_| {
-            _ = try dvui.testing.step(headlessFrame);
-            if (!editor.docSaving(doc)) break;
-        }
+        try stepUntilSaved(editor, doc);
         const before = doc.owner.historyLine(doc, arena.allocator()) orelse return error.TestUnexpectedResult;
         const ids = try arena.allocator().alloc(u64, before.entries.len);
         for (before.entries, ids) |e, *id| id.* = e.id;
@@ -12751,10 +12753,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
                 try dvui.testing.settle(headlessFrame);
                 try std.testing.expect(h.callCommand("text.insert", ".{ .text = \"kept\", .line = 1 }", h.arena()) == .ok);
                 try ed.save();
-                for (0..100) |_| {
-                    _ = try dvui.testing.step(headlessFrame);
-                    if (!ed.docSaving(d)) break;
-                }
+                try stepUntilSaved(ed, d);
                 try ed.rawCloseFileID(d.id);
                 // Its history is packed and written by the checkpoint's thread.
                 for (0..400) |_| {
