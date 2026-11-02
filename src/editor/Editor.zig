@@ -52,6 +52,7 @@ const KeybindSettings = @import("KeybindSettings.zig");
 const Accounts = @import("Accounts.zig");
 pub const menu_model = @import("menu_model.zig");
 
+const GlassBench = @import("GlassBench.zig");
 const workbench_mod = @import("workbench");
 
 /// The plugins this application links in, as the build listed them (`bundled_plugins` is
@@ -116,6 +117,7 @@ app: App,
 
 /// File-management workbench (per-branch explorer decorations, …)
 workbench: Workbench,
+glass_bench: ?GlassBench.Config = null,
 /// The workbench's panes as the app's own views, when `FIZZY_WORKSPACES=1` asked (`Workspaces`).
 workspaces: Workspaces = .{},
 /// The first claim id not yet shown beside the person (`showClaimed`).
@@ -4529,6 +4531,10 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         fizzy.core.screens.publishMainRadius(if (square) 0 else if (builtin.target.os.tag == .linux) Constants.linux_window_radius else fizzy.backend.viewports.windowRadius());
     }
     fizzy.core.LiquidField.publishEnabled(editor.app.settings.glass_shader and fizzy.core.material.inApp().kind == .liquid);
+    if (editor.glass_bench) |cfg| {
+        GlassBench.draw(cfg);
+        return .ok;
+    }
     if (comptime builtin.target.cpu.arch == .wasm32) {
         // Plugins the page has finished linking since last frame register now.
         PluginLoader.pump();

@@ -14550,6 +14550,44 @@ test "a layer inside a scroll area is clipped to it" {
     try std.testing.expectEqual(card.h / 2, card.intersect(command.clip).h);
 }
 
+const GlassBenchFrame = struct {
+    fn draw() !dvui.App.Result {
+        fizzy.GlassBench.draw(.{ .arm = .scene, .panes = 20 });
+        return .ok;
+    }
+};
+
+test "parse reads the two arms" {
+    const Bench = fizzy.GlassBench;
+    try std.testing.expectEqual(Bench.Config{ .arm = .grid, .panes = 20 }, Bench.parse("grid:20").?);
+    try std.testing.expectEqual(Bench.Config{ .arm = .scene, .panes = 1 }, Bench.parse("scene:1").?);
+    try std.testing.expectEqual(Bench.Config{ .arm = .scene, .panes = 64 }, Bench.parse("scene:64").?);
+    for ([_][]const u8{ "scene:0", "scene:65", "list:5", "grid", "" }) |s| {
+        try std.testing.expectEqual(@as(?Bench.Config, null), Bench.parse(s));
+    }
+}
+
+test "scene:20 draws twenty joined panes" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 1000, .h = 800 } });
+    defer t.deinit();
+    fizzy.core.LiquidField.readyInTest(true);
+    const jobs_before = fizzy.core.glass.drawnDetails().jobs;
+    _ = try dvui.testing.step(GlassBenchFrame.draw);
+    try std.testing.expectEqual(@as(usize, 20), fizzy.core.glass.drawnRects().len);
+    try std.testing.expectEqual(jobs_before + 1, fizzy.core.glass.drawnDetails().jobs);
+    try std.testing.expectEqual(12 * dvui.parentGet().screenRectScale(.{}).s, fizzy.core.glass.drawnDetails().merge);
+}
+
+test "the stripes move" {
+    var t = try dvui.testing.init(.{});
+    defer t.deinit();
+    _ = try dvui.testing.step(GlassBenchFrame.draw);
+    const before = dvui.dataGet(null, fizzy.GlassBench.data_id, "stripe_offset", f32).?;
+    _ = try dvui.testing.step(GlassBenchFrame.draw);
+    const after = dvui.dataGet(null, fizzy.GlassBench.data_id, "stripe_offset", f32).?;
+    try std.testing.expectEqual(before + 2, after);
+}
+
 const GlassWidgetFrame = struct {
     const glass = fizzy.core.glass;
     const Glass = fizzy.core.widgets.Glass;

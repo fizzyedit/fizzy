@@ -15,6 +15,7 @@ pub const version: std.SemanticVersion = .{
 };
 
 pub const Entry = @import("Entry.zig");
+pub const GlassBench = @import("editor/GlassBench.zig");
 pub const Editor = @import("editor/Editor.zig");
 /// The mobile shape (`Editor` picks it on mobile); public so the integration tests can drive it.
 pub const layout_mobile = @import("editor/layout_mobile.zig");
