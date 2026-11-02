@@ -249,7 +249,7 @@ def run(job, job_dir, out, keep):
     thread = threading.Thread(target=heartbeat, daemon=True)
     thread.start()
     result = dict(protocol=1, job_id=job['id'], slot_id=slot_id, agent_kind=kind,
-                  model=os.environ.get('SLOT_MODEL', ''), os=os.environ.get('SLOT_OS') or {'win32': 'windows', 'darwin': 'macos'}.get(sys.platform, sys.platform),
+                  model=os.environ.get('SLOT_MODEL') or config.get('default_model', ''), os=os.environ.get('SLOT_OS') or {'win32': 'windows', 'darwin': 'macos'}.get(sys.platform, sys.platform),
                   status='done', started_at=started, title=job.get('issue', {}).get('title', job['id']),
                   pr_body='', review=None, decline=None, gates=[], changed=dict(files=0, added=0, deleted=0))
     try:
@@ -260,13 +260,14 @@ def run(job, job_dir, out, keep):
                       'pr_body_path': str(work / 'pr-body.md'), 'report_path': str(work / 'report.md'),
                       'review_path': str(work / 'review.json')}
             prompt = (ROOT / 'prompts' / (job['kind'] + '.md')).read_text(encoding='utf-8').format_map(values)
-            if os.environ.get('SLOT_MODEL'):
-                command += [config['model_flag'], os.environ['SLOT_MODEL']]
+            model = os.environ.get('SLOT_MODEL') or config.get('default_model')
+            if model:
+                command += [config['model_flag'], model]
             if config['prompt'] == 'arg':
                 command.append(config.get('prompt_prefix', '') + prompt)
             with (out / 'log.txt').open('wb') as log:
                 shown = command[:-1] if config['prompt'] == 'arg' else command
-                log.write(('slot command: ' + ' '.join(shown) + ' (model: ' + (os.environ.get('SLOT_MODEL') or 'default') + ')\n').encode())
+                log.write(('slot command: ' + ' '.join(shown) + ' (model: ' + (model or 'default') + ')\n').encode())
                 log.flush()
                 try:
                     rc = execute(command, work, log, deadline,
