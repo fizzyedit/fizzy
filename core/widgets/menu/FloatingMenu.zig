@@ -13,6 +13,7 @@
 //! a floating surface. Everything else is dvui's, and updates by re-copying.
 const std = @import("std");
 const dvui = @import("dvui");
+const glass = @import("../../glass.zig");
 const motion = @import("glass").motion;
 const dialogs = @import("../../dialogs.zig");
 const BlurBackdrop = @import("glass").BlurBackdrop;
@@ -112,9 +113,8 @@ prevClip: Rect.Physical,
 scale_val: f32,
 /// Sliding open this frame (`reveal`), so its scroll area shows no bar.
 revealing: bool = false,
-/// Growing out of `InitOptions.grow_from` this frame: how far, 0…1 (past 1 in the swing), and
-/// the corner it started from, natural. Null once it is whole.
-grown: ?struct { k: f32, r0: f32 } = null,
+/// Corners follow the spring's size progress so they open with the box, natural units.
+grown: ?struct { radius: f32, alpha: f32 } = null,
 /// The alpha its rows were drawn at while it grows, to put back (`deinit`).
 prev_alpha: ?f32 = null,
 menu: Menu,
@@ -199,7 +199,7 @@ pub fn init(self: *FloatingMenu, src: std.lang.SourceLocation, init_opts: InitOp
         self.wd.rect.y = @round(self.wd.rect.y * s) / s;
     }
 
-    self.reveal(init_opts.from, init_opts.grow_from);
+    self.reveal(init_opts.from, init_opts.grow_from, options.cornersGet().finalize(options.themeGet()).tl.radius());
 
     self.data().register();
     dvui.parentSet(self.widget());
@@ -257,7 +257,7 @@ pub fn init(self: *FloatingMenu, src: std.lang.SourceLocation, init_opts: InitOp
         // square menu built from the same constant.
         var corners = options.cornersGet().finalize(options.themeGet());
         // Growing out of a control: its round corners carried into the menu's.
-        if (self.grown) |g| corners = .round(std.math.lerp(g.r0, corners.tl.radius(), std.math.clamp(g.k, 0, 1)));
+        if (self.grown) |g| corners = .round(g.radius);
         BlurBackdrop.frostPane(self.data().id, brs.r, corners, brs.s, frost);
         // The shadow as a ring round the glass, after it, so the glass never blurs it in
         // (`core.dialogs.glassShadow`).
@@ -277,7 +277,7 @@ pub fn init(self: *FloatingMenu, src: std.lang.SourceLocation, init_opts: InitOp
     if (self.grown) |g| {
         const prev = dvui.currentWindow().alpha;
         self.prev_alpha = prev;
-        dvui.alphaSet(prev * std.math.clamp((g.k - 0.5) / 0.5, 0, 1));
+        dvui.alphaSet(prev * g.alpha);
     }
     // No scrollbar while it slides open: shorter than its rows for those frames, it would show
     // one for a list that fits. A menu too long for the window still gets one once it is open.
@@ -297,12 +297,28 @@ pub fn init(self: *FloatingMenu, src: std.lang.SourceLocation, init_opts: InitOp
 /// size is known (its second frame); a menu that comes back slides open anew.
 ///
 /// Given `grow_from`, it grows out of that control instead: its rect carried from the control's
-/// to its own on the same curve, and its corners with it (`grown`).
-fn reveal(self: *FloatingMenu, from: ?Rect.Natural, grow_from: ?Rect.Natural) void {
+/// to its own by Spring, keeping its speed when turned round mid-grow; corners follow size
+/// progress so they open with the box (`grown`).
+fn reveal(self: *FloatingMenu, from: ?Rect.Natural, grow_from: ?Rect.Natural, radius: f32) void {
     const id = self.data().id;
     if (dvui.minSizeGet(id) == null) return;
     const full = self.wd.rect;
     if (full.h <= 0) return;
+    if (grow_from) |g| {
+        const scale = dvui.windowNaturalScale();
+        var m = dvui.dataGet(null, id, "_morph", glass.Morph) orelse fresh: {
+            var m: glass.Morph = .{};
+            m.start(.{ .rect = g.scale(scale, Rect.Physical), .radii = @splat(@min(g.w, g.h) * scale / 2), .round = true });
+            break :fresh m;
+        };
+        const f = m.step(.{ .rect = full.scale(scale, Rect.Physical), .radii = @splat(radius * scale), .round = true }, dvui.secondsSinceLastFrame(), scale, .{});
+        dvui.dataSet(null, id, "_morph", m);
+        self.wd.rect = f.box.rect.scale(1 / scale, Rect);
+        self.revealing = f.moving;
+        self.grown = .{ .radius = f.box.radii[0] / scale, .alpha = f.content_alpha };
+        if (f.moving) dvui.refresh(null, @src(), id);
+        return;
+    }
     if (dvui.dataGet(null, id, "_revealed", bool) == null) {
         dvui.dataSet(null, id, "_revealed", true);
         dvui.animation(id, "_reveal", .{
@@ -315,17 +331,6 @@ fn reveal(self: *FloatingMenu, from: ?Rect.Natural, grow_from: ?Rect.Natural) vo
     const a = dvui.animationGet(id, "_reveal") orelse return;
     self.revealing = true;
     const k = @max(0, a.value());
-    if (grow_from) |g| {
-        self.wd.rect = .{
-            .x = std.math.lerp(g.x, full.x, k),
-            .y = std.math.lerp(g.y, full.y, k),
-            .w = @max(1, std.math.lerp(g.w, full.w, k)),
-            .h = @max(1, std.math.lerp(g.h, full.h, k)),
-        };
-        self.grown = .{ .k = k, .r0 = @min(g.w, g.h) / 2 };
-        dvui.refresh(null, @src(), id);
-        return;
-    }
     self.wd.rect.h = full.h * k;
     // Placed above what opened it: grow up, from its bottom edge.
     const above = if (from) |fr| full.y + full.h <= fr.y + 1 else false;

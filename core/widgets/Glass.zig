@@ -7,6 +7,8 @@ const LiquidField = @import("glass").LiquidField;
 const Glass = @This();
 
 pub const InitOptions = struct {
+    /// Close by drawing with its box at the source until it rests; see glass-morph.md.
+    morph: ?MorphOptions = null,
     group: u16 = 0,
     role: ?glass_look.Role = null,
     merge: f32 = 0,
@@ -19,12 +21,21 @@ pub const InitOptions = struct {
     light: f32 = 0,
 };
 
+pub const MorphOptions = struct {
+    /// The source box it grows out of on its first frame, physical; null grows from nothing,
+    /// i.e. lands at once.
+    from: ?dvui.Rect.Physical = null,
+    tune: glass.Morph.Tune = .{},
+};
+
 src: std.builtin.SourceLocation,
 init_opts: InitOptions,
 opts: dvui.Options,
 box: dvui.BoxWidget = undefined, // Initialized in install, at its final address.
 owned_layer: glass.Layer = .{},
 material: ?LiquidField.Panel = null,
+prev_clip: ?dvui.Rect.Physical = null,
+prev_alpha: ?f32 = null,
 
 /// Call install at the returned value's final address, then deinit after its children.
 pub fn init(src: std.builtin.SourceLocation, init_opts: InitOptions, opts: dvui.Options) Glass {
@@ -38,28 +49,47 @@ pub fn install(self: *Glass) void {
     const corners = opts.cornersGet().finalize(opts.themeGet()).scale(rs.s, dvui.CornerRect.Physical);
     const radii: [4]f32 = .{ corners.tl.radius(), corners.tr.radius(), corners.br.radius(), corners.bl.radius() };
     const o = self.init_opts;
+    const target: glass.Box = .{
+        .rect = rs.r,
+        .radii = radii,
+        .round = @reduce(.Min, @as(@Vector(4, f32), radii)) >= 4 * rs.s,
+    };
+    var frame: glass.Morph.Frame = .{ .box = target, .t = 1, .blur = 1, .lens = 1, .content_alpha = 1, .moving = false };
+    if (o.morph) |morph| {
+        const id = self.data().id;
+        var m = dvui.dataGet(null, id, "_morph", glass.Morph) orelse fresh: {
+            var m: glass.Morph = .{};
+            if (morph.from) |from| m.start(.{ .rect = from, .radii = @splat(@min(from.w, from.h) / 2), .round = true });
+            break :fresh m;
+        };
+        frame = m.step(target, dvui.secondsSinceLastFrame(), rs.s, morph.tune);
+        dvui.dataSet(null, id, "_morph", m);
+        if (frame.moving) dvui.refresh(null, @src(), id);
+    }
     const seams = o.seams[0..@min(o.seams.len, LiquidField.max_seams)];
-    self.material = if (seams.len > 0) .{ .rect = rs.r, .radii = radii, .seams = seams, .blur = o.blur, .lens = o.lens } else null;
+    self.material = if (seams.len > 0) .{ .rect = frame.box.rect, .radii = frame.box.radii, .seams = seams, .blur = o.blur * frame.blur, .lens = o.lens * frame.lens } else null;
     var layer = glass.current();
     if (!layer.active() or !std.meta.eql(layer.clip().?, dvui.clipGet())) {
         self.owned_layer = glass.layer(self.data().id, .{ .role = o.role, .merge = o.merge });
         layer = self.owned_layer;
     }
     if (!layer.add(.{
-        .shape = if (self.material) |p| .{ .panel = p } else .{ .box = .{
-            .rect = rs.r,
-            .radii = radii,
-            .round = @reduce(.Min, @as(@Vector(4, f32), radii)) >= 4 * rs.s,
-        } },
+        .shape = if (self.material) |p| .{ .panel = p } else .{ .box = frame.box },
         .group = o.group,
-        .blur = o.blur,
-        .lens = o.lens,
+        .blur = o.blur * frame.blur,
+        .lens = o.lens * frame.lens,
         .light = o.light,
     })) {
         const background = self.data().options.background;
         self.data().options.background = true;
         self.box.drawBackground();
         self.data().options.background = background;
+    }
+    if (o.morph != null) {
+        self.prev_clip = dvui.clipGet();
+        self.prev_alpha = dvui.currentWindow().alpha;
+        dvui.clipSet(dvui.clipGet().intersect(frame.box.rect));
+        dvui.alphaSet(self.prev_alpha.? * frame.content_alpha);
     }
 }
 
@@ -73,6 +103,8 @@ pub fn panel(self: *Glass) ?LiquidField.Panel {
 }
 
 pub fn deinit(self: *Glass) void {
+    if (self.prev_clip) |clip| dvui.clipSet(clip);
+    if (self.prev_alpha) |alpha| dvui.alphaSet(alpha);
     self.owned_layer.end();
     self.box.deinit();
 }
