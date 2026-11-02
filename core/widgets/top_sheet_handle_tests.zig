@@ -113,21 +113,44 @@ test "a pull on the bar opens the sheet over a scrolled page" {
     try lift(); // Native focus loss is delivered as a synthetic touch release too.
     try std.testing.expect(!sheet.held);
     try std.testing.expect(!sheet.pressed);
+    // A cancelled press below the threshold must not become a pull on later motion.
+    try pointer(.press, 200, 20);
+    try move(0, 1);
+    try std.testing.expect(sheet.pressed);
+    try std.testing.expect(!sheet.held);
+    dvui.captureMouse(null, dvui.currentWindow().event_num);
+    const before_cancel = sheet.extent;
+    _ = l.extent(l.ctx);
+    try std.testing.expect(!sheet.pressed);
+    try move(0, 15);
+    try std.testing.expectEqual(before_cancel, sheet.extent);
 }
 
 test "a drag that starts on a bar button pulls, and the button does not click" {
     var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
     defer t.deinit();
-    try reset();
-    try pointer(.press, 30, 20);
-    for (0..6) |_| try move(0, 15);
-    try std.testing.expectEqual(@as(f32, 90), sheet.extent);
-    try std.testing.expectEqual(@as(f32, 400), offset);
-    try lift();
-    try std.testing.expectEqual(@as(usize, 0), clicks);
-    try pointer(.press, 30, 20);
-    try lift();
-    try std.testing.expectEqual(@as(usize, 1), clicks);
+    for ([_]bool{ false, true }) |slow_start| {
+        try reset();
+        try pointer(.press, 30, 20);
+        // Held travel includes motion below the threshold before the button yields capture.
+        if (slow_start) {
+            try move(0, 1);
+            try std.testing.expectEqual(@as(f32, 0), sheet.extent);
+        }
+        try move(0, if (slow_start) 14 else 15);
+        try std.testing.expectEqual(@as(f32, 15), sheet.extent);
+        try std.testing.expectEqual(@as(f32, 400), offset);
+        for (2..7) |i| {
+            try move(0, 15);
+            try std.testing.expectEqual(@as(f32, @floatFromInt(i * 15)), sheet.extent);
+            try std.testing.expectEqual(@as(f32, 400), offset);
+        }
+        try lift();
+        try std.testing.expectEqual(@as(usize, 0), clicks);
+        try pointer(.press, 30, 20);
+        try lift();
+        try std.testing.expectEqual(@as(usize, 1), clicks);
+    }
 }
 
 test "a release rests by speed, then by place" {

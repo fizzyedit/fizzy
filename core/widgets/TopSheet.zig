@@ -1,4 +1,4 @@
-//! A sheet pulled from the top edge by a page's scroll: the header's brief. One State per app.
+//! A top sheet shared by page scrolling and bar pulls. One State per app.
 const std = @import("std");
 const dvui = @import("dvui");
 const glass = @import("glass");
@@ -19,6 +19,7 @@ pub const State = struct {
     stepped_ns: ?i128 = null,
     held: bool = false,
     pressed: bool = false,
+    owns_capture: bool = false,
     finger: dvui.enums.Button = .none,
     handle_id: ?dvui.Id = null,
     press_point: dvui.Point.Physical = .{},
@@ -41,9 +42,10 @@ pub fn openness(state: *const State) f32 {
 fn sync(ctx: *anyopaque) *State {
     const state: *State = @ptrCast(@alignCast(ctx));
     // Capture loss cancels ownership even when the page reads the lead before the handle draws.
-    if (state.held and state.handle_id != null and !dvui.captured(state.handle_id.?)) {
+    if (state.owns_capture and state.handle_id != null and !dvui.captured(state.handle_id.?)) {
         state.held = false;
         state.pressed = false;
+        state.owns_capture = false;
     }
     if (state.range != state.seen_range) {
         state.extent = if (state.seen_range > 0 and state.extent >= state.seen_range)
@@ -159,6 +161,7 @@ pub const Handle = struct {
             state.target = null;
             state.pressed = true;
             state.held = false;
+            state.owns_capture = false;
             state.finger = me.button;
             state.handle_id = wd.id;
             state.press_point = me.p;
@@ -180,15 +183,23 @@ pub const Handle = struct {
             if (me.action == .press and !e.handled) {
                 e.handle(@src(), wd);
                 dvui.captureMouse(wd, e.num);
+                s.owns_capture = true;
                 dvui.dragPreStart(me.button, me.p, .{});
             } else if (me.action == .motion) {
                 const travel = me.p.diff(s.press_point);
                 const threshold = dvui.Dragging.threshold * dvui.currentWindow().natural_scale;
                 const vertical = @abs(travel.y) > 1.25 * @abs(travel.x);
                 if (!s.held and (!vertical or @abs(travel.y) <= threshold)) continue;
-                if (!dvui.eventMatch(e, .{ .id = wd.id, .r = rs.r })) continue;
+                // A child yielding capture retargets only later events. This unhandled motion
+                // still names that child, but its press began here and its capture is gone.
+                var bubbled = e.*;
+                if (bubbled.target_widgetId) |id| {
+                    if (!dvui.captured(id)) bubbled.target_widgetId = wd.id;
+                }
+                if (!dvui.eventMatch(&bubbled, .{ .id = wd.id, .r = rs.r })) continue;
                 e.handle(@src(), wd);
                 dvui.captureMouse(wd, e.num);
+                s.owns_capture = true;
                 const delta = if (s.held) me.p.diff(s.last_point).y else travel.y;
                 s.held = true;
                 s.extent = std.math.clamp(s.extent + delta / rs.s, 0, s.range);
@@ -213,6 +224,7 @@ pub const Handle = struct {
                 dvui.dragEnd();
                 s.held = false;
                 s.pressed = false;
+                s.owns_capture = false;
             }
         }
         self.box.deinit();
