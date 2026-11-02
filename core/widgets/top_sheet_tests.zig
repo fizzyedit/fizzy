@@ -16,6 +16,7 @@ var over: f32 = 0;
 var max_y: f32 = 0;
 var finger_y: f32 = 0;
 var draw_scale: f32 = 1;
+var coasting: bool = false;
 
 fn testFrame() !dvui.App.Result {
     var area = ScrollArea.initWith(@src(), .{ .scroll_info = &pages[page], .horizontal = .none, .vertical_bar = .hide }, .{ .expand = .both }, .{ .lead = TopSheet.lead(&sheet) });
@@ -28,6 +29,7 @@ fn testFrame() !dvui.App.Result {
     viewport_bottom = (area_rs.r.y + area_rs.r.h) / area_rs.s;
     over = area.overscroll().y;
     area.deinit();
+    coasting = area.touch.seg_y.kind == .coast;
     offset = pages[page].viewport.y;
     max_y = pages[page].scrollMax(.vertical);
     return .ok;
@@ -320,4 +322,104 @@ test "a pull that catches a coast goes on into the sheet" {
         try lift();
         for (0..300) |_| try frameAfter(16);
     }
+}
+
+fn expectStop(extent: f32, frames: usize, no_band: bool) !void {
+    var coast_frames: usize = 0;
+    while (coasting and coast_frames < 300) : (coast_frames += 1) {
+        try frameAfter(16);
+        if (no_band) try std.testing.expectEqual(@as(f32, 0), over);
+    }
+    try std.testing.expect(!coasting);
+    for (0..frames) |_| {
+        try frameAfter(16);
+        if (no_band) try std.testing.expectEqual(@as(f32, 0), over);
+    }
+    try std.testing.expectEqual(extent, sheet.extent);
+    try std.testing.expectEqual(@as(f32, 0), offset);
+    dvui.currentWindow().extra_frames_needed = 0;
+    try frameAfter(16);
+    try std.testing.expectEqual(@as(u8, 0), dvui.currentWindow().extra_frames_needed);
+}
+
+test "a slow flick stops shut" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    reset(180);
+    try dvui.testing.settle(testFrame);
+    try touchDown();
+    try touchMove(-11.2);
+    try touchMove(-11.2);
+    try lift();
+    try expectStop(0, 18, true);
+}
+
+test "a slow drag settles by where it is and how fast it went" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    const Case = struct { at: f32, speed: f32, want: f32 };
+    for ([_]Case{
+        .{ .at = 100, .speed = 0, .want = 180 },
+        .{ .at = 80, .speed = 0, .want = 0 },
+        .{ .at = 100, .speed = -200, .want = 0 },
+        .{ .at = 80, .speed = 200, .want = 180 },
+    }) |case| {
+        reset(180);
+        try dvui.testing.settle(testFrame);
+        try touchDown();
+        const step = case.speed * 0.016;
+        try touchMoves(case.at - 180 - step * 8, 10);
+        try frameAfter(200);
+        if (case.speed != 0) for (0..8) |_| try touchMove(step);
+        try lift();
+        try expectStop(case.want, if (case.speed == 0) 37 else 18, true);
+    }
+}
+
+test "a coast down at the top lands exactly open" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    reset(90);
+    try dvui.testing.settle(testFrame);
+    try touchDown();
+    for (0..3) |_| try touchMove(8);
+    try lift();
+    try expectStop(180, 18, true);
+}
+
+fn wheel(by: f32, kind: dvui.enums.MouseType) !void {
+    const cw = dvui.currentWindow();
+    _ = try cw.addEventMouseWheel(-by, .vertical, kind);
+    @import("glass").wheel_kind.set(cw, cw.event_num, kind);
+}
+
+test "the wheel shuts first and opens at the top" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    reset(180);
+    try dvui.testing.settle(testFrame);
+    _ = try dvui.currentWindow().addEventMouseMotion(.{ .pt = .{ .x = 150, .y = 200 } });
+    for (0..3) |_| {
+        try wheel(80, .mouse);
+        try frameAfter(16);
+    }
+    var fell = false;
+    for (0..20) |_| {
+        try frameAfter(16);
+        if (sheet.extent > 0) {
+            fell = fell or sheet.extent < 180;
+            try std.testing.expectEqual(@as(f32, 0), offset);
+        }
+    }
+    try std.testing.expect(fell);
+    try std.testing.expectEqual(@as(f32, 0), sheet.extent);
+    try std.testing.expect(offset > 0);
+    pages[0].viewport.y = 0;
+    try dvui.testing.settle(testFrame);
+    try wheel(-80, .mouse);
+    try frameAfter(16);
+    try frameAfter(16);
+    try std.testing.expect(sheet.extent > 0);
+    try std.testing.expectEqual(@as(f32, 0), offset);
+    try expectStop(180, 37, true);
 }
