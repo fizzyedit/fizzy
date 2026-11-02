@@ -37,7 +37,10 @@ for (const reset of [0xFFFFFFFF, -1]) {
 // This catches a missing import as a LinkError, even without built web assets.
 const pageImport = source.match(/dvui: (\{ \.\.\.app\.imports, wasm_field_hints: \(\) => \{\} \}),/);
 assert.ok(pageImport, 'page mode must provide the field-hints import');
-const dvui = runInNewContext(`(${pageImport[1]})`, { app: { imports: {} } });
+const existingImport = () => 42;
+const dvui = runInNewContext(`(${pageImport[1]})`, { app: { imports: { existingImport } } });
+assert.equal(dvui.existingImport, existingImport, 'page mode must preserve dvui imports');
+assert.doesNotThrow(() => dvui.wasm_field_hints(1));
 const str = (s) => [s.length, ...Buffer.from(s)];
 const section = (id, bytes) => [id, bytes.length, ...bytes];
 const module = new WebAssembly.Module(new Uint8Array([
