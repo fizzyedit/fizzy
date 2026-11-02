@@ -23,8 +23,10 @@ pub fn init(src: std.lang.SourceLocation, init_opts: dvui.TextEntryWidget.InitOp
         .hold = dvui.dataGetPtrDefault(null, entry.data().id, "_hold", TouchHold, .{}),
     };
     self.keepFocusOnTouchdown();
+    // dvui turns the menu and handles on when a touch-editing finger lifts.
+    const touch_editing = entry.textLayout.state.touch_editing;
     entry.processEvents();
-    self.processTouch(unhandled);
+    self.processTouch(unhandled, touch_editing);
     entry.draw();
     return self;
 }
@@ -49,11 +51,12 @@ fn keepFocusOnTouchdown(self: TextEntry) void {
     }
 }
 
-fn processTouch(self: TextEntry, unhandled: touch.Presses) void {
+fn processTouch(self: TextEntry, unhandled: touch.Presses, touch_editing: bool) void {
     const tl = &self.entry.textLayout;
     const hold = self.hold;
     const rs = self.entry.data().borderRectScale();
     const slop = TouchHold.slop_pt * dvui.windowNaturalScale();
+    const focused = self.entry.data().id == dvui.focusedWidgetId();
     for (dvui.events(), 0..) |*e, i| {
         if (e.evt != .mouse or !e.evt.mouse.button.touch()) continue;
         const me = e.evt.mouse;
@@ -77,12 +80,8 @@ fn processTouch(self: TextEntry, unhandled: touch.Presses) void {
                 if (e.target_widgetId != tl.data().id) hold.cancel();
                 switch (hold.release(dvui.frameTimeNS())) {
                     .none => {},
-                    .tap, .double_tap => {
-                        dvui.focusWidget(self.entry.data().id, null, e.num);
-                        tl.state.touch_editing = false;
-                        tl.sel_move = .{ .mouse = .{ .down_pt = tl.data().contentRectScale().pointFromPhysical(me.p) } };
-                        tl.scroll_to_cursor = true;
-                    },
+                    .tap => self.tap(me.p, focused, slop, e.num, touch_editing),
+                    .double_tap => SelectableText.selectWordAt(tl, self.entry.data().id, me.p.x, me.p.y),
                 }
             },
             else => {},
@@ -95,4 +94,22 @@ fn processTouch(self: TextEntry, unhandled: touch.Presses) void {
     }
     tl.state.te_first = false;
     tl.state.te_focus_on_touchdown = false;
+}
+
+fn tap(self: TextEntry, p: dvui.Point.Physical, was_focused: bool, slop: f32, event_num: u16, touch_editing: bool) void {
+    const tl = &self.entry.textLayout;
+    const on_caret = was_focused and tl.selection.empty() and
+        tl.screenRectScale(tl.state.sel_end_r).r.outset(.all(slop)).contains(p);
+    dvui.focusWidget(self.entry.data().id, null, event_num);
+    if (on_caret) {
+        tl.state.touch_editing = !touch_editing;
+        tl.state.te_show_draggables = !touch_editing;
+        tl.state.te_show_context_menu = !touch_editing;
+    } else {
+        tl.sel_move = .{ .mouse = .{ .down_pt = tl.data().contentRectScale().pointFromPhysical(p) } };
+        tl.scroll_to_cursor = true;
+        tl.state.touch_editing = false;
+        tl.state.te_show_draggables = false;
+        tl.state.te_show_context_menu = false;
+    }
 }

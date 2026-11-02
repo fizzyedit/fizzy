@@ -36,6 +36,13 @@ paths, fuzzy matching, the LSP client, the profiler.
   dvui selects a word on the first tap, so a finger landing on a message to scroll it selects it.
   `SelectableText` selects on a 0.45 s hold within 14 pt (`TouchHold.zig`), a tap clears; the mouse
   is dvui's. `st.tl` is the layout: draw into it with `addText` / `addLink` as before.
+- **Text fields are `widgets.TextEntry`, not `dvui.textEntry`, in app and plugin code.**
+  dvui focuses on the press, so a finger landing to scroll enters the field. The wrapper focuses
+  on tap release, selects on hold or double tap, and toggles the menu on a caret tap; a drag is
+  the scroll's. Mouse and pen are dvui's; `te.entry` is dvui's widget.
+  Callers left as follow-ups: `plugins/workbench/src/files.zig`, `src/editor/CommandPalette.zig`,
+  and `src/editor/dialogs/WebSaveAs.zig`. No lint rule yet. The text plugin's vendored
+  `TextEntryWidget` is the editor, its own.
 - **Touch or mouse: ask dvui, never infer it.** `dvui.pointerKind()` is the window's answer,
   set as the backend adds events, the same in the app, a plugin dylib and a wasm side module.
   State kept by scanning events (a global, a per-frame key) differs per module and per frame.
