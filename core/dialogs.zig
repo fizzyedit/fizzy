@@ -306,6 +306,8 @@ pub const BubblesOptions = struct {
     /// A signature of what lies under the bubbles, as `frostPaneKept`'s: the frost is read again
     /// only when it changes. Null reads it every frame.
     witness: ?u64 = null,
+    /// The size the bubbles are growing into, as `core.glass.LayerOptions.reach`.
+    reach: ?dvui.Size.Physical = null,
     /// The place the bubbles belong to (`LiquidField.edge`): a bubble near its outline joins it by a
     /// neck, and none crosses it. Physical. No shadow rings with it (`shadow`). Without the glass
     /// program, the bubbles are only cut to its rect.
@@ -357,6 +359,7 @@ pub fn glassBubbles(id: dvui.Id, bubbles: []const Bubble, scale: f32, opts: Bubb
         .solid = opts.solid,
         .light_across = opts.light_across,
         .witness = opts.witness,
+        .reach = opts.reach,
     });
     defer layer.end();
     if (layer.active()) {

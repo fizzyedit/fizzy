@@ -72,6 +72,8 @@ pub const LayerOptions = struct {
     light_across: bool = false,
     /// A signature of what lies under the layer (`BlurBackdrop.Pane.witness`).
     witness: ?u64 = null,
+    /// The size the items are growing into, physical: a menu or window growing open. Its capture is made that size from the first frame (`BlurBackdrop.Pane.reach`), so one set of targets serves the whole growth.
+    reach: ?dvui.Size.Physical = null,
     /// The items' shadow rings' share, 0…1, drawn after the glass so it never blurs them in.
     shadow: f32 = 0,
 };
@@ -106,6 +108,7 @@ pub fn layer(id: dvui.Id, opts: LayerOptions) Layer {
     }
     if (opts.lift > 0) pane.lift = opts.lift;
     pane.witness = opts.witness;
+    pane.reach = opts.reach;
     const cw = dvui.currentWindow();
     const job = cw.arena().create(Job) catch return .{};
     job.* = .{
