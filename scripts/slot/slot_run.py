@@ -57,6 +57,21 @@ def git(repo, *args, env=None):
                                    env=env or clean_env(), stderr=subprocess.PIPE)
 
 
+def contract_doc(work):
+    # Repos other than fizzy (dvui) lack docs/AGENT_WORK.md, which the prompts name: copy it in
+    # untracked and excluded so `git add -A` never commits it.
+    src = ROOT.parent.parent / 'docs' / 'AGENT_WORK.md'
+    dst = work / 'docs' / 'AGENT_WORK.md'
+    if dst.exists() or not src.is_file():
+        return
+    dst.parent.mkdir(exist_ok=True)
+    shutil.copyfile(src, dst)
+    exclude = work / '.git' / 'info' / 'exclude'
+    exclude.parent.mkdir(exist_ok=True)
+    with exclude.open('a') as f:
+        f.write('/docs/AGENT_WORK.md\n')
+
+
 def checkout(job, job_dir, home):
     work = home / 'work' / job['id']
     work.parent.mkdir(parents=True, exist_ok=True)
@@ -84,6 +99,7 @@ def checkout(job, job_dir, home):
         git(work, 'checkout', '--detach', job['base']['sha'])
         if git(work, 'rev-parse', 'HEAD').decode().strip() != job['base']['sha']:
             raise BrokenSlot('HEAD differs from base.sha')
+        contract_doc(work)
         return work
     except (OSError, subprocess.CalledProcessError) as exc:
         rmtree(work, ignore_errors=True)
@@ -244,7 +260,7 @@ def run(job, job_dir, out, keep):
             if os.environ.get('SLOT_MODEL'):
                 command += [config['model_flag'], os.environ['SLOT_MODEL']]
             if config['prompt'] == 'arg':
-                command.append(prompt)
+                command.append(config.get('prompt_prefix', '') + prompt)
             with (out / 'log.txt').open('wb') as log:
                 try:
                     rc = execute(command, work, log, deadline,
