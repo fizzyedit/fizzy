@@ -154,6 +154,8 @@ pub const Handle = struct {
             switch (me.action) {
                 .motion => {
                     const travel = me.p.diff(touch.origin);
+                    // Velocity includes travel held before the drag threshold, just as extent does.
+                    touch.fling.sampleTimed(me.action.motion.y / wd.rectScale().s, glass.input_time.get(e.num));
                     if (!touch.dragging) {
                         if (touch.probe.get(me.p, .{ .window_natural_scale = dvui.currentWindow().natural_scale }) == null) continue;
                         if (@abs(travel.y) <= 1.25 * @abs(travel.x)) touch.sideways = true;
@@ -166,7 +168,6 @@ pub const Handle = struct {
                     self.state.held = true;
                     self.state.target = null;
                     self.state.extent = std.math.clamp(self.state.extent + by / wd.rectScale().s, 0, self.state.range);
-                    touch.fling.sampleTimed(me.action.motion.y / wd.rectScale().s, glass.input_time.get(e.num));
                 },
                 .press => {
                     e.handle(@src(), wd);

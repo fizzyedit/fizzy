@@ -5,6 +5,7 @@ const glass = @import("glass");
 const TopSheet = @import("TopSheet.zig");
 const ScrollArea = @import("ScrollArea.zig");
 
+// The test driver and testFrame write this fixture on the test's UI thread.
 var sheet: TopSheet.State = .{};
 var page: dvui.ScrollInfo = .{};
 var offset: f32 = 0;
@@ -91,6 +92,14 @@ test "a pull on the bar opens the sheet over a scrolled page" {
     try press(200, 20);
     try move(30, 5);
     try std.testing.expectEqual(@as(f32, 90), sheet.extent);
+    try lift();
+    try reset(0);
+    try press(200, 20);
+    try move(0, 1);
+    try std.testing.expectEqual(@as(f32, 0), sheet.extent);
+    try move(0, 14);
+    try std.testing.expectEqual(@as(f32, 15), sheet.extent);
+    try std.testing.expectEqual(@as(f32, 400), offset);
 }
 
 test "a drag that starts on a bar button pulls, and the button does not click" {
