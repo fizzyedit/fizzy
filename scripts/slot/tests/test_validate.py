@@ -36,12 +36,15 @@ class Artifacts(unittest.TestCase):
         now = dt.datetime.now(dt.timezone.utc)
         self.job = dict(protocol=1, id='work-722-w1-123', kind='write',
                         issue=dict(repo='fizzyedit/work', number=722, area='scripts', labels=['kind:test-provable']),
-                        base=dict(repo=str(self.base), sha=self.sha), branch='scripts/example',
+                        base=dict(repo='fizzyedit/fizzy', sha=self.sha), branch='scripts/example',
                         in_bounds=['a.txt'], limits=dict(max_changed_lines=10),
                         lease=dict(ttl_minutes=110), attempt=1, for_review=None, rework=None)
         self.result = dict(protocol=1, job_id=self.job['id'], slot_id='linux-codex-2', agent_kind='codex',
                            status='done', started_at=now.isoformat(), finished_at=now.isoformat(),
-                           title='scripts: example', pr_body='Example body', report='report', review=None)
+                           title='scripts: example', pr_body=Path('docs/AGENT_WORK.md').read_text().split(
+                               '## In plain words\n\nOn a phone,', 1)[1].split('</details>', 1)[0],
+                           report='report', review=None)
+        self.result['pr_body'] = '## In plain words\n\nOn a phone,' + self.result['pr_body'] + '</details>'
         self.key, self.signers = self.root / 'key', self.root / 'signers'
         subprocess.run(['ssh-keygen', '-q', '-t', 'ed25519', '-N', '', '-f', str(self.key)], check=True)
         self.signers.write_text('linux-codex-2 namespaces="fizzy-slot" ' + self.key.with_suffix('.pub').read_text())
@@ -78,7 +81,7 @@ class Artifacts(unittest.TestCase):
         return validate(self.job_dir, self.out, self.base, self.sign(), self.signers)
 
     def review(self):
-        self.job.update(kind='review', base=dict(repo=str(self.base), sha=self.head), in_bounds=[],
+        self.job.update(kind='review', base=dict(repo='fizzyedit/fizzy', sha=self.head), in_bounds=[],
                         for_review=dict(pr=9, head_sha=self.head, author_kind='agy', must_fix=None))
         self.result['review'] = dict(verdict='changes', findings=[dict(id='F1', severity='major',
                                             file='a.txt', line=1, added=True, text='problem')], follow_ups=[])
@@ -183,3 +186,45 @@ class ValidateTests(Artifacts):
         self.assertIn('check-pr-body', str(self.verdict()['reasons']))
         self.result['pr_body'] = 'required-heading'
         self.assertTrue(self.verdict()['accept'])
+
+    def test_targets_refuse_unknown_repo_and_wrong_branch(self):
+        for base in (dict(repo='someone/else'), dict(repo='fizzyedit/dvui', branch='main'),
+                     dict(repo=None), {}):
+            self.job['base'] = dict(sha=self.sha, **base)
+            verdict = self.verdict()
+            self.assertFalse(verdict['accept'])
+            self.assertIn('target:', str(verdict['reasons']))
+
+    def test_dvui_write_and_review_use_target(self):
+        self.job['base']['repo'] = 'https://github.com/fizzyedit/dvui.git'
+        self.assertTrue(self.verdict()['accept'])
+        self.review()
+        self.job['base']['repo'] = 'fizzyedit/dvui'
+        self.state['objects']['repos/fizzyedit/dvui/pulls/9'] = self.state['objects'].pop(
+            'repos/fizzyedit/fizzy/pulls/9')
+        self.state_path.write_text(json.dumps(self.state))
+        self.assertTrue(self.verdict()['accept'])
+
+    def test_missing_base_checker_uses_trusted_checker(self):
+        self.result['pr_body'] = 'invalid body'
+        self.assertIn('check-pr-body', str(self.verdict()['reasons']))
+
+    def test_slot_paths_are_risky(self):
+        path = self.base / 'scripts/slot/example.py'
+        path.parent.mkdir(parents=True)
+        path.write_text('example = True\n')
+        self.git('add', '.')
+        self.git('commit', '-qm', 'slot infrastructure', '-s')
+        self.job['in_bounds'].append('scripts/slot/example.py')
+        (self.out / 'change.mbox').write_text(self.git('format-patch', '--stdout', self.sha + '..HEAD'))
+        verdict = self.verdict()
+        self.assertTrue(verdict['accept'], verdict)
+        self.assertTrue(verdict['risky'])
+
+    def test_runner_fetches_slug_as_https_url(self):
+        from slot.slot_run import checkout
+        self.job['base']['repo'] = 'fizzyedit/dvui'
+        with patch('slot.slot_run.git', return_value=(self.sha + '\n').encode()) as git:
+            checkout(self.job, self.job_dir, self.root)
+        fetch = next(c.args for c in git.call_args_list if 'fetch' in c.args)
+        self.assertIn('https://github.com/fizzyedit/dvui.git', fetch)

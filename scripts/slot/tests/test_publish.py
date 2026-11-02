@@ -71,6 +71,7 @@ class PublishTests(Artifacts):
         import subprocess
         from slot.publish import push
         self.sign()
+        self.job['base']['repo'] = 'fizzyedit/dvui'
         remote = self.root / 'remote.git'
         subprocess.run(['git', 'init', '--bare', '-q', str(remote)], check=True)
         real_run = subprocess.run
@@ -78,7 +79,10 @@ class PublishTests(Artifacts):
         def local_git(args, **kwargs):
             args = list(args)
             for index, arg in enumerate(args):
+                if arg == 'https://github.com/fizzyedit/dvui.git':
+                    args[index] = str(self.base)
                 if arg.startswith('https://x-access-token:'):
+                    self.assertTrue(arg.endswith('@github.com/fizzyedit/dvui.git'))
                     args[index] = str(remote)
             if 'push' in args:
                 pushes.append(args)
@@ -104,7 +108,7 @@ class PublishTests(Artifacts):
         push.assert_not_called()
 
     def test_rework_pushes_once_and_labels_round(self):
-        self.job.update(kind='rework', base=dict(repo=str(self.base), sha=self.head),
+        self.job.update(kind='rework', base=dict(repo='fizzyedit/fizzy', sha=self.head),
                         rework=dict(pr=9, round=1))
         self.state['objects']['repos/fizzyedit/fizzy/issues/9'] = dict(labels=[])
         self.state_path.write_text(json.dumps(self.state))
@@ -127,3 +131,54 @@ class PublishTests(Artifacts):
         with patch('slot.validate.run', return_value=b'[{"body":"one"}]\n[{"body":"two"}]\n'):
             self.assertEqual(gh('api', '--paginate', 'repos/a/b/issues/1/comments'),
                              [dict(body='one'), dict(body='two')])
+
+    def test_dvui_write_dispatches_review_once(self):
+        self.job['base'].update(repo='fizzyedit/dvui', branch='zig-0.17')
+        state, push = self.publish_twice()
+        create = next(c for c in state['calls'] if c[:2] == ['pr', 'create'])
+        self.assertEqual(create[create.index('--repo') + 1], 'fizzyedit/dvui')
+        self.assertEqual(create[create.index('--base') + 1], 'zig-0.17')
+        self.assertIn('gate:yes', create)
+        self.assertEqual(state['dispatches'], [dict(event_type='review',
+                         client_payload=dict(pr=1, repo='fizzyedit/dvui'))])
+        self.assertEqual(push.call_count, 1)
+
+    def test_dvui_clean_review_never_auto_merges(self):
+        self.review()
+        self.job['base']['repo'] = 'fizzyedit/dvui'
+        self.result['review'].update(verdict='clean', findings=[])
+        state, _ = self.publish_twice()
+        self.assertIn('repos/fizzyedit/dvui/statuses/' + self.head, state['statuses'])
+        self.assertFalse(any(c[:2] == ['pr', 'merge'] for c in state['calls']))
+
+    def test_invalid_target_refuses_before_github(self):
+        self.job['base']['repo'] = 'unknown/repo'
+        with self.assertRaises(ValueError):
+            self.publish_twice()
+        self.assertNotIn('calls', json.loads(self.state_path.read_text()))
+
+    def test_dvui_rework_pushes_and_labels_target(self):
+        self.job.update(kind='rework', base=dict(repo='fizzyedit/dvui', sha=self.head),
+                        rework=dict(pr=9, round=1))
+        self.state['objects']['repos/fizzyedit/dvui/pulls/9'] = self.state['objects'].pop(
+            'repos/fizzyedit/fizzy/pulls/9')
+        self.state['objects']['repos/fizzyedit/dvui/issues/9'] = dict(labels=[])
+        self.state_path.write_text(json.dumps(self.state))
+        state, push = self.publish_twice()
+        self.assertEqual(push.call_count, 1)
+        self.assertIn(dict(name='rework:1'), state['objects']['repos/fizzyedit/dvui/issues/9']['labels'])
+
+    def test_dvui_existing_pr_resumes_review_dispatch(self):
+        self.job['base']['repo'] = 'fizzyedit/dvui'
+        self.state['prs'] = [dict(number=12, branch=self.job['branch'],
+                                 body=f'<!-- slot-job: {self.job["id"]} -->')]
+        self.state_path.write_text(json.dumps(self.state))
+        state, push = self.publish_twice()
+        push.assert_not_called()
+        self.assertEqual(state['dispatches'][0]['client_payload'], dict(pr=12, repo='fizzyedit/dvui'))
+
+    def test_dvui_changes_dispatch_carries_repo(self):
+        self.review()
+        self.job['base']['repo'] = 'fizzyedit/dvui'
+        state, _ = self.publish_twice()
+        self.assertEqual(state['dispatches'][0]['client_payload']['repo'], 'fizzyedit/dvui')

@@ -7,9 +7,8 @@ import re
 import subprocess
 import tempfile
 
+from slot.common import target
 from slot.validate import gh, run
-
-FIZZY = 'fizzyedit/fizzy'
 
 
 def api(endpoint, method='GET', **fields):
@@ -41,18 +40,19 @@ def labels(repo, number, wanted, remove=()):
 def push(job, out, result, branch, expected=None):
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._/-]*', branch) or '..' in branch:
         raise ValueError('invalid branch')
+    destination = target(job)['repo']
     token = os.environ['GH_TOKEN']
     # Keep credentials out of errors and persisted remotes.
     with tempfile.TemporaryDirectory(prefix='slot-publish-') as tmp:
         tree, hooks = Path(tmp) / 'tree', Path(tmp) / 'hooks'
         hooks.mkdir()
-        run('git', 'clone', '--no-checkout', job['base']['repo'], str(tree))
+        run('git', 'clone', '--no-checkout', f'https://github.com/{destination}.git', str(tree))
         git = ['git', '-c', f'core.hooksPath={hooks}', '-c', 'user.name=slot-publish',
                '-c', 'user.email=publish@fizzy.invalid']
         run(*git, 'checkout', '--detach', job['base']['sha'], cwd=tree)
         run(*git, 'am', '--3way', '--committer-date-is-author-date', str(out / 'change.mbox'), cwd=tree)
         # Push stderr is surfaced only with the token and any URL credentials removed.
-        url = f'https://x-access-token:{token}@github.com/{FIZZY}.git'
+        url = f'https://x-access-token:{token}@github.com/{destination}.git'
         head = run(*git, 'rev-parse', 'HEAD', cwd=tree).decode().strip()
         remote = subprocess.run([*git, 'ls-remote', url, f'refs/heads/{branch}'], capture_output=True)
         if remote.returncode:
@@ -79,6 +79,8 @@ def publish(job_dir, out):
     if not os.environ.get('GH_TOKEN'):
         raise ValueError('GH_TOKEN is required')
     job = json.loads((job_dir / 'job.json').read_text())
+    destination = target(job)
+    target_repo = destination['repo']
     repo, number = job['issue']['repo'], job['issue']['number']
     marker = f'<!-- slot-job: {job["id"]} -->'
     if verdict['accept'] is not True:
@@ -86,6 +88,15 @@ def publish(job_dir, out):
         labels(repo, number, ['stuck'])
         return
     result = json.loads((out / 'result.json').read_text())
+    def dispatch_review(pr):
+        receipt = f'<!-- slot-review: {job["id"]} -->'
+        comments = gh('api', '--paginate', f'repos/{repo}/issues/{number}/comments')
+        if not any(receipt in c['body'] for c in comments):
+            payload = dict(event_type='review', client_payload=dict(pr=pr, repo=target_repo))
+            run(os.environ.get('SLOT_GH', 'gh'), 'api', f'repos/{repo}/dispatches',
+                '--input', '-', data=json.dumps(payload).encode())
+            comment(repo, number, 'Review dispatched.\n' + receipt, receipt + '\n' + marker)
+
     status = result['status']
     if status == 'declined':
         comment(repo, number, 'APPROACH: ' + result['decline'], marker)
@@ -94,29 +105,34 @@ def publish(job_dir, out):
         comment(repo, number, f'{status}: {result.get("error", "")}\n{result["report"][-2000:]}', marker)
         labels(repo, number, [f'attempt:{job["attempt"]}'] + (['stuck'] if job['attempt'] >= 2 else []))
     elif job['kind'] == 'write':
-        prs = gh('pr', 'list', '--repo', FIZZY, '--head', job['branch'], '--state', 'all',
+        prs = gh('pr', 'list', '--repo', target_repo, '--head', job['branch'], '--state', 'all',
                  '--json', 'number,body')
         if prs:
             if not any(marker in pr['body'] for pr in prs):
                 raise ValueError('branch belongs to another job')
+            if destination['gate']:
+                dispatch_review(prs[0]['number'])
             return
         push(job, out, result, job['branch'])
         body = result['pr_body'] + f'\n\nPart of {repo}#{number}\n\n' + marker
-        args = ['pr', 'create', '--repo', FIZZY, '--head', job['branch'], '--title', result['title'],
+        args = ['pr', 'create', '--repo', target_repo, '--base', destination['branch'],
+                '--head', job['branch'], '--title', result['title'],
                 '--body', body, '--label', f'area:{job["issue"]["area"]}',
                 '--label', f'kind:{result["agent_kind"]}']
-        if verdict['risky']:
+        if verdict['risky'] or destination['gate']:
             args += ['--label', 'gate:yes']
-        gh(*args)
+        created = gh(*args)
+        if destination['gate']:
+            dispatch_review(int(created.rstrip('/').split('/')[-1]))
     elif job['kind'] == 'rework':
         info = job['rework']
-        pr = gh('api', f'repos/{FIZZY}/pulls/{info["pr"]}')
-        comments = gh('api', '--paginate', f'repos/{FIZZY}/issues/{info["pr"]}/comments')
+        pr = gh('api', f'repos/{target_repo}/pulls/{info["pr"]}')
+        comments = gh('api', '--paginate', f'repos/{target_repo}/issues/{info["pr"]}/comments')
         if any(marker in c['body'] for c in comments):
             return
         push(job, out, result, pr['head']['ref'], job['base']['sha'])
-        labels(FIZZY, info['pr'], [f'rework:{info["round"]}'])
-        comment(FIZZY, info['pr'], 'Rework published.', marker)
+        labels(target_repo, info['pr'], [f'rework:{info["round"]}'])
+        comment(target_repo, info['pr'], 'Rework published.', marker)
     else:
         info, review = job['for_review'], result['review']
         pr_number, sha = info['pr'], info['head_sha']
@@ -128,28 +144,28 @@ def publish(job_dir, out):
         text = f'REVIEW: {review["verdict"]} @{sha}\n' + json.dumps(review, indent=2)
         comment(repo, threads[0]['number'], text, marker)
         if review['follow_ups']:
-            comment(FIZZY, pr_number, 'Follow-ups:\n' + json.dumps(review['follow_ups'], indent=2), marker)
-        endpoint = f'repos/{FIZZY}/statuses/{sha}'
+            comment(target_repo, pr_number, 'Follow-ups:\n' + json.dumps(review['follow_ups'], indent=2), marker)
+        endpoint = f'repos/{target_repo}/statuses/{sha}'
         statuses = gh('api', '--paginate', endpoint)
         state = 'success' if review['verdict'] == 'clean' else 'failure'
         description = f'slot {job["id"]}'
         if not any(s['context'] == 'agent-review' and s.get('description') == description for s in statuses):
             api(endpoint, 'POST', state=state, context='agent-review', description=description)
-        if review['verdict'] == 'clean':
-            pr = gh('api', f'repos/{FIZZY}/pulls/{pr_number}')
+        if review['verdict'] == 'clean' and not destination['gate']:
+            pr = gh('api', f'repos/{target_repo}/pulls/{pr_number}')
             if not pr.get('auto_merge') and not pr.get('merged'):
-                gh('pr', 'merge', str(pr_number), '--repo', FIZZY, '--auto')
-        else:
+                gh('pr', 'merge', str(pr_number), '--repo', target_repo, '--auto')
+        elif review['verdict'] == 'changes':
             round_number = job.get('attempt', 1) + 1
             if round_number >= 3:
-                labels(FIZZY, pr_number, ['stuck'])
+                labels(target_repo, pr_number, ['stuck'])
             else:
                 # A dispatch receipt makes subsequent successful runs a no-op.
                 receipt = f'<!-- slot-dispatch: {job["id"]} -->'
                 comments = gh('api', '--paginate', f'repos/{repo}/issues/{threads[0]["number"]}/comments')
                 if not any(receipt in c['body'] for c in comments):
                     payload = dict(event_type='rework', client_payload=dict(pr=pr_number,
-                                   round=round_number, findings=review['findings']))
+                                   round=round_number, findings=review['findings'], repo=target_repo))
                     run(os.environ.get('SLOT_GH', 'gh'), 'api', f'repos/{repo}/dispatches',
                         '--input', '-', data=json.dumps(payload).encode())
                     comment(repo, threads[0]['number'], 'Rework dispatched.\n' + receipt, receipt + '\n' + marker)
