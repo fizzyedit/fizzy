@@ -85,7 +85,7 @@
  "agy": {
   "cmd": [
    "agy",
-   "-p",
+   
    "--mode",
    "accept-edits",
    "--sandbox",
@@ -96,6 +96,7 @@
   ],
   "model_flag": "--model",
   "prompt": "arg",
+  "prompt_prefix": "-p=",
   "auth_exit": []
  }
 }
