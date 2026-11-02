@@ -18,6 +18,7 @@ fn sizeAt(frame: usize) dvui.Size.Physical {
 fn drawFrame(frame: usize, reach: ?dvui.Size.Physical) !?dvui.Size {
     const size = sizeAt(frame);
     var layer = ink.layer(id, .{ .reach = reach });
+    defer layer.end();
     try std.testing.expect(layer.active());
     try std.testing.expectEqual(reach, ink.current().job.?.pane.reach);
     try std.testing.expect(layer.add(.{ .shape = .{ .box = .{
