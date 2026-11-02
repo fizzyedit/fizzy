@@ -11,6 +11,29 @@ class JobError(ValueError):
     pass
 
 
+# Repositories and base branches are trusted policy, never supplied by the spec.
+TARGETS = {
+    'fizzyedit/fizzy': dict(branch='main', gate=False),
+    'fizzyedit/dvui': dict(branch='zig-0.17', gate=True),
+}
+
+
+def target(job):
+    """Resolve an allowed repository and its fixed base branch."""
+    try:
+        base = job['base']
+        match = re.fullmatch(r'https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)\.git', base['repo'])
+        slug = match.group(1) if match else base['repo']
+        if slug not in TARGETS:
+            raise JobError(f'repo not allowed: {slug}')
+        entry = TARGETS[slug]
+        if base.get('branch', entry['branch']) != entry['branch']:
+            raise JobError(f'branch not allowed for {slug}')
+        return dict(repo=slug, **entry)
+    except (KeyError, TypeError, AttributeError) as exc:
+        raise JobError(f'invalid base: {exc}') from exc
+
+
 def load_job(path):
     try:
         with Path(path).open('rb') as source:

@@ -76,7 +76,9 @@ def checkout(job, job_dir, home):
             if not source.exists():
                 git(home, 'init', '--bare', str(source))
             git(home, '--git-dir=' + str(source), 'fetch', '--no-tags', '--',
-                job['base']['repo'], job['base']['sha'])
+                (f'https://github.com/{job["base"]["repo"]}.git'
+                 if job['base']['repo'] in common.TARGETS else job['base']['repo']),
+                job['base']['sha'])
         git(home, 'clone', '--no-checkout', '--no-hardlinks', '--', str(source), str(work))
         git(work, 'config', 'core.hooksPath', str(hooks))
         git(work, 'checkout', '--detach', job['base']['sha'])
