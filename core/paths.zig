@@ -78,11 +78,25 @@ pub fn isNormalizedAbsolute(path: []const u8) bool {
         if (n == path.len) return true;
         return isNormalizedPosixTail(path[n..]);
     }
+    if (builtin.target.os.tag == .windows) return isNormalizedDrivePath(path);
     if (!std.fs.path.isAbsolute(path)) return false;
-    // On Windows `resolve` also rewrites separators and drive-letter case; not worth
-    // replicating, so only the POSIX shape claims the fast path.
-    if (builtin.target.os.tag == .windows) return false;
     return isNormalizedPosixTail(path);
+}
+
+/// True only for `resolve`'s Windows spelling of an absolute drive path.
+/// False lets the caller fall back to normalization, including for UNC and device paths.
+fn isNormalizedDrivePath(path: []const u8) bool {
+    if (path.len < 3 or !std.ascii.isUpper(path[0]) or path[1] != ':' or path[2] != '\\') return false;
+    if (path.len == 3) return true;
+    if (path[path.len - 1] == '\\' or std.mem.findScalar(u8, path, '/') != null) return false;
+
+    var it = std.mem.splitScalar(u8, path[3..], '\\');
+    while (it.next()) |component| {
+        if (component.len == 0) return false;
+        if (std.mem.eql(u8, component, ".")) return false;
+        if (std.mem.eql(u8, component, "..")) return false;
+    }
+    return true;
 }
 
 fn isNormalizedPosixTail(path: []const u8) bool {
@@ -101,21 +115,44 @@ fn isNormalizedPosixTail(path: []const u8) bool {
     return true;
 }
 
-test isNormalizedAbsolute {
-    if (builtin.target.os.tag == .windows) return error.SkipZigTest;
+test isNormalizedDrivePath {
     const gpa = std.testing.allocator;
-
-    // Canonical shapes take the fast path, and agree with `normalize`.
-    for ([_][]const u8{ "/", "/a", "/a/b.txt", "/a/b/c", "/a/.hidden", "/a/..b", "/a/b../c" }) |p| {
-        try std.testing.expect(isNormalizedAbsolute(p));
-        const n = try normalize(gpa, p);
+    for ([_][]const u8{ "C:\\", "C:\\a", "C:\\a\\b.txt", "C:\\a\\..b", "C:\\.hidden", "D:\\x\\y" }) |p| {
+        try std.testing.expect(isNormalizedDrivePath(p));
+        const n = try std.fs.path.resolveAllocWindows(gpa, &.{p});
         defer gpa.free(n);
         try std.testing.expectEqualStrings(p, n);
     }
+    for ([_][]const u8{ "c:\\a", "C:/a", "C:\\a\\", "C:\\a\\\\b", "C:\\a\\.\\b", "C:\\a\\..\\b", "C:", "C:a", "\\\\srv\\share\\a", "\\a", "/a", "" }) |p| {
+        try std.testing.expect(!isNormalizedDrivePath(p));
+    }
+}
 
-    // Non-canonical shapes must decline, so the caller still normalizes them.
-    for ([_][]const u8{ "relative", "a/b", "", "/a/", "/a//b", "/a/./b", "/a/../b", "/.", "/.." }) |p| {
-        try std.testing.expect(!isNormalizedAbsolute(p));
+test isNormalizedAbsolute {
+    const gpa = std.testing.allocator;
+    if (builtin.target.os.tag == .windows) {
+        for ([_][]const u8{ "C:\\", "C:\\a", "C:\\a\\b.txt", "C:\\a\\..b", "C:\\.hidden", "D:\\x\\y" }) |p| {
+            try std.testing.expect(isNormalizedAbsolute(p));
+            const n = try normalize(gpa, p);
+            defer gpa.free(n);
+            try std.testing.expectEqualStrings(p, n);
+        }
+        for ([_][]const u8{ "c:\\a", "C:/a", "C:\\a\\", "C:\\a\\\\b", "C:\\a\\.\\b", "C:\\a\\..\\b", "C:", "C:a", "\\\\srv\\share\\a", "\\a", "/a", "", "relative", "a\\b" }) |p| {
+            try std.testing.expect(!isNormalizedAbsolute(p));
+        }
+    } else {
+        // Canonical shapes take the fast path, and agree with `normalize`.
+        for ([_][]const u8{ "/", "/a", "/a/b.txt", "/a/b/c", "/a/.hidden", "/a/..b", "/a/b../c" }) |p| {
+            try std.testing.expect(isNormalizedAbsolute(p));
+            const n = try normalize(gpa, p);
+            defer gpa.free(n);
+            try std.testing.expectEqualStrings(p, n);
+        }
+
+        // Non-canonical shapes must decline, so the caller still normalizes them.
+        for ([_][]const u8{ "relative", "a/b", "", "/a/", "/a//b", "/a/./b", "/a/../b", "/.", "/.." }) |p| {
+            try std.testing.expect(!isNormalizedAbsolute(p));
+        }
     }
 }
 
