@@ -31,7 +31,23 @@ pub const pass_speed: f32 = 400;
 
 /// The lead to give the visible page's ScrollArea: `.{ .lead = TopSheet.lead(&sheet) }`.
 pub fn lead(state: *State) ScrollArea.Lead {
-    return .{ .ctx = state, .extent = extent, .range = range, .take = take };
+    return .{ .ctx = state, .extent = extent, .range = range, .take = take, .release = releaseRest };
+}
+
+/// The lead for a scroll area holding the sheet's own content.
+pub fn inner(state: *State) ScrollArea.Lead {
+    var piece = lead(state);
+    piece.after = true;
+    return piece;
+}
+
+/// Rest at the open or shut stop after a finger release.
+fn releaseRest(ctx: *anyopaque, speed: f32) void {
+    const state = sync(ctx);
+    const target: f32 = if (@abs(speed) > pass_speed)
+        (if (speed > 0) state.range else 0)
+    else if (state.extent > state.range * @as(f32, if (speed > 0) 0.35 else 0.65)) state.range else 0;
+    rest(state, target, speed);
 }
 
 /// 0 shut .. 1 open; the header draws from this alone.
@@ -114,8 +130,8 @@ fn step(state: *State) void {
     } else dvui.refresh(null, @src(), null);
 }
 
-// Interpolate the start of the release window; stationary time before lift counts too.
-fn releaseSpeed(fling: *const Fling, now: i128) f32 {
+/// Interpolate the start of the release window; stationary time before lift counts too.
+pub fn releaseSpeed(fling: *const Fling, now: i128) f32 {
     if (fling.hist_len < 2) return 0;
     const start = (fling.hist_head + fling.hist.len - fling.hist_len) % fling.hist.len;
     const first = fling.hist[start];
@@ -211,10 +227,7 @@ pub const Handle = struct {
                     e.handle(@src(), wd);
                     const v = releaseSpeed(&s.velocity, glass.input_time.get(e.num));
                     s.velocity.last_debug.vel = v;
-                    const target: f32 = if (@abs(v) > pass_speed)
-                        (if (v > 0) s.range else 0)
-                    else if (s.extent > s.range * @as(f32, if (v > 0) 0.35 else 0.65)) s.range else 0;
-                    rest(s, target, v);
+                    releaseRest(s, v);
                 } else if (!e.handled and rs.r.contains(me.p) and
                     @abs(me.p.x - s.press_point.x) <= dvui.Dragging.threshold * dvui.currentWindow().natural_scale and
                     @abs(me.p.y - s.press_point.y) <= dvui.Dragging.threshold * dvui.currentWindow().natural_scale)
