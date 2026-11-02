@@ -10,7 +10,6 @@ TEMPLATE = Path(__file__).resolve().parents[1] / "docs/AGENT_WORK.md"
 VISION = TEMPLATE.with_name("VISION.md")
 MAX_HEADER = 1800
 MAX_CHARACTERS = 12000
-PATH = re.compile(r"[\w.*-]+/[\w./*-]+|\b[\w-]+\.(?:zig|zon|md|mjs|js|py|sh|yml|json)\b|\brg\b")
 VAGUE = re.compile(r"\band (?:its |the )?callers\b|\betc\b|\band so on\b|\bsomething like\b", re.IGNORECASE)
 ELSEWHERE = re.compile(r"\b(?:first|next|following|latest) comment\b|\bsee (?:the |my )?comments?\b"
                        r"|\bspec (?:is )?in (?:a|the) comment\b", re.IGNORECASE)
@@ -52,8 +51,13 @@ def validate(body, fields):
         failures.append(f"Body: {len(body)} characters exceeds {MAX_CHARACTERS}; split the issue")
     if ELSEWHERE.search(body):
         failures.append("Body: the spec must be in the body, not in a comment")
-    if values.get("In bounds") and not PATH.search(values["In bounds"]):
-        failures.append("In bounds: name each file by path, or an rg command whose hits are the list")
+    bounds = values.get("In bounds", "")
+    if bounds and not re.match(r"`?rg\s", bounds):
+        for entry in bounds.split(","):
+            token = entry.strip()
+            if (not ("/" in token or "." in token) or any(c.isspace() for c in token)
+                    or any(c in token for c in "()\"'`")):
+                failures.append(f"In bounds: invalid entry [{token}]; name a plain path")
     if VAGUE.search(values.get("In bounds", "")):
         failures.append('In bounds: name the files; "and callers" or "etc." is not a list')
     if values.get("Acceptance") and "`" not in values["Acceptance"]:
@@ -98,7 +102,7 @@ def main():
         print(f"{source}: {failure}", file=sys.stderr)
     if not failures:
         print(f"{source}: kickoff passes")
-    return bool(failures)
+    return 2 if any(f.startswith("In bounds: invalid entry") for f in failures) else bool(failures)
 
 
 if __name__ == "__main__":
