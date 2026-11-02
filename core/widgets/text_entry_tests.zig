@@ -9,6 +9,10 @@ var focused = false;
 var selection: dvui.TextLayoutWidget.Selection = .{};
 var touch_editing = false;
 var menu = false;
+// The test frame records these on the test runner thread.
+var draggables = false;
+// The test frame records the physical caret centre on the test runner thread.
+var caret: dvui.Point.Physical = .{};
 var field_bottom: f32 = 0;
 var focus_field = false;
 var scroll_info: dvui.ScrollInfo = .{};
@@ -20,6 +24,8 @@ fn frame() !dvui.App.Result {
     selection = field.entry.textLayout.selection.*;
     touch_editing = field.entry.textLayout.state.touch_editing;
     menu = field.entry.textLayout.state.te_show_context_menu;
+    draggables = field.entry.textLayout.state.te_show_draggables;
+    caret = field.entry.textLayout.screenRectScale(field.entry.textLayout.state.sel_end_r).r.center();
     return .ok;
 }
 
@@ -151,4 +157,69 @@ test "the wrapper scrolls its enclosing area to a newly focused field" {
     try std.testing.expect(scroll_info.viewport.y > 0);
     try std.testing.expect(field_bottom <= 200.5);
     try std.testing.expect(field_bottom > 140);
+}
+
+test "a double tap selects the word" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 200 } });
+    defer t.deinit();
+    reset();
+    try dvui.testing.settle(frame);
+    try touch(.press);
+    try after(30);
+    try touch(.release);
+    try after(100);
+    try touch(.press);
+    try after(30);
+    try touch(.release);
+    try after(16);
+    try after(16);
+    try std.testing.expectEqualStrings("alpha", text[selection.start..selection.end]);
+    try std.testing.expect(focused);
+    try std.testing.expect(touch_editing);
+}
+
+test "two taps more than 300 ms apart do not select" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 200 } });
+    defer t.deinit();
+    reset();
+    try dvui.testing.settle(frame);
+    try touch(.press);
+    try after(30);
+    try touch(.release);
+    // Beyond TouchHold's double-tap interval.
+    try after(400);
+    try touch(.press);
+    try after(30);
+    try touch(.release);
+    try after(16);
+    try after(16);
+    try std.testing.expect(focused);
+    try std.testing.expectEqual(selection.start, selection.end);
+}
+
+test "a tap on the focused caret opens the menu and another closes it" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 200 } });
+    defer t.deinit();
+    reset();
+    try dvui.testing.settle(frame);
+    try touch(.press);
+    try after(30);
+    try touch(.release);
+    // Each tap is beyond TouchHold's double-tap interval.
+    try after(400);
+    try after(16);
+    for ([_]bool{ true, false }) |show| {
+        const wr = dvui.windowRectPixels();
+        const point = caret;
+        _ = try dvui.currentWindow().addEventPointer(.{ .button = .touch0, .action = .press, .xynorm = .{ .x = point.x / wr.w, .y = point.y / wr.h } });
+        try after(30);
+        _ = try dvui.currentWindow().addEventPointer(.{ .button = .touch0, .action = .release, .xynorm = .{ .x = point.x / wr.w, .y = point.y / wr.h } });
+        try after(400);
+        try after(16);
+        try std.testing.expect(focused);
+        try std.testing.expectEqual(selection.start, selection.end);
+        try std.testing.expectEqual(show, touch_editing);
+        try std.testing.expectEqual(show, draggables);
+        try std.testing.expectEqual(show, menu);
+    }
 }
