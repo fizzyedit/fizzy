@@ -32,6 +32,9 @@ def utc():
 
 def clean_env():
     allowed = {'PATH', 'HOME', 'USER', 'LANG', 'TMPDIR', 'TEMP', 'SYSTEMROOT'}
+    if os.name == 'nt':
+        allowed |= {'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'HOMEDRIVE', 'HOMEPATH', 'PROGRAMDATA',
+                    'COMSPEC', 'PATHEXT', 'PROGRAMFILES', 'PROGRAMFILES(X86)', 'TMP'}
     return {k: v for k, v in os.environ.items()
             if (k.upper() in allowed or k.upper().startswith('SLOT_'))
             and not k.upper().startswith(('GITHUB_', 'GH_', 'ACTIONS_', 'RUNNER_'))
@@ -262,6 +265,9 @@ def run(job, job_dir, out, keep):
             if config['prompt'] == 'arg':
                 command.append(config.get('prompt_prefix', '') + prompt)
             with (out / 'log.txt').open('wb') as log:
+                shown = command[:-1] if config['prompt'] == 'arg' else command
+                log.write(('slot command: ' + ' '.join(shown) + ' (model: ' + (os.environ.get('SLOT_MODEL') or 'default') + ')\n').encode())
+                log.flush()
                 try:
                     rc = execute(command, work, log, deadline,
                                  prompt.encode() if config['prompt'] == 'stdin' else None)
@@ -311,7 +317,7 @@ def run(job, job_dir, out, keep):
                         with build_lock(locks, slots, deadline):
                             for gate in job['gates']:
                                 before = time.monotonic()
-                                code = execute(gate, work, log, deadline, shell=True, tmpdir=tempfile.mkdtemp(prefix='s', dir='/tmp') if os.name != 'nt' else None)
+                                code = execute(['bash', '-c', gate] if os.name == 'nt' else gate, work, log, deadline, shell=os.name != 'nt', tmpdir=tempfile.mkdtemp(prefix='s', dir='/tmp') if os.name != 'nt' else None)
                                 result['gates'].append(dict(cmd=gate, exit=code, seconds=round(time.monotonic() - before, 3)))
                                 if code:
                                     raise ValueError('gate failed: ' + gate)
