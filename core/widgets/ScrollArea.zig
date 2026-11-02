@@ -133,6 +133,12 @@ pub const tuning: Fling.Tuning = .{
 
 /// A piece outside the area that takes part of its vertical scroll: a top sheet.
 pub const Lead = struct {
+    /// The piece's travel sits past the area's end for the sheet's own content.
+    /// By default it sits before the top for the page: sheet first, then page content.
+    /// With after, inner content scrolls first, then the sheet shuts; reversing reopens first.
+    after: bool = false,
+    /// Rest a partially traversed after-piece on finger release (opening speed in pt/s).
+    release: ?*const fn (ctx: *anyopaque, speed: f32) void = null,
     ctx: *anyopaque,
     /// How far the piece is open, 0 .. `range`, in points.
     extent: *const fn (ctx: *anyopaque) f32,
@@ -208,7 +214,7 @@ pub fn initWith(src: std.builtin.SourceLocation, init_opts: dvui.ScrollAreaWidge
             .y = Fling.pullFor(t.over.y, self.si.viewport.h, tuning.edge),
         };
         if (self.lead) |piece| {
-            const k = @min(-@min(t.over.y, 0), piece.range(piece.ctx) - piece.extent(piece.ctx));
+            const k = if (piece.after) 0 else @min(-@min(t.over.y, 0), piece.range(piece.ctx) - piece.extent(piece.ctx));
             _ = piece.take(piece.ctx, -k);
             t.over.y += k;
             t.pull.y = Fling.pullFor(t.over.y, self.si.viewport.h, tuning.edge);
@@ -248,7 +254,9 @@ pub fn initWith(src: std.builtin.SourceLocation, init_opts: dvui.ScrollAreaWidge
     if (was_moving_y) t.glide_at.y = self.positionY();
     if (c.init_opts.frame_viewport == null) {
         c.frame_viewport = self.si.viewport.topLeft().plus(t.over);
-        if (self.lead) |piece| c.frame_viewport.y -= piece.extent(piece.ctx);
+        if (self.lead) |piece| {
+            if (!piece.after) c.frame_viewport.y -= piece.extent(piece.ctx);
+        }
     }
     return self;
 }
@@ -321,7 +329,14 @@ pub fn deinit(self: *ScrollArea) void {
         t.coast_aimed = false;
         release(&t.y, &t.seg_y, self.si.viewport.y, &t.over.y, self.si.viewport.h, now);
         if (self.lead) |piece| {
-            if (t.seg_y.kind == .coast) {
+            if (piece.after) {
+                const e = piece.extent(piece.ctx);
+                if (e > 0 and e < piece.range(piece.ctx)) {
+                    if (piece.release) |rest| rest(piece.ctx, -TopSheet.releaseSpeed(&t.y, release_ns));
+                    t.y.cancel();
+                    t.seg_y = .{};
+                }
+            } else if (t.seg_y.kind == .coast) {
                 const e = piece.extent(piece.ctx);
                 t.seg_y.origin = self.si.viewport.y - e;
                 t.seg_y.low = if (e > 0) -piece.range(piece.ctx) else 0;
@@ -338,7 +353,7 @@ pub fn deinit(self: *ScrollArea) void {
     // `processMotionScroll`; clear it so dvui's coast never runs beside ours.
     self.si.velocity = .{};
     var drawn = self.si.viewport.topLeft().plus(t.over);
-    t.pad = if (self.lead) |piece| piece.extent(piece.ctx) else 0;
+    t.pad = if (self.lead) |piece| (if (piece.after) 0 else piece.extent(piece.ctx)) else 0;
     drawn.y -= t.pad;
     if (was_dragging) {
         const moved = drawn.diff(t.last_viewport);
@@ -383,11 +398,11 @@ fn touchMotion(self: *ScrollArea, e: *dvui.Event) void {
 }
 
 fn positionY(self: *const ScrollArea) f32 {
-    return self.si.viewport.y - if (self.lead) |piece| piece.extent(piece.ctx) else @as(f32, 0);
+    return self.si.viewport.y - if (self.lead) |piece| (if (piece.after) 0 else piece.extent(piece.ctx)) else @as(f32, 0);
 }
 
 fn lowY(self: *const ScrollArea) f32 {
-    return if (self.lead) |piece| -piece.range(piece.ctx) else 0;
+    return if (self.lead) |piece| (if (piece.after) 0 else -piece.range(piece.ctx)) else 0;
 }
 
 fn pageMax(self: *const ScrollArea) f32 {
@@ -554,6 +569,30 @@ fn moveY(self: *ScrollArea, by: f32, band: bool) f32 {
     const si = self.si;
     const t = self.touch;
     const piece = self.lead orelse return drag(&si.viewport.y, &t.pull.y, &t.over.y, si.scrollMax(.vertical), si.viewport.h, by, self.bands);
+    if (piece.after) {
+        const max = self.pageMax();
+        if (!band) {
+            const before = si.viewport.y;
+            si.viewport.y = std.math.clamp(before + by, 0, max);
+            return si.viewport.y - before;
+        }
+        const before = si.viewport.y + t.over.y + piece.range(piece.ctx) - piece.extent(piece.ctx);
+        var left = by;
+        // Unwind the opposite band before crossing the seam.
+        if (left > 0) {
+            const used = @min(left, max - si.viewport.y - @min(t.pull.y, 0));
+            _ = drag(&si.viewport.y, &t.pull.y, &t.over.y, max, si.viewport.h, used, true);
+            left -= used;
+            left -= piece.take(piece.ctx, left);
+        } else if (left < 0) {
+            const used = @min(-left, @max(t.pull.y, 0));
+            _ = drag(&si.viewport.y, &t.pull.y, &t.over.y, max, si.viewport.h, -used, true);
+            left += used;
+            left += piece.take(piece.ctx, left);
+        }
+        if (left != 0) _ = drag(&si.viewport.y, &t.pull.y, &t.over.y, max, si.viewport.h, left, true);
+        return si.viewport.y + t.over.y + piece.range(piece.ctx) - piece.extent(piece.ctx) - before;
+    }
     const before = si.viewport.y + t.over.y - piece.extent(piece.ctx);
     const page_max = @max(0, si.scrollMax(.vertical) - t.pad);
     var left = by;
@@ -645,7 +684,7 @@ fn aimOrSeat(self: *ScrollArea) void {
     if (t.y.coasting) {
         if (Fling.aim(y, t.y.vel, tuning, buf[0..n])) |a| {
             t.seg_y.decay = a.decay;
-            if (self.lead != null and a.at == self.lowY()) t.seg_y.low = self.lowY() - 1;
+            if (self.lead != null and !self.lead.?.after and a.at == self.lowY()) t.seg_y.low = self.lowY() - 1;
             t.coast_aimed = true;
             t.seat_at = a.at;
         }
@@ -660,6 +699,7 @@ fn aimOrSeat(self: *ScrollArea) void {
 
 fn leadNotches(self: *const ScrollArea, buf: []Fling.Notch) usize {
     const piece = self.lead orelse return 0;
+    if (piece.after) return 0;
     const e = piece.extent(piece.ctx);
     const y = self.si.viewport.y;
     var n: usize = 0;
@@ -730,9 +770,12 @@ fn coast(self: *ScrollArea) void {
     const si = self.si;
     const in_range = si.viewport.topLeft();
     var before = in_range.plus(t.over);
-    if (self.lead) |piece| before.y -= piece.extent(piece.ctx);
-    self.advance(&t.x, &t.seg_x, &si.viewport.x, &t.over.x, si.scrollMax(.horizontal), si.viewport.w);
     if (self.lead) |piece| {
+        if (!piece.after) before.y -= piece.extent(piece.ctx);
+    }
+    self.advance(&t.x, &t.seg_x, &si.viewport.x, &t.over.x, si.scrollMax(.horizontal), si.viewport.w);
+    if (self.lead != null and !self.lead.?.after) {
+        const piece = self.lead.?;
         const origin = si.viewport.y - piece.extent(piece.ctx);
         var p = origin;
         self.advance(&t.y, &t.seg_y, &p, &t.over.y, @max(0, si.scrollMax(.vertical) - t.pad), si.viewport.h);
@@ -741,7 +784,9 @@ fn coast(self: *ScrollArea) void {
         self.advance(&t.y, &t.seg_y, &si.viewport.y, &t.over.y, si.scrollMax(.vertical), si.viewport.h);
     }
     var after = si.viewport.topLeft().plus(t.over);
-    if (self.lead) |piece| after.y -= piece.extent(piece.ctx);
+    if (self.lead) |piece| {
+        if (!piece.after) after.y -= piece.extent(piece.ctx);
+    }
     const moved = after.diff(before);
 
     if (t.last_coast.x != 0) profile.scrollJump(moved.x, @abs(t.last_coast.x) * 3);
@@ -854,7 +899,7 @@ fn settle(self: *ScrollArea, x: bool, y: bool) void {
     if (y) {
         if (self.lead) |piece| {
             const e = piece.extent(piece.ctx);
-            const by = settleBy(rs.r.y, si.viewport.y - e, if (e > 0) -piece.range(piece.ctx) else 0, @max(0, si.scrollMax(.vertical) - self.touch.pad), rs.s);
+            const by = settleBy(rs.r.y, si.viewport.y - (if (piece.after) 0 else e), if (!piece.after and e > 0) -piece.range(piece.ctx) else 0, @max(0, si.scrollMax(.vertical) - self.touch.pad), rs.s);
             _ = self.moveY(by, false);
         }
     }
