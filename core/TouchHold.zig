@@ -1,5 +1,6 @@
 //! Press-and-hold selection for touch, without a window: a finger held still for `delay_ns`
-//! selects; a double tap selects; a tap clears; a finger that moves more than `slop` is a scroll and selects nothing.
+//! selects; a double tap selects; a tap clears; a finger that moves more than `slop` is a
+//! scroll and selects nothing.
 //!
 //! std-only so the rules are tested by feeding it times and points. `widgets/SelectableText.zig`
 //! is the dvui half: it feeds this the frame's touch events and applies what it answers.
@@ -28,7 +29,10 @@ x: f32 = 0,
 y: f32 = 0,
 /// Frame time of the press.
 start_ns: i128 = 0,
+/// This press is within `tap_ns` and `slop` of the last tap; a short release is a double tap.
 second: bool = false,
+/// The only state retained across `press` and `release`: the last plain tap's position and time.
+/// A plain tap replaces it; every other release and `cancel` clear it.
 last_tap: ?struct { x: f32, y: f32, at_ns: i128 } = null,
 
 /// `slop` in physical pixels: a press within `tap_ns` and `slop` of the last tap is a second press.
