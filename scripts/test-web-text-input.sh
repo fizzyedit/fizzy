@@ -6,6 +6,7 @@
 set -eu
 cd "$(dirname "$0")/.."
 if [ "${1:-}" = --embed-only ]; then
+    node web/tests/field-hints.test.mjs
     node web/tests/keyboard-inset.test.mjs
     exec node web/tests/embed.test.mjs
 fi
@@ -14,6 +15,7 @@ js=zig-out/web/web.js
 if command -v node >/dev/null; then
     node web/tests/wheel-input.test.mjs
     node web/tests/pointer-input.test.mjs
+    node web/tests/field-hints.test.mjs
     node web/tests/keyboard-inset.test.mjs
     node web/tests/text-input.test.js "$PWD/$js"
     exec node web/tests/embed.test.mjs
