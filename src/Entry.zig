@@ -370,6 +370,12 @@ pub fn AppInit(win: *dvui.Window) !void {
     const editor_ptr = try allocator.create(Editor);
     fizzy.setInstances(app_ptr, editor_ptr);
     editor_ptr.* = Editor.init(app_ptr) catch unreachable;
+    if (comptime builtin.target.cpu.arch != .wasm32) {
+        if (std.c.getenv("FIZZY_GLASS_BENCH")) |raw| {
+            editor_ptr.glass_bench = fizzy.GlassBench.parse(std.mem.span(raw));
+            if (editor_ptr.glass_bench == null) std.log.warn("Ignoring invalid FIZZY_GLASS_BENCH: {s}", .{std.mem.span(raw)});
+        }
+    }
     fizzy.core.profile.phase(dvui.io, "editor");
 
     // Workbench fizzy-owned state: wire before plugin `register`.
