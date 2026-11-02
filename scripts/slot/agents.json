@@ -88,6 +88,7 @@
    
    "--mode",
    "accept-edits",
+   "--dangerously-skip-permissions",
    "--sandbox",
    "--add-dir",
    "~/.cache/zig",
