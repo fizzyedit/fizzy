@@ -100,6 +100,7 @@ const Segment = struct {
     start_ns: i128 = 0,
     /// A coast: the viewport at its start. A settle: how far past the edge it starts.
     origin: f32 = 0,
+    low: f32 = 0,
     /// Points a second at the start.
     vel: f32 = 0,
     /// A coast's decay: `tuning.decay`, or the one that ends it on a notch.
@@ -205,6 +206,12 @@ pub fn initWith(src: std.builtin.SourceLocation, init_opts: dvui.ScrollAreaWidge
             .x = Fling.pullFor(t.over.x, self.si.viewport.w, tuning.edge),
             .y = Fling.pullFor(t.over.y, self.si.viewport.h, tuning.edge),
         };
+        if (self.lead) |piece| {
+            const k = @min(-@min(t.over.y, 0), piece.range(piece.ctx) - piece.extent(piece.ctx));
+            _ = piece.take(piece.ctx, -k);
+            t.over.y += k;
+            t.pull.y = Fling.pullFor(t.over.y, self.si.viewport.h, tuning.edge);
+        }
     }
 
     // Captured and unclaimed motion reaches layout here; event matching preserves child capture.
@@ -309,6 +316,13 @@ pub fn deinit(self: *ScrollArea) void {
         release(&t.x, &t.seg_x, self.si.viewport.x, &t.over.x, self.si.viewport.w, now);
         t.coast_aimed = false;
         release(&t.y, &t.seg_y, self.si.viewport.y, &t.over.y, self.si.viewport.h, now);
+        if (self.lead) |piece| {
+            if (t.seg_y.kind == .coast) {
+                const e = piece.extent(piece.ctx);
+                t.seg_y.origin = self.si.viewport.y - e;
+                t.seg_y.low = if (e > 0) -piece.range(piece.ctx) else 0;
+            }
+        }
         if (t.over.y == 0) self.aimOrSeat();
         // The release may contain no motion, so it must schedule the first coast, settle or seat frame itself.
         if (t.anyMoving()) dvui.refresh(null, @src(), self.data().id);
@@ -482,7 +496,7 @@ fn processMotionScroll(self: *ScrollArea, motion: dvui.Point.Physical, scale: f3
             (motion.y > 0 and si.viewport.y > 0) or
             (motion.y < 0 and si.viewport.y < si.scrollMax(.vertical)))
         {
-            moved.y = self.moveY(-motion.y / scale);
+            moved.y = self.moveY(-motion.y / scale, true);
         } else if (@abs(motion.y) > @abs(motion.x)) {
             propagate = true;
         }
@@ -511,14 +525,25 @@ fn processMotionScroll(self: *ScrollArea, motion: dvui.Point.Physical, scale: f3
     return moved;
 }
 
-// All finger travel crosses the page/sheet seam here; autonomous motion uses the page alone.
-fn moveY(self: *ScrollArea, by: f32) f32 {
+// Vertical travel crosses the page/sheet seam before reaching a band.
+fn moveY(self: *ScrollArea, by: f32, band: bool) f32 {
     const si = self.si;
     const t = self.touch;
     const piece = self.lead orelse return drag(&si.viewport.y, &t.pull.y, &t.over.y, si.scrollMax(.vertical), si.viewport.h, by, self.bands);
     const before = si.viewport.y + t.over.y - piece.extent(piece.ctx);
     const page_max = @max(0, si.scrollMax(.vertical) - t.pad);
     var left = by;
+    if (!band) {
+        if (left > 0) {
+            left -= piece.take(piece.ctx, left);
+            si.viewport.y = std.math.clamp(si.viewport.y + left, 0, page_max);
+        } else {
+            const used = @min(-left, si.viewport.y);
+            si.viewport.y -= used;
+            _ = piece.take(piece.ctx, left + used);
+        }
+        return si.viewport.y + t.over.y - piece.extent(piece.ctx) - before;
+    }
     if (left > 0) {
         if (t.pull.y < 0) {
             const used = @min(left, -t.pull.y);
@@ -656,10 +681,20 @@ fn coast(self: *ScrollArea) void {
     const t = self.touch;
     const si = self.si;
     const in_range = si.viewport.topLeft();
-    const before = in_range.plus(t.over);
+    var before = in_range.plus(t.over);
+    if (self.lead) |piece| before.y -= piece.extent(piece.ctx);
     self.advance(&t.x, &t.seg_x, &si.viewport.x, &t.over.x, si.scrollMax(.horizontal), si.viewport.w);
-    self.advance(&t.y, &t.seg_y, &si.viewport.y, &t.over.y, si.scrollMax(.vertical), si.viewport.h);
-    const moved = si.viewport.topLeft().plus(t.over).diff(before);
+    if (self.lead) |piece| {
+        const origin = si.viewport.y - piece.extent(piece.ctx);
+        var p = origin;
+        self.advance(&t.y, &t.seg_y, &p, &t.over.y, @max(0, si.scrollMax(.vertical) - t.pad), si.viewport.h);
+        _ = self.moveY(p - origin, false);
+    } else {
+        self.advance(&t.y, &t.seg_y, &si.viewport.y, &t.over.y, si.scrollMax(.vertical), si.viewport.h);
+    }
+    var after = si.viewport.topLeft().plus(t.over);
+    if (self.lead) |piece| after.y -= piece.extent(piece.ctx);
+    const moved = after.diff(before);
 
     if (t.last_coast.x != 0) profile.scrollJump(moved.x, @abs(t.last_coast.x) * 3);
     if (t.last_coast.y != 0) profile.scrollJump(moved.y, @abs(t.last_coast.y) * 3);
@@ -681,7 +716,7 @@ fn advance(self: *ScrollArea, fling: *Fling, seg: *Segment, pos: *f32, over: *f3
         .none => return,
         .coast => {
             const elapsed = @as(f64, @floatFromInt(now - seg.start_ns)) / std.time.ns_per_s;
-            const edge: f32 = if (seg.vel > 0) max else 0;
+            const edge: f32 = if (seg.vel > 0) max else seg.low;
             if (Fling.edgeTime(seg.origin, seg.vel, edge, seg.decay, tuning.stop)) |hit| {
                 if (hit <= elapsed) {
                     pos.* = edge;
@@ -692,6 +727,7 @@ fn advance(self: *ScrollArea, fling: *Fling, seg: *Segment, pos: *f32, over: *f3
                     }
                     seg.* = .{
                         .kind = .settle,
+                        .low = seg.low,
                         .start_ns = seg.start_ns + @as(i128, @intFromFloat(hit * std.time.ns_per_s)),
                         .vel = settleVelocity(0, seg.vel * @as(f32, @floatCast(@exp(-@as(f64, seg.decay) * hit))), extent),
                         .end = seg.vel > 0,
@@ -700,17 +736,17 @@ fn advance(self: *ScrollArea, fling: *Fling, seg: *Segment, pos: *f32, over: *f3
                 }
             }
             pos.* = coastPosition(fling, seg.origin, seg.vel, seg.decay, elapsed);
-            if (!fling.coasting) seg.* = .{};
             // Content that shrank under a coast ends it at the new edge.
-            if (pos.* < 0 or pos.* > max) {
-                pos.* = std.math.clamp(pos.*, 0, max);
+            if (pos.* < seg.low or pos.* > max) {
+                pos.* = std.math.clamp(pos.*, seg.low, max);
                 fling.cancel();
                 seg.* = .{};
             }
+            if (!fling.coasting) seg.* = .{};
             return;
         },
         .settle => {
-            pos.* = if (seg.end) max else 0;
+            pos.* = if (seg.end) max else seg.low;
             const w = 2 * std.math.pi * @as(f64, tuning.edge.hz) * glass.motion.rate();
             if (w <= 0) {
                 over.* = 0;
@@ -728,7 +764,7 @@ fn advance(self: *ScrollArea, fling: *Fling, seg: *Segment, pos: *f32, over: *f3
                         seg.* = .{};
                         return;
                     }
-                    seg.* = .{ .kind = .coast, .start_ns = seg.start_ns + @as(i128, @intFromFloat(cross * std.time.ns_per_s)), .origin = pos.*, .vel = at.vel };
+                    seg.* = .{ .kind = .coast, .low = seg.low, .start_ns = seg.start_ns + @as(i128, @intFromFloat(cross * std.time.ns_per_s)), .origin = pos.*, .vel = at.vel };
                     if (seg == &self.touch.seg_y) self.touch.coast_aimed = false;
                     fling.coasting = true;
                     fling.vel = at.vel;
@@ -764,20 +800,27 @@ fn settle(self: *ScrollArea, x: bool, y: bool) void {
     if (rs.s == 0) return;
     const si = self.si;
     self.scrollBy(.{
-        .x = if (x) settleBy(rs.r.x, si.viewport.x, si.scrollMax(.horizontal), rs.s) else 0,
-        .y = if (y) settleBy(rs.r.y, si.viewport.y, si.scrollMax(.vertical), rs.s) else 0,
+        .x = if (x) settleBy(rs.r.x, si.viewport.x, 0, si.scrollMax(.horizontal), rs.s) else 0,
+        .y = if (y and self.lead == null) settleBy(rs.r.y, si.viewport.y, 0, si.scrollMax(.vertical), rs.s) else 0,
     });
+    if (y) {
+        if (self.lead) |piece| {
+            const e = piece.extent(piece.ctx);
+            const by = settleBy(rs.r.y, si.viewport.y - e, if (e > 0) -piece.range(piece.ctx) else 0, @max(0, si.scrollMax(.vertical) - self.touch.pad), rs.s);
+            _ = self.moveY(by, false);
+        }
+    }
 }
 
-/// How far to move a viewport at `viewport` (of `0..max`, in an area whose content starts at
+/// How far to move a viewport at `viewport` (of `low..max`, in an area whose content starts at
 /// physical `area_px` with `scale` pixels a point) so the content's origin lands on a pixel.
-fn settleBy(area_px: f32, viewport: f32, max: f32, scale: f32) f32 {
+fn settleBy(area_px: f32, viewport: f32, low: f32, max: f32, scale: f32) f32 {
     // A child at content point p draws at `area_px + (p - viewport) * scale`. Round the
     // content's origin, not the viewport: the area itself may sit between pixels.
     const origin = area_px - viewport * scale;
     var by = (origin - @round(origin)) / scale;
     // Round the other way if snapping would put the viewport outside its scroll range.
-    if (viewport + by < 0) by += 1 / scale;
+    if (viewport + by < low) by += 1 / scale;
     if (viewport + by > max) by -= 1 / scale;
     return by;
 }
@@ -1120,7 +1163,7 @@ test "a settled viewport puts the content's origin on a pixel, inside the range"
         .{ .area_px = 0, .viewport = 99.7, .max = 99.9, .scale = 1 },
     };
     for (cases) |c| {
-        const settled = c.viewport + settleBy(c.area_px, c.viewport, c.max, c.scale);
+        const settled = c.viewport + settleBy(c.area_px, c.viewport, 0, c.max, c.scale);
         const origin = c.area_px - settled * c.scale;
         try std.testing.expectApproxEqAbs(@round(origin), origin, 0.0001);
         try std.testing.expect(settled >= 0 and settled <= c.max);
