@@ -77,11 +77,13 @@ fn take(ctx: *anyopaque, by: f32) f32 {
 
 /// Glide to the open rest without changing the page's scroll position.
 pub fn open(state: *State) void {
+    _ = sync(state);
     rest(state, state.range, 0);
 }
 
 /// Glide to the shut rest without changing the page's scroll position.
 pub fn shut(state: *State) void {
+    _ = sync(state);
     rest(state, 0, 0);
 }
 

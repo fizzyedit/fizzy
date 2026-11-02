@@ -47,13 +47,11 @@ fn pointer(action: dvui.Event.Mouse.Action, x: f32, y: f32) !void {
     finger = .{ .x = x, .y = y };
     const cw = dvui.currentWindow();
     _ = try cw.addEventPointer(.{ .button = .touch0, .action = action, .xynorm = .{ .x = x / 300, .y = y / 400 } });
-    // A lift accompanies the last sampled position; no extra idle interval is injected.
-    glass.input_time.set(cw, cw.event_num, cw.frame_time_ns -
-        @as(i128, if (action == .release) 16 else 0) * std.time.ns_per_ms);
+    glass.input_time.set(cw, cw.event_num, cw.frame_time_ns);
     try frame(16);
 }
 
-fn move(x: f32, y: f32) !void {
+fn move(x: f32, y: f32, next_ms: u64) !void {
     finger.x += x;
     finger.y += y;
     const cw = dvui.currentWindow();
@@ -65,7 +63,7 @@ fn move(x: f32, y: f32) !void {
             e.evt.mouse.action.motion = .{ .x = x * scale, .y = y * scale };
         }
     }
-    try frame(16);
+    try frame(next_ms);
 }
 
 fn lift() !void {
@@ -86,7 +84,7 @@ test "a pull on the bar opens the sheet over a scrolled page" {
     try reset();
     try pointer(.press, 200, 20);
     for (1..7) |i| {
-        try move(0, 15);
+        try move(0, 15, 16);
         try std.testing.expectEqual(@as(f32, @floatFromInt(i * 15)), sheet.extent);
         try std.testing.expectEqual(@as(f32, 400), offset);
     }
@@ -94,11 +92,11 @@ test "a pull on the bar opens the sheet over a scrolled page" {
     try std.testing.expectEqual(@as(f32, 0), l.take(l.ctx, 20));
     try std.testing.expectEqual(@as(f32, 90), sheet.extent);
     try pointer(.press, 200, 20);
-    try move(30, 5);
+    try move(30, 5, 16);
     try std.testing.expectEqual(@as(f32, 90), sheet.extent);
     try lift();
     try pointer(.press, 200, 20);
-    try move(0, 15);
+    try move(0, 15, 16);
     try std.testing.expect(sheet.held);
     // Capture loss also clears ownership when a platform cancels the touch.
     dvui.captureMouse(null, dvui.currentWindow().event_num);
@@ -109,20 +107,20 @@ test "a pull on the bar opens the sheet over a scrolled page" {
     try frame(16);
     try std.testing.expect(!sheet.held);
     try pointer(.press, 200, 20);
-    try move(0, 15);
+    try move(0, 15, 16);
     try lift(); // Native focus loss is delivered as a synthetic touch release too.
     try std.testing.expect(!sheet.held);
     try std.testing.expect(!sheet.pressed);
     // A cancelled press below the threshold must not become a pull on later motion.
     try pointer(.press, 200, 20);
-    try move(0, 1);
+    try move(0, 1, 16);
     try std.testing.expect(sheet.pressed);
     try std.testing.expect(!sheet.held);
     dvui.captureMouse(null, dvui.currentWindow().event_num);
     const before_cancel = sheet.extent;
     _ = l.extent(l.ctx);
     try std.testing.expect(!sheet.pressed);
-    try move(0, 15);
+    try move(0, 15, 16);
     try std.testing.expectEqual(before_cancel, sheet.extent);
 }
 
@@ -134,14 +132,14 @@ test "a drag that starts on a bar button pulls, and the button does not click" {
         try pointer(.press, 30, 20);
         // Held travel includes motion below the threshold before the button yields capture.
         if (slow_start) {
-            try move(0, 1);
+            try move(0, 1, 16);
             try std.testing.expectEqual(@as(f32, 0), sheet.extent);
         }
-        try move(0, if (slow_start) 14 else 15);
+        try move(0, if (slow_start) 14 else 15, 16);
         try std.testing.expectEqual(@as(f32, 15), sheet.extent);
         try std.testing.expectEqual(@as(f32, 400), offset);
         for (2..7) |i| {
-            try move(0, 15);
+            try move(0, 15, 16);
             try std.testing.expectEqual(@as(f32, @floatFromInt(i * 15)), sheet.extent);
             try std.testing.expectEqual(@as(f32, 400), offset);
         }
@@ -166,10 +164,11 @@ test "a release rests by speed, then by place" {
         try reset();
         try pointer(.press, 200, 20);
         const delta = case.speed * 0.016;
-        try move(0, case.at - delta * 5);
+        try move(0, case.at - delta * 5, 16);
         try frame(100);
         if (case.speed != 0) {
-            for (0..5) |_| try move(0, delta);
+            // Lift at the final motion timestamp: five real 16 ms samples measure 600 pt/s.
+            for (0..5) |i| try move(0, delta, if (i == 4) 0 else 16);
         }
         try std.testing.expectApproxEqAbs(case.at, sheet.extent, 0.001);
         try lift();
@@ -196,6 +195,14 @@ test "a tap toggles in one glide" {
     try pointer(.press, 200, 20);
     try lift();
     try finish(0);
+    TopSheet.open(&sheet);
+    try frame(16);
+    try frame(16);
+    const before_reverse = sheet.extent;
+    TopSheet.shut(&sheet);
+    // Reversing before either widget draws must first advance to this frame.
+    try std.testing.expect(sheet.extent > before_reverse);
+    try finish(0);
     glass.motion.publish(0, 0.5, false, false, 1);
     TopSheet.open(&sheet);
     try std.testing.expectEqual(@as(f32, 180), sheet.extent);
@@ -215,7 +222,7 @@ test "a page drag stops a handle glide" {
     // A lead read steps the same frame the page's motion will take over.
     const l = TopSheet.lead(&sheet);
     const before = l.extent(l.ctx);
-    try move(0, -30);
+    try move(0, -30, 16);
     try std.testing.expectEqual(@max(0, before - 30), sheet.extent);
     try std.testing.expectEqual(@as(?f32, null), sheet.target);
 }
