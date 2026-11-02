@@ -235,7 +235,6 @@ export fn fizzy_remote_close(handle: ?*Handle) callconv(.c) void {
 const t = std.testing;
 
 test "the C ABI opens, round trips a frame and closes" {
-    if (builtin.os.tag == .windows) return error.SkipZigTest;
     var tmp = t.tmpDir(.{});
     defer tmp.cleanup();
     const profile = try tmp.dir.realPathFileAlloc(t.io, ".", t.allocator);

@@ -346,8 +346,9 @@ const Started = struct {
         }
     }
 
-    fn status(self: *Started) Status {
-        if (comptime builtin.os.tag == .windows or builtin.os.tag == .wasi) return .running;
+    fn status(self: *Started, io: Io) Status {
+        if (comptime builtin.os.tag == .wasi) return .running;
+        if (comptime builtin.os.tag == .windows) return self.statusWindows(io);
         const pid = self.child.id orelse return .running;
         var wait_status: i32 = 0;
         const rc = std.posix.system.waitpid(pid, &wait_status, std.posix.W.NOHANG);
@@ -360,6 +361,21 @@ const Started = struct {
         const raw: u32 = @bitCast(wait_status);
         const clean = std.posix.W.IFEXITED(raw) and std.posix.W.EXITSTATUS(raw) == 0;
         return if (clean) .exited_clean else .failed;
+    }
+
+    /// `status` on Windows: a zero-timeout wait on the process handle says whether it has exited
+    /// without blocking. Once it has, `wait` returns at once, reads the exit code and closes the
+    /// handles, so `id` is null after and a later call says `.running`.
+    fn statusWindows(self: *Started, io: Io) Status {
+        const windows = std.os.windows;
+        const handle = self.child.id orelse return .running;
+        var zero: windows.LARGE_INTEGER = 0;
+        if (windows.ntdll.NtWaitForSingleObject(handle, .FALSE, &zero) != windows.NTSTATUS.WAIT_0) return .running;
+        const term = self.child.wait(io) catch return .failed;
+        return switch (term) {
+            .exited => |code| if (code == 0) .exited_clean else .failed,
+            else => .failed,
+        };
     }
 };
 
@@ -384,6 +400,7 @@ fn timeoutMs(ms: u32) Io.Timeout {
 /// One read of at most `buf.len` bytes: the count (0 is the end of the stream), or null when
 /// `timeout` passed first.
 pub fn readSome(io: Io, stream: Io.net.Stream, buf: []u8, timeout: Io.Timeout) error{Closed}!?usize {
+    if (comptime builtin.os.tag == .windows) if (timeout != .none) return readSomeWindows(io, stream, buf, timeout);
     var data: [1][]u8 = .{buf};
     const result = io.operateTimeout(
         .{ .net_read = .{ .socket_handle = stream.socket.handle, .data = &data } },
@@ -394,6 +411,26 @@ pub fn readSome(io: Io, stream: Io.net.Stream, buf: []u8, timeout: Io.Timeout) e
     };
     const read = result.net_read catch return error.Closed;
     return read.data_len;
+}
+
+/// `readSome` with a timeout on Windows, where std's `operateTimeout` cannot time a socket read
+/// (`ConcurrencyUnavailable`): an untimed read in a task of its own, cancelled if `timeout` passes
+/// first. A read that finished before the cancel keeps its bytes.
+fn readSomeWindows(io: Io, stream: Io.net.Stream, buf: []u8, timeout: Io.Timeout) error{Closed}!?usize {
+    const Read = struct {
+        done: Io.Event = .unset,
+
+        fn run(self: *@This(), task_io: Io, s: Io.net.Stream, b: []u8) error{Closed}!?usize {
+            defer self.done.set(task_io);
+            return readSome(task_io, s, b, .none);
+        }
+    };
+    var read: Read = .{};
+    var task = io.concurrent(Read.run, .{ &read, io, stream, buf }) catch return error.Closed;
+    read.done.waitTimeout(io, timeout) catch {};
+    const finished = read.done.isSet();
+    const result = task.cancel(io);
+    return if (finished) result else result catch null;
 }
 
 pub fn writeAll(io: Io, stream: Io.net.Stream, bytes: []const u8) error{Closed}!void {
@@ -445,7 +482,7 @@ pub fn connect(self: *Client) Error!void {
         if (started == null) {
             const found = install orelse try locate(self.io, arena, opts.identity, opts.env);
             started = try startQuiet(self.io, arena, found, opts.env.profile, opts);
-        } else if (!started.?.via_open and started.?.status() == .failed) {
+        } else if (!started.?.via_open and started.?.status(self.io) == .failed) {
             return error.StartFailed;
         }
         const left = deadline.remainingMs();

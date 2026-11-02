@@ -1,9 +1,8 @@
 //! `Client` against `fake_fizzy.zig`, a stand-in executable that listens on a test socket. The
 //! build compiles it and names its path in the `fake_fizzy_options` import, so these run under
-//! `zig build test`, not a bare `zig test`. POSIX only: the fake's socket and the child's exit
-//! status are skipped on Windows.
+//! `zig build test`, not a bare `zig test`. They run on Windows too: the socket is AF_UNIX, which
+//! Windows 10 1803 and later have.
 const std = @import("std");
-const builtin = @import("builtin");
 const Io = std.Io;
 const remote = @import("root.zig");
 const Client = remote.Client;
@@ -20,7 +19,6 @@ const Fixture = struct {
     fake: []const u8,
 
     fn init(mode: []const u8) !Fixture {
-        if (builtin.os.tag == .windows) return error.SkipZigTest;
         var tmp = t.tmpDir(.{});
         errdefer tmp.cleanup();
         const profile = try tmp.dir.realPathFileAlloc(t.io, ".", t.allocator);

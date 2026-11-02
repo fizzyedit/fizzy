@@ -37,7 +37,7 @@ pub fn main(init: std.process.Init) !void {
         if (std.mem.eql(u8, arg, "--profile")) profile = args.next();
     }
     const dir = profile orelse std.process.exit(1);
-    const sock = try std.fmt.allocPrint(gpa, "{s}/control.sock", .{dir});
+    const sock = try std.fs.path.join(gpa, &.{ dir, "control.sock" });
 
     if (control_path) {
         var buf: [512]u8 = undefined;
