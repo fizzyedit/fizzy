@@ -18,71 +18,34 @@
 //! glass the app draws is drawn with (`publishLook`), set once in `Editor.tick` before plugins'
 //! `beginFrame` and read by `LiquidField`.
 //!
-//! All but the publish and read functions is std-only (a unit-test root in `build/app.zig`).
-const std = @import("std");
+//! The types and the resolver are `glass_look`'s, std-only and tested there; this file publishes
+//! and reads them.
+const glass_look = @import("glass_look");
 
-pub const Material = struct {
-    kind: Kind = .none,
-    /// How much of the theme's window colour covers what is behind, 0 (clear) to 1. Ignored by
-    /// `none`; `transparent` at 1 looks as `none` does.
-    opacity: f32 = 1,
+/// What a window or glass is made of, and the kinds there are (`glass_look`, std-only)…
+pub const Material = glass_look.Material;
+pub const Kind = glass_look.Kind;
+pub const Kinds = glass_look.Kinds;
+pub const inAppMissing = glass_look.inAppMissing;
+pub const inAppKinds = glass_look.inAppKinds;
 
-    /// `kind` where `offered` has it, else the richest glass below it that `offered` has, else
-    /// `none`. A clear window only when asked for: in glass's place it reads as a broken window.
-    pub fn effective(self: Material, offered: Kinds) Material {
-        if (offered.has(self.kind)) return self;
-        var k = @backingInt(self.kind);
-        while (k > @backingInt(Kind.blur)) {
-            k -= 1;
-            if (offered.has(@fromBackingInt(k))) return .{ .kind = @fromBackingInt(k), .opacity = self.opacity };
-        }
-        return .{ .kind = .none, .opacity = self.opacity };
-    }
-};
-
-/// From the plainest to the richest, as the settings list them: what `Material.effective` falls
-/// back through.
-pub const Kind = enum(u8) { none, transparent, blur, frost, liquid };
-
-/// The kinds a backend offers. A backend offers a kind only if every surface it puts glass on can
-/// show it: a backend whose OS windows can only frost offers no `liquid`, so glass drawn in the app
-/// frosts too and the look stays one.
-pub const Kinds = packed struct {
-    none: bool = true,
-    transparent: bool = false,
-    blur: bool = false,
-    frost: bool = false,
-    liquid: bool = false,
-
-    pub fn has(self: Kinds, kind: Kind) bool {
-        return switch (kind) {
-            inline else => |k| @field(self, @tagName(k)),
-        };
-    }
-};
-
-/// Why the app's own renderer cannot draw `kind` as in-app glass, one static line for a tooltip;
-/// null when it can. Frost and blur are drawn over the app's own frame on every backend; Liquid
-/// Glass needs the glass program (`glass_program`: the backend draws `programs`).
-pub fn inAppMissing(kind: Kind, glass_program: bool) ?[]const u8 {
-    return switch (kind) {
-        .liquid => if (glass_program) null else "Not available with this renderer: needs the glass program",
-        .none, .transparent, .blur, .frost => null,
-    };
-}
-
-/// The kinds the app's own renderer draws as in-app glass (`inAppMissing`).
-pub fn inAppKinds(glass_program: bool) Kinds {
-    var kinds: Kinds = .{};
-    inline for (comptime std.enums.values(Kind)) |k| @field(kinds, @tagName(k)) = inAppMissing(k, glass_program) == null;
-    return kinds;
-}
+/// …and the one resolver every OS window's body and every glass's rung comes from: what the target
+/// offers (`Offer`, filled by the backend), what is asked, what is drawn (`resolve`).
+pub const resolve = glass_look.resolve;
+pub const Offer = glass_look.Offer;
+pub const Resolved = glass_look.Resolved;
+pub const WindowRole = glass_look.WindowRole;
+pub const Thickness = glass_look.Thickness;
+pub const Body = glass_look.Body;
+pub const NativeBody = glass_look.NativeBody;
+pub const Natives = glass_look.Natives;
+pub const Target = glass_look.Target;
 
 /// The numbers a glass is drawn with, one set per role (`glass_look.Look`)…
-pub const Look = @import("glass_look").Look;
-pub const Role = @import("glass_look").Role;
+pub const Look = glass_look.Look;
+pub const Role = glass_look.Role;
 /// …the five sets (`Looks.fromOpacity` is fizzy's)…
-pub const Looks = @import("glass_look").Looks;
+pub const Looks = glass_look.Looks;
 
 /// …published for this frame: null for the earlier glass, as each field's own numbers say.
 pub const publishLook = @import("glass").LiquidField.publishLook;
@@ -115,35 +78,4 @@ pub fn publishInApp(m: Material) void {
 pub fn inApp() Material {
     const dvui = @import("dvui");
     return dvui.dataGet(null, dvui.Id.update(.zero, key), "_in_app", Material) orelse get();
-}
-
-test "effective falls back to the richest glass offered below the one asked" {
-    const mac_old: Kinds = .{ .transparent = true, .blur = true, .frost = true };
-    try std.testing.expectEqual(Kind.frost, (Material{ .kind = .liquid }).effective(mac_old).kind);
-    try std.testing.expectEqual(Kind.blur, (Material{ .kind = .blur }).effective(mac_old).kind);
-    const windows: Kinds = .{ .transparent = true, .frost = true };
-    try std.testing.expectEqual(Kind.frost, (Material{ .kind = .liquid }).effective(windows).kind);
-    try std.testing.expectEqual(Kind.none, (Material{ .kind = .liquid }).effective(.{}).kind);
-    try std.testing.expectEqual(@as(f32, 0.4), (Material{ .kind = .liquid, .opacity = 0.4 }).effective(windows).opacity);
-}
-
-test "glass not offered falls back to opaque, never to a clear window" {
-    const windows: Kinds = .{ .transparent = true, .frost = true };
-    try std.testing.expectEqual(Kind.none, (Material{ .kind = .blur }).effective(windows).kind);
-    const linux: Kinds = .{ .transparent = true };
-    inline for (.{ Kind.blur, Kind.frost, Kind.liquid }) |k| {
-        try std.testing.expectEqual(Kind.none, (Material{ .kind = k }).effective(linux).kind);
-    }
-    try std.testing.expectEqual(Kind.transparent, (Material{ .kind = .transparent }).effective(linux).kind);
-    try std.testing.expectEqual(Kind.blur, (Material{ .kind = .liquid }).effective(.{ .transparent = true, .blur = true }).kind);
-}
-
-test "in-app glass draws every kind where the glass program is, Liquid Glass only there" {
-    const with: Kinds = inAppKinds(true);
-    inline for (comptime std.enums.values(Kind)) |k| try std.testing.expect(with.has(k));
-    const without: Kinds = inAppKinds(false);
-    try std.testing.expect(!without.has(.liquid));
-    try std.testing.expect(without.has(.frost));
-    try std.testing.expectEqual(Kind.frost, (Material{ .kind = .liquid }).effective(without).kind);
-    try std.testing.expect(inAppMissing(.liquid, false) != null);
 }

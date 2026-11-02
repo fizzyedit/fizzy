@@ -12,11 +12,13 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     const test_step = b.step("test", "Run the backend's std-only tests");
+    const glass_look = b.createModule(.{ .root_source_file = b.path("src/glass_look.zig") });
     for (unit_tests) |t| {
         const compile = b.addTest(.{
             .name = t.name,
             .root_module = b.createModule(.{ .root_source_file = b.path(t.root), .target = target, .optimize = optimize }),
         });
+        if (t.glass_look) compile.root_module.addImport("glass_look", glass_look);
         test_step.dependOn(&b.addRunArtifact(compile).step);
     }
 
@@ -92,12 +94,17 @@ pub fn build(b: *std.Build) void {
 
 /// The backend's std-only files with tests of their own, relative to this package: run by
 /// `zig build test` here, and by an app's own test step through `dependency.path(root)`.
-pub const unit_tests = [_]struct { name: []const u8, root: []const u8 }{
+pub const unit_tests = [_]struct {
+    name: []const u8,
+    root: []const u8,
+    /// The root imports `glass_look` (`src/glass_look.zig`, std-only too).
+    glass_look: bool = false,
+}{
     .{ .name = "backend-window-layout-tests", .root = "src/platform/window_layout.zig" },
     // The hit test Windows' WM_NCHITTEST and Linux's SDL hit test both answer from.
     .{ .name = "backend-titlebar-tests", .root = "src/platform/titlebar.zig" },
-    // Which window materials each platform can draw, why not the others, and the fallback.
-    .{ .name = "backend-materials-tests", .root = "src/materials.zig" },
+    // Why each platform lacks the window materials it does, read from the resolver's offer.
+    .{ .name = "backend-materials-tests", .root = "src/materials.zig", .glass_look = true },
     // The rounded frame Linux's blur behind the window is stepped into (`wayland_blur`).
     .{ .name = "backend-blur-region-tests", .root = "src/platform/blur_region.zig" },
     // The X11 arm of it: the `_KDE_NET_WM_BLUR_BEHIND_REGION` payload and which window managers read it.
