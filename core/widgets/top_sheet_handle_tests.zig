@@ -102,12 +102,17 @@ test "a pull on the bar opens the sheet over a scrolled page" {
     try std.testing.expect(sheet.held);
     // Capture loss also clears ownership when a platform cancels the touch.
     dvui.captureMouse(null, dvui.currentWindow().event_num);
+    const cancelled_at = sheet.extent;
+    try std.testing.expectEqual(@as(f32, 20), l.take(l.ctx, 20));
+    try std.testing.expectEqual(cancelled_at - 20, sheet.extent);
+    try std.testing.expect(!sheet.pressed);
     try frame(16);
     try std.testing.expect(!sheet.held);
     try pointer(.press, 200, 20);
     try move(0, 15);
     try lift(); // Native focus loss is delivered as a synthetic touch release too.
     try std.testing.expect(!sheet.held);
+    try std.testing.expect(!sheet.pressed);
 }
 
 test "a drag that starts on a bar button pulls, and the button does not click" {

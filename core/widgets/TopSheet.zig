@@ -40,6 +40,11 @@ pub fn openness(state: *const State) f32 {
 
 fn sync(ctx: *anyopaque) *State {
     const state: *State = @ptrCast(@alignCast(ctx));
+    // Capture loss cancels ownership even when the page reads the lead before the handle draws.
+    if (state.held and state.handle_id != null and !dvui.captured(state.handle_id.?)) {
+        state.held = false;
+        state.pressed = false;
+    }
     if (state.range != state.seen_range) {
         state.extent = if (state.seen_range > 0 and state.extent >= state.seen_range)
             state.range
@@ -139,10 +144,6 @@ pub const Handle = struct {
         _ = sync(state);
         const box = dvui.box(src, .{}, opts);
         const wd = box.data();
-        if (state.handle_id == wd.id and state.held and !dvui.captured(wd.id)) {
-            state.held = false;
-            state.pressed = false;
-        }
         // Observe the press before children consume it, without taking their capture.
         for (dvui.events()) |*e| {
             if (e.evt != .mouse) continue;
