@@ -35,6 +35,7 @@ const Fling = @import("../Fling.zig");
 const glass = @import("glass");
 const FrameClock = glass.FrameClock;
 const Spring = @import("../Spring.zig");
+const TopSheet = @import("TopSheet.zig");
 
 const ScrollArea = @This();
 
@@ -226,8 +227,11 @@ pub fn initWith(src: std.builtin.SourceLocation, init_opts: dvui.ScrollAreaWidge
         self.coast();
         self.seatStep();
     }
+    if (self.lead != null and was_coasting_y and t.seg_y.kind == .none and !t.dragging and t.coast_aimed and t.over.y == 0) {
+        self.glideTo(.vertical, t.seat_at);
+    }
     if (was_coasting_y and t.seg_y.kind == .none and !t.dragging and !t.coast_aimed and
-        t.over.y == 0 and self.si.viewport.y > 0 and self.si.viewport.y < self.si.scrollMax(.vertical))
+        t.over.y == 0 and self.positionY() > self.lowY() and self.positionY() < self.pageMax())
     {
         t.rest_pending = true;
         t.wheel_dir = std.math.sign(coast_velocity_y);
@@ -241,7 +245,7 @@ pub fn initWith(src: std.builtin.SourceLocation, init_opts: dvui.ScrollAreaWidge
     // A bounce ends its coast past an edge; only in-range axes settle onto pixels.
     self.settle(was_coasting_x and t.seg_x.kind != .coast and t.over.x == 0, (was_coasting_y and t.seg_y.kind != .coast or was_seating and !t.seating) and t.over.y == 0);
     if (was_moving_x) t.glide_at.x = self.si.viewport.x;
-    if (was_moving_y) t.glide_at.y = self.si.viewport.y;
+    if (was_moving_y) t.glide_at.y = self.positionY();
     if (c.init_opts.frame_viewport == null) {
         c.frame_viewport = self.si.viewport.topLeft().plus(t.over);
         if (self.lead) |piece| c.frame_viewport.y -= piece.extent(piece.ctx);
@@ -378,21 +382,34 @@ fn touchMotion(self: *ScrollArea, e: *dvui.Event) void {
     t.y.sampleTimed(delta.y, time_ns);
 }
 
+fn positionY(self: *const ScrollArea) f32 {
+    return self.si.viewport.y - if (self.lead) |piece| piece.extent(piece.ctx) else @as(f32, 0);
+}
+
+fn lowY(self: *const ScrollArea) f32 {
+    return if (self.lead) |piece| -piece.range(piece.ctx) else 0;
+}
+
+fn pageMax(self: *const ScrollArea) f32 {
+    return @max(0, self.si.scrollMax(.vertical) - if (self.lead != null) self.touch.pad else @as(f32, 0));
+}
+
 /// Seconds for a glide to cover 63% of what is left; about 95% in 150 ms.
 pub const glide_tau_s: f32 = 0.05;
 
-/// Slide the viewport to `to` along `axis`, clamped to 0..scrollMax. Moves from the next frame's `init`.
+/// Slide to `to` along `axis`, clamped to its range, from the next frame's `init`.
+/// Vertical targets include the lead: page offset minus its extent.
 pub fn glideTo(self: *ScrollArea, axis: dvui.enums.Direction, to: f32) void {
     const target = if (axis == .horizontal) &self.touch.glide_x else &self.touch.glide_y;
-    target.* = std.math.clamp(to, 0, self.si.scrollMax(axis));
-    if (axis == .horizontal) self.touch.glide_at.x = self.si.viewport.x else self.touch.glide_at.y = self.si.viewport.y;
+    target.* = std.math.clamp(to, if (axis == .vertical) self.lowY() else 0, if (axis == .vertical) self.pageMax() else self.si.scrollMax(axis));
+    if (axis == .horizontal) self.touch.glide_at.x = self.si.viewport.x else self.touch.glide_at.y = self.positionY();
     dvui.refresh(null, @src(), self.data().id);
 }
 
 /// Add `by` to the glide's target (the viewport when none runs), clamped. Notches accumulate on the target.
 pub fn glideBy(self: *ScrollArea, axis: dvui.enums.Direction, by: f32) void {
     const target = if (axis == .horizontal) self.touch.glide_x else self.touch.glide_y;
-    const pos = if (axis == .horizontal) self.si.viewport.x else self.si.viewport.y;
+    const pos = if (axis == .horizontal) self.si.viewport.x else self.positionY();
     self.glideTo(axis, (target orelse pos) + by);
 }
 
@@ -411,7 +428,7 @@ fn glideStep(self: *ScrollArea) void {
         const horizontal = axis == .horizontal;
         const target = if (horizontal) &t.glide_x else &t.glide_y;
         const to = target.* orelse continue;
-        const pos = if (horizontal) self.si.viewport.x else self.si.viewport.y;
+        const pos = if (horizontal) self.si.viewport.x else self.positionY();
         const at = if (horizontal) &t.glide_at.x else &t.glide_at.y;
         if (@abs(pos - at.*) > 0.01) {
             target.* = null;
@@ -419,16 +436,22 @@ fn glideStep(self: *ScrollArea) void {
         }
         const seg = if (horizontal) t.seg_x else t.seg_y;
         if (seg.kind != .none or (!horizontal and t.seating)) continue;
-        const clamped = std.math.clamp(to, 0, self.si.scrollMax(axis));
+        const clamped = std.math.clamp(to, if (horizontal) 0 else self.lowY(), if (horizontal) self.si.scrollMax(axis) else self.pageMax());
         var next = if (glass.motion.off()) clamped else pos + (clamped - pos) * (1 - @exp(-dt * glass.motion.rate() / glide_tau_s));
         const done = @abs(clamped - next) <= 0.5;
         if (done) next = clamped;
-        self.scrollBy(if (horizontal) .{ .x = next - pos } else .{ .y = next - pos });
+        if (horizontal) {
+            self.scrollBy(.{ .x = next - pos });
+        } else {
+            const before = self.si.viewport.y;
+            _ = self.moveY(next - pos, false);
+            if (self.area.scroll.?.init_opts.user_scroll) |us| us.y += self.si.viewport.y - before;
+        }
         if (done) {
             target.* = null;
             self.settle(horizontal, !horizontal);
         } else dvui.refresh(null, @src(), self.data().id);
-        at.* = if (horizontal) self.si.viewport.x else self.si.viewport.y;
+        at.* = if (horizontal) self.si.viewport.x else self.positionY();
     }
 }
 
@@ -451,9 +474,10 @@ fn wheelEvent(self: *ScrollArea, e: *dvui.Event) void {
     if (trackpad) {
         if (dir == .horizontal) self.touch.glide_x = null else self.touch.glide_y = null;
     }
-    const at = if (dir == .vertical) self.si.viewport.y else self.si.viewport.x;
-    const max = self.si.scrollMax(dir);
-    if (max <= 0 or (by < 0 and at <= 0) or (by > 0 and at >= max)) return;
+    const at = if (dir == .vertical) self.positionY() else self.si.viewport.x;
+    const low = if (dir == .vertical) self.lowY() else 0;
+    const max = if (dir == .vertical) self.pageMax() else self.si.scrollMax(dir);
+    if (max <= low or (by < 0 and at <= low) or (by > 0 and at >= max)) return;
     e.handle(@src(), c.data());
     self.touch.wheel_ns = dvui.frameTimeNS();
     self.touch.wheel_settle = true;
@@ -466,7 +490,7 @@ fn wheelEvent(self: *ScrollArea, e: *dvui.Event) void {
     if (self.touch.seg_y.kind == .coast) self.touch.seg_y = .{};
     self.touch.seating = false;
     if (trackpad) {
-        self.si.scrollByOffset(dir, by);
+        if (dir == .vertical) _ = self.moveY(std.math.clamp(at + by, low, max) - at, false) else self.si.scrollByOffset(dir, by);
         if (c.init_opts.user_scroll) |us| {
             if (dir == .vertical) us.y += by else us.x += by;
         }
@@ -598,9 +622,9 @@ const max_notches = 32;
 /// started, seat the content on the notch it was lifted near.
 fn aimOrSeat(self: *ScrollArea) void {
     const t = self.touch;
-    const y = self.si.viewport.y;
-    const max = self.si.scrollMax(.vertical);
-    var buf: [max_notches + 2]Fling.Notch = undefined;
+    const y = self.positionY();
+    const max = self.pageMax();
+    var buf: [max_notches + 4]Fling.Notch = undefined;
     var n: usize = 0;
     for (self.notch_list) |notch| {
         if (notch.at < 0 or notch.at > max or n == max_notches) continue;
@@ -617,12 +641,16 @@ fn aimOrSeat(self: *ScrollArea) void {
             }
         }
     }
+    n += self.leadNotches(buf[n..]);
     if (t.y.coasting) {
         if (Fling.aim(y, t.y.vel, tuning, buf[0..n])) |a| {
             t.seg_y.decay = a.decay;
+            if (self.lead != null and a.at == self.lowY()) t.seg_y.low = self.lowY() - 1;
             t.coast_aimed = true;
+            t.seat_at = a.at;
         }
     } else if (Fling.nearest(y, buf[0..n])) |at| {
+        if (self.lead != null and at == y) return;
         // A lift with no coast is slow or paused: the seat starts from rest.
         t.seating = true;
         t.seat_at = at;
@@ -630,23 +658,41 @@ fn aimOrSeat(self: *ScrollArea) void {
     }
 }
 
+fn leadNotches(self: *const ScrollArea, buf: []Fling.Notch) usize {
+    const piece = self.lead orelse return 0;
+    const e = piece.extent(piece.ctx);
+    const y = self.si.viewport.y;
+    var n: usize = 0;
+    if (e > 0 or y == 0) {
+        buf[n] = .{ .at = y, .on_rest = true, .capture = piece.range(piece.ctx), .detent = TopSheet.pass_speed };
+        n += 1;
+    }
+    if (y == 0 and e > 0) {
+        buf[n] = .{ .at = -piece.range(piece.ctx), .on_rest = true, .capture = std.math.inf(f32), .pass_speed = std.math.inf(f32) };
+        n += 1;
+    }
+    return n;
+}
+
 fn wheelRest(self: *ScrollArea) void {
     const t = self.touch;
     if (!t.rest_pending or dvui.frameTimeNS() - t.wheel_ns < wheel_rest_ms * std.time.ns_per_ms or
         t.dragging or t.finger != .none or t.over.y != 0 or t.anyMoving()) return;
     t.rest_pending = false;
-    const y = self.si.viewport.y;
-    const max = self.si.scrollMax(.vertical);
+    const y = self.positionY();
+    const max = self.pageMax();
     var a: ?Fling.Notch = null;
     var b: ?Fling.Notch = null;
     for (self.notch_list) |notch| {
-        if (notch.on_rest) restCandidate(notch, y, max, &a, &b);
+        if (notch.on_rest) restCandidate(notch, y, 0, max, &a, &b);
     }
     if (self.snap_with) |provider| {
         for ([_]f32{ -1, 1 }) |dir| {
-            if (provider.near(provider.ctx, y, dir)) |notch| restCandidate(notch, y, max, &a, &b);
+            if (provider.near(provider.ctx, y, dir)) |notch| restCandidate(notch, y, 0, max, &a, &b);
         }
     }
+    var buf: [2]Fling.Notch = undefined;
+    for (buf[0..self.leadNotches(&buf)]) |notch| restCandidate(notch, y, self.lowY(), max, &a, &b);
     if ((a != null and a.?.at == y) or (b != null and b.?.at == y)) return;
     const target = if (a) |lo| (if (b) |hi| blk: {
         const f = (y - lo.at) / (hi.at - lo.at);
@@ -655,8 +701,8 @@ fn wheelRest(self: *ScrollArea) void {
     if (@abs(y - target.at) <= target.capture) self.glideTo(.vertical, target.at);
 }
 
-fn restCandidate(n: Fling.Notch, y: f32, max: f32, a: *?Fling.Notch, b: *?Fling.Notch) void {
-    if (n.at < 0 or n.at > max) return;
+fn restCandidate(n: Fling.Notch, y: f32, low: f32, max: f32, a: *?Fling.Notch, b: *?Fling.Notch) void {
+    if (n.at < low or n.at > max) return;
     if (n.at <= y and (a.* == null or n.at > a.*.?.at)) a.* = n;
     if (n.at >= y and (b.* == null or n.at < b.*.?.at)) b.* = n;
 }
@@ -667,8 +713,10 @@ fn seatStep(self: *ScrollArea) void {
     if (!t.seating) return;
     const max_step_s = @as(f32, @floatFromInt(FrameClock.max_step_ns)) / std.time.ns_per_s;
     const moving = t.seat_spring.step(.{}, @min(dvui.secondsSinceLastFrame(), max_step_s), seat);
-    const to = if (moving) t.seat_at + t.seat_spring.pos.y else t.seat_at;
-    self.scrollBy(.{ .y = to - self.si.viewport.y });
+    const to = std.math.clamp(if (moving) t.seat_at + t.seat_spring.pos.y else t.seat_at, self.lowY(), self.pageMax());
+    const before = self.si.viewport.y;
+    _ = self.moveY(to - self.positionY(), false);
+    if (self.area.scroll.?.init_opts.user_scroll) |us| us.y += self.si.viewport.y - before;
     if (moving) {
         dvui.refresh(null, @src(), self.data().id);
     } else {
