@@ -146,7 +146,12 @@ pub const Lead = struct {
     /// Open (`by` < 0) or shut (`by` > 0) by up to `|by|`; returns the length used, never negative.
     take: *const fn (ctx: *anyopaque, by: f32) f32,
 };
-pub const With = struct { lead: ?Lead = null };
+pub const With = struct {
+    lead: ?Lead = null,
+    /// Points the caller moved the viewport since the last frame because the content above it
+    /// changed size (a list keeping its reader in place): motion in flight moves with it.
+    shift: f32 = 0,
+};
 
 pub fn init(src: std.builtin.SourceLocation, init_opts: dvui.ScrollAreaWidget.InitOpts, opts: dvui.Options) ScrollArea {
     return initWith(src, init_opts, opts, .{});
@@ -168,6 +173,12 @@ pub fn initWith(src: std.builtin.SourceLocation, init_opts: dvui.ScrollAreaWidge
     };
 
     if (self.bands) self.lead = with.lead;
+    if (with.shift != 0) {
+        if (self.touch.seg_y.kind == .coast) self.touch.seg_y.origin += with.shift;
+        if (self.touch.glide_y) |*y| y.* += with.shift;
+        self.touch.glide_at.y += with.shift;
+        self.touch.seat_at += with.shift;
+    }
     if (self.lead) |lead_piece| _ = lead_piece.extent(lead_piece.ctx);
 
     const dragging = dvui.currentWindow().dragging;
