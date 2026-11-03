@@ -32,8 +32,9 @@ const WindowsDynLib = struct {
 
     pub fn open(path: []const u8) Error!WindowsDynLib {
         var buf: [windows.PATH_MAX_WIDE:0]u16 = undefined;
-        const len = std.unicode.wtf8ToWtf16Le(buf[0..], path) catch return error.InvalidUtf8;
+        const len = std.unicode.calcWtf16LeLen(path) catch return error.InvalidUtf8;
         if (len >= buf.len) return error.FileNotFound;
+        _ = std.unicode.wtf8ToWtf16Le(buf[0..], path) catch return error.InvalidUtf8;
         buf[len] = 0;
         const wide_path: [*:0]const u16 = buf[0..len :0].ptr;
         const handle = LoadLibraryW(wide_path) orelse return error.FileNotFound;
@@ -663,4 +664,23 @@ test "builtin plugin path joins exe_dir/plugins/<name>/<name>.<ext>" {
 test "sdk version satisfy" {
     try std.testing.expect(version.sdkVersionSatisfies(.{ .major = 0, .minor = 2, .patch = 0 }, .{ .major = 0, .minor = 1, .patch = 5 }));
     try std.testing.expect(!version.sdkVersionSatisfies(.{ .major = 0, .minor = 0, .patch = 9 }, .{ .major = 0, .minor = 1, .patch = 0 }));
+}
+
+test "Windows: a DLL opens, its symbols are found or not, and a bad path is an error" {
+    if (builtin.target.os.tag != .windows) return error.SkipZigTest;
+    const t = std.testing;
+    const Fn = *const fn () callconv(.winapi) u32;
+
+    var lib = try DynLib.open("kernel32.dll");
+    defer lib.close();
+    try t.expect(lib.lookup(Fn, "GetCurrentProcessId") != null);
+    try t.expect(lib.lookup(Fn, "fizzy_no_such_symbol") == null);
+
+    try t.expectError(error.FileNotFound, DynLib.open("C:\\fizzy-no-such-dir\\none.dll"));
+    try t.expectError(error.InvalidUtf8, DynLib.open("\xff.dll"));
+
+    const long_path = try t.allocator.alloc(u8, std.os.windows.PATH_MAX_WIDE + 1);
+    defer t.allocator.free(long_path);
+    @memset(long_path, 'a');
+    try t.expectError(error.FileNotFound, DynLib.open(long_path));
 }
