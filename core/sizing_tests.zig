@@ -12,6 +12,7 @@
 test {
     _ = @import("glass.zig");
     _ = @import("glass_morph_tests.zig");
+    _ = @import("glass_reach_tests.zig");
     _ = @import("widgets/glass_morph_widget_tests.zig");
     _ = @import("widgets/Split.zig");
     // An over-long seams slice is clamped to what the field draws.
