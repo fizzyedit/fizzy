@@ -20,6 +20,7 @@ test {
     _ = @import("widgets/ContextWidget.zig");
     // Touch drag and fling of a scroll area.
     _ = @import("widgets/ScrollArea.zig");
+    _ = @import("widgets/scroll_axis_tests.zig");
     _ = @import("widgets/top_sheet_tests.zig");
     _ = @import("widgets/top_sheet_inner_tests.zig");
     _ = @import("widgets/top_sheet_handle_tests.zig");
