@@ -17,7 +17,7 @@ pub const tap_ns: i128 = 300 * std.time.ns_per_ms;
 /// What a lifted finger was.
 pub const Release = enum { none, tap, double_tap };
 
-/// Points a finger may drift and still be holding.
+/// The one touch slop, in points: shared by holds, drag thresholds and view ghost rests.
 pub const slop_pt: f32 = 14;
 
 /// A finger is down on the text, still holding or finished with this press.
