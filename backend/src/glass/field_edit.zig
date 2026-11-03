@@ -86,4 +86,10 @@ test "a full queue drops the new edit, never an old one" {
     for (edits, 0..) |edit, i| try std.testing.expectEqual(i, edit.select.start);
     try std.testing.expect(!push(.{ .replace = .{ .range = .{ .start = 0, .end = 0 }, .text = &(@as([5120]u8, @splat('x'))) } }));
     try std.testing.expectEqual(@as(usize, 0), take().len);
+    const full = @as([4096]u8, @splat('a'));
+    try std.testing.expect(push(.{ .replace = .{ .range = .{ .start = 0, .end = 0 }, .text = &full } }));
+    try std.testing.expect(!push(.{ .replace = .{ .range = .{ .start = 0, .end = 0 }, .text = "b" } }));
+    const kept = take();
+    try std.testing.expectEqual(@as(usize, 1), kept.len);
+    try std.testing.expectEqualStrings(&full, kept[0].replace.text);
 }

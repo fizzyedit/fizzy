@@ -78,6 +78,12 @@ test "select moves the caret and the selection" {
     try select(3, 3);
     try std.testing.expectEqual(@as(usize, 3), selections[0].cursor);
     try std.testing.expect(selections[0].empty());
+    try select(11, 6);
+    try std.testing.expectEqual(@as(usize, 6), selections[0].start);
+    try std.testing.expectEqual(@as(usize, 11), selections[0].end);
+    try std.testing.expectEqual(@as(usize, 6), selections[0].cursor);
+    _ = try frame();
+    try std.testing.expectEqual(field_edit.Range{ .start = 11, .end = 6 }, field_edit.current().?.sel);
 }
 
 test "an unfocused field leaves edits queued" {
