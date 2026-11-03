@@ -1029,6 +1029,7 @@ fn addTests(
 
     inline for (.{
         .{ "fizzy-lint-tests", "scripts/lint.zig" },
+        .{ "fizzy-touchplay-tests", "scripts/touchplay.zig" },
         .{ "fizzy-direction-tests", "core/math/direction.zig" },
         .{ "fizzy-easing-tests", "core/math/easing.zig" },
         .{ "fizzy-layout-anchor-tests", "core/math/layout_anchor.zig" },
