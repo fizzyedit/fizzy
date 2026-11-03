@@ -1400,6 +1400,18 @@ fn addTests(
         null,
     );
 
+    const field_edit_module = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("backend/src/glass/field_edit.zig"),
+    });
+    field_edit_module.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
+    try unit_test_artifacts.append(b.allocator, b.addTest(.{
+        .name = "fizzy-field-edit-tests",
+        .root_module = field_edit_module,
+        .filters = test_filters,
+    }));
+
     // The liquid field's packing and edge-light arithmetic needs dvui's geometry types,
     // but no Window or native backend. Keep it in `test`, apart from the glass window tests.
     const liquid_field_module = b.createModule(.{

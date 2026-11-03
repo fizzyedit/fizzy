@@ -18,6 +18,7 @@ pub const motion = @import("motion.zig");
 pub const FrameClock = @import("FrameClock.zig");
 pub const MotionClock = @import("MotionClock.zig");
 pub const input_time = @import("input_time.zig");
+pub const field_edit = @import("field_edit.zig");
 pub const field_hints = @import("field_hints.zig");
 pub const AxisLock = @import("AxisLock.zig");
 pub const wheel_kind = @import("wheel_kind.zig");

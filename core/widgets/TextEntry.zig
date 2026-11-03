@@ -7,17 +7,36 @@ const dvui = @import("dvui");
 const TouchHold = @import("../TouchHold.zig");
 const touch = @import("touch.zig");
 const SelectableText = @import("SelectableText.zig");
+const field_edit = @import("glass").field_edit;
+const field_hints = @import("glass").field_hints;
 const widgets = @import("../widgets.zig");
 
 const TextEntry = @This();
 entry: *dvui.TextEntryWidget,
 hold: *TouchHold,
 
-/// Starts the field, reads this frame's touch events and draws it. Call `deinit`, as for `dvui.textEntry`.
+/// Starts and draws the field. Call `deinit`, as for `dvui.textEntry`.
+/// Queued edits wait for focus so another field cannot consume them.
 pub fn init(src: std.lang.SourceLocation, init_opts: dvui.TextEntryWidget.InitOptions, opts: dvui.Options) TextEntry {
     const unhandled = touch.unhandledPresses();
     const entry = dvui.widgetAlloc(dvui.TextEntryWidget);
     entry.init(src, init_opts, opts);
+    if (dvui.focusedWidgetId() == entry.data().id) {
+        for (field_edit.take()) |edit| {
+            const range = widen(entry, switch (edit) {
+                .replace => |r| r.range,
+                .select => |r| r,
+            });
+            entry.textLayout.selection.* = .{ .start = @intCast(range.start), .end = @intCast(range.end), .cursor = @intCast(range.end) };
+            switch (edit) {
+                .replace => |r| entry.textTyped(r.text, false),
+                .select => |r| {
+                    if (r.start > r.end) entry.textLayout.selection.cursor = range.start;
+                    dvui.refresh(null, @src(), entry.data().id);
+                },
+            }
+        }
+    }
     const self: TextEntry = .{
         .entry = entry,
         .hold = dvui.dataGetPtrDefault(null, entry.data().id, "_hold", TouchHold, .{}),
@@ -28,6 +47,20 @@ pub fn init(src: std.lang.SourceLocation, init_opts: dvui.TextEntryWidget.InitOp
     entry.processEvents();
     self.processTouch(unhandled, touch_editing);
     entry.draw();
+    if (dvui.focusedWidgetId() == entry.data().id) {
+        const sel = entry.textLayout.selection;
+        const text = entry.text[0..entry.len];
+        const caret = @min(sel.cursor, text.len);
+        // A 4 KB window bounds publication cost while keeping the caret in view.
+        var offset = if (text.len <= 4096) 0 else @min(caret -| 2048, text.len - 4096);
+        while (offset > 0 and (std.unicode.utf8ByteSequenceLength(text[offset]) catch 0) == 0) offset -= 1;
+        field_edit.publish(.{
+            .text = text[offset..@min(offset + 4096, text.len)],
+            .offset = offset,
+            .sel = .{ .start = if (sel.cursor == sel.start) sel.end else sel.start, .end = sel.cursor },
+            .hints = field_hints.current() orelse .{},
+        });
+    }
     return self;
 }
 
@@ -112,4 +145,12 @@ fn tap(self: TextEntry, p: dvui.Point.Physical, was_focused: bool, slop: f32, ev
         tl.state.te_show_draggables = false;
         tl.state.te_show_context_menu = false;
     }
+}
+
+fn widen(entry: *dvui.TextEntryWidget, range: field_edit.Range) field_edit.Range {
+    var start = @min(@min(range.start, range.end), entry.len);
+    var end = @min(@max(range.start, range.end), entry.len);
+    while (start > 0 and start < entry.len and (std.unicode.utf8ByteSequenceLength(entry.text[start]) catch 0) == 0) start -= 1;
+    while (end < entry.len and (std.unicode.utf8ByteSequenceLength(entry.text[end]) catch 0) == 0) end += 1;
+    return .{ .start = start, .end = end };
 }
