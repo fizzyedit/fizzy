@@ -49,10 +49,11 @@ pub fn Iterator(comptime T: type) type {
 }
 
 test "fizzy's menus, then plugins' in registration order, then Help" {
+    // lint-allow(anyerror): mirrors `MenuContribution.draw`
     const Draw = *const fn (ctx: ?*anyopaque) anyerror!void;
     const fns = struct {
-        fn model(_: ?*anyopaque) anyerror!void {}
-        fn plugin(_: ?*anyopaque) anyerror!void {}
+        fn model(_: ?*anyopaque) anyerror!void {} // lint-allow(anyerror): a `Draw`
+        fn plugin(_: ?*anyopaque) anyerror!void {} // lint-allow(anyerror): a `Draw`
     };
     const Owner = struct { id: u8 };
     var owner: Owner = .{ .id = 0 };

@@ -235,6 +235,7 @@ fn remove(self: *Openings, editor: *Editor, i: usize) void {
 }
 
 /// "Loading <name>…" over a spinner, centred in the pane; or, once it failed, why.
+// lint-allow(anyerror): the signature of `Surface.draw`
 fn draw(ctx: ?*anyopaque) anyerror!dvui.App.Result {
     const o: *Opening = @ptrCast(@alignCast(ctx orelse return .ok));
     const theme = dvui.themeGet();

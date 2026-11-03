@@ -105,6 +105,7 @@ fn run(id: []const u8) void {
 /// Draw one top-level menu from `menu_model`. Registered once per `menu_model.menu_bar` entry
 /// with the `Submenu` itself as `ctx`, so there is no per-menu function here to fall out of step
 /// with the macOS builder walking the same tree.
+// lint-allow(anyerror): the signature of `MenuContribution.draw`
 pub fn drawModelMenu(ctx: ?*anyopaque) anyerror!void {
     const sub: *const model.Submenu = @ptrCast(@alignCast(ctx orelse return));
     const editor = fizzy.editor();

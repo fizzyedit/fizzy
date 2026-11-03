@@ -56,6 +56,7 @@ fn selectScope(name: []const u8) void {
     selected_scope_len = n;
 }
 
+// lint-allow(anyerror): the signature of `Surface.draw`
 pub fn draw(_: ?*anyopaque) anyerror!dvui.App.Result {
     var hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .both });
     defer hbox.deinit();
