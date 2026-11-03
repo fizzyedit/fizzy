@@ -193,6 +193,27 @@ class SlotRunTests(unittest.TestCase):
                     with self.assertRaises(ProcessLookupError):
                         os.kill(pid, 0)
 
+    def test_unlock_keychain_only_runs_on_darwin_with_password_file(self):
+        with mock.patch.dict(os.environ, {'HOME': str(self.root), 'USERPROFILE': str(self.root)}), \
+                mock.patch.object(subprocess, 'run') as run:
+            password = self.root / '.fizzy-keychain-pass'
+            password.write_text('fixture-password\n')
+            for platform in ('linux', 'win32'):
+                with self.subTest(platform=platform), mock.patch.object(sys, 'platform', platform):
+                    slot_run.unlock_keychain()
+                    run.assert_not_called()
+            with mock.patch.object(sys, 'platform', 'darwin'):
+                password.unlink()
+                slot_run.unlock_keychain()
+                run.assert_not_called()
+                password.write_text('fixture-password\n')
+                slot_run.unlock_keychain()
+                run.assert_called_once_with(
+                    ['security', 'unlock-keychain', '-p', 'fixture-password',
+                     str(self.root / 'Library/Keychains/login.keychain-db')],
+                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL, check=False)
+
     def test_rmtree_removes_read_only_file(self):
         tree = Path(self.temp.name) / 'tree'
         (tree / 'sub').mkdir(parents=True)
