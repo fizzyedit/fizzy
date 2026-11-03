@@ -87,7 +87,6 @@
     .{ .rule = .@"fn-length", .file = "sdk/tape/ring.zig", .count = 1 },
     .{ .rule = .@"fn-length", .file = "src/editor/CommandPalette.zig", .count = 2 },
     .{ .rule = .@"fn-length", .file = "src/editor/Editor.zig", .count = 5 },
-    .{ .rule = .@"fn-length", .file = "src/editor/dialogs/AboutFizzy.zig", .count = 1 },
     .{ .rule = .@"raw-scroll-area", .file = "app/layout/Picker.zig", .count = 1 },
     .{ .rule = .@"raw-scroll-area", .file = "app/store/PluginStore.zig", .count = 1 },
     .{ .rule = .@"raw-scroll-area", .file = "core/viz/Table.zig", .count = 1 },
