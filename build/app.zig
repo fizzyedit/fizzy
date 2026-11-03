@@ -1956,6 +1956,34 @@ fn addTests(
         bench_step.dependOn(&run_bench.step);
     }
 
+    for ([_]bool{ false, true }) |smoke| {
+        const bench_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("tests/bench/bench_list.zig"),
+        });
+        bench_module.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
+        bench_module.addImport("core", core_module_test);
+        const options = b.addOptions();
+        options.addOption(bool, "smoke", smoke);
+        bench_module.addOptions("bench_list_options", options);
+        const binary = b.addTest(.{
+            .name = if (smoke) "fizzy-bench-list-smoke" else "fizzy-bench-list",
+            .root_module = bench_module,
+            .filters = &.{if (smoke) "bench-list smoke:" else "bench-list:"},
+        });
+        binary.root_module.link_libcpp = !target_is_windows_msvc;
+        if (target.result.os.tag == .windows) binary.root_module.linkSystemLibrary("comctl32", .{});
+        const run_bench = b.addRunArtifact(binary);
+        if (smoke) {
+            test_integration_step.dependOn(&run_bench.step);
+            check_integration_step.dependOn(&binary.step);
+        } else {
+            run_bench.has_side_effects = true;
+            b.step("bench-list", "Benchmark variable-height list CPU cost").dependOn(&run_bench.step);
+        }
+    }
+
     // `zig build bench-markdown` — markdown preview frame-cost benchmark. Same rules as
     // `bench-text` above: its own step, prints timings instead of asserting, only comparable at
     // equal `-Doptimize` (md4c and freetype build at the app's optimize level).
