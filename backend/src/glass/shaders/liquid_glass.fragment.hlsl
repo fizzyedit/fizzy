@@ -249,7 +249,11 @@ float4 main(PSInput input) : SV_Target0
     float F = smin(f1, f2, k, wf);
     // Cut: the glass's outline, and so its rim line, runs along the place's where that is nearer.
     if (cutEdge) D = max(D, inPlace);
-    float cov = clamp(0.5 - max(D, inPlace), 0.0, 1.0);
+    // Match LiquidField.edgeRamp: soften stairs at low pixel density.
+    float px = g2.z * 1.25;
+    bool lowRes = px <= 1.25;
+    float aa = lowRes ? 1.4 : 1.0;
+    float cov = clamp(0.5 - max(D, inPlace) / aa, 0.0, 1.0);
     if (cov <= 0.0) discard;
     if (input.color.r < 0.5) return float4(0.0, 0.0, 0.0, cov);
 
@@ -369,13 +373,12 @@ float4 main(PSInput input) : SV_Target0
     // Nothing across the band in either. Shade is the glass's own, not the picture's: a dark layer
     // over it, as whole where the picture is see-through as where it is not. `px` is a point, in
     // pixels (the rim line's width is 0.8 of one, `LiquidField.rim_line_width`).
-    float px = g2.z * 1.25;
     float af = abs(facing);
     bool diagonal = inward && dg > 0.0;
     // The lit edge (`g10.x`, below) is the one rim where it is on: neither of these draws.
     bool litEdge = g10.x > 0.0;
     float edge_dark = litEdge ? 0.0 : diagonal ? dg * (1.0 - smoothstep(0.2, 0.7, af)) * exp(-max(0.0, -D) / (2.0 * px))
-                               : g8.x * (1.0 - smoothstep(0.0, 0.5 * px, -D));
+                               : g8.x * (1.0 - smoothstep(0.0, lowRes ? 0.7 : 0.5 * px, -D));
     // As much as the edge has formed (`lens`), as its bend, clearing and light are: glass that is
     // barely a lens yet — a drop sunk into its place's edge — draws no dark line round itself.
     float shade = inward ? max(g5.w * t * t, edge_dark) * min(lens, 1.0) : 0.0;
@@ -387,7 +390,8 @@ float4 main(PSInput input) : SV_Target0
     float spec = inward ? (diagonal ? dg * max(smoothstep(0.75, 1.0, af), max(along.x, along.y)) : 0.25)
                         : 0.45 * (toward * sqrt(toward) + 0.75 * away * sqrt(away)) + 0.06;
     float line_ = diagonal ? exp(-max(0.0, -D) / px)
-             : inward ? smoothstep(0.25 * px, 0.5 * px, -D) * (1.0 - smoothstep(1.2 * px, 1.6 * px, -D))
+             : inward ? (lowRes ? smoothstep(0.0, 0.9, -D) * (1.0 - smoothstep(1.5, 2.4, -D))
+                                : smoothstep(0.25 * px, 0.5 * px, -D) * (1.0 - smoothstep(1.2 * px, 1.6 * px, -D)))
                         : exp(-max(0.0, -D) / g2.z);
     float lit = litEdge ? 0.0 : line_ * spec + (inward ? 0.0 : 0.04 * steepL * toward);
     // Down the shape (`v`, 0 at its top): the wash falls from `wash_top` to `wash_bottom`, and the

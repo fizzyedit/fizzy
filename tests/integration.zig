@@ -6425,7 +6425,7 @@ test "liquid field: a rounded box's outline is its rect with its own corner per 
     // On a straight side, and just outside it.
     try std.testing.expectApproxEqAbs(@as(f32, 0), f.sample(.{ .x = 50, .y = 0 }).d, 0.01);
     try std.testing.expectApproxEqAbs(@as(f32, 0.5), f.sample(.{ .x = 50, .y = 60 }).coverage, 0.01);
-    try std.testing.expectApproxEqAbs(@as(f32, 0), f.sample(.{ .x = 50, .y = 60.5 }).coverage, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.142857), f.sample(.{ .x = 50, .y = 60.5 }).coverage, 0.01);
     // The square corners are square; the round one cuts its corner off.
     try std.testing.expect(f.sample(.{ .x = 99.5, .y = 59.5 }).d < 0);
     try std.testing.expect(f.sample(.{ .x = 1, .y = 1 }).d > 0);
