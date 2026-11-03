@@ -52,6 +52,7 @@ const KeybindSettings = @import("KeybindSettings.zig");
 const Accounts = @import("Accounts.zig");
 pub const menu_model = @import("menu_model.zig");
 
+pub const GlassTestbed = @import("GlassTestbed.zig");
 const GlassBench = @import("GlassBench.zig");
 const workbench_mod = @import("workbench");
 
@@ -118,6 +119,7 @@ app: App,
 /// File-management workbench (per-branch explorer decorations, …)
 workbench: Workbench,
 glass_bench: ?GlassBench.Config = null,
+glass_testbed: ?GlassTestbed = null,
 /// The workbench's panes as the app's own views, when `FIZZY_WORKSPACES=1` asked (`Workspaces`).
 workspaces: Workspaces = .{},
 /// The first claim id not yet shown beside the person (`showClaimed`).
@@ -4531,6 +4533,12 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         fizzy.core.screens.publishMainRadius(if (square) 0 else if (builtin.target.os.tag == .linux) Constants.linux_window_radius else fizzy.backend.viewports.windowRadius());
     }
     fizzy.core.LiquidField.publishEnabled(editor.app.settings.glass_shader and fizzy.core.material.inApp().kind == .liquid);
+    if (comptime builtin.target.cpu.arch != .wasm32) {
+        if (editor.glass_testbed) |*testbed| {
+            testbed.draw();
+            return .ok;
+        }
+    }
     if (editor.glass_bench) |cfg| {
         GlassBench.draw(cfg);
         return .ok;
@@ -7392,6 +7400,7 @@ pub fn deinit(editor: *Editor) !void {
     // A demo playing at quit leaves the user's layout and settings as `Demo.begin` flushed them:
     // nothing it changed is written below.
     const demo_was_active = editor.demo.active();
+    if (editor.glass_testbed) |*testbed| testbed.deinit();
     editor.demo.deinit();
     editor.demos.deinit();
     editor.tape_tabs.deinit(editor);
