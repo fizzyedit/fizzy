@@ -1430,6 +1430,9 @@ fn addTests(
         "test-integration",
         "Run fizzy headless integration tests (dvui-testing; needs MSVC on Windows)",
     );
+    const fullscreen_tests = b.addSystemCommand(&.{"node"});
+    fullscreen_tests.addFileArg(b.path("web/tests/fullscreen.test.mjs"));
+    test_integration_step.dependOn(&fullscreen_tests.step);
     const check_integration_step = b.step("check-integration", "Compile fizzy integration tests without running them");
     const test_all_step = b.step("test-all", "Run unit + integration tests");
     test_all_step.dependOn(test_step);
