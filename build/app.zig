@@ -1400,6 +1400,19 @@ fn addTests(
         null,
     );
 
+    const glass_testbed_module = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("src/editor/glass_testbed_tests.zig"),
+    });
+    glass_testbed_module.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
+    glass_testbed_module.addImport("core", core_module_test);
+    try unit_test_artifacts.append(b.allocator, b.addTest(.{
+        .name = "fizzy-glass-testbed-tests",
+        .root_module = glass_testbed_module,
+        .filters = test_filters,
+    }));
+
     // The liquid field's packing and edge-light arithmetic needs dvui's geometry types,
     // but no Window or native backend. Keep it in `test`, apart from the glass window tests.
     const liquid_field_module = b.createModule(.{
@@ -1634,6 +1647,7 @@ fn addTests(
         singleton_test_dep.module("singleton_app"),
         fizzy_test_module,
     );
+    glass_testbed_module.addImport("app", app_module_test);
     const image_module_test = image_plugin.addStaticModule(b, target, optimize, .{
         .dvui = dvui_testing_dep.module("dvui_testing"),
         .core = core_module_test,

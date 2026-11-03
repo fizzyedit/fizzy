@@ -371,6 +371,14 @@ pub fn AppInit(win: *dvui.Window) !void {
     fizzy.setInstances(app_ptr, editor_ptr);
     editor_ptr.* = Editor.init(app_ptr) catch unreachable;
     if (comptime builtin.target.cpu.arch != .wasm32) {
+        if (std.c.getenv("FIZZY_GLASS_TESTBED")) |raw| {
+            const cfg = Editor.GlassTestbed.parse(std.mem.span(raw)) orelse {
+                std.log.err("Invalid FIZZY_GLASS_TESTBED", .{});
+                std.process.exit(1);
+            };
+            editor_ptr.app.settings.in_app_material = .liquid;
+            editor_ptr.glass_testbed = .init(cfg, editor_ptr.app.gpa);
+        }
         if (std.c.getenv("FIZZY_GLASS_BENCH")) |raw| {
             editor_ptr.glass_bench = fizzy.GlassBench.parse(std.mem.span(raw));
             if (editor_ptr.glass_bench == null) std.log.warn("Ignoring invalid FIZZY_GLASS_BENCH: {s}", .{std.mem.span(raw)});
@@ -656,6 +664,7 @@ fn frameOnce() !dvui.App.Result {
         main_window.host().end();
         // What an agent asked for (`automation` service): the snapshot, now that every dialog has
         // drawn, and a picture of a window as drawn, read back whether or not it is on screen.
+        if (fizzy.editor().glass_testbed) |*testbed| testbed.frameEnd(if (main_window.frame_target.picture()) |p| .{ .tag = "", .target = p.target, .w = p.w, .h = p.h } else null);
         fizzy.editor().demo.frameEnd(if (main_window.frame_target.picture()) |p| .{ .target = p.target, .w = p.w, .h = p.h } else null);
         // A snapshot just written answers the `fizzy.screen` waiting on it now, not at the next
         // frame's start: a frame sooner.
