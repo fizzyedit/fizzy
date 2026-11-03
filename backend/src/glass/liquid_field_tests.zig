@@ -444,10 +444,12 @@ test "2D: pills part, the brief stays whole" {
     var storage: [8]Shape = undefined;
     const parts = LiquidField.pieces(f.panel.?, &storage);
     try testing.expectEqual(@as(f32, 20), parts[0].radii[2]);
-    // The half-pixel below the host belongs to the continuous antialiasing band.
+    // Beyond the wider antialiasing band, the brief remains fully covered.
+    // Check the straight edge separately inside the band.
+    try testing.expectApproxEqAbs(@as(f32, 0.5 + 0.5 / 1.4), panelSample(&f, 200, 60.5).coverage, 0.001);
     for (0..120) |yi| for (0..401) |xi| {
         const x: f32 = @floatFromInt(xi);
-        const y = 60.5 + @as(f32, @floatFromInt(yi)) * 0.5;
+        const y = 61 + @as(f32, @floatFromInt(yi)) * 0.5;
         try testing.expectApproxEqAbs(panelSample(&parent, x, y).coverage, panelSample(&f, x, y).coverage, 0.001);
     };
     try checkNeck(true);
@@ -523,4 +525,18 @@ test "panel outlines draw in a frame" {
     };
     const f = panelField(&seams);
     f.drawOutlines(.white);
+}
+
+test "edge coverage follows pixel density at straight and rounded edges" {
+    for ([_]f32{ 1, 1.25, 1.5, 2 }) |scale| {
+        const f = testCard(scale);
+        const ramp: f32 = if (scale <= 1.25) 1.4 else 1;
+        const r = f.shapes[0].radii[0];
+        for ([_]f32{ -0.7, -0.5, 0, 0.5, 0.7 }) |distance| {
+            const expected = std.math.clamp(0.5 - distance / ramp, 0, 1);
+            try testing.expectApproxEqAbs(expected, f.sample(.{ .x = 100 * scale, .y = -distance }).coverage, 0.0001);
+            const diagonal = (r + distance) / @sqrt(@as(f32, 2));
+            try testing.expectApproxEqAbs(expected, f.sample(.{ .x = r - diagonal, .y = r - diagonal }).coverage, 0.0001);
+        }
+    }
 }

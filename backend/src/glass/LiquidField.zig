@@ -521,6 +521,11 @@ pub fn pack(self: *const LiquidField, covered: dvui.Rect.Physical, has_sharp: bo
 /// `liquid_glass`'s rim line width, in points.
 const rim_line_width: f32 = 0.8;
 
+/// Coverage ramp in physical pixels, widened where a one-pixel edge reads as stairs.
+fn edgeRamp(scale: f32) f32 {
+    return if (scale <= 1.25) 1.4 else 1.0;
+}
+
 // ── Drawing ─────────────────────────────────────────────────────────────────────────────────────
 
 /// The program, written once in `shaders/liquid_glass.fragment.hlsl` and compiled from it for every
@@ -922,7 +927,7 @@ pub fn sampleWith(self: *const LiquidField, p: dvui.Point.Physical, l: glass_loo
     }
     return .{
         .d = dist,
-        .coverage = std.math.clamp(0.5 - @max(d, in_place), 0, 1),
+        .coverage = std.math.clamp(0.5 - @max(d, in_place) / edgeRamp(self.scale), 0, 1),
         .out = .{ .x = out[0], .y = out[1] },
         .steep = @exp(-soft / liquid_glass.depthPx(self.look(), rim)),
         .blur = std.math.lerp(m1[0], m2[0], wm),
