@@ -12,6 +12,7 @@ const Rule = enum {
     @"changelog-words",
     @"raw-transient-surface",
     @"raw-scroll-area",
+    @"todo-seam",
 };
 const Finding = struct { rule: Rule, line: usize, message: []const u8 };
 const Allow = struct { rule: Rule, file: []const u8, count: usize };
@@ -174,6 +175,17 @@ fn analyze(allocator: std.mem.Allocator, source: [:0]const u8) ![]Finding {
         const comment = commentStart(line) orelse continue;
         const text = std.mem.trim(u8, line[comment + 2 ..], " /!\t\r");
         if (std.mem.startsWith(u8, text, "lint-allow(")) continue;
+        if (std.mem.find(u8, text, "TODO")) |at| {
+            if ((at + 4 == text.len or text[at + 4] != '(') and
+                !silenced(suppressions.items, .@"todo-seam", line_number))
+            {
+                try findings.append(allocator, .{
+                    .rule = .@"todo-seam",
+                    .line = line_number,
+                    .message = "TODO names its seam: TODO(<seam, plans/X.md or #issue>): what",
+                });
+            }
+        }
         if (silenced(suppressions.items, .@"changelog-words", line_number)) continue;
         const words = [_][]const u8{ "fixed", "now", "used to", "previously", "formerly", "no longer", "new:" };
         word_loop: for (words) |word| {
@@ -892,4 +904,23 @@ test "a file over its raw-scroll-area budget fails" {
     output.clearRetainingCapacity();
     try std.testing.expect(!try reportFile(&output.writer, "over.zig", findings[0..1], &allowances, &seen, false));
     try std.testing.expectEqualStrings("", output.written());
+}
+
+test "a TODO names its seam" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][:0]const u8{
+        "// TODO: free memory\nconst n = 1;",
+        "const n = 1; // AK TODO - not yet implemented",
+    }) |source| {
+        const findings = try analyze(a, source);
+        try std.testing.expectEqual(@as(usize, 1), findings.len);
+        try std.testing.expectEqual(Rule.@"todo-seam", findings[0].rule);
+    }
+    for ([_][:0]const u8{
+        "// TODO(plans/X.md): free memory\nconst n = 1;",
+        "const s = \"TODO: in a string\";",
+        "// lint-allow(todo-seam): upstream wording\n// TODO: keep\nconst n = 1;",
+    }) |source| try std.testing.expectEqual(@as(usize, 0), (try analyze(a, source)).len);
 }
