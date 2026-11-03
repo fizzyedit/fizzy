@@ -10,6 +10,7 @@
 //! nothing else: every bug this pair has had was a dvui event-routing or layout-settle rule rather
 //! than arithmetic, and reading the code caught none of them.
 test {
+    _ = @import("widgets/Button.zig");
     _ = @import("glass.zig");
     _ = @import("glass_morph_tests.zig");
     _ = @import("glass_reach_tests.zig");
