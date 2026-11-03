@@ -269,6 +269,7 @@ fn register(self: *Workspaces, grouping: u64) !void {
     });
 }
 
+// lint-allow(anyerror): the signature of `Surface.draw`
 fn drawView(ctx: ?*anyopaque) anyerror!dvui.App.Result {
     const v: *View = @ptrCast(@alignCast(ctx.?));
     const ws = v.editor.workbench.workspaces.getPtr(v.grouping) orelse return .ok;
