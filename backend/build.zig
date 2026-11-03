@@ -100,6 +100,7 @@ pub const unit_tests = [_]struct {
     /// The root imports `glass_look` (`src/glass_look.zig`, std-only too).
     glass_look: bool = false,
 }{
+    .{ .name = "backend-axis-lock-tests", .root = "src/glass/axis_lock_tests.zig" },
     .{ .name = "backend-window-layout-tests", .root = "src/platform/window_layout.zig" },
     // The hit test Windows' WM_NCHITTEST and Linux's SDL hit test both answer from.
     .{ .name = "backend-titlebar-tests", .root = "src/platform/titlebar.zig" },

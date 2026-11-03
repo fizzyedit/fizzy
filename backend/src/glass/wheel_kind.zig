@@ -1,6 +1,19 @@
 //! The input kind of each wheel event, by dvui event number: dvui keeps only the window's last.
 const std = @import("std");
 const dvui = @import("dvui");
+const AxisLock = @import("AxisLock.zig");
+
+/// Add wheel travel, choosing one axis per trackpad gesture before dvui routes it.
+pub fn add(win: *dvui.Window, by: f32, dir: dvui.enums.Direction, kind: dvui.enums.MouseType) !bool {
+    const travel = if (kind == .trackpad) blk: {
+        const lock = dvui.dataGetPtrDefault(win, win.data().id, "_axis_lock", AxisLock, .{});
+        break :blk lock.filter(if (dir == .horizontal) .horizontal else .vertical, by, win.frame_time_ns);
+    } else by;
+    if (travel == 0) return false;
+    const result = try win.addEventMouseWheel(travel, dir, kind);
+    set(win, win.event_num, kind);
+    return result;
+}
 
 /// Record `kind` for wheel event `num` (the window's `event_num` right after addEventMouseWheel).
 pub fn set(win: *dvui.Window, num: u16, kind: dvui.enums.MouseType) void {

@@ -542,12 +542,12 @@ fn add_event_raw(w: *dvui.Window, which: u8, int1: u32, int2: u32, float1: f32, 
             _ = try w.addEventMouseButton(buttonFromJS(int1), .release);
         },
         4 => {
-            _ = try w.addEventMouseWheel(
+            _ = try glass.wheel_kind.add(
+                w,
                 float1 * (if (int2 == 0) @as(f32, 100) else dvui.scroll_speed),
                 if (int1 > 0) .vertical else .horizontal,
                 if (int2 == 0) .mouse else .trackpad,
             );
-            glass.wheel_kind.set(w, w.event_num, if (int2 == 0) .mouse else .trackpad);
         },
         5 => {
             const str = @as([*]u8, @ptrFromInt(int1))[0..int2];
