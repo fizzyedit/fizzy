@@ -274,46 +274,7 @@ pub fn dialog(id: dvui.Id) fizzy.core.dialogs.Error!bool {
 
     _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 8, .h = 10 } });
 
-    // Three states for the status slot:
-    //  1. `checking`        — looping spinner (worker thread is in flight).
-    //  2. `finish_elapsed`  — pop → check finish animation right after the
-    //                          worker publishes a successful outcome, same
-    //                          feedback as a completed file save.
-    //  3. otherwise          — static status text.
-    const checking: bool = if (comptime auto_update.impl) check_in_flight.load(.acquire) else false;
-    const finish_elapsed: ?i128 = blk: {
-        if (comptime !auto_update.impl) break :blk null;
-        const start = check_complete_at_ns orelse break :blk null;
-        const elapsed = fizzy.core.perf.nanoTimestamp() - start;
-        if (elapsed >= check_done_flash_duration_ns) {
-            check_complete_at_ns = null;
-            break :blk null;
-        }
-        break :blk elapsed;
-    };
-
-    {
-        var spinner_slot = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .expand = .none,
-            .min_size_content = .{ .w = 24, .h = 24 },
-            .gravity_x = 0.5,
-        });
-        defer spinner_slot.deinit();
-
-        if (checking or finish_elapsed != null) {
-            fizzy.core.dialogs.bubbleSpinner(@src(), .{
-                .expand = .none,
-                .min_size_content = .{ .w = 24, .h = 24 },
-                .gravity_x = 0.5,
-                .color_text = .{ .color = dvui.themeGet().color(.control, .text) },
-            }, .{ .complete_elapsed_ns = finish_elapsed });
-            dvui.refresh(null, @src(), null);
-        }
-    }
-
-    if (!checking) {
-        dvui.labelNoFmt(@src(), status_line, .{}, .{ .font = body_small, .gravity_x = 0.5, .color_text = .{ .color = dvui.themeGet().color(.control, .text) } });
-    }
+    const checking = statusSlot(body_small);
 
     _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 8, .h = 12 } });
 
@@ -359,6 +320,52 @@ pub fn dialog(id: dvui.Id) fizzy.core.dialogs.Error!bool {
     }
 
     return true;
+}
+
+/// Three states for the status slot:
+///  1. `checking`        — looping spinner (worker thread is in flight).
+///  2. `finish_elapsed`  — pop → check finish animation right after the
+///                          worker publishes a successful outcome, same
+///                          feedback as a completed file save.
+///  3. otherwise          — static status text.
+/// Returns whether a check is in flight (the buttons hide while it is).
+fn statusSlot(body_small: dvui.Font) bool {
+    const checking: bool = if (comptime auto_update.impl) check_in_flight.load(.acquire) else false;
+    const finish_elapsed: ?i128 = blk: {
+        if (comptime !auto_update.impl) break :blk null;
+        const start = check_complete_at_ns orelse break :blk null;
+        const elapsed = fizzy.core.perf.nanoTimestamp() - start;
+        if (elapsed >= check_done_flash_duration_ns) {
+            check_complete_at_ns = null;
+            break :blk null;
+        }
+        break :blk elapsed;
+    };
+
+    {
+        var spinner_slot = dvui.box(@src(), .{ .dir = .vertical }, .{
+            .expand = .none,
+            .min_size_content = .{ .w = 24, .h = 24 },
+            .gravity_x = 0.5,
+        });
+        defer spinner_slot.deinit();
+
+        if (checking or finish_elapsed != null) {
+            fizzy.core.dialogs.bubbleSpinner(@src(), .{
+                .expand = .none,
+                .min_size_content = .{ .w = 24, .h = 24 },
+                .gravity_x = 0.5,
+                .color_text = .{ .color = dvui.themeGet().color(.control, .text) },
+            }, .{ .complete_elapsed_ns = finish_elapsed });
+            dvui.refresh(null, @src(), null);
+        }
+    }
+
+    if (!checking) {
+        dvui.labelNoFmt(@src(), status_line, .{}, .{ .font = body_small, .gravity_x = 0.5, .color_text = .{ .color = dvui.themeGet().color(.control, .text) } });
+    }
+
+    return checking;
 }
 
 pub fn callAfter(_: dvui.Id, _: dvui.enums.DialogResponse) !void {
