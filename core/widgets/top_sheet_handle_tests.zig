@@ -12,14 +12,17 @@ var offset: f32 = 0;
 var clicks: usize = 0;
 var finger: dvui.Point = .{};
 var scale: f32 = 1;
+var show_handle: bool = true;
 
 fn testFrame() !dvui.App.Result {
     var column = dvui.box(@src(), .{}, .{ .expand = .both });
     defer column.deinit();
-    var handle = TopSheet.Handle.init(@src(), &sheet, .{ .expand = .horizontal, .min_size_content = .{ .h = 60 } });
-    scale = handle.box.data().borderRectScale().s;
-    if (dvui.button(@src(), "Button", .{}, .{ .min_size_content = .{ .w = 80, .h = 40 } })) clicks += 1;
-    handle.deinit();
+    if (show_handle) {
+        var handle = TopSheet.Handle.init(@src(), &sheet, .{ .expand = .horizontal, .min_size_content = .{ .h = 60 } });
+        scale = handle.box.data().borderRectScale().s;
+        if (dvui.button(@src(), "Button", .{}, .{ .min_size_content = .{ .w = 80, .h = 40 } })) clicks += 1;
+        handle.deinit();
+    }
     var area = ScrollArea.initWith(@src(), .{ .scroll_info = &page, .horizontal = .none, .vertical_bar = .hide }, .{ .expand = .both }, .{ .lead = TopSheet.lead(&sheet) });
     _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 100, .h = 20000 } });
     area.deinit();
@@ -38,6 +41,7 @@ fn reset() !void {
     sheet = .{ .range = 180, .seen_range = 180 };
     page = .{};
     clicks = 0;
+    show_handle = true;
     try dvui.testing.settle(testFrame);
     page.viewport.y = 400;
     try dvui.testing.settle(testFrame);
@@ -124,6 +128,48 @@ test "a pull on the bar opens the sheet over a scrolled page" {
     try std.testing.expectEqual(before_cancel, sheet.extent);
 }
 
+test "a cancelled bar drag lets the page move the sheet" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    for (0..4) |cancel| {
+        try reset();
+        try pointer(.press, 200, 20);
+        try move(0, 60, 16);
+        try std.testing.expect(sheet.held);
+        const l = TopSheet.lead(&sheet);
+        if (cancel == 0) {
+            dvui.captureMouse(null, dvui.currentWindow().event_num);
+        } else if (cancel == 1) {
+            // Native focus loss delivers a synthetic release for each active touch.
+            try lift();
+        } else if (cancel == 2) {
+            show_handle = false;
+            // Capture expires at begin after a whole frame without its widget.
+            try frame(16);
+            try frame(16);
+        } else {
+            // Another finger retaining the same handle must not keep this drag alive.
+            const cw = dvui.currentWindow();
+            const capture = dvui.captureMouseGet();
+            _ = try cw.addEventPointer(.{ .button = .touch1, .action = .press, .xynorm = .{ .x = 0.7, .y = 0.05 } });
+            dvui.captureMouseCustom(capture, cw.event_num);
+            _ = try cw.addEventPointer(.{ .button = .touch0, .action = .release });
+            dvui.captureMouse(null, cw.event_num);
+        }
+        const before = l.extent(l.ctx);
+        try std.testing.expect(!sheet.held);
+        try std.testing.expect(!sheet.pressed);
+        try std.testing.expectEqual(@as(f32, 20), l.take(l.ctx, 20));
+        try std.testing.expectEqual(before - 20, sheet.extent);
+        try pointer(.press, 150, 250);
+        const before_page_pull = sheet.extent;
+        try move(0, -15, 16);
+        try std.testing.expectEqual(before_page_pull - 15, sheet.extent);
+        try std.testing.expectEqual(@as(f32, 400), offset);
+        try lift();
+    }
+}
+
 test "a drag that starts on a bar button pulls, and the button does not click" {
     var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
     defer t.deinit();
@@ -167,12 +213,13 @@ test "a release rests by speed, then by place" {
         try move(0, case.at - delta * 5, 16);
         try frame(100);
         if (case.speed != 0) {
-            // Lift at the final motion timestamp: five real 16 ms samples measure 600 pt/s.
-            for (0..5) |i| try move(0, delta, if (i == 4) 0 else 16);
+            // Five 16 ms moves, then 16 ms stationary before lift. The 50 ms
+            // window contains 34 ms of motion, including an interpolated sample.
+            for (0..5) |_| try move(0, delta, 16);
         }
         try std.testing.expectApproxEqAbs(case.at, sheet.extent, 0.001);
         try lift();
-        try std.testing.expectApproxEqAbs(case.speed, sheet.velocity.last_debug.vel, 0.01);
+        try std.testing.expectApproxEqAbs(case.speed * 34 / 50, sheet.velocity.last_debug.vel, 0.01);
         try finish(case.target);
         try std.testing.expectEqual(@as(f32, 400), offset);
     }

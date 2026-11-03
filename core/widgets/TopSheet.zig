@@ -58,7 +58,7 @@ pub fn openness(state: *const State) f32 {
 fn sync(ctx: *anyopaque) *State {
     const state: *State = @ptrCast(@alignCast(ctx));
     // Capture loss cancels ownership even when the page reads the lead before the handle draws.
-    if (state.owns_capture and state.handle_id != null and !dvui.captured(state.handle_id.?)) {
+    if (state.owns_capture and state.handle_id != null and dvui.currentWindow().captureId(state.finger) != state.handle_id) {
         state.held = false;
         state.pressed = false;
         state.owns_capture = false;
