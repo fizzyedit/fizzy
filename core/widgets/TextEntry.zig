@@ -4,6 +4,8 @@
 //! the mouse, text editing, selection handles and menu remain dvui's.
 const std = @import("std");
 const dvui = @import("dvui");
+const field_edit = @import("glass").field_edit;
+const field_hints = @import("glass").field_hints;
 const TouchHold = @import("../TouchHold.zig");
 const touch = @import("touch.zig");
 const SelectableText = @import("SelectableText.zig");
@@ -18,6 +20,33 @@ pub fn init(src: std.lang.SourceLocation, init_opts: dvui.TextEntryWidget.InitOp
     const unhandled = touch.unhandledPresses();
     const entry = dvui.widgetAlloc(dvui.TextEntryWidget);
     entry.init(src, init_opts, opts);
+    // Unfocused fields leave edits queued so only the intended focused field consumes them.
+    if (dvui.focusedWidgetId() == entry.data().id) {
+        for (field_edit.take()) |edit| {
+            const range = switch (edit) {
+                .replace => |r| r.range,
+                .select => |r| r,
+            };
+            var start = @min(@min(range.start, range.end), entry.len);
+            var end = @min(@max(range.start, range.end), entry.len);
+            while (start > 0 and start < entry.len and
+                std.unicode.utf8ByteSequenceLength(entry.text[start]) == error.Utf8InvalidStartByte) : (start -= 1)
+            {}
+            while (end < entry.len and
+                std.unicode.utf8ByteSequenceLength(entry.text[end]) == error.Utf8InvalidStartByte) : (end += 1)
+            {}
+            entry.textLayout.selection.start = start;
+            entry.textLayout.selection.end = end;
+            entry.textLayout.selection.cursor = end;
+            switch (edit) {
+                .replace => |r| entry.textTyped(r.text, false),
+                .select => {
+                    entry.textLayout.scroll_to_cursor = true;
+                    dvui.refresh(null, @src(), entry.data().id);
+                },
+            }
+        }
+    }
     const self: TextEntry = .{
         .entry = entry,
         .hold = dvui.dataGetPtrDefault(null, entry.data().id, "_hold", TouchHold, .{}),
@@ -28,6 +57,19 @@ pub fn init(src: std.lang.SourceLocation, init_opts: dvui.TextEntryWidget.InitOp
     entry.processEvents();
     self.processTouch(unhandled, touch_editing);
     entry.draw();
+    if (dvui.focusedWidgetId() == entry.data().id) {
+        const sel = entry.textLayout.selection;
+        const text = entry.getText();
+        // Limit the borrowed window to 4 KB, with context on both sides of the caret.
+        var offset: usize = if (text.len <= 4096) 0 else @min(sel.cursor -| 2048, text.len - 4096);
+        while (offset > 0 and std.unicode.utf8ByteSequenceLength(text[offset]) == error.Utf8InvalidStartByte) : (offset -= 1) {}
+        field_edit.publish(.{
+            .text = text[offset..@min(text.len, offset + 4096)],
+            .offset = offset,
+            .sel = .{ .start = if (sel.cursor == sel.start) sel.end else sel.start, .end = sel.cursor },
+            .hints = field_hints.current() orelse .{},
+        });
+    }
     return self;
 }
 

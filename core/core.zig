@@ -52,6 +52,7 @@ pub const motion = @import("glass").motion;
 /// The clock motion runs on, and the wall time of the frame for what means real time.
 pub const MotionClock = @import("glass").MotionClock;
 /// Keyboard preferences of the focused field, shared through the dvui window.
+pub const field_edit = @import("glass").field_edit;
 pub const field_hints = @import("glass").field_hints;
 /// Event times on the wall clock, shared through the dvui window (plugin images included).
 pub const input_time = @import("glass").input_time;
