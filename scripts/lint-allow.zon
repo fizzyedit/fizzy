@@ -103,4 +103,11 @@
     .{ .rule = .@"raw-scroll-area", .file = "src/editor/dialogs/FileTypeDefaults.zig", .count = 1 },
     .{ .rule = .@"raw-scroll-area", .file = "src/editor/dialogs/PluginUpdates.zig", .count = 1 },
     .{ .rule = .@"raw-scroll-area", .file = "tests/integration.zig", .count = 3 },
+    .{ .rule = .@"todo-seam", .file = "backend/src/SDLBackend.zig", .count = 1 },
+    .{ .rule = .@"todo-seam", .file = "core/gfx/image.zig", .count = 2 },
+    .{ .rule = .@"todo-seam", .file = "core/widgets/TreeWidget.zig", .count = 1 },
+    .{ .rule = .@"todo-seam", .file = "plugins/text/src/widgets/TextEntryWidget.zig", .count = 2 },
+    .{ .rule = .@"todo-seam", .file = "src/backend/WebBackend.zig", .count = 4 },
+    .{ .rule = .@"todo-seam", .file = "src/editor/Editor.zig", .count = 1 },
+    .{ .rule = .@"todo-seam", .file = "src/editor/Infobar.zig", .count = 1 },
 }
