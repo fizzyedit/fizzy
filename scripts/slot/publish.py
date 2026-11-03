@@ -37,7 +37,7 @@ def labels(repo, number, wanted, remove=()):
             gh('issue', 'edit', str(number), '--repo', repo, '--remove-label', label)
 
 
-def push(job, out, result, branch, expected=None):
+def push(job, out, result, branch, expected=None, replace=False):
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._/-]*', branch) or '..' in branch:
         raise ValueError('invalid branch')
     destination = target(job)['repo']
@@ -64,6 +64,9 @@ def push(job, out, result, branch, expected=None):
             raise ValueError('PR head moved')
         if expected:
             run(*git, 'merge-base', '--is-ancestor', expected, 'HEAD', cwd=tree)
+        if replace and remote_sha:
+            # Caller verified no PR (open or closed) uses this branch: a stale leftover, replace it.
+            expected = remote_sha[0]
         lease = f'--force-with-lease=refs/heads/{branch}:{expected or ""}'
         p = subprocess.run([*git, 'push', lease, url, f'HEAD:refs/heads/{branch}'],
                            cwd=tree, capture_output=True)
@@ -113,7 +116,7 @@ def publish(job_dir, out):
             if destination['gate']:
                 dispatch_review(prs[0]['number'])
             return
-        push(job, out, result, job['branch'])
+        push(job, out, result, job['branch'], replace=True)
         body = result['pr_body'] + f'\n\nPart of {repo}#{number}\n\n' + marker
         args = ['pr', 'create', '--repo', target_repo, '--base', destination['branch'],
                 '--head', job['branch'], '--title', result['title'],
