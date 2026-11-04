@@ -2224,7 +2224,8 @@ fn addTests(
             });
             test_integration_step.dependOn(&b.addRunArtifact(t).step);
             check_integration_step.dependOn(&t.step);
-            if (entry[1] == plugin_loader_module) test_step.dependOn(&b.addRunArtifact(t).step);
+            if (entry[1] == plugin_loader_module or entry[1] == glass_tests_module or
+                entry[1] == split_tests_module) test_step.dependOn(&b.addRunArtifact(t).step);
             if (win_libc.needs_setup) if (msvcup_before_compile) |m| t.step.dependOn(&m.step);
         }
     }
