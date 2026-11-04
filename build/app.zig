@@ -1429,6 +1429,18 @@ fn addTests(
         .filters = test_filters,
     }));
 
+    const field_edit_module = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("backend/src/glass/field_edit.zig"),
+    });
+    field_edit_module.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
+    try unit_test_artifacts.append(b.allocator, b.addTest(.{
+        .name = "fizzy-field-edit-tests",
+        .root_module = field_edit_module,
+        .filters = test_filters,
+    }));
+
     for (unit_test_artifacts.items) |unit_test| {
         test_step.dependOn(&b.addRunArtifact(unit_test).step);
         check_step.dependOn(&unit_test.step);
