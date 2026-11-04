@@ -19,6 +19,27 @@ TARGETS = {
 }
 
 
+ALLOWED_REF_OWNERS = ('fizzyedit',)
+
+
+def validate_refs(refs):
+    """Validate reference checkouts against trusted owner policy."""
+    try:
+        if not isinstance(refs, list):
+            raise JobError('invalid refs')
+        for ref in refs:
+            name = ref['name']
+            if not re.fullmatch(r'[A-Za-z0-9_.-]+', name) or '..' in name or name == '.':
+                raise JobError('invalid ref name')
+            repo = re.fullmatch(r'([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)', ref['repo'])
+            if not repo or repo.group(1) not in ALLOWED_REF_OWNERS:
+                raise JobError('ref repo not allowed')
+            if not re.fullmatch(r'[0-9a-fA-F]{40}', ref['sha']):
+                raise JobError('invalid ref sha')
+    except (KeyError, TypeError) as exc:
+        raise JobError(f'invalid ref: {exc}') from exc
+
+
 def target(job):
     """Resolve an allowed repository and its fixed base branch."""
     try:
