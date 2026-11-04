@@ -47,9 +47,12 @@ def unlock_keychain():
         return
     pw = Path.home() / '.fizzy-keychain-pass'
     if pw.is_file():
-        subprocess.run(['security', 'unlock-keychain', '-p', pw.read_text().strip(),
-                        str(Path.home() / 'Library/Keychains/login.keychain-db')],
-                       stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+        result = subprocess.run(['security', 'unlock-keychain',
+                                 str(Path.home() / 'Library/Keychains/login.keychain-db')],
+                                input=pw.read_text().strip(), text=True,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, check=False)
+        if result.returncode != 0:
+            print(result.stderr.strip(), file=sys.stderr)
 
 
 def rmtree(path, ignore_errors=False):
