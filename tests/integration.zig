@@ -6500,7 +6500,7 @@ test "liquid field: groups are the shapes that touch, each drawn as its own quad
     try std.testing.expectEqual(@as(u8, 2), g.size[0]);
     try std.testing.expectEqual(@as(u8, 1), g.size[1]);
     // The uniforms are the shader's `uData`: its header, then three vec4s a shape.
-    try std.testing.expectEqual(@as(usize, (11 + 3 * LF.max_shapes) * 16), @sizeOf(LF.Uniforms));
+    try std.testing.expectEqual(@as(usize, (12 + 3 * LF.max_shapes) * 16), @sizeOf(LF.Uniforms));
     const u = f.pack(.{ .x = 0, .y = 0, .w = 400, .h = 100 }, false, g.order[0..f.len]);
     try std.testing.expectEqual(@as(f32, 22), u.shapes[1][0][0]);
 }

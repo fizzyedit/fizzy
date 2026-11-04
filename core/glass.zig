@@ -74,7 +74,8 @@ pub const LayerOptions = struct {
     witness: ?u64 = null,
     /// The size the items are growing into, physical: a menu or window growing open. Its capture is made that size from the first frame (`BlurBackdrop.Pane.reach`), so one set of targets serves the whole growth.
     reach: ?dvui.Size.Physical = null,
-    /// The items' shadow rings' share, 0…1, drawn after the glass so it never blurs them in.
+    /// The shadow the joined glass casts, drawn by the glass program: one per joined piece, none
+    /// inside another. The floating surfaces' shadow (`dialogs.surfaceShadow`) at this share, 0…1.
     shadow: f32 = 0,
 };
 
@@ -198,13 +199,15 @@ const Job = struct {
         const arena = dvui.currentWindow().arena();
         var fields: std.ArrayList(LiquidField) = .empty;
         var groups: std.ArrayList(u16) = .empty;
+        const shadow = job.castShadow();
+        const shadow_reach = if (shadow.alpha > 0 and job.opts.edge == null) shadow.fade_px + @max(@abs(shadow.offset[0]), @abs(shadow.offset[1])) else 0;
         for (job.items.items) |item| {
             const box: Box = switch (item.shape) {
                 .box => |b| b,
                 .panel => |p| .{ .rect = p.rect, .radii = p.radii },
             };
-            // Quadratic smooth min lowers distance by at most merge_px / 4, so joined ink is that close to some piece; reaches adds the 1 px fringe.
-            const reach = if (item.group != 0) job.opts.merge * job.scale / 4 else 0;
+            // Quadratic smooth min lowers distance by at most merge_px / 4, so joined ink is that close to some piece; reaches adds the 1 px fringe. The shadow reaches past that.
+            const reach = (if (item.group != 0) job.opts.merge * job.scale / 4 else 0) + shadow_reach;
             if (!reaches(box.rect.insetAll(-reach))) continue;
             // Only a group's newest field is open; earlier ones have filled or taken a panel.
             var open: ?usize = null;
@@ -242,22 +245,14 @@ const Job = struct {
             record.capture();
             BlurBackdrop.fieldsPane(job.id, fields.items, job.scale, job.pane);
         }
-        // The rings over the glass, never under it, so none lands on a neighbour drawn earlier.
-        if (job.opts.shadow > 0) {
-            const bs = dialogs.surfaceShadow();
-            const s = job.scale;
-            for (job.items.items) |item| {
-                const box: Box = switch (item.shape) {
-                    .box => |b| b,
-                    .panel => |p| .{ .rect = p.rect, .radii = p.radii },
-                };
-                if (!reaches(box.rect.insetAll(-bs.fade * s))) continue;
-                record.shadow();
-                const r = box.radii;
-                const corners: dvui.CornerRect = .{ .tl = .round(r[0] / s), .tr = .round(r[1] / s), .br = .round(r[2] / s), .bl = .round(r[3] / s) };
-                dialogs.glassShadow(box.rect, corners, s, bs, job.opts.shadow);
-            }
-        }
+    }
+
+    /// The floating surfaces' shadow at the layer's share, physical: what each field casts.
+    fn castShadow(job: *const Job) LiquidField.Shadow {
+        if (job.opts.shadow <= 0) return .{};
+        const bs = dialogs.surfaceShadow();
+        const s = job.scale;
+        return .{ .alpha = bs.alpha * job.opts.shadow, .fade_px = bs.fade * s, .offset = .{ bs.offset.x * s, bs.offset.y * s } };
     }
 
     fn newField(job: *const Job, group: u16) LiquidField {
@@ -265,6 +260,7 @@ const Job = struct {
         return .{
             .scale = job.scale,
             .merge_px = if (group == 0) 0 else o.merge * job.scale,
+            .shadow = job.castShadow(),
             .role = o.role,
             .tint = o.tint,
             .mix = o.mix,
@@ -280,13 +276,13 @@ const Job = struct {
 
 /// What the replay drew, for tests: nothing in other builds.
 const record = if (builtin.is_test) struct {
-    const Tag = enum { glass, shadow, item, float_core, float_dvui };
+    const Tag = enum { glass, item, float_core, float_dvui };
     var jobs: usize = 0;
     var captures: usize = 0;
     var glass_shapes: usize = 0;
-    var shadow_shapes: usize = 0;
     var field_lens: [8]usize = undefined;
     var field_merge: [8]f32 = undefined;
+    var field_shadow: [8]f32 = undefined;
     var fields: usize = 0;
     var panels: usize = 0;
     var radii: [64][4]f32 = undefined;
@@ -299,7 +295,6 @@ const record = if (builtin.is_test) struct {
         jobs = 0;
         captures = 0;
         glass_shapes = 0;
-        shadow_shapes = 0;
         fields = 0;
         panels = 0;
         order_len = 0;
@@ -310,7 +305,6 @@ const record = if (builtin.is_test) struct {
     }
     fn beginJob() void {
         glass_shapes = 0;
-        shadow_shapes = 0;
         fields = 0;
         panels = 0;
         jobs += 1;
@@ -320,6 +314,7 @@ const record = if (builtin.is_test) struct {
         if (fields < field_lens.len) {
             field_lens[fields] = f.len;
             field_merge[fields] = f.merge_px;
+            field_shadow[fields] = f.shadow.alpha;
         }
         fields += 1;
         if (f.panel != null) panels += 1;
@@ -332,17 +327,12 @@ const record = if (builtin.is_test) struct {
             glass_shapes += 1;
         }
     }
-    fn shadow() void {
-        shadow_shapes += 1;
-        log(.shadow);
-    }
     fn capture() void {
         captures += 1;
     }
 } else struct {
     fn beginJob() void {}
     fn field(_: *const LiquidField) void {}
-    fn shadow() void {}
     fn capture() void {}
 };
 
@@ -391,7 +381,7 @@ fn recordFill(ctx: ?*anyopaque) void {
 }
 
 fn fill(tag: record.Tag) void {
-    dvui.deferRender(@ptrFromInt(@backingInt(tag) + 1), recordFill);
+    dvui.deferRender(@ptrFromInt(@as(usize, @backingInt(tag)) + 1), recordFill);
 }
 
 fn addItems(l: *Layer) !void {
@@ -463,8 +453,6 @@ test "the glass is under the items' contents" {
         items += 1;
     }
     try std.testing.expectEqual(3, items);
-    // The rings come with the glass, before any item's fill.
-    for (order[1 .. 1 + record.shadow_shapes]) |tag| try std.testing.expectEqual(record.Tag.shadow, tag);
 }
 
 test "immediate and deferred alike" {
@@ -521,15 +509,17 @@ test "a floating window opened inside a layer draws normally" {
     try std.testing.expectEqual(record.Tag.float_dvui, order[order.len - 1]);
 }
 
-test "30 items: glass and shadows both drawn at replay" {
+test "30 items: glass drawn at replay, each field casting the shadow" {
     var t = try dvui.testing.init(.{});
     defer t.deinit();
     resetTest();
     test_n = 30;
-    test_shadow = 1;
+    test_shadow = 0.5;
     _ = try dvui.testing.step(immediateFrame);
     try std.testing.expectEqual(30, record.glass_shapes);
-    try std.testing.expectEqual(30, record.shadow_shapes);
+    try std.testing.expect(record.fields >= 2);
+    const alpha = dialogs.surfaceShadow().alpha * test_shadow;
+    for (record.field_shadow[0..@min(record.fields, record.field_shadow.len)]) |a| try std.testing.expectEqual(alpha, a);
 }
 
 test "16 items of one group: two fields, one capture" {

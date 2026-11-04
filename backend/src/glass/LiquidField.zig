@@ -37,7 +37,7 @@ const LiquidField = @This();
 pub const max_shapes = 16;
 
 /// Uniform vec4s before the shapes (`Uniforms`), and per shape.
-const header_vec4s = 11;
+const header_vec4s = 12;
 const shape_vec4s = 3;
 
 /// A piece of glass. Physical pixels, window coordinates.
@@ -255,6 +255,9 @@ len: usize = 0,
 edge: ?Edge = null,
 /// Physical pixels: how far apart two shapes still bridge. 0 never joins.
 merge_px: f32 = 0,
+/// The shadow the joined glass casts on what is under it, drawn by the punch pass outside the
+/// glass only: one for the joined outline, however many pieces it holds. None with an `edge`.
+shadow: Shadow = .{},
 scale: f32 = 1,
 /// The pane's colour, mixed with the frost: `(1 − mix) · frost + mix · tint`, as `BlurBackdrop.Pane`.
 tint: ?dvui.Color = null,
@@ -304,6 +307,21 @@ pub const Edge = struct {
     cut: bool = false,
 };
 
+/// A black shadow from the joined outline: `alpha · (1 − x)²` at `x` of `fade_px` out from the
+/// outline moved by `offset` (physical pixels), as `liquid_glass.drawShadow` falls, scaled by the
+/// pieces' lens, so flat glass casts none.
+pub const Shadow = struct {
+    alpha: f32 = 0,
+    fade_px: f32 = 0,
+    offset: [2]f32 = .{ 0, 0 },
+};
+
+/// Whether the shadow draws: an alpha that shows, a fade of half a pixel or more, and no edge (a
+/// shadow round each piece would lie across its neck to the edge).
+fn shadowOn(self: *const LiquidField) bool {
+    return self.shadow.alpha >= 0.002 and self.shadow.fade_px >= 0.5 and self.edge == null;
+}
+
 /// Pixels past its place's outline the outside of the place begins: `EDGE_GAP` in the program.
 const edge_gap: f32 = 1;
 
@@ -328,9 +346,10 @@ pub fn bounds(self: *const LiquidField) dvui.Rect.Physical {
 
 /// `r`, some shapes' rect, with room for what joins them: the bridges between them, and with an
 /// edge, the neck to it (as far as a shape can be from the outline and still join it, half the
-/// merge width), kept inside the place.
+/// merge width), kept inside the place; and the shadow's fade and offset where it casts one.
 fn withReach(self: *const LiquidField, r: dvui.Rect.Physical) dvui.Rect.Physical {
-    const e = self.edge orelse return r.outsetAll(self.merge_px * 0.25 + 1);
+    const shadow = if (self.shadowOn()) self.shadow.fade_px + @max(@abs(self.shadow.offset[0]), @abs(self.shadow.offset[1])) else 0;
+    const e = self.edge orelse return r.outsetAll(self.merge_px * 0.25 + 1 + shadow);
     return r.outsetAll(self.merge_px * 0.5 + 1).intersect(e.rect.outsetAll(1));
 }
 
@@ -425,6 +444,8 @@ pub const Uniforms = extern struct {
     /// corners (`rim_extent`, physical pixels). All 0: the lit edge is off, and a drop's edge
     /// reads only the light.
     edge: [4]f32 = @splat(0),
+    /// The shadow (`Shadow`): its fade, physical pixels; its offset, x and y; its alpha, 0 for none.
+    shadow: [4]f32 = @splat(0),
     shapes: [max_shapes][shape_vec4s][4]f32,
 
     pub fn vec4s(self: *const Uniforms) [*]const [4]f32 {
@@ -475,6 +496,7 @@ pub fn pack(self: *const LiquidField, covered: dvui.Rect.Physical, has_sharp: bo
     u.light = lanes.light;
     u.edge = lanes.edge;
     u.widths[1..4].* = lanes.widths;
+    if (self.shadowOn()) u.shadow = .{ self.shadow.fade_px, self.shadow.offset[0], self.shadow.offset[1], self.shadow.alpha };
     @memset(std.mem.asBytes(&u.shapes), 0);
     for (order, 0..) |i, slot| {
         const sh = self.shapeAt(i);
@@ -782,6 +804,8 @@ pub const Sample = struct {
     edge_line: f32,
     edge_glow: f32,
     edge_shade: f32,
+    /// The shadow the glass casts here, the punch pass's `sh`: 0 where the coverage is 1.
+    shadow: f32,
 };
 
 /// `sampleWith` the look the app published for this field's role, else the default.
@@ -925,9 +949,10 @@ pub fn sampleWith(self: *const LiquidField, p: dvui.Point.Physical, l: glass_loo
         glow = lanes.edge[1] * lit * band(-dist, lanes.widths[0], lanes.widths[1]) * on;
         shade = lanes.edge[2] * (1 - @abs(lf)) * band(-dist, 0, 2 * px) * on;
     }
+    const coverage = std.math.clamp(0.5 - @max(d, in_place) / edgeRamp(self.scale), 0, 1);
     return .{
         .d = dist,
-        .coverage = std.math.clamp(0.5 - @max(d, in_place) / edgeRamp(self.scale), 0, 1),
+        .coverage = coverage,
         .out = .{ .x = out[0], .y = out[1] },
         .steep = @exp(-soft / liquid_glass.depthPx(self.look(), rim)),
         .blur = std.math.lerp(m1[0], m2[0], wm),
@@ -937,7 +962,40 @@ pub fn sampleWith(self: *const LiquidField, p: dvui.Point.Physical, l: glass_loo
         .edge_line = line,
         .edge_glow = glow,
         .edge_shade = shade,
+        .shadow = self.shadowAt(p, coverage, lens),
     };
+}
+
+/// The program's `sh` at `p`, where the glass covers `coverage` and its lens is `lens`: one
+/// falloff of the joined outline, moved by the offset.
+fn shadowAt(self: *const LiquidField, p: dvui.Point.Physical, coverage: f32, lens: f32) f32 {
+    if (!self.shadowOn() or coverage >= 1) return 0;
+    const s = self.shadow;
+    const x = std.math.clamp(self.outlineAt(.{ p.x - s.offset[0], p.y - s.offset[1] }) / s.fade_px, 0, 1);
+    return s.alpha * (1 - x) * (1 - x) * std.math.clamp(lens, 0, 1);
+}
+
+/// The program's `outlineAt`: the joined outline's signed distance at `q`, from the two nearest
+/// shapes as `sampleWith` finds them, without the place.
+fn outlineAt(self: *const LiquidField, q: [2]f32) f32 {
+    const big = std.math.floatMax(f32);
+    var d1: f32 = big;
+    var d2: f32 = big;
+    for (0..self.shapeCount()) |shape_index| {
+        const sh = self.shapeAt(shape_index);
+        const c: [2]f32 = .{ sh.rect.x + sh.rect.w / 2, sh.rect.y + sh.rect.h / 2 };
+        const half: [2]f32 = .{ sh.rect.w / 2, sh.rect.h / 2 };
+        const lim = @min(half[0], half[1]);
+        const radii: [4]f32 = .{ @min(sh.radii[0], lim), @min(sh.radii[1], lim), @min(sh.radii[2], lim), @min(sh.radii[3], lim) };
+        var g: [2]f32 = undefined;
+        const d = if (shape_index == self.len and self.panel != null) panelDistance(self.panel.?, q, 0, &g) else roundBox(.{ q[0] - c[0], q[1] - c[1] }, half, radii, &g);
+        if (d < d1) {
+            d2 = d1;
+            d1 = d;
+        } else if (d < d2) d2 = d;
+    }
+    var w: f32 = undefined;
+    return smin(d1, d2, @max(self.merge_px, 0.0001), &w);
 }
 
 fn smoothstep(a: f32, b: f32, x: f32) f32 {

@@ -15,7 +15,7 @@
 // sharp picture at 1, the uniforms as one array. On the web the same, by the names
 // `core.gfx.programs` gives them (the generator renames them).
 
-#define G 11
+#define G 12
 #define MAX_SHAPES 16
 // How far past its place's outline the outside of the place begins, in pixels: far enough that no
 // sliver of it shows inside, near enough that a shape at the outline still runs into it.
@@ -154,6 +154,26 @@ float alongEnd(float2 p, float4 s0, float4 rad, float2 L, float ext, float ramp)
     return 1.0 - smoothstep(max(ext - max(ramp, 1.0), 0.0), ext, length(p - P));
 }
 
+// The joined outline's signed distance at `q`: the two nearest shapes of the quad's group, each
+// measured as the loop in `main` measures it, joined by the smooth minimum. Without the place,
+// which casts no shadow (`LiquidField.shadow`). `LiquidField.outlineAt` mirrors it.
+float outlineAt(float2 q, int first, int count)
+{
+    float d1 = 1e9; float d2 = 1e9;
+    for (int i = first; i < first + count && i < MAX_SHAPES; i++) {
+        float4 s0 = uData[G + 3 * i];
+        float4 s1 = uData[G + 3 * i + 1];
+        float4 s2 = uData[G + 3 * i + 2];
+        float2 g;
+        float d;
+        if (s2.w < -0.5 || s2.w > 3.5) d = panelDistance(q, 0.0, g);
+        else d = sdRoundBox(q - s0.xy, s0.zw, min(s1, (float4)min(s0.z, s0.w)), g);
+        if (d < d1) { d2 = d1; d1 = d; } else if (d < d2) { d2 = d; }
+    }
+    float w;
+    return smin(d1, d2, max(uData[1].x, 0.0001), w);
+}
+
 float noise(float2 p)
 {
     return frac(52.9829189 * frac(dot(p, float2(0.06711056, 0.00583715))));
@@ -174,6 +194,7 @@ float4 main(PSInput input) : SV_Target0
     float4 g8 = uData[8]; // how dark the window's hairline edge is; the lit edge's line width, glow width, and the length of its falloff ramp
     float4 g9 = uData[9]; // the light: the unit vector toward it, its height, the far side's share
     float4 g10 = uData[10]; // the lit edge: line, glow, shade, and how far the light runs along the outline (0: the lit edge is off, the drop's edge reads only the light)
+    float4 g11 = uData[11]; // the shadow (`LiquidField.Shadow`): its fade, its offset, its alpha (0: none)
     float4 g6 = uData[6]; // opaque window (+1); the lens: dispersion, a drop's diagonal light (0: a window's hairline), the band's cap
     // Apple's lens (`glass_look.inApp`): the picture pulled inward from a band near the rim,
     // magnified and, past a bend of 1, folded there. Off, the earlier glass: pulled from outside.
@@ -254,8 +275,17 @@ float4 main(PSInput input) : SV_Target0
     bool lowRes = px <= 1.25;
     float aa = lowRes ? 1.4 : 1.0;
     float cov = clamp(0.5 - max(D, inPlace) / aa, 0.0, 1.0);
+    // The shadow the joined glass casts (`liquid_glass.drawShadow`'s falloff), from its outline
+    // moved by the offset, as much as the pieces are a lens: one for the joined glass, however many
+    // pieces it holds. The punch alone draws it, outside the glass: `dst · (1 − cov) · (1 − sh)`.
+    float sh = 0.0;
+    if (g11.w > 0.0 && cov < 1.0) {
+        float x = clamp(outlineAt(p - g11.yz, first, count) / g11.x, 0.0, 1.0);
+        sh = g11.w * (1.0 - x) * (1.0 - x) * clamp(lerp(m1.y, m2.y, wm), 0.0, 1.0);
+    }
+    if (cov <= 0.0 && sh <= 0.002) discard;
+    if (input.color.r < 0.5) return float4(0.0, 0.0, 0.0, cov + (1.0 - cov) * sh);
     if (cov <= 0.0) discard;
-    if (input.color.r < 0.5) return float4(0.0, 0.0, 0.0, cov);
 
     float4 mat = lerp(m1, m2, wm);
     float2 outv = lerp(o1, o2, wf);
