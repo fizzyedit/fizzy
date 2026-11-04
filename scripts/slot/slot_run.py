@@ -90,6 +90,11 @@ def contract_doc(work):
 
 
 def checkout(job, job_dir, home):
+    refs = job.get('refs', [])
+    try:
+        common.validate_refs(refs)
+    except common.JobError as exc:
+        raise BrokenSlot(str(exc)) from exc
     work = home / 'work' / job['id']
     work.parent.mkdir(parents=True, exist_ok=True)
     if work.exists():
@@ -117,8 +122,24 @@ def checkout(job, job_dir, home):
         if git(work, 'rev-parse', 'HEAD').decode().strip() != job['base']['sha']:
             raise BrokenSlot('HEAD differs from base.sha')
         contract_doc(work)
+        if refs:
+            exclude = work / '.git' / 'info' / 'exclude'
+            exclude.parent.mkdir(parents=True, exist_ok=True)
+            existing = exclude.read_text() if exclude.exists() else ''
+            if '.reference/' not in existing.splitlines():
+                with exclude.open('a') as f:
+                    f.write(('\n' if existing and not existing.endswith('\n') else '') + '.reference/\n')
+        for ref in refs:
+            reference = work / '.reference' / ref['name']
+            reference.mkdir(parents=True)
+            git(reference, 'init')
+            git(reference, 'fetch', '--no-tags', '--',
+                f'https://github.com/{ref["repo"]}.git', ref['sha'])
+            git(reference, 'checkout', '--detach', ref['sha'])
+            if git(reference, 'rev-parse', 'HEAD').decode().strip().lower() != ref['sha'].lower():
+                raise BrokenSlot('HEAD differs from ref.sha')
         return work
-    except (OSError, subprocess.CalledProcessError) as exc:
+    except (OSError, subprocess.CalledProcessError, BrokenSlot) as exc:
         rmtree(work, ignore_errors=True)
         raise BrokenSlot('fetch/checkout failed') from exc
 

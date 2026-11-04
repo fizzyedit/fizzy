@@ -16,6 +16,102 @@ from slot import common, slot_run
 ROOT = Path(__file__).resolve().parents[1]
 
 
+class ReferenceCheckoutTests(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.home = Path(temp.name)
+        self.work = self.home / 'work' / 'refs-test'
+        self.job = dict(id='refs-test', base=dict(repo='fizzyedit/fizzy', sha='a' * 40))
+        self.ref = dict(name='example-plugin', repo='fizzyedit/example-plugin', sha='B' * 40)
+
+    def fake_git(self, cwd, *args):
+        if args[0] == 'clone':
+            (self.work / '.git' / 'info').mkdir(parents=True)
+        if args == ('rev-parse', 'HEAD'):
+            sha = self.job['base']['sha'] if cwd == self.work else self.ref['sha']
+            return (sha.lower() + '\n').encode()
+        return b''
+
+    def test_no_refs_adds_no_git_calls(self):
+        for refs in (None, []):
+            with self.subTest(refs=refs), mock.patch.object(slot_run, 'git', side_effect=self.fake_git) as git, \
+                    mock.patch.object(slot_run, 'contract_doc'):
+                if refs is not None:
+                    self.job['refs'] = refs
+                slot_run.checkout(self.job, self.home, self.home)
+                self.assertEqual(git.call_count, 6)
+                self.assertFalse((self.work / '.reference').exists())
+                self.assertFalse((self.work / '.git/info/exclude').exists())
+                slot_run.rmtree(self.work)
+
+    def test_valid_refs_checkout_and_exclude_once(self):
+        self.job['refs'] = [self.ref, {**self.ref, 'name': 'second'}]
+        with mock.patch.object(slot_run, 'git', side_effect=self.fake_git) as git, \
+                mock.patch.object(slot_run, 'contract_doc'):
+            slot_run.checkout(self.job, self.home, self.home)
+        for ref in self.job['refs']:
+            dest = self.work / '.reference' / ref['name']
+            self.assertTrue(dest.is_dir())
+            self.assertEqual([call for call in git.call_args_list if call.args[0] == dest], [
+                mock.call(dest, 'init'),
+                mock.call(dest, 'fetch', '--no-tags', '--',
+                          'https://github.com/fizzyedit/example-plugin.git', self.ref['sha']),
+                mock.call(dest, 'checkout', '--detach', self.ref['sha']),
+                mock.call(dest, 'rev-parse', 'HEAD'),
+            ])
+        self.assertEqual((self.work / '.git/info/exclude').read_text(), '.reference/\n')
+
+    def test_ref_preserves_existing_exclude(self):
+        self.job['refs'] = [self.ref]
+        for existing in ('# keep this', '# keep this\n.reference/\n'):
+            def prepare(work):
+                (work / '.git/info/exclude').write_text(existing)
+            with self.subTest(existing=existing), mock.patch.object(slot_run, 'git', side_effect=self.fake_git), \
+                    mock.patch.object(slot_run, 'contract_doc', side_effect=prepare):
+                slot_run.checkout(self.job, self.home, self.home)
+                self.assertEqual((self.work / '.git/info/exclude').read_text(),
+                                 '# keep this\n.reference/\n')
+                slot_run.rmtree(self.work)
+
+    def test_invalid_refs_fail_before_git(self):
+        invalid = [dict(repo='evil/x'), dict(name='bad/name'), dict(name='bad..name'),
+                   dict(name='..'), dict(name='.'), dict(sha='a' * 39),
+                   dict(sha='g' * 40), dict(sha='a' * 41), dict(sha=None), dict(repo=None)]
+        for changes in invalid:
+            with self.subTest(changes=changes), mock.patch.object(slot_run, 'git') as git:
+                self.job['refs'] = [self.ref, {**self.ref, **changes}]
+                with self.assertRaises(slot_run.BrokenSlot):
+                    slot_run.checkout(self.job, self.home, self.home)
+                git.assert_not_called()
+
+    def test_malformed_refs_fail_before_git(self):
+        for refs in (None, {}, 'refs', [None], [{}], [dict(name=42)],
+                     [{**self.ref, 'name': None}], [{**self.ref, 'repo': 'fizzyedit/x/y'}]):
+            with self.subTest(refs=refs), mock.patch.object(slot_run, 'git') as git:
+                self.job['refs'] = refs
+                with self.assertRaises(slot_run.BrokenSlot):
+                    slot_run.checkout(self.job, self.home, self.home)
+                git.assert_not_called()
+                self.assertFalse(self.work.exists())
+
+    def test_ref_failure_removes_checkout(self):
+        self.job['refs'] = [self.ref]
+        for failure in ('fetch', 'head'):
+            def fail(cwd, *args):
+                if cwd.parent.name == '.reference':
+                    if failure == 'fetch' and args[0] == 'fetch':
+                        raise subprocess.CalledProcessError(1, 'git')
+                    if failure == 'head' and args == ('rev-parse', 'HEAD'):
+                        return b'wrong'
+                return self.fake_git(cwd, *args)
+            with self.subTest(failure=failure), mock.patch.object(slot_run, 'git', side_effect=fail), \
+                    mock.patch.object(slot_run, 'contract_doc'):
+                with self.assertRaises(slot_run.BrokenSlot):
+                    slot_run.checkout(self.job, self.home, self.home)
+                self.assertFalse(self.work.exists())
+
+
 class SlotRunTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
