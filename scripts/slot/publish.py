@@ -78,10 +78,10 @@ def push(job, out, result, branch, expected=None, replace=False):
 
 def publish(job_dir, out):
     verdict_path = out.parent / 'verdict.json'
-    verdict = json.loads(verdict_path.read_text())
+    verdict = json.loads(verdict_path.read_bytes())
     if not os.environ.get('GH_TOKEN'):
         raise ValueError('GH_TOKEN is required')
-    job = json.loads((job_dir / 'job.json').read_text())
+    job = json.loads((job_dir / 'job.json').read_bytes())
     destination = target(job)
     target_repo = destination['repo']
     repo, number = job['issue']['repo'], job['issue']['number']
@@ -90,7 +90,7 @@ def publish(job_dir, out):
         comment(repo, number, 'REFUSED: ' + '\n'.join(verdict['reasons']), marker)
         labels(repo, number, ['stuck'])
         return
-    result = json.loads((out / 'result.json').read_text())
+    result = json.loads((out / 'result.json').read_bytes())
     def dispatch_review(pr):
         receipt = f'<!-- slot-review: {job["id"]} -->'
         comments = gh('api', '--paginate', f'repos/{repo}/issues/{number}/comments')

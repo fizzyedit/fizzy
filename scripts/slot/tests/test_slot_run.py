@@ -223,6 +223,12 @@ class SlotRunTests(unittest.TestCase):
         slot_run.rmtree(tree)
         self.assertFalse(tree.exists())
 
+    def test_read_agent_drops_leading_bom(self):
+        out = Path(self.temp.name) / 'bom-out'
+        (out / 'agent').mkdir(parents=True)
+        (out / 'agent' / 'result.json').write_bytes(b'\xef\xbb\xbf{"ok": true}')
+        self.assertEqual(json.loads(slot_run.read_agent(out, 'result.json')), dict(ok=True))
+
     def test_execute_resolves_command_through_child_path(self):
         bin_dir = Path(self.temp.name) / 'pathbin'
         bin_dir.mkdir()

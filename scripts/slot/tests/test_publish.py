@@ -61,6 +61,17 @@ class PublishTests(Artifacts):
         self.assertEqual(state['objects']['repos/fizzyedit/work/issues/722']['labels'], [dict(name='arch:needed')])
         push.assert_not_called()
 
+    def test_bom_led_json_files_parse(self):
+        self.result.update(status='declined', decline='Need an answer')
+        self.sign()
+        bom = b'\xef\xbb\xbf'
+        (self.root / 'verdict.json').write_bytes(bom + json.dumps(dict(accept=True, reasons=[], risky=False)).encode())
+        for path in (self.job_dir / 'job.json', self.out / 'result.json'):
+            path.write_bytes(bom + path.read_bytes())
+        publish(self.job_dir, self.out)
+        state = json.loads(self.state_path.read_text())
+        self.assertEqual(len(state['comments']['repos/fizzyedit/work/issues/722/comments']), 1)
+
     def test_refused_labels_stuck_and_pushes_nothing(self):
         state, push = self.publish_twice(accepted=False)
         self.assertIn(dict(name='stuck'), state['objects']['repos/fizzyedit/work/issues/722']['labels'])
