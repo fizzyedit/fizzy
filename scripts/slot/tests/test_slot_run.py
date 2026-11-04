@@ -85,6 +85,16 @@ class ReferenceCheckoutTests(unittest.TestCase):
                     slot_run.checkout(self.job, self.home, self.home)
                 git.assert_not_called()
 
+    def test_malformed_refs_fail_before_git(self):
+        for refs in (None, {}, 'refs', [None], [{}], [dict(name=42)],
+                     [{**self.ref, 'name': None}], [{**self.ref, 'repo': 'fizzyedit/x/y'}]):
+            with self.subTest(refs=refs), mock.patch.object(slot_run, 'git') as git:
+                self.job['refs'] = refs
+                with self.assertRaises(slot_run.BrokenSlot):
+                    slot_run.checkout(self.job, self.home, self.home)
+                git.assert_not_called()
+                self.assertFalse(self.work.exists())
+
     def test_ref_failure_removes_checkout(self):
         self.job['refs'] = [self.ref]
         for failure in ('fetch', 'head'):
