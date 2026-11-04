@@ -41,6 +41,17 @@ def clean_env():
             and not k.upper().endswith('_TOKEN')}
 
 
+def unlock_keychain():
+    """macOS: a LaunchDaemon cannot unlock the slot user's login keychain; do it with the password file the setup left in the slot's home."""
+    if sys.platform != 'darwin':
+        return
+    pw = Path.home() / '.fizzy-keychain-pass'
+    if pw.is_file():
+        subprocess.run(['security', 'unlock-keychain', '-p', pw.read_text().strip(),
+                        str(Path.home() / 'Library/Keychains/login.keychain-db')],
+                       stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+
+
 def rmtree(path, ignore_errors=False):
     def fix(func, p, *_):
         os.chmod(p, stat.S_IWRITE)  # git objects are read-only on Windows
@@ -176,6 +187,7 @@ def stop_tree(proc):
 def execute(command, repo, log, deadline, prompt=None, shell=False, tmpdir=None):
     options = {'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == 'nt' else {'start_new_session': True}
     env = clean_env()
+    unlock_keychain()
     if tmpdir:
         env['TMPDIR'] = tmpdir  # short path: unix socket paths over 107 bytes give NameTooLong
     if not shell and isinstance(command, list):
