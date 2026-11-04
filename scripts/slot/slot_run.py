@@ -225,7 +225,7 @@ def review_shape(value):
 
 def read_agent(out, name):
     path = out / 'agent' / name
-    return path.read_text(encoding='utf-8', errors='replace') if path.exists() else ''
+    return path.read_text(encoding='utf-8-sig', errors='replace') if path.exists() else ''
 
 
 def run(job, job_dir, out, keep):
