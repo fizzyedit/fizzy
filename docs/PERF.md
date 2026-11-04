@@ -170,3 +170,7 @@ once per recording. This is a bounded history sample, not a continuous recording
 `--store DIR`, `$FIZZY_PERF_STORE`, then `$XDG_DATA_HOME/fizzy/perf` (defaulting to
 `~/.local/share/fizzy/perf`) select the store as for `perf-compile`. The script prints the same
 lines it appends and rejects reports without retained frame rows.
+
+## Benchmarks
+
+`zig build check-bench` compiles every benchmark; `test-integration` runs it, so CI catches a benchmark that no longer builds.
