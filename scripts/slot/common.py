@@ -15,6 +15,7 @@ class JobError(ValueError):
 TARGETS = {
     'fizzyedit/fizzy': dict(branch='main', gate=False),
     'fizzyedit/dvui': dict(branch='zig-0.17', gate=True),
+    'fizzyedit/heronin': dict(branch='main', gate=True),
 }
 
 

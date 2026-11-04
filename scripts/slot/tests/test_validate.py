@@ -9,6 +9,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from slot.common import target
 from slot.validate import validate, matches
 
 FAKE = Path(__file__).resolve().parents[1] / 'fakes/gh.py'
@@ -194,6 +195,11 @@ class ValidateTests(Artifacts):
             verdict = self.verdict()
             self.assertFalse(verdict['accept'])
             self.assertIn('target:', str(verdict['reasons']))
+
+    def test_heronin_resolves_to_its_main_branch(self):
+        resolved = target({'base': {'repo': 'https://github.com/fizzyedit/heronin.git', 'branch': 'main'}})
+        self.assertEqual(resolved['repo'], 'fizzyedit/heronin')
+        self.assertEqual(resolved['branch'], 'main')
 
     def test_dvui_write_and_review_use_target(self):
         self.job['base']['repo'] = 'https://github.com/fizzyedit/dvui.git'
