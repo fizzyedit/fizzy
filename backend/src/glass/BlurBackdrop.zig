@@ -40,6 +40,7 @@ const Size = dvui.Size;
 const Texture = dvui.Texture;
 
 const BlurBackdrop = @This();
+pub const BlurField = @import("BlurField.zig");
 
 /// Physical-pixel rect this backdrop covers. Set by `init`.
 rect: Rect.Physical = .{},
@@ -972,6 +973,8 @@ pub const Pane = struct {
     /// whole growth — growing from a drop to a window several times its size, it outgrew each
     /// capture in turn and made a new pyramid for each, all in the motion's first frames.
     reach: ?Size.Physical = null,
+    /// A feathered frost from the same capture, drawn first, under the fields; no rim, edge or light.
+    blur_field: ?BlurField = null,
 };
 
 /// Physical pixels: the least blur a frost is drawn with (`frostPane`).
@@ -1015,6 +1018,12 @@ pub fn fieldsPane(id: dvui.Id, fields: []const LiquidField, scale: f32, pane: Pa
         if (f.len == 0) continue;
         rect = if (any) rect.unionWith(f.bounds()) else f.bounds();
         any = true;
+    }
+    if (pane.blur_field) |f| {
+        if (f.strength >= 0.004 and !f.rect.empty()) {
+            rect = if (any) rect.unionWith(f.rect) else f.rect;
+            any = true;
+        }
     }
     if (any) queuePane(id, rect, .{}, scale, pane, fields);
 }
@@ -1103,6 +1112,7 @@ fn queuePane(id: dvui.Id, rect: Rect.Physical, corners: dvui.CornerRect, scale: 
         .refraction = pane.refraction,
         .fields = if (fields.len > 0) dvui.currentWindow().arena().dupe(LiquidField, fields) catch &.{} else &.{},
         .clear = pane.clear,
+        .blur_field = pane.blur_field,
         .kept = pane.witness != null,
     };
     dvui.deferRender(job, FrostJob.draw);
@@ -1248,6 +1258,7 @@ pub const FrostJob = struct {
     /// Shapes run together, drawn by the glass program, instead of the one rounded rect
     /// (`fieldPane`, `fieldsPane`); empty is the plain pane. All draw from the one capture.
     fields: []const LiquidField = &.{},
+    blur_field: ?BlurField = null,
     /// Clear glass (`Pane.clear`): the picture before the blur.
     clear: bool = false,
     /// Read only when its witness changes (`Pane.witness`), or what is under it changed in a way
@@ -1273,8 +1284,9 @@ pub const FrostJob = struct {
         // replayed into another target already this frame: `deinit`).
         self.backdrop.deinit();
         // Through the glass program where there is one: the same pane in one pass a pixel.
-        if (self.fields.len > 0) {
+        if (self.fields.len > 0 or self.blur_field != null) {
             const tex = self.backdrop.small orelse return;
+            if (self.blur_field) |f| f.draw(tex, self.backdrop.coverage());
             const sharp = self.backdrop.sharpTexture();
             const distinct = if (sharp) |t| t.ptr != tex.ptr else false;
             for (self.fields) |field| {

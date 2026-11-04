@@ -28,6 +28,7 @@ pub const prof = @import("prof.zig");
 // sizes and the blobs' smooth union.
 test {
     _ = BlurBackdrop;
+    _ = @import("BlurField.zig");
     _ = liquid_blob;
     _ = MotionClock;
     _ = input_time;
