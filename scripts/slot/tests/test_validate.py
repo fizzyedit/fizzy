@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import patch
 
 from slot.common import target
-from slot.validate import validate, matches
+from slot.validate import validate, matches, review_checks
 
 FAKE = Path(__file__).resolve().parents[1] / 'fakes/gh.py'
 
@@ -87,6 +87,29 @@ class Artifacts(unittest.TestCase):
         self.result['review'] = dict(verdict='changes', findings=[dict(id='F1', severity='major',
                                             file='a.txt', line=1, added=True, text='problem')], follow_ups=[])
 
+    def kept_file(self):
+        """Add b.txt to the PR's base, so line 1 of b.txt is at head but not added by the diff."""
+        self.git('checkout', '-q', self.sha)
+        (self.base / 'b.txt').write_text('kept\n')
+        self.git('add', '.')
+        self.git('commit', '-qm', 'kept')
+        self.sha = self.git('rev-parse', 'HEAD').strip()
+        (self.base / 'a.txt').write_text('after\n')
+        self.git('commit', '-qam', 'change', '-s')
+        self.head = self.git('rev-parse', 'HEAD').strip()
+        pr = self.state['objects']['repos/fizzyedit/fizzy/pulls/9']
+        pr.update(head=dict(sha=self.head, ref='scripts/example'), base=dict(sha=self.sha))
+        self.state_path.write_text(json.dumps(self.state))
+
+    def note(self, fid, severity, file='a.txt', added=True):
+        return dict(id=fid, severity=severity, file=file, line=1, added=added, text='problem')
+
+    def corrected(self):
+        """Run the review checks alone and return their reasons; the review is corrected in place."""
+        reasons = []
+        review_checks(self.job, self.result, self.base, reasons)
+        return reasons
+
 
 class ValidateTests(Artifacts):
     def test_accepts_good_write(self):
@@ -141,20 +164,70 @@ class ValidateTests(Artifacts):
         self.job['for_review']['author_kind'] = 'codex'
         self.assertIn('review same kind as author', self.verdict()['reasons'])
 
-    def test_review_line_not_in_diff_refused(self):
+    def test_review_line_not_in_file_refused(self):
         self.review()
         self.result['review']['findings'][0]['line'] = 2
-        self.assertFalse(self.verdict()['accept'])
+        self.assertIn('review line not in file: F1', self.verdict()['reasons'])
 
-    def test_review_nit_as_finding_refused(self):
+    def test_review_file_not_at_head_refused(self):
         self.review()
-        self.result['review']['findings'][0]['severity'] = 'nit'
-        self.assertIn('invalid finding/follow-up split', str(self.verdict()))
+        self.result['review']['findings'][0]['file'] = 'missing.txt'
+        self.assertIn('review file not at head: F1', self.verdict()['reasons'])
+
+    def test_review_duplicate_id_refused(self):
+        self.review()
+        self.result['review']['findings'].append(self.note('F1', 'blocker'))
+        self.assertIn('duplicate finding: F1', self.verdict()['reasons'])
+
+    def test_review_unknown_severity_refused(self):
+        self.review()
+        self.result['review']['findings'][0]['severity'] = 'critical'
+        self.assertIn('unknown review severity: F1', self.verdict()['reasons'])
+
+    def test_review_wrong_added_corrected(self):
+        self.review()
+        self.result['review']['findings'][0]['added'] = False
+        self.assertTrue(self.verdict()['accept'])
+        self.assertEqual(self.corrected(), [])
+        self.assertIs(self.result['review']['findings'][0]['added'], True)
+
+    def test_review_split_corrected(self):
+        self.kept_file()
+        self.review()
+        review = self.result['review']
+        review['findings'] = [self.note('F1', 'minor', 'b.txt'), self.note('F2', 'major', 'b.txt'),
+                              self.note('F3', 'nit')]
+        review['follow_ups'] = [self.note('F4', 'minor', added=False), self.note('F5', 'blocker', 'b.txt'),
+                                self.note('F6', 'nit', 'b.txt')]
+        self.assertTrue(self.verdict()['accept'])
+        self.assertEqual(self.corrected(), [])
+        self.assertEqual([n['id'] for n in review['findings']], ['F2', 'F4', 'F5'])
+        self.assertEqual([n['id'] for n in review['follow_ups']], ['F1', 'F3', 'F6'])
+        self.assertEqual([n['added'] for n in review['findings']], [False, True, False])
+
+    def test_review_verdict_uses_corrected_findings(self):
+        self.kept_file()
+        self.review()
+        review = self.result['review']
+        review['findings'] = [self.note('F1', 'minor', 'b.txt')]
+        self.assertIn('review verdict does not match findings', self.verdict()['reasons'])
+        review['verdict'] = 'clean'
+        self.assertTrue(self.verdict()['accept'])
+        review['findings'], review['follow_ups'] = [], [self.note('F2', 'minor')]
+        self.assertIn('review verdict does not match findings', self.verdict()['reasons'])
+        review['verdict'] = 'changes'
+        self.assertTrue(self.verdict()['accept'])
 
     def test_rereview_outside_must_fix_refused(self):
         self.review()
         self.job['for_review']['must_fix'] = ['F2']
         self.assertIn('re-review outside must_fix', str(self.verdict()))
+
+    def test_rereview_minor_moved_into_findings_checked_against_must_fix(self):
+        self.review()
+        self.job['for_review']['must_fix'] = ['F1']
+        self.result['review']['follow_ups'] = [self.note('F2', 'minor')]
+        self.assertIn('re-review outside must_fix: F2', self.verdict()['reasons'])
 
     def test_accepts_valid_review(self):
         self.review()
