@@ -104,6 +104,7 @@ pub const Config = struct {
     app_repo_url_set: bool,
     app_issues_url: []const u8,
     app_layout_path: ?std.Build.LazyPath,
+    web_storage: []const u8,
     static_workbench: bool,
     static_text: bool,
     static_image: bool,
@@ -382,6 +383,13 @@ pub fn readConfig(b: *std.Build, target: std.Build.ResolvedTarget, opts: Options
     else
         null;
 
+    const web_storage = b.option(
+        []const u8,
+        "web-storage",
+        "What the web app files its browser storage under (default \"fizzy\"); give a " ++
+            "test build served beside the real one a name of its own",
+    ) orelse "fizzy";
+
     const no_emit = b.option(bool, "no-emit", "Check for compile errors without emitting any code") orelse false;
 
     const app_version_opt = b.option(
@@ -622,6 +630,7 @@ pub fn readConfig(b: *std.Build, target: std.Build.ResolvedTarget, opts: Options
         .app_repo_url_set = app_repo_url_set,
         .app_issues_url = app_issues_url,
         .app_layout_path = app_layout_path,
+        .web_storage = web_storage,
         .static_workbench = static_workbench,
         .static_text = static_text,
         .static_image = static_image,
@@ -689,6 +698,7 @@ pub fn construct(
         opts.web_plugin_deps,
         opts.web_plugin_dirs,
         opts.own != null,
+        cfg.web_storage,
     );
     const built = try native(
         b,
