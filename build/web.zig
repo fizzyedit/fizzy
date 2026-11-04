@@ -135,6 +135,7 @@ pub fn build(
     /// Fizzy's own build (`Options.own`): the hosted demo tapes come from `docs/demos/` and
     /// `scripts/`, which fizzy's package leaves out, so an app built on fizzy has none.
     own: bool,
+    web_storage: []const u8,
 ) Web {
     const web_target = target(b);
     const dvui_web_dep = fw.dvui_dep;
@@ -368,7 +369,7 @@ pub fn build(
     const web_js = patchedWebJs(b, dvui_web_dep);
     // `fizzy.js` names what it loads by their hash, and the page names `fizzy.js` by its own.
     const cb_js = b.addRunArtifact(cb);
-    cb_js.addFileArg(stampStorage(b));
+    cb_js.addFileArg(stampStorage(b, web_storage));
     cb_js.addFileArg(web_js);
     cb_js.addFileArg(b.path("web/fizzy-worker.js"));
     cb_js.addFileArg(web_exe.getEmittedBin());
@@ -520,13 +521,7 @@ fn patchedWebJs(b: *std.Build, dvui_dep: *std.Build.Dependency) std.Build.LazyPa
 /// (`storageName` there): `-Dweb-storage`, or "fizzy". Every copy of the app on one site shares
 /// the browser's storage for it, so a test build served beside the real one — fizzyed.it/testapp/
 /// beside /app/ — is built with a name of its own and keeps out of the real one's settings.
-fn stampStorage(b: *std.Build) std.Build.LazyPath {
-    const name = b.option(
-        []const u8,
-        "web-storage",
-        "What the web app files its browser storage under (default \"fizzy\"); give a " ++
-            "test build served beside the real one a name of its own",
-    ) orelse "fizzy";
+fn stampStorage(b: *std.Build, name: []const u8) std.Build.LazyPath {
     for (name) |c| switch (c) {
         'a'...'z', '0'...'9', '-', '_' => {},
         else => std.debug.panic("-Dweb-storage={s}: only a-z, 0-9, '-' and '_'", .{name}),
