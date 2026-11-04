@@ -195,7 +195,8 @@ class SlotRunTests(unittest.TestCase):
 
     def test_unlock_keychain_only_runs_on_darwin_with_password_file(self):
         with mock.patch.dict(os.environ, {'HOME': str(self.root), 'USERPROFILE': str(self.root)}), \
-                mock.patch.object(subprocess, 'run') as run:
+                mock.patch.object(subprocess, 'run', return_value=subprocess.CompletedProcess(
+                    [], 0, stderr='')) as run:
             password = self.root / '.fizzy-keychain-pass'
             password.write_text('fixture-password\n')
             for platform in ('linux', 'win32'):
@@ -209,10 +210,17 @@ class SlotRunTests(unittest.TestCase):
                 password.write_text('fixture-password\n')
                 slot_run.unlock_keychain()
                 run.assert_called_once_with(
-                    ['security', 'unlock-keychain', '-p', 'fixture-password',
+                    ['security', 'unlock-keychain',
                      str(self.root / 'Library/Keychains/login.keychain-db')],
-                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL, check=False)
+                    input='fixture-password', text=True, stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE, check=False)
+                run.reset_mock()
+                run.return_value = subprocess.CompletedProcess([], 1, stderr='unlock failed\n')
+                with mock.patch.object(sys, 'stderr') as stderr:
+                    slot_run.unlock_keychain()
+                run.assert_called_once()
+                self.assertEqual(''.join(call.args[0] for call in stderr.write.call_args_list),
+                                 'unlock failed\n')
 
     def test_rmtree_removes_read_only_file(self):
         tree = Path(self.temp.name) / 'tree'
