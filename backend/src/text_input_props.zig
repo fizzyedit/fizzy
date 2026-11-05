@@ -56,6 +56,9 @@ test "explicit correction and capitalization override each kind independently" {
 
 test "equal hints produce equal properties for the restart guard" {
     const h: field_hints.Hints = .{ .kind = .email, .enter = .done, .capitalize = true, .autocorrect = false };
-    try std.testing.expect(std.meta.eql(props(h), props(h)));
+    const same: field_hints.Hints = .{ .kind = .email, .enter = .done, .capitalize = true, .autocorrect = false };
+    try std.testing.expect(std.meta.eql(props(h), props(same)));
+    try std.testing.expect(std.meta.eql(props(.{}), props(.{ .autocorrect = true, .capitalize = true })));
+    try std.testing.expect(std.meta.eql(props(.{ .kind = .code }), props(.{ .kind = .search })));
     try std.testing.expect(!std.meta.eql(props(h), props(.{})));
 }
