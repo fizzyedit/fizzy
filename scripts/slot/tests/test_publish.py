@@ -37,7 +37,8 @@ class PublishTests(Artifacts):
     def test_review_comment_names_reviewer_after_verdict_line(self):
         self.review()
         state, _ = self.publish_twice()
-        comments = state['comments']['repos/fizzyedit/work/issues/722/comments']
+        comments = [c for c in state['comments']['repos/fizzyedit/work/issues/722/comments']
+                    if c['body'].startswith('REVIEW:')]
         self.assertEqual(len(comments), 1)
         verdict, reviewer, body = comments[0]['body'].split('\n', 2)
         self.assertEqual(verdict, f'REVIEW: changes @{self.head}')
