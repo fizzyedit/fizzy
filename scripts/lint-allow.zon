@@ -94,8 +94,6 @@
     .{ .rule = .@"raw-scroll-area", .file = "src/editor/CommandPalette.zig", .count = 1 },
     .{ .rule = .@"raw-scroll-area", .file = "src/editor/Infobar.zig", .count = 1 },
     .{ .rule = .@"raw-scroll-area", .file = "src/editor/OutputPanel.zig", .count = 1 },
-    .{ .rule = .@"raw-scroll-area", .file = "src/editor/dialogs/FileTypeDefaults.zig", .count = 1 },
-    .{ .rule = .@"raw-scroll-area", .file = "src/editor/dialogs/PluginUpdates.zig", .count = 1 },
     .{ .rule = .@"raw-scroll-area", .file = "tests/integration.zig", .count = 3 },
     .{ .rule = .@"todo-seam", .file = "backend/src/SDLBackend.zig", .count = 1 },
     .{ .rule = .@"todo-seam", .file = "core/gfx/image.zig", .count = 2 },
