@@ -2,7 +2,7 @@
 precision highp float;
 precision highp int;
 
-uniform highp vec4 uData[59];
+uniform highp vec4 uData[60];
 uniform highp sampler2D uSampler;
 uniform highp sampler2D uTex1;
 
@@ -12,306 +12,308 @@ layout(location = 0) out highp vec4 out_var_SV_Target0;
 
 void main()
 {
-    highp vec4 _1712;
+    highp vec4 _2007;
     do
     {
-        int _110 = int((vColor.y * 255.0) + 0.5);
-        int _115 = int((vColor.z * 255.0) + 0.5);
-        bool _139 = uData[5].y > 0.0;
-        highp vec2 _141;
-        highp float _144;
-        highp vec2 _146;
-        highp vec2 _148;
+        int _114 = int((vColor.y * 255.0) + 0.5);
+        int _119 = int((vColor.z * 255.0) + 0.5);
+        bool _145 = uData[5].y > 0.0;
+        highp vec4 _147;
         highp vec4 _150;
         highp vec2 _152;
         highp float _154;
-        highp float _156;
+        highp vec2 _156;
         highp vec2 _158;
         highp vec2 _160;
-        highp vec4 _162;
+        highp float _162;
         highp float _164;
-        highp float _166;
-        highp float _168;
-        _141 = vec2(0.0, 1.0);
-        _144 = 1000000000.0;
-        _146 = vec2(0.0);
-        _148 = vec2(0.0);
+        highp vec2 _166;
+        highp vec2 _168;
+        highp float _170;
+        highp float _172;
+        highp float _174;
+        _147 = vec4(0.0);
         _150 = vec4(0.0);
-        _152 = vec2(0.0);
+        _152 = vec2(0.0, 1.0);
         _154 = 1000000000.0;
-        _156 = 1000000000.0;
+        _156 = vec2(0.0);
         _158 = vec2(0.0);
-        _160 = vec2(0.0, 1.0);
-        _162 = vec4(0.0);
+        _160 = vec2(0.0);
+        _162 = 1000000000.0;
         _164 = 1000000000.0;
-        _166 = 1000000000.0;
-        _168 = 1000000000.0;
-        highp vec2 _153;
-        highp float _157;
-        highp vec2 _159;
-        highp vec4 _163;
-        highp float _167;
-        highp float _169;
-        highp vec2 _142;
-        highp float _145;
-        highp vec2 _147;
-        highp vec2 _149;
+        _166 = vec2(0.0);
+        _168 = vec2(0.0, 1.0);
+        _170 = 1000000000.0;
+        _172 = 1000000000.0;
+        _174 = 1000000000.0;
         highp vec4 _151;
-        highp float _155;
         highp vec2 _161;
         highp float _165;
-        int _170 = _110;
+        highp vec2 _167;
+        highp float _173;
+        highp float _175;
+        int _180;
+        highp vec4 _148;
+        highp vec2 _153;
+        highp float _155;
+        highp vec2 _157;
+        highp vec2 _159;
+        highp float _163;
+        highp vec2 _169;
+        highp float _171;
+        int _176 = _114;
         for (;;)
         {
-            bool _179;
-            if (_170 < (_110 + _115))
+            _180 = _114 + _119;
+            bool _185;
+            if (_176 < _180)
             {
-                _179 = _170 < 16;
+                _185 = _176 < 16;
             }
             else
             {
-                _179 = false;
+                _185 = false;
             }
-            if (_179)
+            if (_185)
             {
-                int _181 = 3 * _170;
-                int _188 = _181 + 13;
-                bool _196;
-                if (uData[_188 * 1 + 0].w >= (-0.5))
+                int _187 = 3 * _176;
+                int _194 = _187 + 14;
+                bool _202;
+                if (uData[_194 * 1 + 0].w >= (-0.5))
                 {
-                    _196 = uData[_188 * 1 + 0].w > 3.5;
+                    _202 = uData[_194 * 1 + 0].w > 3.5;
                 }
                 else
                 {
-                    _196 = true;
+                    _202 = true;
                 }
-                highp vec4 _206;
-                highp vec4 _207;
-                highp vec4 _208;
-                if (_196)
+                highp vec4 _212;
+                highp vec4 _213;
+                highp vec4 _214;
+                if (_202)
                 {
-                    highp vec4 _204 = uData[58];
-                    _204.z = 0.0;
-                    _206 = _204;
-                    _207 = uData[56];
-                    _208 = uData[57];
+                    highp vec4 _210 = uData[59];
+                    _210.z = 0.0;
+                    _212 = _210;
+                    _213 = uData[57];
+                    _214 = uData[58];
                 }
                 else
                 {
-                    _206 = uData[_188 * 1 + 0];
-                    _207 = uData[(11 + _181) * 1 + 0];
-                    _208 = uData[(_181 + 12) * 1 + 0];
+                    _212 = uData[_194 * 1 + 0];
+                    _213 = uData[(12 + _187) * 1 + 0];
+                    _214 = uData[(_187 + 13) * 1 + 0];
                 }
-                highp float _211 = min(_207.z, _207.w);
-                highp vec4 _213 = min(_208, vec4(_211));
-                highp vec2 _498;
-                highp float _499;
-                if (_196)
+                highp float _217 = min(_213.z, _213.w);
+                highp vec4 _219 = min(_214, vec4(_217));
+                highp vec2 _504;
+                highp float _505;
+                if (_202)
                 {
-                    highp vec4 _288 = min(uData[57], vec4(min(uData[56].z, uData[56].w)));
-                    int _291 = int(uData[58].z);
-                    highp vec2 _293 = vTextureCoord - uData[56].xy;
-                    highp float _295 = _293.x;
-                    highp float _316;
-                    if (_295 > 0.0)
+                    highp vec4 _294 = min(uData[58], vec4(min(uData[57].z, uData[57].w)));
+                    int _297 = int(uData[59].z);
+                    highp vec2 _299 = vTextureCoord - uData[57].xy;
+                    highp float _301 = _299.x;
+                    highp float _322;
+                    if (_301 > 0.0)
                     {
-                        highp float _315;
-                        if (_293.y > 0.0)
+                        highp float _321;
+                        if (_299.y > 0.0)
                         {
-                            _315 = _288.z;
+                            _321 = _294.z;
                         }
                         else
                         {
-                            _315 = _288.y;
+                            _321 = _294.y;
                         }
-                        _316 = _315;
+                        _322 = _321;
                     }
                     else
                     {
-                        highp float _307;
-                        if (_293.y > 0.0)
+                        highp float _313;
+                        if (_299.y > 0.0)
                         {
-                            _307 = _288.w;
+                            _313 = _294.w;
                         }
                         else
                         {
-                            _307 = _288.x;
+                            _313 = _294.x;
                         }
-                        _316 = _307;
+                        _322 = _313;
                     }
-                    highp vec2 _320 = (abs(_293) - uData[56].zw) + vec2(_316);
-                    highp float _322 = (_295 < 0.0) ? (-1.0) : 1.0;
-                    highp float _325 = (_293.y < 0.0) ? (-1.0) : 1.0;
-                    highp float _327 = _320.x;
-                    bool _333;
-                    if (_327 > 0.0)
+                    highp vec2 _326 = (abs(_299) - uData[57].zw) + vec2(_322);
+                    highp float _328 = (_301 < 0.0) ? (-1.0) : 1.0;
+                    highp float _331 = (_299.y < 0.0) ? (-1.0) : 1.0;
+                    highp float _333 = _326.x;
+                    bool _339;
+                    if (_333 > 0.0)
                     {
-                        _333 = _320.y > 0.0;
-                    }
-                    else
-                    {
-                        _333 = false;
-                    }
-                    highp vec2 _347;
-                    if (_333)
-                    {
-                        _347 = normalize(_320) * vec2(_322, _325);
+                        _339 = _326.y > 0.0;
                     }
                     else
                     {
-                        highp vec2 _344;
-                        if (_327 > _320.y)
+                        _339 = false;
+                    }
+                    highp vec2 _353;
+                    if (_339)
+                    {
+                        _353 = normalize(_326) * vec2(_328, _331);
+                    }
+                    else
+                    {
+                        highp vec2 _350;
+                        if (_333 > _326.y)
                         {
-                            _344 = vec2(_322, 0.0);
+                            _350 = vec2(_328, 0.0);
                         }
                         else
                         {
-                            _344 = vec2(0.0, _325);
+                            _350 = vec2(0.0, _331);
                         }
-                        _347 = _344;
+                        _353 = _350;
                     }
-                    highp vec2 _356;
-                    highp float _359;
-                    _356 = _347;
-                    _359 = (min(max(_327, _320.y), 0.0) + length(max(_320, vec2(0.0)))) - _316;
-                    highp vec2 _357;
-                    highp float _360;
-                    int _361 = 0;
+                    highp vec2 _362;
+                    highp float _365;
+                    _362 = _353;
+                    _365 = (min(max(_333, _326.y), 0.0) + length(max(_326, vec2(0.0)))) - _322;
+                    highp vec2 _363;
+                    highp float _366;
+                    int _367 = 0;
                     for (;;)
                     {
-                        bool _369;
-                        if (_361 < _291)
+                        bool _375;
+                        if (_367 < _297)
                         {
-                            _369 = _361 < 4;
+                            _375 = _367 < 4;
                         }
                         else
                         {
-                            _369 = false;
+                            _375 = false;
                         }
-                        if (_369)
+                        if (_375)
                         {
-                            int _371 = 14 - _361;
-                            int _372 = 3 * _371;
-                            int _373 = 11 + _372;
-                            int _376 = _372 + 12;
-                            if (uData[_376 * 1 + 0].x == 0.0)
+                            int _377 = 14 - _367;
+                            int _378 = 3 * _377;
+                            int _379 = 12 + _378;
+                            int _382 = _378 + 13;
+                            if (uData[_382 * 1 + 0].x == 0.0)
                             {
-                                _357 = _356;
-                                _360 = _359;
-                                int _362 = _361 + 1;
-                                _356 = _357;
-                                _359 = _360;
-                                _361 = _362;
+                                _363 = _362;
+                                _366 = _365;
+                                int _368 = _367 + 1;
+                                _362 = _363;
+                                _365 = _366;
+                                _367 = _368;
                                 continue;
                             }
-                            highp float _385 = clamp(uData[_376 * 1 + 0].x / uData[_376 * 1 + 0].y, 0.0, 1.0);
-                            bool _387 = uData[_373 * 1 + 0].x < 0.5;
-                            highp float _395;
-                            if (_387)
+                            highp float _391 = clamp(uData[_382 * 1 + 0].x / uData[_382 * 1 + 0].y, 0.0, 1.0);
+                            bool _393 = uData[_379 * 1 + 0].x < 0.5;
+                            highp float _401;
+                            if (_393)
                             {
-                                _395 = vTextureCoord.y;
+                                _401 = vTextureCoord.y;
                             }
                             else
                             {
-                                _395 = vTextureCoord.x;
+                                _401 = vTextureCoord.x;
                             }
-                            highp float _403;
-                            if (_387)
+                            highp float _409;
+                            if (_393)
                             {
-                                _403 = vTextureCoord.x;
-                            }
-                            else
-                            {
-                                _403 = vTextureCoord.y;
-                            }
-                            highp float _405 = _403 - uData[_373 * 1 + 0].y;
-                            highp float _406 = uData[_376 * 1 + 0].x * 0.5;
-                            highp float _409 = uData[_373 * 1 + 0].w - uData[_373 * 1 + 0].z;
-                            highp float _410 = smoothstep(0.0, 0.60000002384185791015625, _385);
-                            highp float _439;
-                            highp float _440;
-                            if (uData[_376 * 1 + 0].w > 2.5)
-                            {
-                                highp float _430 = _395 - ((uData[_373 * 1 + 0].z + uData[_373 * 1 + 0].w) * 0.5);
-                                _439 = (_430 < 0.0) ? 1.0 : (-1.0);
-                                _440 = max(((_409 * 0.5) * (1.0 - _410)) - abs(_430), 0.0);
+                                _409 = vTextureCoord.x;
                             }
                             else
                             {
-                                bool _416 = uData[_376 * 1 + 0].w < 1.5;
-                                highp float _422;
-                                if (_416)
+                                _409 = vTextureCoord.y;
+                            }
+                            highp float _411 = _409 - uData[_379 * 1 + 0].y;
+                            highp float _412 = uData[_382 * 1 + 0].x * 0.5;
+                            highp float _415 = uData[_379 * 1 + 0].w - uData[_379 * 1 + 0].z;
+                            highp float _416 = smoothstep(0.0, 0.60000002384185791015625, _391);
+                            highp float _445;
+                            highp float _446;
+                            if (uData[_382 * 1 + 0].w > 2.5)
+                            {
+                                highp float _436 = _401 - ((uData[_379 * 1 + 0].z + uData[_379 * 1 + 0].w) * 0.5);
+                                _445 = (_436 < 0.0) ? 1.0 : (-1.0);
+                                _446 = max(((_415 * 0.5) * (1.0 - _416)) - abs(_436), 0.0);
+                            }
+                            else
+                            {
+                                bool _422 = uData[_382 * 1 + 0].w < 1.5;
+                                highp float _428;
+                                if (_422)
                                 {
-                                    _422 = _395 - uData[_373 * 1 + 0].z;
+                                    _428 = _401 - uData[_379 * 1 + 0].z;
                                 }
                                 else
                                 {
-                                    _422 = uData[_373 * 1 + 0].w - _395;
+                                    _428 = uData[_379 * 1 + 0].w - _401;
                                 }
-                                _439 = _416 ? 1.0 : (-1.0);
-                                _440 = max(_422 - ((_409 - _406) * _410), 0.0);
+                                _445 = _422 ? 1.0 : (-1.0);
+                                _446 = max(_428 - ((_415 - _412) * _416), 0.0);
                             }
-                            highp float _442 = length(vec2(_405, _440));
-                            highp float _443 = _442 - _406;
-                            highp vec2 _458;
-                            if (_442 > 0.0)
+                            highp float _448 = length(vec2(_411, _446));
+                            highp float _449 = _448 - _412;
+                            highp vec2 _464;
+                            if (_448 > 0.0)
                             {
-                                highp vec2 _452 = vec2(-_405, (-_440) * _439) / vec2(_442);
-                                highp vec2 _457;
-                                if (uData[_373 * 1 + 0].x > 0.5)
+                                highp vec2 _458 = vec2(-_411, (-_446) * _445) / vec2(_448);
+                                highp vec2 _463;
+                                if (uData[_379 * 1 + 0].x > 0.5)
                                 {
-                                    _457 = _452.yx;
+                                    _463 = _458.yx;
                                 }
                                 else
                                 {
-                                    _457 = _452;
+                                    _463 = _458;
                                 }
-                                _458 = _457;
+                                _464 = _463;
                             }
                             else
                             {
-                                _458 = vec2(0.0);
+                                _464 = vec2(0.0);
                             }
-                            highp float _460 = uData[_376 * 1 + 0].z * _385;
-                            highp vec2 _464 = max(vec2(_460 + _359, _460 - _443), vec2(0.0));
-                            highp float _465 = length(_464);
-                            bool _470;
-                            if (_460 > 0.0)
+                            highp float _466 = uData[_382 * 1 + 0].z * _391;
+                            highp vec2 _470 = max(vec2(_466 + _365, _466 - _449), vec2(0.0));
+                            highp float _471 = length(_470);
+                            bool _476;
+                            if (_466 > 0.0)
                             {
-                                _470 = _465 > 0.0;
+                                _476 = _471 > 0.0;
                             }
                             else
                             {
-                                _470 = false;
+                                _476 = false;
                             }
-                            highp vec2 _485;
-                            if (_470)
+                            highp vec2 _491;
+                            if (_476)
                             {
-                                _485 = ((_356 * _464.x) + (_458 * _464.y)) / vec2(_465);
+                                _491 = ((_362 * _470.x) + (_464 * _470.y)) / vec2(_471);
                             }
                             else
                             {
-                                bvec2 _476 = bvec2((-_443) > _359);
-                                _485 = vec2(_476.x ? _458.x : _356.x, _476.y ? _458.y : _356.y);
+                                bvec2 _482 = bvec2((-_449) > _365);
+                                _491 = vec2(_482.x ? _464.x : _362.x, _482.y ? _464.y : _362.y);
                             }
-                            highp float _486 = -_443;
-                            highp float _497;
+                            highp float _492 = -_449;
+                            highp float _503;
                             do
                             {
-                                if (_460 == 0.0)
+                                if (_466 == 0.0)
                                 {
-                                    _497 = max(_359, _486);
+                                    _503 = max(_365, _492);
                                     break;
                                 }
-                                _497 = min(-_460, max(_359, _486)) + _465;
+                                _503 = min(-_466, max(_365, _492)) + _471;
                                 break;
                             } while(false);
-                            _357 = _485;
-                            _360 = _497;
-                            int _362 = _361 + 1;
-                            _356 = _357;
-                            _359 = _360;
-                            _361 = _362;
+                            _363 = _491;
+                            _366 = _503;
+                            int _368 = _367 + 1;
+                            _362 = _363;
+                            _365 = _366;
+                            _367 = _368;
                             continue;
                         }
                         else
@@ -319,465 +321,465 @@ void main()
                             break;
                         }
                     }
-                    _498 = _356;
-                    _499 = _359;
+                    _504 = _362;
+                    _505 = _365;
                 }
                 else
                 {
-                    highp vec2 _218 = vTextureCoord - _207.xy;
-                    highp float _220 = _218.x;
-                    highp float _241;
-                    if (_220 > 0.0)
+                    highp vec2 _224 = vTextureCoord - _213.xy;
+                    highp float _226 = _224.x;
+                    highp float _247;
+                    if (_226 > 0.0)
                     {
-                        highp float _240;
-                        if (_218.y > 0.0)
+                        highp float _246;
+                        if (_224.y > 0.0)
                         {
-                            _240 = _213.z;
+                            _246 = _219.z;
                         }
                         else
                         {
-                            _240 = _213.y;
+                            _246 = _219.y;
                         }
-                        _241 = _240;
+                        _247 = _246;
                     }
                     else
                     {
-                        highp float _232;
-                        if (_218.y > 0.0)
+                        highp float _238;
+                        if (_224.y > 0.0)
                         {
-                            _232 = _213.w;
+                            _238 = _219.w;
                         }
                         else
                         {
-                            _232 = _213.x;
+                            _238 = _219.x;
                         }
-                        _241 = _232;
+                        _247 = _238;
                     }
-                    highp vec2 _245 = (abs(_218) - _207.zw) + vec2(_241);
-                    highp float _247 = (_220 < 0.0) ? (-1.0) : 1.0;
-                    highp float _250 = (_218.y < 0.0) ? (-1.0) : 1.0;
-                    highp float _252 = _245.x;
-                    bool _258;
-                    if (_252 > 0.0)
+                    highp vec2 _251 = (abs(_224) - _213.zw) + vec2(_247);
+                    highp float _253 = (_226 < 0.0) ? (-1.0) : 1.0;
+                    highp float _256 = (_224.y < 0.0) ? (-1.0) : 1.0;
+                    highp float _258 = _251.x;
+                    bool _264;
+                    if (_258 > 0.0)
                     {
-                        _258 = _245.y > 0.0;
-                    }
-                    else
-                    {
-                        _258 = false;
-                    }
-                    highp vec2 _272;
-                    if (_258)
-                    {
-                        _272 = normalize(_245) * vec2(_247, _250);
+                        _264 = _251.y > 0.0;
                     }
                     else
                     {
-                        highp vec2 _269;
-                        if (_252 > _245.y)
+                        _264 = false;
+                    }
+                    highp vec2 _278;
+                    if (_264)
+                    {
+                        _278 = normalize(_251) * vec2(_253, _256);
+                    }
+                    else
+                    {
+                        highp vec2 _275;
+                        if (_258 > _251.y)
                         {
-                            _269 = vec2(_247, 0.0);
+                            _275 = vec2(_253, 0.0);
                         }
                         else
                         {
-                            _269 = vec2(0.0, _250);
+                            _275 = vec2(0.0, _256);
                         }
-                        _272 = _269;
+                        _278 = _275;
                     }
-                    _498 = _272;
-                    _499 = (min(max(_252, _245.y), 0.0) + length(max(_245, vec2(0.0)))) - _241;
+                    _504 = _278;
+                    _505 = (min(max(_258, _251.y), 0.0) + length(max(_251, vec2(0.0)))) - _247;
                 }
-                highp vec2 _647;
+                highp vec2 _653;
                 if (uData[10].w > 0.0)
                 {
-                    highp float _508 = (uData[9].x < 0.0) ? (-1.0) : 1.0;
-                    highp float _511 = (uData[9].y < 0.0) ? (-1.0) : 1.0;
-                    highp float _531;
-                    if (_508 < 0.0)
+                    highp float _514 = (uData[9].x < 0.0) ? (-1.0) : 1.0;
+                    highp float _517 = (uData[9].y < 0.0) ? (-1.0) : 1.0;
+                    highp float _537;
+                    if (_514 < 0.0)
                     {
-                        highp float _530;
-                        if (_511 < 0.0)
+                        highp float _536;
+                        if (_517 < 0.0)
                         {
-                            _530 = _213.x;
+                            _536 = _219.x;
                         }
                         else
                         {
-                            _530 = _213.w;
+                            _536 = _219.w;
                         }
-                        _531 = _530;
+                        _537 = _536;
                     }
                     else
                     {
-                        highp float _523;
-                        if (_511 < 0.0)
+                        highp float _529;
+                        if (_517 < 0.0)
                         {
-                            _523 = _213.y;
+                            _529 = _219.y;
                         }
                         else
                         {
-                            _523 = _213.z;
+                            _529 = _219.z;
                         }
-                        _531 = _523;
+                        _537 = _529;
                     }
-                    highp vec2 _535 = max(_207.zw - vec2(_531), vec2(0.0));
-                    highp vec2 _540 = (_207.xy + (vec2(_508, _511) * _535)) + (uData[9].xy * _531);
-                    highp vec2 _555;
+                    highp vec2 _541 = max(_213.zw - vec2(_537), vec2(0.0));
+                    highp vec2 _546 = (_213.xy + (vec2(_514, _517) * _541)) + (uData[9].xy * _537);
+                    highp vec2 _561;
                     if (abs(uData[9].x) < 0.001000000047497451305389404296875)
                     {
-                        highp float _548 = _535.x;
-                        highp vec2 _554 = _540;
-                        _554.x = clamp(vTextureCoord.x, _207.x - _548, _207.x + _548) + (_531 * uData[9].x);
-                        _555 = _554;
+                        highp float _554 = _541.x;
+                        highp vec2 _560 = _546;
+                        _560.x = clamp(vTextureCoord.x, _213.x - _554, _213.x + _554) + (_537 * uData[9].x);
+                        _561 = _560;
                     }
                     else
                     {
-                        _555 = _540;
+                        _561 = _546;
                     }
-                    highp vec2 _570;
+                    highp vec2 _576;
                     if (abs(uData[9].y) < 0.001000000047497451305389404296875)
                     {
-                        highp float _563 = _535.y;
-                        highp vec2 _569 = _555;
-                        _569.y = clamp(vTextureCoord.y, _207.y - _563, _207.y + _563) + (_531 * uData[9].y);
-                        _570 = _569;
+                        highp float _569 = _541.y;
+                        highp vec2 _575 = _561;
+                        _575.y = clamp(vTextureCoord.y, _213.y - _569, _213.y + _569) + (_537 * uData[9].y);
+                        _576 = _575;
                     }
                     else
                     {
-                        _570 = _555;
+                        _576 = _561;
                     }
-                    highp float _573 = max(uData[10].w - max(uData[8].w, 1.0), 0.0);
-                    highp vec2 _578 = -uData[9].xy;
-                    highp float _579 = _578.x;
-                    highp float _581 = (_579 < 0.0) ? (-1.0) : 1.0;
-                    highp float _582 = _578.y;
-                    highp float _584 = (_582 < 0.0) ? (-1.0) : 1.0;
-                    highp float _604;
-                    if (_581 < 0.0)
+                    highp float _579 = max(uData[10].w - max(uData[8].w, 1.0), 0.0);
+                    highp vec2 _584 = -uData[9].xy;
+                    highp float _585 = _584.x;
+                    highp float _587 = (_585 < 0.0) ? (-1.0) : 1.0;
+                    highp float _588 = _584.y;
+                    highp float _590 = (_588 < 0.0) ? (-1.0) : 1.0;
+                    highp float _610;
+                    if (_587 < 0.0)
                     {
-                        highp float _603;
-                        if (_584 < 0.0)
+                        highp float _609;
+                        if (_590 < 0.0)
                         {
-                            _603 = _213.x;
+                            _609 = _219.x;
                         }
                         else
                         {
-                            _603 = _213.w;
+                            _609 = _219.w;
                         }
-                        _604 = _603;
+                        _610 = _609;
                     }
                     else
                     {
-                        highp float _596;
-                        if (_584 < 0.0)
+                        highp float _602;
+                        if (_590 < 0.0)
                         {
-                            _596 = _213.y;
+                            _602 = _219.y;
                         }
                         else
                         {
-                            _596 = _213.z;
+                            _602 = _219.z;
                         }
-                        _604 = _596;
+                        _610 = _602;
                     }
-                    highp vec2 _607 = max(_207.zw - vec2(_604), vec2(0.0));
-                    highp vec2 _611 = (_207.xy + (vec2(_581, _584) * _607)) + (_578 * _604);
-                    highp vec2 _626;
-                    if (abs(_579) < 0.001000000047497451305389404296875)
+                    highp vec2 _613 = max(_213.zw - vec2(_610), vec2(0.0));
+                    highp vec2 _617 = (_213.xy + (vec2(_587, _590) * _613)) + (_584 * _610);
+                    highp vec2 _632;
+                    if (abs(_585) < 0.001000000047497451305389404296875)
                     {
-                        highp float _619 = _607.x;
-                        highp vec2 _625 = _611;
-                        _625.x = clamp(vTextureCoord.x, _207.x - _619, _207.x + _619) + (_604 * _579);
-                        _626 = _625;
+                        highp float _625 = _613.x;
+                        highp vec2 _631 = _617;
+                        _631.x = clamp(vTextureCoord.x, _213.x - _625, _213.x + _625) + (_610 * _585);
+                        _632 = _631;
                     }
                     else
                     {
-                        _626 = _611;
+                        _632 = _617;
                     }
-                    highp vec2 _641;
-                    if (abs(_582) < 0.001000000047497451305389404296875)
+                    highp vec2 _647;
+                    if (abs(_588) < 0.001000000047497451305389404296875)
                     {
-                        highp float _634 = _607.y;
-                        highp vec2 _640 = _626;
-                        _640.y = clamp(vTextureCoord.y, _207.y - _634, _207.y + _634) + (_604 * _582);
-                        _641 = _640;
+                        highp float _640 = _613.y;
+                        highp vec2 _646 = _632;
+                        _646.y = clamp(vTextureCoord.y, _213.y - _640, _213.y + _640) + (_610 * _588);
+                        _647 = _646;
                     }
                     else
                     {
-                        _641 = _626;
+                        _647 = _632;
                     }
-                    _647 = vec2(1.0 - smoothstep(_573, uData[10].w, length(vTextureCoord - _570)), 1.0 - smoothstep(_573, uData[10].w, length(vTextureCoord - _641)));
+                    _653 = vec2(1.0 - smoothstep(_579, uData[10].w, length(vTextureCoord - _576)), 1.0 - smoothstep(_579, uData[10].w, length(vTextureCoord - _647)));
                 }
                 else
                 {
-                    _647 = vec2(0.0);
+                    _653 = vec2(0.0);
                 }
-                bool _648 = _499 < _166;
-                if (_648)
+                bool _654 = _505 < _172;
+                if (_654)
                 {
-                    _142 = _160;
-                    _145 = _168;
-                    _147 = _158;
-                    _151 = _162;
-                    _161 = _207.yw;
-                    _165 = _166;
+                    _148 = _150;
+                    _153 = _168;
+                    _155 = _174;
+                    _157 = _166;
+                    _169 = _213.yw;
+                    _171 = _172;
                 }
                 else
                 {
-                    bool _652 = _499 < _164;
-                    highp vec2 _656;
-                    if (_652)
+                    bool _658 = _505 < _170;
+                    highp vec2 _662;
+                    if (_658)
                     {
-                        _656 = _207.yw;
+                        _662 = _213.yw;
                     }
                     else
                     {
-                        _656 = _141;
+                        _662 = _152;
                     }
-                    bvec2 _658 = bvec2(_652);
-                    bvec4 _660 = bvec4(_652);
-                    _142 = _656;
-                    _145 = _652 ? _211 : _144;
-                    _147 = vec2(_658.x ? _647.x : _146.x, _658.y ? _647.y : _146.y);
-                    _151 = vec4(_660.x ? _206.x : _150.x, _660.y ? _206.y : _150.y, _660.z ? _206.z : _150.z, _660.w ? _206.w : _150.w);
-                    _161 = _160;
-                    _165 = _652 ? _499 : _164;
+                    bvec4 _663 = bvec4(_658);
+                    bvec2 _666 = bvec2(_658);
+                    _148 = vec4(_663.x ? _212.x : _147.x, _663.y ? _212.y : _147.y, _663.z ? _212.z : _147.z, _663.w ? _212.w : _147.w);
+                    _153 = _662;
+                    _155 = _658 ? _217 : _154;
+                    _157 = vec2(_666.x ? _653.x : _156.x, _666.y ? _653.y : _156.y);
+                    _169 = _168;
+                    _171 = _658 ? _505 : _170;
                 }
-                bvec2 _664 = bvec2(_648);
-                _159 = vec2(_664.x ? _647.x : _158.x, _664.y ? _647.y : _158.y);
-                bvec4 _665 = bvec4(_648);
-                _163 = vec4(_665.x ? _206.x : _162.x, _665.y ? _206.y : _162.y, _665.z ? _206.z : _162.z, _665.w ? _206.w : _162.w);
-                _167 = _648 ? _499 : _166;
-                _169 = _648 ? _211 : _168;
-                highp vec2 _978;
-                highp float _979;
-                if (_196)
+                bvec4 _670 = bvec4(_654);
+                _151 = vec4(_670.x ? _212.x : _150.x, _670.y ? _212.y : _150.y, _670.z ? _212.z : _150.z, _670.w ? _212.w : _150.w);
+                bvec2 _671 = bvec2(_654);
+                _167 = vec2(_671.x ? _653.x : _166.x, _671.y ? _653.y : _166.y);
+                _173 = _654 ? _505 : _172;
+                _175 = _654 ? _217 : _174;
+                highp vec2 _984;
+                highp float _985;
+                if (_202)
                 {
-                    highp vec4 _724 = min(uData[57], vec4(min(uData[56].z, uData[56].w)));
-                    int _727 = int(uData[58].z);
-                    highp vec2 _833;
-                    highp float _834;
+                    highp vec4 _730 = min(uData[58], vec4(min(uData[57].z, uData[57].w)));
+                    int _733 = int(uData[59].z);
+                    highp vec2 _839;
+                    highp float _840;
                     if (uData[1].y > 0.0)
                     {
-                        highp float _799 = (vTextureCoord.x - uData[56].x) + uData[56].z;
-                        highp float _801 = (uData[56].x + uData[56].z) - vTextureCoord.x;
-                        highp float _806 = (vTextureCoord.y - uData[56].y) + uData[56].w;
-                        highp float _808 = (uData[56].y + uData[56].w) - vTextureCoord.y;
-                        highp float _812 = min(min(_799, _801), min(_806, _808));
-                        highp vec4 _817 = exp((vec4(_812) - vec4(_799, _801, _806, _808)) / vec4(uData[1].y));
-                        highp float _818 = _817.x;
-                        highp float _819 = _817.y;
-                        highp float _821 = _817.z;
-                        highp float _823 = _817.w;
-                        highp float _824 = ((_818 + _819) + _821) + _823;
-                        _833 = vec2(_819 - _818, _823 - _821) / vec2(_824);
-                        _834 = (uData[1].y * log(_824)) - _812;
+                        highp float _805 = (vTextureCoord.x - uData[57].x) + uData[57].z;
+                        highp float _807 = (uData[57].x + uData[57].z) - vTextureCoord.x;
+                        highp float _812 = (vTextureCoord.y - uData[57].y) + uData[57].w;
+                        highp float _814 = (uData[57].y + uData[57].w) - vTextureCoord.y;
+                        highp float _818 = min(min(_805, _807), min(_812, _814));
+                        highp vec4 _823 = exp((vec4(_818) - vec4(_805, _807, _812, _814)) / vec4(uData[1].y));
+                        highp float _824 = _823.x;
+                        highp float _825 = _823.y;
+                        highp float _827 = _823.z;
+                        highp float _829 = _823.w;
+                        highp float _830 = ((_824 + _825) + _827) + _829;
+                        _839 = vec2(_825 - _824, _829 - _827) / vec2(_830);
+                        _840 = (uData[1].y * log(_830)) - _818;
                     }
                     else
                     {
-                        highp vec2 _733 = vTextureCoord - uData[56].xy;
-                        highp float _735 = _733.x;
-                        highp float _756;
-                        if (_735 > 0.0)
+                        highp vec2 _739 = vTextureCoord - uData[57].xy;
+                        highp float _741 = _739.x;
+                        highp float _762;
+                        if (_741 > 0.0)
                         {
-                            highp float _755;
-                            if (_733.y > 0.0)
+                            highp float _761;
+                            if (_739.y > 0.0)
                             {
-                                _755 = _724.z;
+                                _761 = _730.z;
                             }
                             else
                             {
-                                _755 = _724.y;
+                                _761 = _730.y;
                             }
-                            _756 = _755;
+                            _762 = _761;
                         }
                         else
                         {
-                            highp float _747;
-                            if (_733.y > 0.0)
+                            highp float _753;
+                            if (_739.y > 0.0)
                             {
-                                _747 = _724.w;
+                                _753 = _730.w;
                             }
                             else
                             {
-                                _747 = _724.x;
+                                _753 = _730.x;
                             }
-                            _756 = _747;
+                            _762 = _753;
                         }
-                        highp vec2 _760 = (abs(_733) - uData[56].zw) + vec2(_756);
-                        highp float _762 = (_735 < 0.0) ? (-1.0) : 1.0;
-                        highp float _765 = (_733.y < 0.0) ? (-1.0) : 1.0;
-                        highp float _767 = _760.x;
-                        bool _773;
-                        if (_767 > 0.0)
+                        highp vec2 _766 = (abs(_739) - uData[57].zw) + vec2(_762);
+                        highp float _768 = (_741 < 0.0) ? (-1.0) : 1.0;
+                        highp float _771 = (_739.y < 0.0) ? (-1.0) : 1.0;
+                        highp float _773 = _766.x;
+                        bool _779;
+                        if (_773 > 0.0)
                         {
-                            _773 = _760.y > 0.0;
-                        }
-                        else
-                        {
-                            _773 = false;
-                        }
-                        highp vec2 _787;
-                        if (_773)
-                        {
-                            _787 = normalize(_760) * vec2(_762, _765);
+                            _779 = _766.y > 0.0;
                         }
                         else
                         {
-                            highp vec2 _784;
-                            if (_767 > _760.y)
+                            _779 = false;
+                        }
+                        highp vec2 _793;
+                        if (_779)
+                        {
+                            _793 = normalize(_766) * vec2(_768, _771);
+                        }
+                        else
+                        {
+                            highp vec2 _790;
+                            if (_773 > _766.y)
                             {
-                                _784 = vec2(_762, 0.0);
+                                _790 = vec2(_768, 0.0);
                             }
                             else
                             {
-                                _784 = vec2(0.0, _765);
+                                _790 = vec2(0.0, _771);
                             }
-                            _787 = _784;
+                            _793 = _790;
                         }
-                        _833 = _787;
-                        _834 = (min(max(_767, _760.y), 0.0) + length(max(_760, vec2(0.0)))) - _756;
+                        _839 = _793;
+                        _840 = (min(max(_773, _766.y), 0.0) + length(max(_766, vec2(0.0)))) - _762;
                     }
-                    highp vec2 _836;
-                    highp float _839;
-                    _836 = _833;
-                    _839 = _834;
-                    highp vec2 _837;
-                    highp float _840;
-                    int _841 = 0;
+                    highp vec2 _842;
+                    highp float _845;
+                    _842 = _839;
+                    _845 = _840;
+                    highp vec2 _843;
+                    highp float _846;
+                    int _847 = 0;
                     for (;;)
                     {
-                        bool _849;
-                        if (_841 < _727)
+                        bool _855;
+                        if (_847 < _733)
                         {
-                            _849 = _841 < 4;
+                            _855 = _847 < 4;
                         }
                         else
                         {
-                            _849 = false;
+                            _855 = false;
                         }
-                        if (_849)
+                        if (_855)
                         {
-                            int _851 = 14 - _841;
-                            int _852 = 3 * _851;
-                            int _853 = 11 + _852;
-                            int _856 = _852 + 12;
-                            if (uData[_856 * 1 + 0].x == 0.0)
+                            int _857 = 14 - _847;
+                            int _858 = 3 * _857;
+                            int _859 = 12 + _858;
+                            int _862 = _858 + 13;
+                            if (uData[_862 * 1 + 0].x == 0.0)
                             {
-                                _837 = _836;
-                                _840 = _839;
-                                int _842 = _841 + 1;
-                                _836 = _837;
-                                _839 = _840;
-                                _841 = _842;
+                                _843 = _842;
+                                _846 = _845;
+                                int _848 = _847 + 1;
+                                _842 = _843;
+                                _845 = _846;
+                                _847 = _848;
                                 continue;
                             }
-                            highp float _865 = clamp(uData[_856 * 1 + 0].x / uData[_856 * 1 + 0].y, 0.0, 1.0);
-                            bool _867 = uData[_853 * 1 + 0].x < 0.5;
-                            highp float _875;
-                            if (_867)
+                            highp float _871 = clamp(uData[_862 * 1 + 0].x / uData[_862 * 1 + 0].y, 0.0, 1.0);
+                            bool _873 = uData[_859 * 1 + 0].x < 0.5;
+                            highp float _881;
+                            if (_873)
                             {
-                                _875 = vTextureCoord.y;
+                                _881 = vTextureCoord.y;
                             }
                             else
                             {
-                                _875 = vTextureCoord.x;
+                                _881 = vTextureCoord.x;
                             }
-                            highp float _883;
-                            if (_867)
+                            highp float _889;
+                            if (_873)
                             {
-                                _883 = vTextureCoord.x;
-                            }
-                            else
-                            {
-                                _883 = vTextureCoord.y;
-                            }
-                            highp float _885 = _883 - uData[_853 * 1 + 0].y;
-                            highp float _886 = uData[_856 * 1 + 0].x * 0.5;
-                            highp float _889 = uData[_853 * 1 + 0].w - uData[_853 * 1 + 0].z;
-                            highp float _890 = smoothstep(0.0, 0.60000002384185791015625, _865);
-                            highp float _919;
-                            highp float _920;
-                            if (uData[_856 * 1 + 0].w > 2.5)
-                            {
-                                highp float _910 = _875 - ((uData[_853 * 1 + 0].z + uData[_853 * 1 + 0].w) * 0.5);
-                                _919 = (_910 < 0.0) ? 1.0 : (-1.0);
-                                _920 = max(((_889 * 0.5) * (1.0 - _890)) - abs(_910), 0.0);
+                                _889 = vTextureCoord.x;
                             }
                             else
                             {
-                                bool _896 = uData[_856 * 1 + 0].w < 1.5;
-                                highp float _902;
-                                if (_896)
+                                _889 = vTextureCoord.y;
+                            }
+                            highp float _891 = _889 - uData[_859 * 1 + 0].y;
+                            highp float _892 = uData[_862 * 1 + 0].x * 0.5;
+                            highp float _895 = uData[_859 * 1 + 0].w - uData[_859 * 1 + 0].z;
+                            highp float _896 = smoothstep(0.0, 0.60000002384185791015625, _871);
+                            highp float _925;
+                            highp float _926;
+                            if (uData[_862 * 1 + 0].w > 2.5)
+                            {
+                                highp float _916 = _881 - ((uData[_859 * 1 + 0].z + uData[_859 * 1 + 0].w) * 0.5);
+                                _925 = (_916 < 0.0) ? 1.0 : (-1.0);
+                                _926 = max(((_895 * 0.5) * (1.0 - _896)) - abs(_916), 0.0);
+                            }
+                            else
+                            {
+                                bool _902 = uData[_862 * 1 + 0].w < 1.5;
+                                highp float _908;
+                                if (_902)
                                 {
-                                    _902 = _875 - uData[_853 * 1 + 0].z;
+                                    _908 = _881 - uData[_859 * 1 + 0].z;
                                 }
                                 else
                                 {
-                                    _902 = uData[_853 * 1 + 0].w - _875;
+                                    _908 = uData[_859 * 1 + 0].w - _881;
                                 }
-                                _919 = _896 ? 1.0 : (-1.0);
-                                _920 = max(_902 - ((_889 - _886) * _890), 0.0);
+                                _925 = _902 ? 1.0 : (-1.0);
+                                _926 = max(_908 - ((_895 - _892) * _896), 0.0);
                             }
-                            highp float _922 = length(vec2(_885, _920));
-                            highp float _923 = _922 - _886;
-                            highp vec2 _938;
-                            if (_922 > 0.0)
+                            highp float _928 = length(vec2(_891, _926));
+                            highp float _929 = _928 - _892;
+                            highp vec2 _944;
+                            if (_928 > 0.0)
                             {
-                                highp vec2 _932 = vec2(-_885, (-_920) * _919) / vec2(_922);
-                                highp vec2 _937;
-                                if (uData[_853 * 1 + 0].x > 0.5)
+                                highp vec2 _938 = vec2(-_891, (-_926) * _925) / vec2(_928);
+                                highp vec2 _943;
+                                if (uData[_859 * 1 + 0].x > 0.5)
                                 {
-                                    _937 = _932.yx;
+                                    _943 = _938.yx;
                                 }
                                 else
                                 {
-                                    _937 = _932;
+                                    _943 = _938;
                                 }
-                                _938 = _937;
+                                _944 = _943;
                             }
                             else
                             {
-                                _938 = vec2(0.0);
+                                _944 = vec2(0.0);
                             }
-                            highp float _940 = uData[_856 * 1 + 0].z * _865;
-                            highp vec2 _944 = max(vec2(_940 + _839, _940 - _923), vec2(0.0));
-                            highp float _945 = length(_944);
-                            bool _950;
-                            if (_940 > 0.0)
+                            highp float _946 = uData[_862 * 1 + 0].z * _871;
+                            highp vec2 _950 = max(vec2(_946 + _845, _946 - _929), vec2(0.0));
+                            highp float _951 = length(_950);
+                            bool _956;
+                            if (_946 > 0.0)
                             {
-                                _950 = _945 > 0.0;
+                                _956 = _951 > 0.0;
                             }
                             else
                             {
-                                _950 = false;
+                                _956 = false;
                             }
-                            highp vec2 _965;
-                            if (_950)
+                            highp vec2 _971;
+                            if (_956)
                             {
-                                _965 = ((_836 * _944.x) + (_938 * _944.y)) / vec2(_945);
+                                _971 = ((_842 * _950.x) + (_944 * _950.y)) / vec2(_951);
                             }
                             else
                             {
-                                bvec2 _956 = bvec2((-_923) > _839);
-                                _965 = vec2(_956.x ? _938.x : _836.x, _956.y ? _938.y : _836.y);
+                                bvec2 _962 = bvec2((-_929) > _845);
+                                _971 = vec2(_962.x ? _944.x : _842.x, _962.y ? _944.y : _842.y);
                             }
-                            highp float _966 = -_923;
-                            highp float _977;
+                            highp float _972 = -_929;
+                            highp float _983;
                             do
                             {
-                                if (_940 == 0.0)
+                                if (_946 == 0.0)
                                 {
-                                    _977 = max(_839, _966);
+                                    _983 = max(_845, _972);
                                     break;
                                 }
-                                _977 = min(-_940, max(_839, _966)) + _945;
+                                _983 = min(-_946, max(_845, _972)) + _951;
                                 break;
                             } while(false);
-                            _837 = _965;
-                            _840 = _977;
-                            int _842 = _841 + 1;
-                            _836 = _837;
-                            _839 = _840;
-                            _841 = _842;
+                            _843 = _971;
+                            _846 = _983;
+                            int _848 = _847 + 1;
+                            _842 = _843;
+                            _845 = _846;
+                            _847 = _848;
                             continue;
                         }
                         else
@@ -785,57 +787,54 @@ void main()
                             break;
                         }
                     }
-                    _978 = _836;
-                    _979 = _839;
+                    _984 = _842;
+                    _985 = _845;
                 }
                 else
                 {
-                    highp vec2 _713;
-                    highp float _714;
-                    if (_206.w < 0.5)
+                    highp vec2 _719;
+                    highp float _720;
+                    if (_212.w < 0.5)
                     {
-                        highp float _679 = (vTextureCoord.x - _207.x) + _207.z;
-                        highp float _681 = (_207.x + _207.z) - vTextureCoord.x;
-                        highp float _686 = (vTextureCoord.y - _207.y) + _207.w;
-                        highp float _688 = (_207.y + _207.w) - vTextureCoord.y;
-                        highp float _692 = min(min(_679, _681), min(_686, _688));
-                        highp vec4 _697 = exp((vec4(_692) - vec4(_679, _681, _686, _688)) / vec4(uData[1].y));
-                        highp float _698 = _697.x;
-                        highp float _699 = _697.y;
-                        highp float _701 = _697.z;
-                        highp float _703 = _697.w;
-                        highp float _704 = ((_698 + _699) + _701) + _703;
-                        _713 = vec2(_699 - _698, _703 - _701) / vec2(_704);
-                        _714 = (uData[1].y * log(_704)) - _692;
+                        highp float _685 = (vTextureCoord.x - _213.x) + _213.z;
+                        highp float _687 = (_213.x + _213.z) - vTextureCoord.x;
+                        highp float _692 = (vTextureCoord.y - _213.y) + _213.w;
+                        highp float _694 = (_213.y + _213.w) - vTextureCoord.y;
+                        highp float _698 = min(min(_685, _687), min(_692, _694));
+                        highp vec4 _703 = exp((vec4(_698) - vec4(_685, _687, _692, _694)) / vec4(uData[1].y));
+                        highp float _704 = _703.x;
+                        highp float _705 = _703.y;
+                        highp float _707 = _703.z;
+                        highp float _709 = _703.w;
+                        highp float _710 = ((_704 + _705) + _707) + _709;
+                        _719 = vec2(_705 - _704, _709 - _707) / vec2(_710);
+                        _720 = (uData[1].y * log(_710)) - _698;
                     }
                     else
                     {
-                        _713 = _498;
-                        _714 = _499;
+                        _719 = _504;
+                        _720 = _505;
                     }
-                    _978 = _713;
-                    _979 = _714;
+                    _984 = _719;
+                    _985 = _720;
                 }
-                bool _980 = _979 < _156;
-                if (_980)
+                bool _986 = _985 < _164;
+                if (_986)
                 {
-                    _149 = _152;
-                    _155 = _156;
+                    _159 = _160;
+                    _163 = _164;
                 }
                 else
                 {
-                    bool _984 = _979 < _154;
-                    bvec2 _985 = bvec2(_984);
-                    _149 = vec2(_985.x ? _978.x : _148.x, _985.y ? _978.y : _148.y);
-                    _155 = _984 ? _979 : _154;
+                    bool _990 = _985 < _162;
+                    bvec2 _991 = bvec2(_990);
+                    _159 = vec2(_991.x ? _984.x : _158.x, _991.y ? _984.y : _158.y);
+                    _163 = _990 ? _985 : _162;
                 }
-                bvec2 _988 = bvec2(_980);
-                _153 = vec2(_988.x ? _978.x : _152.x, _988.y ? _978.y : _152.y);
-                _157 = _980 ? _979 : _156;
-                _141 = _142;
-                _144 = _145;
-                _146 = _147;
-                _148 = _149;
+                bvec2 _994 = bvec2(_986);
+                _161 = vec2(_994.x ? _984.x : _160.x, _994.y ? _984.y : _160.y);
+                _165 = _986 ? _985 : _164;
+                _147 = _148;
                 _150 = _151;
                 _152 = _153;
                 _154 = _155;
@@ -846,7 +845,10 @@ void main()
                 _164 = _165;
                 _166 = _167;
                 _168 = _169;
-                _170++;
+                _170 = _171;
+                _172 = _173;
+                _174 = _175;
+                _176++;
                 continue;
             }
             else
@@ -854,608 +856,882 @@ void main()
                 break;
             }
         }
-        bool _998;
-        if (uData[58].w > 2.5)
+        bool _1004;
+        if (uData[59].w > 2.5)
         {
-            _998 = uData[58].w < 3.5;
+            _1004 = uData[59].w < 3.5;
         }
         else
         {
-            _998 = false;
+            _1004 = false;
         }
-        bool _999 = uData[58].w > 1.5;
-        bool _1003;
-        if (_999)
+        bool _1005 = uData[59].w > 1.5;
+        bool _1009;
+        if (_1005)
         {
-            _1003 = uData[58].w < 3.5;
+            _1009 = uData[59].w < 3.5;
         }
         else
         {
-            _1003 = false;
+            _1009 = false;
         }
-        highp float _1076;
-        highp vec2 _1077;
-        if (_1003)
+        highp float _1082;
+        highp vec2 _1083;
+        if (_1009)
         {
-            highp vec2 _1009 = vTextureCoord - uData[56].xy;
-            highp vec4 _1015 = min(uData[57], vec4(min(uData[56].z, uData[56].w)));
-            highp float _1016 = _1009.x;
-            highp float _1037;
-            if (_1016 > 0.0)
+            highp vec2 _1015 = vTextureCoord - uData[57].xy;
+            highp vec4 _1021 = min(uData[58], vec4(min(uData[57].z, uData[57].w)));
+            highp float _1022 = _1015.x;
+            highp float _1043;
+            if (_1022 > 0.0)
             {
-                highp float _1036;
-                if (_1009.y > 0.0)
+                highp float _1042;
+                if (_1015.y > 0.0)
                 {
-                    _1036 = _1015.z;
+                    _1042 = _1021.z;
                 }
                 else
                 {
-                    _1036 = _1015.y;
+                    _1042 = _1021.y;
                 }
-                _1037 = _1036;
+                _1043 = _1042;
             }
             else
             {
-                highp float _1028;
-                if (_1009.y > 0.0)
+                highp float _1034;
+                if (_1015.y > 0.0)
                 {
-                    _1028 = _1015.w;
+                    _1034 = _1021.w;
                 }
                 else
                 {
-                    _1028 = _1015.x;
+                    _1034 = _1021.x;
                 }
-                _1037 = _1028;
+                _1043 = _1034;
             }
-            highp vec2 _1041 = (abs(_1009) - uData[56].zw) + vec2(_1037);
-            highp float _1043 = (_1016 < 0.0) ? (-1.0) : 1.0;
-            highp float _1046 = (_1009.y < 0.0) ? (-1.0) : 1.0;
-            highp float _1048 = _1041.x;
-            bool _1054;
-            if (_1048 > 0.0)
+            highp vec2 _1047 = (abs(_1015) - uData[57].zw) + vec2(_1043);
+            highp float _1049 = (_1022 < 0.0) ? (-1.0) : 1.0;
+            highp float _1052 = (_1015.y < 0.0) ? (-1.0) : 1.0;
+            highp float _1054 = _1047.x;
+            bool _1060;
+            if (_1054 > 0.0)
             {
-                _1054 = _1041.y > 0.0;
-            }
-            else
-            {
-                _1054 = false;
-            }
-            highp vec2 _1068;
-            if (_1054)
-            {
-                _1068 = normalize(_1041) * vec2(_1043, _1046);
+                _1060 = _1047.y > 0.0;
             }
             else
             {
-                highp vec2 _1065;
-                if (_1048 > _1041.y)
+                _1060 = false;
+            }
+            highp vec2 _1074;
+            if (_1060)
+            {
+                _1074 = normalize(_1047) * vec2(_1049, _1052);
+            }
+            else
+            {
+                highp vec2 _1071;
+                if (_1054 > _1047.y)
                 {
-                    _1065 = vec2(_1043, 0.0);
+                    _1071 = vec2(_1049, 0.0);
                 }
                 else
                 {
-                    _1065 = vec2(0.0, _1046);
+                    _1071 = vec2(0.0, _1052);
                 }
-                _1068 = _1065;
+                _1074 = _1071;
             }
-            _1076 = (min(max(_1048, _1041.y), 0.0) + length(max(_1041, vec2(0.0)))) - _1037;
-            _1077 = _1068;
+            _1082 = (min(max(_1054, _1047.y), 0.0) + length(max(_1047, vec2(0.0)))) - _1043;
+            _1083 = _1074;
         }
         else
         {
-            _1076 = -1000000000.0;
-            _1077 = vec2(0.0);
+            _1082 = -1000000000.0;
+            _1083 = vec2(0.0);
         }
-        bool _1081;
-        if (_999)
+        bool _1087;
+        if (_1005)
         {
-            _1081 = uData[58].w < 3.5;
+            _1087 = uData[59].w < 3.5;
         }
         else
         {
-            _1081 = false;
+            _1087 = false;
         }
-        bool _1085;
-        if (_1081)
+        bool _1091;
+        if (_1087)
         {
-            _1085 = !_998;
+            _1091 = !_1004;
         }
         else
         {
-            _1085 = false;
+            _1091 = false;
         }
-        highp vec2 _1130;
-        highp vec2 _1131;
-        highp float _1132;
-        highp vec2 _1133;
-        highp vec2 _1134;
-        highp vec2 _1135;
-        highp vec2 _1136;
+        highp vec4 _1136;
         highp vec4 _1137;
-        highp vec4 _1138;
-        highp float _1139;
+        highp vec2 _1138;
+        highp vec2 _1139;
         highp float _1140;
-        highp float _1141;
-        highp float _1142;
-        if (_1085)
+        highp vec2 _1141;
+        highp vec2 _1142;
+        highp vec2 _1143;
+        highp vec2 _1144;
+        highp float _1145;
+        highp float _1146;
+        highp float _1147;
+        highp float _1148;
+        if (_1091)
         {
-            highp float _1088 = 1.0 - _1076;
-            bool _1089 = _1088 < _166;
-            highp vec2 _1105;
-            highp vec2 _1106;
-            highp float _1107;
-            highp vec2 _1108;
-            highp vec4 _1109;
-            highp float _1110;
-            if (_1089)
+            highp float _1094 = 1.0 - _1082;
+            bool _1095 = _1094 < _172;
+            highp vec4 _1111;
+            highp vec2 _1112;
+            highp vec2 _1113;
+            highp float _1114;
+            highp vec2 _1115;
+            highp float _1116;
+            if (_1095)
             {
-                _1105 = _160;
-                _1106 = uData[56].yw;
-                _1107 = _168;
-                _1108 = _158;
-                _1109 = _162;
-                _1110 = _166;
+                _1111 = _150;
+                _1112 = _168;
+                _1113 = uData[57].yw;
+                _1114 = _174;
+                _1115 = _166;
+                _1116 = _172;
             }
             else
             {
-                bool _1093 = _1088 < _164;
-                highp vec2 _1097;
-                if (_1093)
+                bool _1099 = _1094 < _170;
+                highp vec2 _1103;
+                if (_1099)
                 {
-                    _1097 = uData[56].yw;
+                    _1103 = uData[57].yw;
                 }
                 else
                 {
-                    _1097 = _141;
+                    _1103 = _152;
                 }
-                bvec2 _1099 = bvec2(_1093);
-                bvec4 _1101 = bvec4(_1093);
-                _1105 = _1097;
-                _1106 = _160;
-                _1107 = _1093 ? _168 : _144;
-                _1108 = vec2(_1099.x ? vec2(0.0).x : _146.x, _1099.y ? vec2(0.0).y : _146.y);
-                _1109 = vec4(_1101.x ? uData[58].x : _150.x, _1101.y ? uData[58].y : _150.y, _1101.z ? uData[58].z : _150.z, _1101.w ? uData[58].w : _150.w);
-                _1110 = _1093 ? _1088 : _164;
+                bvec4 _1104 = bvec4(_1099);
+                bvec2 _1107 = bvec2(_1099);
+                _1111 = vec4(_1104.x ? uData[59].x : _147.x, _1104.y ? uData[59].y : _147.y, _1104.z ? uData[59].z : _147.z, _1104.w ? uData[59].w : _147.w);
+                _1112 = _1103;
+                _1113 = _168;
+                _1114 = _1099 ? _174 : _154;
+                _1115 = vec2(_1107.x ? vec2(0.0).x : _156.x, _1107.y ? vec2(0.0).y : _156.y);
+                _1116 = _1099 ? _1094 : _170;
             }
-            bvec2 _1111 = bvec2(_1089);
-            bvec4 _1113 = bvec4(_1089);
-            highp vec2 _1116 = -_1077;
-            bool _1117 = _1088 < _156;
-            highp vec2 _1125;
-            highp float _1126;
-            if (_1117)
+            bvec4 _1117 = bvec4(_1095);
+            bvec2 _1119 = bvec2(_1095);
+            highp vec2 _1122 = -_1083;
+            bool _1123 = _1094 < _164;
+            highp vec2 _1131;
+            highp float _1132;
+            if (_1123)
             {
-                _1125 = _152;
-                _1126 = _156;
+                _1131 = _160;
+                _1132 = _164;
             }
             else
             {
-                bool _1121 = _1088 < _154;
-                bvec2 _1122 = bvec2(_1121);
-                _1125 = vec2(_1122.x ? _1116.x : _148.x, _1122.y ? _1116.y : _148.y);
-                _1126 = _1121 ? _1088 : _154;
+                bool _1127 = _1094 < _162;
+                bvec2 _1128 = bvec2(_1127);
+                _1131 = vec2(_1128.x ? _1122.x : _158.x, _1128.y ? _1122.y : _158.y);
+                _1132 = _1127 ? _1094 : _162;
             }
-            bvec2 _1127 = bvec2(_1117);
-            _1130 = _1105;
-            _1131 = _1106;
-            _1132 = _1107;
-            _1133 = _1108;
-            _1134 = vec2(_1111.x ? vec2(0.0).x : _158.x, _1111.y ? vec2(0.0).y : _158.y);
-            _1135 = _1125;
-            _1136 = vec2(_1127.x ? _1116.x : _152.x, _1127.y ? _1116.y : _152.y);
-            _1137 = _1109;
-            _1138 = vec4(_1113.x ? uData[58].x : _162.x, _1113.y ? uData[58].y : _162.y, _1113.z ? uData[58].z : _162.z, _1113.w ? uData[58].w : _162.w);
-            _1139 = _1126;
-            _1140 = _1117 ? _1088 : _156;
-            _1141 = _1110;
-            _1142 = _1089 ? _1088 : _166;
+            bvec2 _1133 = bvec2(_1123);
+            _1136 = _1111;
+            _1137 = vec4(_1117.x ? uData[59].x : _150.x, _1117.y ? uData[59].y : _150.y, _1117.z ? uData[59].z : _150.z, _1117.w ? uData[59].w : _150.w);
+            _1138 = _1112;
+            _1139 = _1113;
+            _1140 = _1114;
+            _1141 = _1115;
+            _1142 = vec2(_1119.x ? vec2(0.0).x : _166.x, _1119.y ? vec2(0.0).y : _166.y);
+            _1143 = _1131;
+            _1144 = vec2(_1133.x ? _1122.x : _160.x, _1133.y ? _1122.y : _160.y);
+            _1145 = _1132;
+            _1146 = _1123 ? _1094 : _164;
+            _1147 = _1116;
+            _1148 = _1095 ? _1094 : _172;
         }
         else
         {
-            _1130 = _141;
-            _1131 = _160;
-            _1132 = _144;
-            _1133 = _146;
-            _1134 = _158;
-            _1135 = _148;
-            _1136 = _152;
+            _1136 = _147;
             _1137 = _150;
-            _1138 = _162;
-            _1139 = _154;
-            _1140 = _156;
-            _1141 = _164;
+            _1138 = _152;
+            _1139 = _168;
+            _1140 = _154;
+            _1141 = _156;
             _1142 = _166;
+            _1143 = _158;
+            _1144 = _160;
+            _1145 = _162;
+            _1146 = _164;
+            _1147 = _170;
+            _1148 = _172;
         }
-        highp float _1144 = max(uData[1].x, 9.9999997473787516355514526367188e-05);
-        highp float _1149 = max(_1144 - abs(_1142 - _1141), 0.0) / _1144;
-        highp float _1150 = _1149 * _1149;
-        highp float _1151 = _1150 * 0.5;
-        highp float _1156;
-        if (_1141 < _1142)
+        highp float _1150 = max(uData[1].x, 9.9999997473787516355514526367188e-05);
+        highp float _1155 = max(_1150 - abs(_1148 - _1147), 0.0) / _1150;
+        highp float _1156 = _1155 * _1155;
+        highp float _1157 = _1156 * 0.5;
+        highp float _1162;
+        if (_1147 < _1148)
         {
-            _1156 = 1.0 - _1151;
+            _1162 = 1.0 - _1157;
         }
         else
         {
-            _1156 = _1151;
+            _1162 = _1157;
         }
-        highp float _1160 = min(_1142, _1141) - ((_1150 * _1144) * 0.25);
-        highp float _1165 = max(_1144 - abs(_1140 - _1139), 0.0) / _1144;
-        highp float _1166 = _1165 * _1165;
-        highp float _1167 = _1166 * 0.5;
-        highp float _1172;
-        if (_1139 < _1140)
+        highp float _1166 = min(_1148, _1147) - ((_1156 * _1150) * 0.25);
+        highp float _1171 = max(_1150 - abs(_1146 - _1145), 0.0) / _1150;
+        highp float _1172 = _1171 * _1171;
+        highp float _1173 = _1172 * 0.5;
+        highp float _1178;
+        if (_1145 < _1146)
         {
-            _1172 = 1.0 - _1167;
+            _1178 = 1.0 - _1173;
         }
         else
         {
-            _1172 = _1167;
+            _1178 = _1173;
         }
-        highp float _1176 = min(_1140, _1139) - ((_1166 * _1144) * 0.25);
-        highp float _1180;
-        if (_998)
+        highp float _1182 = min(_1146, _1145) - ((_1172 * _1150) * 0.25);
+        highp float _1186;
+        if (_1004)
         {
-            _1180 = max(_1160, _1076);
+            _1186 = max(_1166, _1082);
         }
         else
         {
-            _1180 = _1160;
+            _1186 = _1166;
         }
-        highp float _1183 = clamp(0.5 - max(_1180, _1076), 0.0, 1.0);
-        if (_1183 <= 0.0)
-        {
-            discard;
-        }
-        if (vColor.x < 0.5)
-        {
-            _1712 = vec4(0.0, 0.0, 0.0, _1183);
-            break;
-        }
-        highp vec4 _1194 = mix(_1138, _1137, vec4(_1156));
-        highp vec2 _1196 = mix(_1136, _1135, vec2(_1172));
+        highp float _1188 = uData[2].z * 1.25;
+        bool _1189 = _1188 <= 1.25;
+        highp float _1194 = clamp(0.5 - (max(_1186, _1082) / (_1189 ? 1.39999997615814208984375 : 1.0)), 0.0, 1.0);
         bool _1200;
-        if (_998)
+        if (uData[11].w > 0.0)
         {
-            _1200 = _1076 > _1176;
+            _1200 = _1194 < 1.0;
         }
         else
         {
             _1200 = false;
         }
-        bvec2 _1202 = bvec2(_1200);
-        highp vec2 _1203 = vec2(_1202.x ? _1077.x : _1196.x, _1202.y ? _1077.y : _1196.y);
-        highp vec2 _1204 = vec2(_1156);
-        highp vec2 _1208 = mix(_1134, _1133, _1204) * min(length(_1203), 1.0);
-        highp float _1210 = max(0.0, -(_1200 ? _1076 : _1176));
-        highp float _1211 = -_1210;
-        highp float _1214 = exp(_1211 / uData[1].z);
-        highp float _1220 = _1194.y;
-        highp float _1254;
-        highp float _1255;
-        highp vec2 _1256;
-        if (_139)
+        highp float _1458;
+        if (_1200)
         {
-            highp float _1238 = max(min(uData[5].y * mix(_168, _1132, _1156), uData[6].w), 1.0);
-            highp float _1241 = clamp(1.0 - (_1210 / _1238), 0.0, 1.0);
-            highp float _1246 = (((uData[5].z * _1238) * _1220) * _1241) * _1241;
-            _1254 = _1241;
-            _1255 = _1246;
-            _1256 = clamp(((vTextureCoord - (_1203 * _1246)) - uData[0].xy) * uData[0].zw, vec2(0.0), vec2(1.0));
-        }
-        else
-        {
-            _1254 = 0.0;
-            _1255 = 0.0;
-            _1256 = clamp(((vTextureCoord + (_1203 * ((uData[2].x * _1220) * _1214))) - uData[0].xy) * uData[0].zw, vec2(0.0), vec2(1.0));
-        }
-        highp vec4 _1260 = textureLod(uSampler, _1256, 0.0);
-        bool _1262 = uData[4].w > 0.5;
-        highp vec4 _1270;
-        if (_1262)
-        {
-            _1270 = textureLod(uTex1, _1256, 0.0);
-        }
-        else
-        {
-            _1270 = _1260;
-        }
-        bool _1275;
-        if (_139)
-        {
-            _1275 = uData[6].y > 0.0;
-        }
-        else
-        {
-            _1275 = false;
-        }
-        bool _1279;
-        if (_1275)
-        {
-            _1279 = _1255 > 0.5;
-        }
-        else
-        {
-            _1279 = false;
-        }
-        highp vec4 _1340;
-        highp vec4 _1341;
-        if (_1279)
-        {
-            highp vec2 _1287 = (_1203 * ((_1255 * 0.039999999105930328369140625) * uData[6].y)) * uData[0].zw;
-            highp vec2 _1289 = clamp(_1256 + _1287, vec2(0.0), vec2(1.0));
-            highp vec2 _1291 = clamp(_1256 - _1287, vec2(0.0), vec2(1.0));
-            highp vec4 _1295 = textureLod(uSampler, _1289, 0.0);
-            highp float _1300 = _1260.w;
-            highp float _1301 = (_1295.x / max(_1295.w, 9.9999997473787516355514526367188e-05)) * _1300;
-            highp vec4 _1302 = _1260;
-            _1302.x = _1301;
-            highp vec4 _1306 = textureLod(uSampler, _1291, 0.0);
-            highp float _1311 = (_1306.z / max(_1306.w, 9.9999997473787516355514526367188e-05)) * _1300;
-            _1302.z = _1311;
-            highp vec4 _1339;
-            if (_1262)
+            highp vec2 _1204 = vTextureCoord - uData[11].yz;
+            highp float _1206;
+            highp float _1209;
+            _1206 = 1000000000.0;
+            _1209 = 1000000000.0;
+            highp float _1210;
+            highp float _1207;
+            int _1211 = _114;
+            for (;;)
             {
-                highp vec4 _1321 = textureLod(uTex1, _1289, 0.0);
-                highp vec4 _1328 = _1270;
-                _1328.x = (_1321.x / max(_1321.w, 9.9999997473787516355514526367188e-05)) * _1270.w;
-                highp vec4 _1332 = textureLod(uTex1, _1291, 0.0);
-                _1328.z = (_1332.z / max(_1332.w, 9.9999997473787516355514526367188e-05)) * _1270.w;
-                _1339 = _1328;
-            }
-            else
-            {
-                highp vec4 _1316 = _1270;
-                _1316.x = _1301;
-                _1316.z = _1311;
-                _1339 = _1316;
-            }
-            _1340 = _1339;
-            _1341 = _1302;
-        }
-        else
-        {
-            _1340 = _1270;
-            _1341 = _1260;
-        }
-        bool _1343 = uData[4].x > 1.5;
-        highp float _1357;
-        if (_1343)
-        {
-            _1357 = uData[3].w;
-        }
-        else
-        {
-            highp float _1355;
-            if ((uData[6].x - 2.0 * trunc(uData[6].x / 2.0)) > 0.5)
-            {
-                _1355 = 1.0;
-            }
-            else
-            {
-                _1355 = _1341.w;
-            }
-            _1357 = _1355;
-        }
-        highp vec4 _1366 = vec4(_1341.xyz / vec3(max(_1341.w, 9.9999997473787516355514526367188e-05)), 1.0);
-        highp vec4 _1375 = vec4(_1340.xyz / vec3(max(_1340.w, 9.9999997473787516355514526367188e-05)), 1.0);
-        highp float _1382;
-        if (_1343)
-        {
-            _1382 = 1.0;
-        }
-        else
-        {
-            _1382 = (uData[4].z > 0.5) ? uData[4].x : 0.0;
-        }
-        bool _1386;
-        if (_139)
-        {
-            _1386 = !_1343;
-        }
-        else
-        {
-            _1386 = false;
-        }
-        highp float _1395;
-        if (_1386)
-        {
-            _1395 = _1382 * (1.0 - ((_1254 * _1254) * (1.0 - smoothstep(0.800000011920928955078125, 1.0, _1382))));
-        }
-        else
-        {
-            _1395 = _1382;
-        }
-        highp float _1398 = 1.0 - _1395;
-        highp float _1406;
-        if (_139)
-        {
-            _1406 = _1254;
-        }
-        else
-        {
-            _1406 = _1214 * _1214;
-        }
-        highp float _1409 = clamp(((uData[2].y * _1220) * _1406) * _1398, 0.0, 1.0);
-        highp vec4 _1415 = ((_1375 * _1409) + ((mix(_1375, _1366, vec4(clamp(_1194.x, 0.0, 1.0))) * _1398) * (1.0 - _1409))) + (uData[3] * _1395);
-        highp vec4 _1458;
-        if (_1343)
-        {
-            _1458 = vec4(uData[3].xyz / vec3(max(uData[3].w, 9.9999997473787516355514526367188e-05)), 1.0);
-        }
-        else
-        {
-            highp vec4 _1422 = _1415 + (_1366 * (1.0 - _1415.w));
-            highp vec4 _1448;
-            if (uData[7].w < 1.0)
-            {
-                highp vec3 _1427 = _1422.xyz;
-                highp float _1428 = dot(_1427, vec3(0.2125999927520751953125, 0.715200006961822509765625, 0.072200000286102294921875));
-                highp float _1429 = 0.60000002384185791015625 * uData[7].w;
-                highp float _1431 = max(uData[7].w - _1429, 9.9999997473787516355514526367188e-05);
-                highp float _1443;
-                if (_1428 <= _1429)
+                bool _1219;
+                if (_1211 < _180)
                 {
-                    _1443 = _1428;
+                    _1219 = _1211 < 16;
                 }
                 else
                 {
-                    _1443 = _1429 + (_1431 * (1.0 - exp((-(_1428 - _1429)) / _1431)));
+                    _1219 = false;
                 }
-                highp vec3 _1446 = _1427 * (_1443 / max(_1428, 9.9999997473787516355514526367188e-05));
-                _1448 = vec4(_1446.x, _1446.y, _1446.z, _1422.w);
+                if (_1219)
+                {
+                    int _1221 = 3 * _1211;
+                    int _1222 = 12 + _1221;
+                    int _1228 = _1221 + 14;
+                    bool _1236;
+                    if (uData[_1228 * 1 + 0].w >= (-0.5))
+                    {
+                        _1236 = uData[_1228 * 1 + 0].w > 3.5;
+                    }
+                    else
+                    {
+                        _1236 = true;
+                    }
+                    highp float _1427;
+                    if (_1236)
+                    {
+                        highp vec4 _1288 = min(uData[58], vec4(min(uData[57].z, uData[57].w)));
+                        int _1291 = int(uData[59].z);
+                        highp vec2 _1293 = _1204 - uData[57].xy;
+                        highp float _1316;
+                        if (_1293.x > 0.0)
+                        {
+                            highp float _1315;
+                            if (_1293.y > 0.0)
+                            {
+                                _1315 = _1288.z;
+                            }
+                            else
+                            {
+                                _1315 = _1288.y;
+                            }
+                            _1316 = _1315;
+                        }
+                        else
+                        {
+                            highp float _1307;
+                            if (_1293.y > 0.0)
+                            {
+                                _1307 = _1288.w;
+                            }
+                            else
+                            {
+                                _1307 = _1288.x;
+                            }
+                            _1316 = _1307;
+                        }
+                        highp vec2 _1320 = (abs(_1293) - uData[57].zw) + vec2(_1316);
+                        highp float _1330;
+                        _1330 = (min(max(_1320.x, _1320.y), 0.0) + length(max(_1320, vec2(0.0)))) - _1316;
+                        highp float _1331;
+                        int _1333 = 0;
+                        for (;;)
+                        {
+                            bool _1341;
+                            if (_1333 < _1291)
+                            {
+                                _1341 = _1333 < 4;
+                            }
+                            else
+                            {
+                                _1341 = false;
+                            }
+                            if (_1341)
+                            {
+                                int _1343 = 14 - _1333;
+                                int _1344 = 3 * _1343;
+                                int _1345 = 12 + _1344;
+                                int _1348 = _1344 + 13;
+                                if (uData[_1348 * 1 + 0].x == 0.0)
+                                {
+                                    _1331 = _1330;
+                                    int _1334 = _1333 + 1;
+                                    _1330 = _1331;
+                                    _1333 = _1334;
+                                    continue;
+                                }
+                                highp float _1357 = clamp(uData[_1348 * 1 + 0].x / uData[_1348 * 1 + 0].y, 0.0, 1.0);
+                                bool _1359 = uData[_1345 * 1 + 0].x < 0.5;
+                                highp float _1365;
+                                if (_1359)
+                                {
+                                    _1365 = _1204.y;
+                                }
+                                else
+                                {
+                                    _1365 = _1204.x;
+                                }
+                                highp float _1371;
+                                if (_1359)
+                                {
+                                    _1371 = _1204.x;
+                                }
+                                else
+                                {
+                                    _1371 = _1204.y;
+                                }
+                                highp float _1374 = uData[_1348 * 1 + 0].x * 0.5;
+                                highp float _1377 = uData[_1345 * 1 + 0].w - uData[_1345 * 1 + 0].z;
+                                highp float _1378 = smoothstep(0.0, 0.60000002384185791015625, _1357);
+                                highp float _1404;
+                                if (uData[_1348 * 1 + 0].w > 2.5)
+                                {
+                                    _1404 = max(((_1377 * 0.5) * (1.0 - _1378)) - abs(_1365 - ((uData[_1345 * 1 + 0].z + uData[_1345 * 1 + 0].w) * 0.5)), 0.0);
+                                }
+                                else
+                                {
+                                    highp float _1390;
+                                    if (uData[_1348 * 1 + 0].w < 1.5)
+                                    {
+                                        _1390 = _1365 - uData[_1345 * 1 + 0].z;
+                                    }
+                                    else
+                                    {
+                                        _1390 = uData[_1345 * 1 + 0].w - _1365;
+                                    }
+                                    _1404 = max(_1390 - ((_1377 - _1374) * _1378), 0.0);
+                                }
+                                highp float _1407 = length(vec2(_1371 - uData[_1345 * 1 + 0].y, _1404)) - _1374;
+                                highp float _1409 = uData[_1348 * 1 + 0].z * _1357;
+                                highp float _1410 = -_1407;
+                                highp float _1426;
+                                do
+                                {
+                                    if (_1409 == 0.0)
+                                    {
+                                        _1426 = max(_1330, _1410);
+                                        break;
+                                    }
+                                    _1426 = min(-_1409, max(_1330, _1410)) + length(max(vec2(_1409 + _1330, _1409 - _1407), vec2(0.0)));
+                                    break;
+                                } while(false);
+                                _1331 = _1426;
+                                int _1334 = _1333 + 1;
+                                _1330 = _1331;
+                                _1333 = _1334;
+                                continue;
+                            }
+                            else
+                            {
+                                break;
+                            }
+                        }
+                        _1427 = _1330;
+                    }
+                    else
+                    {
+                        highp vec2 _1241 = _1204 - uData[_1222 * 1 + 0].xy;
+                        highp vec4 _1247 = min(uData[(_1221 + 13) * 1 + 0], vec4(min(uData[_1222 * 1 + 0].z, uData[_1222 * 1 + 0].w)));
+                        highp float _1269;
+                        if (_1241.x > 0.0)
+                        {
+                            highp float _1268;
+                            if (_1241.y > 0.0)
+                            {
+                                _1268 = _1247.z;
+                            }
+                            else
+                            {
+                                _1268 = _1247.y;
+                            }
+                            _1269 = _1268;
+                        }
+                        else
+                        {
+                            highp float _1260;
+                            if (_1241.y > 0.0)
+                            {
+                                _1260 = _1247.w;
+                            }
+                            else
+                            {
+                                _1260 = _1247.x;
+                            }
+                            _1269 = _1260;
+                        }
+                        highp vec2 _1273 = (abs(_1241) - uData[_1222 * 1 + 0].zw) + vec2(_1269);
+                        _1427 = (min(max(_1273.x, _1273.y), 0.0) + length(max(_1273, vec2(0.0)))) - _1269;
+                    }
+                    bool _1428 = _1427 < _1209;
+                    if (_1428)
+                    {
+                        _1207 = _1209;
+                    }
+                    else
+                    {
+                        _1207 = (_1427 < _1206) ? _1427 : _1206;
+                    }
+                    _1210 = _1428 ? _1427 : _1209;
+                    _1206 = _1207;
+                    _1209 = _1210;
+                    _1211++;
+                    continue;
+                }
+                else
+                {
+                    break;
+                }
             }
-            else
-            {
-                _1448 = _1422;
-            }
-            _1458 = _1448;
-        }
-        highp float _1461 = dot(_1203, uData[9].xy);
-        highp float _1462 = max(_1461, 0.0);
-        highp float _1464 = max(-_1461, 0.0);
-        highp float _1467 = abs(_1461);
-        bool _1471;
-        if (_139)
-        {
-            _1471 = uData[6].z > 0.0;
+            highp float _1436 = max(uData[1].x, 9.9999997473787516355514526367188e-05);
+            highp float _1441 = max(_1436 - abs(_1209 - _1206), 0.0) / _1436;
+            highp float _1450 = 1.0 - clamp((min(_1209, _1206) - (((_1441 * _1441) * _1436) * 0.25)) / uData[11].x, 0.0, 1.0);
+            _1458 = ((uData[11].w * _1450) * _1450) * clamp(mix(_1137.y, _1136.y, _1162), 0.0, 1.0);
         }
         else
         {
-            _1471 = false;
+            _1458 = 0.0;
         }
-        bool _1473 = uData[10].x > 0.0;
-        highp float _1497;
-        if (_1473)
+        bool _1459 = _1194 <= 0.0;
+        bool _1463;
+        if (_1459)
         {
-            _1497 = 0.0;
+            _1463 = _1458 <= 0.00200000009499490261077880859375;
         }
         else
         {
-            highp float _1496;
-            if (_1471)
-            {
-                _1496 = (uData[6].z * (1.0 - smoothstep(0.20000000298023223876953125, 0.699999988079071044921875, _1467))) * exp((-max(0.0, -_1180)) / (uData[2].z * 2.5));
-            }
-            else
-            {
-                _1496 = uData[8].x * (1.0 - smoothstep(0.0, uData[2].z * 0.625, -_1180));
-            }
-            _1497 = _1496;
+            _1463 = false;
         }
-        highp float _1507;
-        if (_139)
+        if (_1463)
         {
-            _1507 = max((uData[5].w * _1254) * _1254, _1497) * min(_1220, 1.0);
+            discard;
+        }
+        if (vColor.x < 0.5)
+        {
+            _2007 = vec4(0.0, 0.0, 0.0, _1194 + ((1.0 - _1194) * _1458));
+            break;
+        }
+        if (_1459)
+        {
+            discard;
+        }
+        highp vec4 _1478 = mix(_1137, _1136, vec4(_1162));
+        highp vec2 _1480 = mix(_1144, _1143, vec2(_1178));
+        bool _1484;
+        if (_1004)
+        {
+            _1484 = _1082 > _1182;
         }
         else
         {
-            _1507 = 0.0;
+            _1484 = false;
         }
-        highp float _1510 = _1357 * (1.0 - _1507);
-        highp vec4 _1516 = vec4(_1458.xyz * _1510, _1510 + _1507);
+        bvec2 _1486 = bvec2(_1484);
+        highp vec2 _1487 = vec2(_1486.x ? _1083.x : _1480.x, _1486.y ? _1083.y : _1480.y);
+        highp vec2 _1488 = vec2(_1162);
+        highp vec2 _1492 = mix(_1142, _1141, _1488) * min(length(_1487), 1.0);
+        highp float _1494 = max(0.0, -(_1484 ? _1082 : _1182));
+        highp float _1495 = -_1494;
+        highp float _1498 = exp(_1495 / uData[1].z);
+        highp float _1504 = _1478.y;
         highp float _1538;
-        if (_139)
+        highp float _1539;
+        highp vec2 _1540;
+        if (_145)
         {
-            highp float _1537;
-            if (_1471)
-            {
-                _1537 = uData[6].z * max(smoothstep(0.75, 1.0, _1467), max(_1208.x, _1208.y));
-            }
-            else
-            {
-                _1537 = 0.25;
-            }
-            _1538 = _1537;
+            highp float _1522 = max(min(uData[5].y * mix(_174, _1140, _1162), uData[6].w), 1.0);
+            highp float _1525 = clamp(1.0 - (_1494 / _1522), 0.0, 1.0);
+            highp float _1530 = (((uData[5].z * _1522) * _1504) * _1525) * _1525;
+            _1538 = _1525;
+            _1539 = _1530;
+            _1540 = clamp(((vTextureCoord - (_1487 * _1530)) - uData[0].xy) * uData[0].zw, vec2(0.0), vec2(1.0));
         }
         else
         {
-            _1538 = (0.449999988079071044921875 * ((_1462 * sqrt(_1462)) + ((0.75 * _1464) * sqrt(_1464)))) + 0.0599999986588954925537109375;
+            _1538 = 0.0;
+            _1539 = 0.0;
+            _1540 = clamp(((vTextureCoord + (_1487 * ((uData[2].x * _1504) * _1498))) - uData[0].xy) * uData[0].zw, vec2(0.0), vec2(1.0));
         }
-        highp float _1565;
-        if (_1471)
+        highp vec4 _1544 = textureLod(uSampler, _1540, 0.0);
+        bool _1546 = uData[4].w > 0.5;
+        highp vec4 _1554;
+        if (_1546)
         {
-            _1565 = exp((-max(0.0, -_1180)) / (uData[2].z * 1.25));
+            _1554 = textureLod(uTex1, _1540, 0.0);
         }
         else
         {
-            highp float _1559;
-            if (_139)
-            {
-                highp float _1552 = -_1180;
-                _1559 = smoothstep(uData[2].z * 0.3125, uData[2].z * 0.625, _1552) * (1.0 - smoothstep(uData[2].z * 1.5, uData[2].z * 2.0, _1552));
-            }
-            else
-            {
-                _1559 = exp((-max(0.0, -_1180)) / uData[2].z);
-            }
-            _1565 = _1559;
+            _1554 = _1544;
         }
-        highp float _1577;
-        if (_1473)
+        bool _1559;
+        if (_145)
         {
-            _1577 = 0.0;
+            _1559 = uData[6].y > 0.0;
         }
         else
         {
-            highp float _1575;
-            if (_139)
+            _1559 = false;
+        }
+        bool _1563;
+        if (_1559)
+        {
+            _1563 = _1539 > 0.5;
+        }
+        else
+        {
+            _1563 = false;
+        }
+        highp vec4 _1624;
+        highp vec4 _1625;
+        if (_1563)
+        {
+            highp vec2 _1571 = (_1487 * ((_1539 * 0.039999999105930328369140625) * uData[6].y)) * uData[0].zw;
+            highp vec2 _1573 = clamp(_1540 + _1571, vec2(0.0), vec2(1.0));
+            highp vec2 _1575 = clamp(_1540 - _1571, vec2(0.0), vec2(1.0));
+            highp vec4 _1579 = textureLod(uSampler, _1573, 0.0);
+            highp float _1584 = _1544.w;
+            highp float _1585 = (_1579.x / max(_1579.w, 9.9999997473787516355514526367188e-05)) * _1584;
+            highp vec4 _1586 = _1544;
+            _1586.x = _1585;
+            highp vec4 _1590 = textureLod(uSampler, _1575, 0.0);
+            highp float _1595 = (_1590.z / max(_1590.w, 9.9999997473787516355514526367188e-05)) * _1584;
+            _1586.z = _1595;
+            highp vec4 _1623;
+            if (_1546)
             {
-                _1575 = 0.0;
+                highp vec4 _1605 = textureLod(uTex1, _1573, 0.0);
+                highp vec4 _1612 = _1554;
+                _1612.x = (_1605.x / max(_1605.w, 9.9999997473787516355514526367188e-05)) * _1554.w;
+                highp vec4 _1616 = textureLod(uTex1, _1575, 0.0);
+                _1612.z = (_1616.z / max(_1616.w, 9.9999997473787516355514526367188e-05)) * _1554.w;
+                _1623 = _1612;
             }
             else
             {
-                _1575 = (0.039999999105930328369140625 * exp(_1211 / uData[1].w)) * _1462;
+                highp vec4 _1600 = _1554;
+                _1600.x = _1585;
+                _1600.z = _1595;
+                _1623 = _1600;
             }
-            _1577 = (_1565 * _1538) + _1575;
+            _1624 = _1623;
+            _1625 = _1586;
         }
-        highp vec2 _1578 = mix(_1131, _1130, _1204);
-        highp float _1582 = _1578.y;
-        highp float _1588 = clamp((vTextureCoord.y - (_1578.x - _1582)) / max(2.0 * _1582, 9.9999997473787516355514526367188e-05), 0.0, 1.0);
-        highp float _1606;
+        else
+        {
+            _1624 = _1554;
+            _1625 = _1544;
+        }
+        bool _1627 = uData[4].x > 1.5;
+        highp float _1641;
+        if (_1627)
+        {
+            _1641 = uData[3].w;
+        }
+        else
+        {
+            highp float _1639;
+            if ((uData[6].x - 2.0 * trunc(uData[6].x / 2.0)) > 0.5)
+            {
+                _1639 = 1.0;
+            }
+            else
+            {
+                _1639 = _1625.w;
+            }
+            _1641 = _1639;
+        }
+        highp vec4 _1650 = vec4(_1625.xyz / vec3(max(_1625.w, 9.9999997473787516355514526367188e-05)), 1.0);
+        highp vec4 _1659 = vec4(_1624.xyz / vec3(max(_1624.w, 9.9999997473787516355514526367188e-05)), 1.0);
+        highp float _1666;
+        if (_1627)
+        {
+            _1666 = 1.0;
+        }
+        else
+        {
+            _1666 = (uData[4].z > 0.5) ? uData[4].x : 0.0;
+        }
+        bool _1670;
+        if (_145)
+        {
+            _1670 = !_1627;
+        }
+        else
+        {
+            _1670 = false;
+        }
+        highp float _1679;
+        if (_1670)
+        {
+            _1679 = _1666 * (1.0 - ((_1538 * _1538) * (1.0 - smoothstep(0.800000011920928955078125, 1.0, _1666))));
+        }
+        else
+        {
+            _1679 = _1666;
+        }
+        highp float _1682 = 1.0 - _1679;
+        highp float _1690;
+        if (_145)
+        {
+            _1690 = _1538;
+        }
+        else
+        {
+            _1690 = _1498 * _1498;
+        }
+        highp float _1693 = clamp(((uData[2].y * _1504) * _1690) * _1682, 0.0, 1.0);
+        highp vec4 _1699 = ((_1659 * _1693) + ((mix(_1659, _1650, vec4(clamp(_1478.x, 0.0, 1.0))) * _1682) * (1.0 - _1693))) + (uData[3] * _1679);
+        highp vec4 _1742;
+        if (_1627)
+        {
+            _1742 = vec4(uData[3].xyz / vec3(max(uData[3].w, 9.9999997473787516355514526367188e-05)), 1.0);
+        }
+        else
+        {
+            highp vec4 _1706 = _1699 + (_1650 * (1.0 - _1699.w));
+            highp vec4 _1732;
+            if (uData[7].w < 1.0)
+            {
+                highp vec3 _1711 = _1706.xyz;
+                highp float _1712 = dot(_1711, vec3(0.2125999927520751953125, 0.715200006961822509765625, 0.072200000286102294921875));
+                highp float _1713 = 0.60000002384185791015625 * uData[7].w;
+                highp float _1715 = max(uData[7].w - _1713, 9.9999997473787516355514526367188e-05);
+                highp float _1727;
+                if (_1712 <= _1713)
+                {
+                    _1727 = _1712;
+                }
+                else
+                {
+                    _1727 = _1713 + (_1715 * (1.0 - exp((-(_1712 - _1713)) / _1715)));
+                }
+                highp vec3 _1730 = _1711 * (_1727 / max(_1712, 9.9999997473787516355514526367188e-05));
+                _1732 = vec4(_1730.x, _1730.y, _1730.z, _1706.w);
+            }
+            else
+            {
+                _1732 = _1706;
+            }
+            _1742 = _1732;
+        }
+        highp float _1745 = dot(_1487, uData[9].xy);
+        highp float _1746 = max(_1745, 0.0);
+        highp float _1748 = max(-_1745, 0.0);
+        highp float _1749 = abs(_1745);
+        bool _1753;
+        if (_145)
+        {
+            _1753 = uData[6].z > 0.0;
+        }
+        else
+        {
+            _1753 = false;
+        }
+        bool _1755 = uData[10].x > 0.0;
+        highp float _1783;
+        if (_1755)
+        {
+            _1783 = 0.0;
+        }
+        else
+        {
+            highp float _1782;
+            if (_1753)
+            {
+                _1782 = (uData[6].z * (1.0 - smoothstep(0.20000000298023223876953125, 0.699999988079071044921875, _1749))) * exp((-max(0.0, -_1186)) / (uData[2].z * 2.5));
+            }
+            else
+            {
+                highp float _1767;
+                if (_1189)
+                {
+                    _1767 = 0.699999988079071044921875;
+                }
+                else
+                {
+                    _1767 = uData[2].z * 0.625;
+                }
+                _1782 = uData[8].x * (1.0 - smoothstep(0.0, _1767, -_1186));
+            }
+            _1783 = _1782;
+        }
+        highp float _1793;
+        if (_145)
+        {
+            _1793 = max((uData[5].w * _1538) * _1538, _1783) * min(_1504, 1.0);
+        }
+        else
+        {
+            _1793 = 0.0;
+        }
+        highp float _1796 = _1641 * (1.0 - _1793);
+        highp vec4 _1802 = vec4(_1742.xyz * _1796, _1796 + _1793);
+        highp float _1824;
+        if (_145)
+        {
+            highp float _1823;
+            if (_1753)
+            {
+                _1823 = uData[6].z * max(smoothstep(0.75, 1.0, _1749), max(_1492.x, _1492.y));
+            }
+            else
+            {
+                _1823 = 0.25;
+            }
+            _1824 = _1823;
+        }
+        else
+        {
+            _1824 = (0.449999988079071044921875 * ((_1746 * sqrt(_1746)) + ((0.75 * _1748) * sqrt(_1748)))) + 0.0599999986588954925537109375;
+        }
+        highp float _1860;
+        if (_1753)
+        {
+            _1860 = exp((-max(0.0, -_1186)) / _1188);
+        }
+        else
+        {
+            highp float _1854;
+            if (_145)
+            {
+                highp float _1853;
+                if (_1189)
+                {
+                    highp float _1848 = -_1186;
+                    _1853 = smoothstep(0.0, 0.89999997615814208984375, _1848) * (1.0 - smoothstep(1.5, 2.400000095367431640625, _1848));
+                }
+                else
+                {
+                    highp float _1841 = -_1186;
+                    _1853 = smoothstep(uData[2].z * 0.3125, uData[2].z * 0.625, _1841) * (1.0 - smoothstep(uData[2].z * 1.5, uData[2].z * 2.0, _1841));
+                }
+                _1854 = _1853;
+            }
+            else
+            {
+                _1854 = exp((-max(0.0, -_1186)) / uData[2].z);
+            }
+            _1860 = _1854;
+        }
+        highp float _1872;
+        if (_1755)
+        {
+            _1872 = 0.0;
+        }
+        else
+        {
+            highp float _1870;
+            if (_145)
+            {
+                _1870 = 0.0;
+            }
+            else
+            {
+                _1870 = (0.039999999105930328369140625 * exp(_1495 / uData[1].w)) * _1746;
+            }
+            _1872 = (_1860 * _1824) + _1870;
+        }
+        highp vec2 _1873 = mix(_1139, _1138, _1488);
+        highp float _1877 = _1873.y;
+        highp float _1883 = clamp((vTextureCoord.y - (_1873.x - _1877)) / max(2.0 * _1877, 9.9999997473787516355514526367188e-05), 0.0, 1.0);
+        highp float _1901;
         if (uData[4].z > 0.5)
         {
-            _1606 = uData[4].y + ((uData[7].x + ((uData[7].y - uData[7].x) * _1588)) + (uData[7].z * (1.0 - smoothstep(0.0, 0.37999999523162841796875, _1588))));
+            _1901 = uData[4].y + ((uData[7].x + ((uData[7].y - uData[7].x) * _1883)) + (uData[7].z * (1.0 - smoothstep(0.0, 0.37999999523162841796875, _1883))));
         }
         else
         {
-            _1606 = 0.0;
+            _1901 = 0.0;
         }
-        highp vec3 _1616 = _1516.xyz + vec3(clamp((_1606 + _1194.z) + ((_1220 * uData[2].w) * _1577), 0.0, 1.0));
-        highp vec4 _1688;
-        if (_1473)
+        highp vec3 _1911 = _1802.xyz + vec3(clamp((_1901 + _1478.z) + ((_1504 * uData[2].w) * _1872), 0.0, 1.0));
+        highp vec4 _1983;
+        if (_1755)
         {
-            highp vec2 _1626;
-            if (dot(_1203, _1203) > 9.9999999392252902907785028219223e-09)
+            highp vec2 _1921;
+            if (dot(_1487, _1487) > 9.9999999392252902907785028219223e-09)
             {
-                _1626 = normalize(_1203);
+                _1921 = normalize(_1487);
             }
             else
             {
-                _1626 = vec2(0.0);
+                _1921 = vec2(0.0);
             }
-            highp float _1627 = dot(_1626, uData[9].xy);
-            highp float _1629 = mix(8.0, 1.0, uData[9].z);
-            highp float _1637 = pow(max(_1627, 0.0), _1629) + (uData[9].w * pow(max(-_1627, 0.0), _1629));
-            highp float _1638 = min(_1220, 1.0);
-            highp float _1645 = -_1180;
-            highp float _1647 = smoothstep(-0.5, 0.5, _1645);
-            highp float _1649 = -max(0.0, _1645);
-            highp vec3 _1686 = (_1616.xyz * (1.0 - (((uData[10].z * (1.0 - abs(_1627))) * (_1647 * exp(_1649 / max(uData[2].z * 2.5, 0.001000000047497451305389404296875)))) * _1638))) + vec3(_1638 * (((uData[10].x * max(_1637, max(_1208.x, uData[9].w * _1208.y))) * (_1647 * exp(_1649 / max(uData[8].y, 0.001000000047497451305389404296875)))) + ((uData[10].y * _1637) * (smoothstep(uData[8].y - 0.5, uData[8].y + 0.5, _1645) * exp((-max(0.0, _1645 - uData[8].y)) / max(uData[8].z, 0.001000000047497451305389404296875))))));
-            _1688 = vec4(_1686.x, _1686.y, _1686.z, _1516.w);
+            highp float _1922 = dot(_1921, uData[9].xy);
+            highp float _1924 = mix(8.0, 1.0, uData[9].z);
+            highp float _1932 = pow(max(_1922, 0.0), _1924) + (uData[9].w * pow(max(-_1922, 0.0), _1924));
+            highp float _1933 = min(_1504, 1.0);
+            highp float _1940 = -_1186;
+            highp float _1942 = smoothstep(-0.5, 0.5, _1940);
+            highp float _1944 = -max(0.0, _1940);
+            highp vec3 _1981 = (_1911.xyz * (1.0 - (((uData[10].z * (1.0 - abs(_1922))) * (_1942 * exp(_1944 / max(uData[2].z * 2.5, 0.001000000047497451305389404296875)))) * _1933))) + vec3(_1933 * (((uData[10].x * max(_1932, max(_1492.x, uData[9].w * _1492.y))) * (_1942 * exp(_1944 / max(uData[8].y, 0.001000000047497451305389404296875)))) + ((uData[10].y * _1932) * (smoothstep(uData[8].y - 0.5, uData[8].y + 0.5, _1940) * exp((-max(0.0, _1940 - uData[8].y)) / max(uData[8].z, 0.001000000047497451305389404296875))))));
+            _1983 = vec4(_1981.x, _1981.y, _1981.z, _1802.w);
         }
         else
         {
-            _1688 = vec4(_1616.x, _1616.y, _1616.z, _1516.w);
+            _1983 = vec4(_1911.x, _1911.y, _1911.z, _1802.w);
         }
-        highp vec4 _1689 = clamp(_1688, vec4(0.0), vec4(1.0));
-        highp float _1696 = max(_1689.w, max(_1689.x, max(_1689.y, _1689.z)));
-        highp vec4 _1697 = _1689;
-        _1697.w = _1696;
-        highp vec3 _1708 = _1697.xyz + vec3(((fract(52.98291778564453125 * fract(dot(vTextureCoord, vec2(0.067110560834407806396484375, 0.005837149918079376220703125)))) - 0.5) * uData[5].x) * _1696);
-        _1712 = clamp(vec4(_1708.x, _1708.y, _1708.z, _1697.w), vec4(0.0), vec4(1.0)) * _1183;
+        highp vec4 _1984 = clamp(_1983, vec4(0.0), vec4(1.0));
+        highp float _1991 = max(_1984.w, max(_1984.x, max(_1984.y, _1984.z)));
+        highp vec4 _1992 = _1984;
+        _1992.w = _1991;
+        highp vec3 _2003 = _1992.xyz + vec3(((fract(52.98291778564453125 * fract(dot(vTextureCoord, vec2(0.067110560834407806396484375, 0.005837149918079376220703125)))) - 0.5) * uData[5].x) * _1991);
+        _2007 = clamp(vec4(_2003.x, _2003.y, _2003.z, _1992.w), vec4(0.0), vec4(1.0)) * _1194;
         break;
     } while(false);
-    out_var_SV_Target0 = _1712;
+    out_var_SV_Target0 = _2007;
 }
 
