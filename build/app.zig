@@ -104,6 +104,7 @@ pub const Config = struct {
     app_repo_url_set: bool,
     app_issues_url: []const u8,
     app_layout_path: ?std.Build.LazyPath,
+    web_storage: []const u8,
     static_workbench: bool,
     static_text: bool,
     static_image: bool,
@@ -382,6 +383,13 @@ pub fn readConfig(b: *std.Build, target: std.Build.ResolvedTarget, opts: Options
     else
         null;
 
+    const web_storage = b.option(
+        []const u8,
+        "web-storage",
+        "What the web app files its browser storage under (default \"fizzy\"); give a " ++
+            "test build served beside the real one a name of its own",
+    ) orelse "fizzy";
+
     const no_emit = b.option(bool, "no-emit", "Check for compile errors without emitting any code") orelse false;
 
     const app_version_opt = b.option(
@@ -622,6 +630,7 @@ pub fn readConfig(b: *std.Build, target: std.Build.ResolvedTarget, opts: Options
         .app_repo_url_set = app_repo_url_set,
         .app_issues_url = app_issues_url,
         .app_layout_path = app_layout_path,
+        .web_storage = web_storage,
         .static_workbench = static_workbench,
         .static_text = static_text,
         .static_image = static_image,
@@ -689,6 +698,7 @@ pub fn construct(
         opts.web_plugin_deps,
         opts.web_plugin_dirs,
         opts.own != null,
+        cfg.web_storage,
     );
     const built = try native(
         b,
@@ -1931,6 +1941,10 @@ fn addTests(
         check_integration_step.dependOn(&profile_tests.step);
     }
 
+    const check_bench_step = b.step("check-bench", "Compile every benchmark without running it");
+    test_integration_step.dependOn(check_bench_step);
+    check_integration_step.dependOn(check_bench_step);
+
     // `zig build bench-text` — text editor frame-cost benchmark. Its own step, never wired into
     // `test`/`test-all`: it prints timings instead of asserting, and the numbers are
     // machine-dependent. Same headless harness as the integration tests, so it measures the
@@ -1957,6 +1971,7 @@ fn addTests(
         bench_module.addAnonymousImport("sample_small", .{ .root_source_file = b.path("src/Entry.zig") });
 
         const bench_text = b.addTest(.{ .name = "fizzy-bench-text", .root_module = bench_module });
+        check_bench_step.dependOn(&bench_text.step);
         bench_text.root_module.link_libcpp = !target_is_windows_msvc;
         if (target.result.os.tag == .windows) {
             bench_text.root_module.linkSystemLibrary("comctl32", .{});
@@ -2024,6 +2039,7 @@ fn addTests(
         );
 
         const bench_markdown = b.addTest(.{ .name = "fizzy-bench-markdown", .root_module = bench_module });
+        check_bench_step.dependOn(&bench_markdown.step);
         bench_markdown.root_module.link_libcpp = !target_is_windows_msvc;
         if (target.result.os.tag == .windows) {
             bench_markdown.root_module.linkSystemLibrary("comctl32", .{});
@@ -2053,6 +2069,7 @@ fn addTests(
         bench_module.addAnonymousImport("sample", .{ .root_source_file = b.path("src/Entry.zig") });
 
         const bench_replay = b.addTest(.{ .name = "fizzy-bench-replay", .root_module = bench_module });
+        check_bench_step.dependOn(&bench_replay.step);
         bench_replay.root_module.link_libcpp = !target_is_windows_msvc;
         if (target.result.os.tag == .windows) {
             bench_replay.root_module.linkSystemLibrary("comctl32", .{});
@@ -2065,9 +2082,6 @@ fn addTests(
                 .{ .target = target, .optimize = optimize, .c_modules = &.{app_module_test} },
             );
         };
-
-        const check_bench_replay_step = b.step("check-bench-replay", "Compile fizzy bench-replay without running it");
-        check_bench_replay_step.dependOn(&bench_replay.step);
 
         const bench_step = b.step(
             "bench-replay",
@@ -2090,6 +2104,7 @@ fn addTests(
         bench_module.addImport("fizzy_sdk", sdk_module_test);
 
         const bench_tracks = b.addTest(.{ .name = "fizzy-bench-tracks", .root_module = bench_module });
+        check_bench_step.dependOn(&bench_tracks.step);
         bench_tracks.root_module.link_libcpp = !target_is_windows_msvc;
         if (target.result.os.tag == .windows) {
             bench_tracks.root_module.linkSystemLibrary("comctl32", .{});
@@ -2122,6 +2137,7 @@ fn addTests(
             .root_source_file = b.path("core/diff.zig"),
         }));
         const bench_diff = b.addTest(.{ .name = "fizzy-bench-diff", .root_module = bench_module });
+        check_bench_step.dependOn(&bench_diff.step);
 
         const bench_step = b.step(
             "bench-diff",
@@ -2147,6 +2163,7 @@ fn addTests(
             .root_source_file = b.dependency("fizzy_sdk", .{}).path("tape/root.zig"),
         }));
         const bench_tape = b.addTest(.{ .name = "fizzy-bench-tape", .root_module = bench_module });
+        check_bench_step.dependOn(&bench_tape.step);
 
         const bench_step = b.step(
             "bench-tape",
@@ -2224,7 +2241,8 @@ fn addTests(
             });
             test_integration_step.dependOn(&b.addRunArtifact(t).step);
             check_integration_step.dependOn(&t.step);
-            if (entry[1] == plugin_loader_module) test_step.dependOn(&b.addRunArtifact(t).step);
+            if (entry[1] == plugin_loader_module or entry[1] == glass_tests_module or
+                entry[1] == split_tests_module) test_step.dependOn(&b.addRunArtifact(t).step);
             if (win_libc.needs_setup) if (msvcup_before_compile) |m| t.step.dependOn(&m.step);
         }
     }

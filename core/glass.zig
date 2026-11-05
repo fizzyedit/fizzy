@@ -13,6 +13,8 @@ const widgets = @import("widgets.zig");
 /// The backend keeps a copy (`BlurBackdrop.fringe_px`), pinned to it by the test below.
 pub const fringe_px: f32 = 1;
 
+pub const BlurField = BlurBackdrop.BlurField;
+
 /// True when physical ink meets the clip grown by `margin_px` on both axes.
 pub fn within(ink: dvui.Rect.Physical, clip: dvui.Rect.Physical, margin_px: f32) bool {
     return ink.x <= clip.x + clip.w + margin_px and ink.x + ink.w >= clip.x - margin_px and
@@ -77,6 +79,9 @@ pub const LayerOptions = struct {
     /// The shadow the joined glass casts, drawn by the glass program: one per joined piece, none
     /// inside another. The floating surfaces' shadow (`dialogs.surfaceShadow`) at this share, 0…1.
     shadow: f32 = 0,
+    /// A blur field under every item, from the layer's one capture: animate `rect` and
+    /// `strength`; the items bend the sharp scene, not the field.
+    blur_field: ?BlurField = null,
 };
 
 /// Items in one field: the program's shape slots, less the one an edge takes.
@@ -110,6 +115,7 @@ pub fn layer(id: dvui.Id, opts: LayerOptions) Layer {
     if (opts.lift > 0) pane.lift = opts.lift;
     pane.witness = opts.witness;
     pane.reach = opts.reach;
+    pane.blur_field = opts.blur_field;
     const cw = dvui.currentWindow();
     const job = cw.arena().create(Job) catch return .{};
     job.* = .{
@@ -240,7 +246,8 @@ const Job = struct {
                 .light = item.light,
             });
         }
-        if (fields.items.len > 0) {
+        const has_blur_field = if (job.pane.blur_field) |f| f.strength >= 0.004 and !f.rect.empty() else false;
+        if (fields.items.len > 0 or has_blur_field) {
             for (fields.items) |*f| record.field(f);
             record.capture();
             BlurBackdrop.fieldsPane(job.id, fields.items, job.scale, job.pane);
@@ -608,10 +615,10 @@ test "groups do not join" {
 }
 
 /// Replay details for headless widget tests; valid until the next replay.
-pub fn drawnDetails() struct { radii: []const [4]f32, clips: []const dvui.Rect.Physical, jobs: usize, fields: usize, shapes: usize, merge: f32 } {
+pub fn drawnDetails() struct { radii: []const [4]f32, clips: []const dvui.Rect.Physical, jobs: usize, captures: usize, shadows: usize, fields: usize, shapes: usize, merge: f32 } {
     if (!builtin.is_test) @compileError("drawnDetails is for tests");
     const n = @min(record.glass_shapes, record.rects.len);
-    return .{ .jobs = record.jobs, .radii = record.radii[0..n], .clips = record.clips[0..n], .fields = record.fields, .shapes = record.glass_shapes, .merge = if (record.fields > 0) record.field_merge[0] else 0 };
+    return .{ .jobs = record.jobs, .captures = record.captures, .shadows = record.shadow_shapes, .radii = record.radii[0..n], .clips = record.clips[0..n], .fields = record.fields, .shapes = record.glass_shapes, .merge = if (record.fields > 0) record.field_merge[0] else 0 };
 }
 
 fn currentFrame() !dvui.App.Result {

@@ -126,7 +126,9 @@ def review_checks(job, result, base, reasons):
             line += 1
         elif row.startswith(' '):
             line += 1
-    seen = set()
+    # `added` and the finding/follow-up split follow from the diff, so the reviewer's claims are
+    # corrected rather than refused.
+    seen, corrected = set(), {'findings': [], 'follow_ups': []}
     for group in ('findings', 'follow_ups'):
         for finding in review[group]:
             fid, path, line = finding['id'], finding['file'], finding['line']
@@ -141,14 +143,15 @@ def review_checks(job, result, base, reasons):
             actual = line in added.get(path, set())
             if type(line) is not int or not 1 <= line <= len(content):
                 reasons.append(f'review line not in file: {fid}')
-            if type(finding['added']) is not bool or finding['added'] != actual:
-                reasons.append(f'review line not in diff as claimed: {fid}')
             severity = finding['severity']
+            if severity not in ('blocker', 'major', 'minor', 'nit'):
+                reasons.append(f'unknown review severity: {fid}')
+            finding['added'] = actual
             is_finding = severity in ('blocker', 'major') or severity == 'minor' and actual
-            if severity not in ('blocker', 'major', 'minor', 'nit') or is_finding != (group == 'findings'):
-                reasons.append(f'invalid finding/follow-up split: {fid}')
-            if group == 'findings' and info.get('must_fix') is not None and fid not in info['must_fix']:
+            corrected['findings' if is_finding else 'follow_ups'].append(finding)
+            if is_finding and info.get('must_fix') is not None and fid not in info['must_fix']:
                 reasons.append(f're-review outside must_fix: {fid}')
+    review['findings'], review['follow_ups'] = corrected['findings'], corrected['follow_ups']
     if review['verdict'] != ('changes' if review['findings'] else 'clean'):
         reasons.append('review verdict does not match findings')
 

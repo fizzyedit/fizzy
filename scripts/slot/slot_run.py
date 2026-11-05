@@ -47,9 +47,12 @@ def unlock_keychain():
         return
     pw = Path.home() / '.fizzy-keychain-pass'
     if pw.is_file():
-        subprocess.run(['security', 'unlock-keychain', '-p', pw.read_text().strip(),
-                        str(Path.home() / 'Library/Keychains/login.keychain-db')],
-                       stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+        result = subprocess.run(['security', 'unlock-keychain',
+                                 str(Path.home() / 'Library/Keychains/login.keychain-db')],
+                                input=pw.read_text().strip(), text=True,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, check=False)
+        if result.returncode != 0:
+            print(result.stderr.strip(), file=sys.stderr)
 
 
 def rmtree(path, ignore_errors=False):
@@ -87,6 +90,11 @@ def contract_doc(work):
 
 
 def checkout(job, job_dir, home):
+    refs = job.get('refs', [])
+    try:
+        common.validate_refs(refs)
+    except common.JobError as exc:
+        raise BrokenSlot(str(exc)) from exc
     work = home / 'work' / job['id']
     work.parent.mkdir(parents=True, exist_ok=True)
     if work.exists():
@@ -114,8 +122,24 @@ def checkout(job, job_dir, home):
         if git(work, 'rev-parse', 'HEAD').decode().strip() != job['base']['sha']:
             raise BrokenSlot('HEAD differs from base.sha')
         contract_doc(work)
+        if refs:
+            exclude = work / '.git' / 'info' / 'exclude'
+            exclude.parent.mkdir(parents=True, exist_ok=True)
+            existing = exclude.read_text() if exclude.exists() else ''
+            if '.reference/' not in existing.splitlines():
+                with exclude.open('a') as f:
+                    f.write(('\n' if existing and not existing.endswith('\n') else '') + '.reference/\n')
+        for ref in refs:
+            reference = work / '.reference' / ref['name']
+            reference.mkdir(parents=True)
+            git(reference, 'init')
+            git(reference, 'fetch', '--no-tags', '--',
+                f'https://github.com/{ref["repo"]}.git', ref['sha'])
+            git(reference, 'checkout', '--detach', ref['sha'])
+            if git(reference, 'rev-parse', 'HEAD').decode().strip().lower() != ref['sha'].lower():
+                raise BrokenSlot('HEAD differs from ref.sha')
         return work
-    except (OSError, subprocess.CalledProcessError) as exc:
+    except (OSError, subprocess.CalledProcessError, BrokenSlot) as exc:
         rmtree(work, ignore_errors=True)
         raise BrokenSlot('fetch/checkout failed') from exc
 
@@ -225,7 +249,7 @@ def review_shape(value):
 
 def read_agent(out, name):
     path = out / 'agent' / name
-    return path.read_text(encoding='utf-8', errors='replace') if path.exists() else ''
+    return path.read_text(encoding='utf-8-sig', errors='replace') if path.exists() else ''
 
 
 def run(job, job_dir, out, keep):
