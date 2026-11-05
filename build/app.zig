@@ -1453,6 +1453,18 @@ fn addTests(
         .filters = test_filters,
     }));
 
+    const text_input_props_module = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("backend/src/text_input_props.zig"),
+    });
+    text_input_props_module.addImport("glass", core_module_test.import_table.get("glass").?);
+    try unit_test_artifacts.append(b.allocator, b.addTest(.{
+        .name = "fizzy-text-input-props-tests",
+        .root_module = text_input_props_module,
+        .filters = test_filters,
+    }));
+
     for (unit_test_artifacts.items) |unit_test| {
         test_step.dependOn(&b.addRunArtifact(unit_test).step);
         check_step.dependOn(&unit_test.step);
