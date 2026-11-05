@@ -144,7 +144,8 @@ def publish(job_dir, out):
         threads = [t for t in threads if t['title'].startswith(f'PR #{pr_number}:')]
         if len(threads) != 1:
             raise ValueError('expected exactly one PR thread')
-        text = f'REVIEW: {review["verdict"]} @{sha}\n' + json.dumps(review, indent=2)
+        text = (f'REVIEW: {review["verdict"]} @{sha}\nReviewer: slot/{result["agent_kind"]}\n'
+                + json.dumps(review, indent=2))
         comment(repo, threads[0]['number'], text, marker)
         if review['follow_ups']:
             comment(target_repo, pr_number, 'Follow-ups:\n' + json.dumps(review['follow_ups'], indent=2), marker)
