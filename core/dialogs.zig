@@ -340,6 +340,7 @@ const round_corner: f32 = 4;
 /// Where the glass program is not there to draw it, or the blur is off, each is frosted (or
 /// filled) on its own and lit with the menus' hover and press. `id` keys the frost.
 pub fn glassBubbles(id: dvui.Id, bubbles: []const Bubble, scale: f32, opts: BubblesOptions) void {
+    const bs = surfaceShadow();
     // One layer: the bubbles' glass is of where they are this frame, from one capture, and the
     // shadow the joined glass casts (none with an edge, `LiquidField.shadow`).
     var layer = ink.layer(id, .{
@@ -379,7 +380,6 @@ pub fn glassBubbles(id: dvui.Id, bubbles: []const Bubble, scale: f32, opts: Bubb
     }
     // Without the program, a ring round each pane, after it so its frost never blurs the ring in.
     // None with an edge: round each bubble's own outline it would lie across the neck to it.
-    const bs = surfaceShadow();
     defer if (opts.shadow > 0 and opts.edge == null) for (bubbles) |b| {
         if (b.rect.w < 1 or b.rect.h < 1) continue;
         glassShadow(b.rect, b.corners(scale), scale, bs, opts.shadow);
