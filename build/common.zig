@@ -50,12 +50,11 @@ pub fn zigOutSubdirForTarget(b: *std.Build, rt: std.Build.ResolvedTarget) []cons
     return buf;
 }
 
-/// SDL (fizzy's own `sdl` for its backend, dvui's lazy `sdl3` for dvui's) requires SDK layout when
-/// `-Dtarget=*-macos` is not "native".
-pub const MacosSdlPaths = struct {
+/// The target SDK paths SDL needs for an explicit macOS target or Android.
+pub const SdlSystemPaths = struct {
     include: std.Build.LazyPath,
-    framework: std.Build.LazyPath,
-    lib: std.Build.LazyPath,
+    framework: ?std.Build.LazyPath = null,
+    lib: ?std.Build.LazyPath = null,
 };
 
 /// `-Dmacos-sdk`, else `xcrun`. Not `SDKROOT`: Zig 0.17 caches the build's configuration without
@@ -100,17 +99,25 @@ fn resolveMacosSdkPath(b: *std.Build, explicit: ?[]const u8) ![]const u8 {
     return b.dupePath(path);
 }
 
-pub fn macosSdlPathsForExplicitTarget(
+pub fn sdlSystemPaths(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
     macos_sdk: ?[]const u8,
-) !?MacosSdlPaths {
+    android: ?@import("android.zig").AndroidSdk,
+) !?SdlSystemPaths {
+    if (target.result.abi.isAndroid()) {
+        const paths = android orelse {
+            std.log.err("SDL on Android: pass -Dandroid-sdk=<Android SDK directory>", .{});
+            return error.AndroidSdkMissing;
+        };
+        return .{ .include = .{ .cwd_relative = b.pathJoin(&.{ paths.sysroot(b, b.graph.host.result.os.tag), "usr/include" }) } };
+    }
     if (target.result.os.tag != .macos) return null;
     if (b.graph.host.result.os.tag != .macos) return null;
     if (target.query.isNative()) return null;
 
     const sdk = try resolveMacosSdkPath(b, macos_sdk);
-    return MacosSdlPaths{
+    return SdlSystemPaths{
         .include = .{ .cwd_relative = b.pathJoin(&.{ sdk, "usr/include" }) },
         .framework = .{ .cwd_relative = b.pathJoin(&.{ sdk, "System/Library/Frameworks" }) },
         .lib = .{ .cwd_relative = b.pathJoin(&.{ sdk, "usr/lib" }) },

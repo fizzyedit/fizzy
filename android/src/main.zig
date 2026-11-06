@@ -1,4 +1,4 @@
-//! The Android hello: a dvui App on the SDL3 backend. A tap on the button changes what is drawn.
+//! The Android hello: a dvui App on fizzy's backend. A tap on the button changes what is drawn.
 const std = @import("std");
 const builtin = @import("builtin");
 const dvui = @import("dvui");

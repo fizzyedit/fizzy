@@ -1,26 +1,38 @@
 //! `zig build apk -Dandroid-sdk=<dir>`: the Android hello (`android/`), an SDL3 window with dvui
 //! drawing, packaged as an APK with the Android SDK's own tools. See `android/README.md`.
 const std = @import("std");
-const builtin = @import("builtin");
-const sdk = @import("sdk.zig");
+const exe = @import("exe.zig");
+const backend = @import("fizzy_backend");
 
-pub fn add(b: *std.Build) void {
+pub const AndroidSdk = struct {
+    dir: []const u8,
+    ndk: []const u8,
+    build_tools: []const u8,
+    platform: []const u8,
+    keystore: []const u8,
+
+    pub fn sysroot(self: AndroidSdk, b: *std.Build, host: std.Target.Os.Tag) []const u8 {
+        // The NDK ships x86_64 host tools; Darwin's tools also run on Apple Silicon.
+        const host_tag = switch (host) {
+            .linux => "linux-x86_64",
+            .macos => "darwin-x86_64",
+            .windows => "windows-x86_64",
+            else => @panic("Android NDK tools are unavailable for this host OS"),
+        };
+        return b.pathJoin(&.{ self.dir, "ndk", self.ndk, "toolchains/llvm/prebuilt", host_tag, "sysroot" });
+    }
+};
+
+pub fn add(b: *std.Build, android: ?AndroidSdk) void {
     const android_step = b.step("android", "Build the Android hello native library (needs -Dandroid-sdk)");
     const apk_step = b.step("apk", "Build zig-out/fizzy-hello.apk (needs -Dandroid-sdk)");
-    // Options only, never the environment: see `build.zig`. Without the SDK the step says so, and
-    // dvui's Android dependencies are never configured for a desktop build.
-    const sdk_dir = b.option([]const u8, "android-sdk", "The Android SDK directory (platform 35, build-tools 35.0.0, NDK 27.2.12479018)") orelse {
+    const paths = android orelse {
         const missing_sdk = b.addFail("Android build: pass -Dandroid-sdk=<Android SDK directory>");
         android_step.dependOn(&missing_sdk.step);
         apk_step.dependOn(&missing_sdk.step);
         return;
     };
     const arch = b.option(enum { aarch64, x86_64 }, "android-arch", "aarch64 (phones, the default) or x86_64 (the emulator on an x86_64 host)") orelse .aarch64;
-    const ndk_version = b.option([]const u8, "android-ndk", "NDK under <sdk>/ndk") orelse "27.2.12479018";
-    const build_tools = b.option([]const u8, "android-build-tools", "Build-tools under <sdk>/build-tools") orelse "35.0.0";
-    const platform = b.option([]const u8, "android-platform", "Platform under <sdk>/platforms") orelse "android-35";
-    const keystore = b.option([]const u8, "android-keystore", "Debug keystore (alias androiddebugkey, password android)") orelse
-        b.pathJoin(&.{ b.graph.environ_map.get("HOME") orelse ".", ".android/debug.keystore" });
     // The activity's Java package stays `dev.fizzyedit.hello` (its source); this is the app's id.
     const app_id = b.fmt("dev.fizzy.{s}", .{@import("bundle_id.zig").component(b.allocator, "hello")});
 
@@ -39,25 +51,9 @@ pub fn add(b: *std.Build) void {
         .x86_64 => "x86_64",
     };
     const triple = b.fmt("{s}-linux-android", .{@tagName(arch)});
-    // The NDK ships x86_64 host tools; Darwin's tools also run on Apple Silicon.
-    const host_tag = switch (builtin.os.tag) {
-        .linux => "linux-x86_64",
-        .macos => "darwin-x86_64",
-        .windows => "windows-x86_64",
-        else => {
-            apk_step.dependOn(&b.addFail("Android NDK tools are unavailable for this host OS").step);
-            return;
-        },
-    };
-    const sysroot = b.pathJoin(&.{ sdk_dir, "ndk", ndk_version, "toolchains/llvm/prebuilt", host_tag, "sysroot" });
-
-    const dvui_dep = sdk.dvuiDependency(b, .{
-        .target = target,
-        .optimize = optimize,
-        .backend = .sdl3,
-        .accesskit = .off,
-        .android_include_path = std.Build.LazyPath{ .cwd_relative = b.pathJoin(&.{ sysroot, "usr/include" }) },
-    });
+    const sysroot = paths.sysroot(b, b.graph.host.result.os.tag);
+    const sdl_paths = @import("common.zig").sdlSystemPaths(b, target, null, paths) catch @panic("Android SDK paths unavailable");
+    const native = exe.nativeDvui(b, .fizzy, target, optimize, .off, sdl_paths);
 
     const mod = b.createModule(.{
         .root_source_file = b.path("android/src/main.zig"),
@@ -65,15 +61,16 @@ pub fn add(b: *std.Build) void {
         .optimize = optimize,
         .pic = true, // linked into the app's JNI .so
     });
-    mod.addImport("dvui", dvui_dep.module("dvui_sdl3"));
+    mod.addImport("dvui", native.dvui);
+    mod.addImport("backend", native.backend);
+    mod.addImport("platform", exe.platformModule(b, native, target, optimize, sdl_paths));
     const hello = b.addLibrary(.{ .name = "fizzy_hello", .root_module = mod });
     // Debug C code (SDL, stb) calls __ubsan_handle_*, which the NDK linker has no runtime for.
     hello.bundle_ubsan_rt = true;
     hello.bundle_compiler_rt = true; // ubsan_rt needs __extendxftf2, which the NDK lacks
 
     // Artifact publication waits for lazy dependencies; Zig retries configuration after fetching.
-    if (b.graph.needed_lazy_dependencies.count() != 0) return;
-    const sdl3 = dvui_dep.artifact("SDL3");
+    const sdl = backend.androidSdl(exe.backendDependency(b), exe.backendOptions(target, optimize, sdl_paths)) orelse return;
 
     // Zig ships no Android libc, so the NDK's clang links. SDL finds its JNI entry points and
     // `SDL_main` by name at runtime, so both archives link whole.
@@ -81,7 +78,7 @@ pub fn add(b: *std.Build) void {
     const so = link.addPrefixedOutputFileArg("-o", "libfizzy_hello.so");
     link.addArgs(&.{ "-s", "-Wl,--gc-sections", "-Wl,-z,max-page-size=16384", "-Wl,--whole-archive" });
     link.addArtifactArg(hello);
-    link.addArtifactArg(sdl3);
+    link.addArtifactArg(sdl.lib);
     link.addArgs(&.{
         "-Wl,--no-whole-archive",
         "-landroid",
@@ -103,10 +100,10 @@ pub fn add(b: *std.Build) void {
     package.addFileArg(so);
     package.addFileArg(b.path("android/AndroidManifest.xml"));
     package.addFileArg(b.path("android/src/FizzyActivity.java"));
-    package.addDirectoryArg(dvui_dep.namedLazyPath("sdl3_android_java"));
-    package.addArg(b.pathJoin(&.{ sdk_dir, "platforms", platform, "android.jar" }));
+    package.addDirectoryArg(sdl.java);
+    package.addArg(b.pathJoin(&.{ paths.dir, "platforms", paths.platform, "android.jar" }));
     const apk = package.addOutputFileArg("fizzy-hello.apk");
-    package.addArgs(&.{ b.pathJoin(&.{ sdk_dir, "build-tools", build_tools }), abi, keystore, app_id });
+    package.addArgs(&.{ b.pathJoin(&.{ paths.dir, "build-tools", paths.build_tools }), abi, paths.keystore, app_id });
 
     apk_step.dependOn(&b.addInstallFile(apk, "fizzy-hello.apk").step);
 }

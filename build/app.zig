@@ -65,6 +65,7 @@ pub const Options = struct {
     macos_notary_profile: ?[]const u8 = null,
     /// `-Dmacos-sdk`: the macOS SDK for an explicit `-Dtarget=*-macos`; null asks `xcrun`.
     macos_sdk: ?[]const u8 = null,
+    android: ?@import("android.zig").AndroidSdk = null,
 };
 
 pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.OptimizeMode, opts: Options) !void {
@@ -80,7 +81,7 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang
 pub const Config = struct {
     /// Null on the configure pass that fetches Velopack (see `readConfig`).
     vz: ?velopack.Dep,
-    macos_sdl_paths: ?@import("common.zig").MacosSdlPaths,
+    sdl_paths: ?@import("common.zig").SdlSystemPaths,
     zig_out_subdir: []const u8,
     zig_out_install_dir: std.Build.InstallDir,
     target_is_windows_msvc: bool,
@@ -318,7 +319,7 @@ pub fn readConfig(b: *std.Build, target: std.Build.ResolvedTarget, opts: Options
     // package dependency to resolve here. Their canonical `build.zig` is only for the
     // standalone (`cd plugins/<name> && zig build`) third-party-shape build.
 
-    const macos_sdl_paths = try common.macosSdlPathsForExplicitTarget(b, target, opts.macos_sdk);
+    const sdl_paths = try common.sdlSystemPaths(b, target, opts.macos_sdk, opts.android);
     const zig_out_subdir = common.zigOutSubdirForTarget(b, target);
     const zig_out_install_dir: std.Build.InstallDir = .{ .custom = zig_out_subdir };
 
@@ -606,7 +607,7 @@ pub fn readConfig(b: *std.Build, target: std.Build.ResolvedTarget, opts: Options
     ) orelse &.{};
     return .{
         .vz = vz,
-        .macos_sdl_paths = macos_sdl_paths,
+        .sdl_paths = sdl_paths,
         .zig_out_subdir = zig_out_subdir,
         .zig_out_install_dir = zig_out_install_dir,
         .target_is_windows_msvc = target_is_windows_msvc,
@@ -735,7 +736,7 @@ pub const Frameworks = struct {
             optimize,
             cfg.accesskit,
             cfg.native_backend,
-            cfg.macos_sdl_paths,
+            cfg.sdl_paths,
         );
         return self.native.?;
     }
@@ -765,7 +766,7 @@ fn native(
 ) !Native {
     const fizzy_exe = @import("exe.zig");
     const vz = cfg.vz;
-    const macos_sdl_paths = cfg.macos_sdl_paths;
+    const sdl_paths = cfg.sdl_paths;
     const velopack_supported_for_target = cfg.velopack_supported_for_target;
     const velopack_enabled = cfg.velopack_enabled;
     const app_version = cfg.app_version;
@@ -798,7 +799,7 @@ fn native(
         assets_module,
         app_icon_module,
         cfg.branding.rc,
-        macos_sdl_paths,
+        sdl_paths,
         velopack_enabled,
         app_name,
         app_layout_path,
@@ -847,7 +848,7 @@ fn native(
             assets_module,
             app_icon_module,
             cfg.branding.rc,
-            macos_sdl_paths,
+            sdl_paths,
             true,
             app_name,
             app_layout_path,
@@ -986,7 +987,7 @@ fn addTests(
     const text_plugin = plugins.text;
     const image_plugin = plugins.image;
     const vz = cfg.vz;
-    const macos_sdl_paths = cfg.macos_sdl_paths;
+    const sdl_paths = cfg.sdl_paths;
     const target_is_windows_msvc = cfg.target_is_windows_msvc;
     const effective_win_libc = cfg.effective_win_libc;
     const velopack_supported_for_target = cfg.velopack_supported_for_target;
@@ -1722,7 +1723,7 @@ fn addTests(
     if (target.result.os.tag == .macos) {
         if (@import("fizzy_backend").objcModule(
             fizzy_exe.backendDependency(b),
-            fizzy_exe.backendOptions(target, optimize, macos_sdl_paths),
+            fizzy_exe.backendOptions(target, optimize, sdl_paths),
         )) |objc| {
             fizzy_test_module.addImport("objc", objc);
         }
