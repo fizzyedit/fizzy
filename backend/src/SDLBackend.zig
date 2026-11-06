@@ -2650,13 +2650,18 @@ pub fn setCursor(self: *SDLBackend, cursor: dvui.enums.Cursor) void {
 }
 
 pub fn textInputRect(self: *SDLBackend, rect: ?dvui.Rect.Natural) void {
+    // dvui calls this backend hook during Window.end(), while the window is current.
+    self.textInputRectWithHints(rect, glass.field_hints.current());
+}
+
+fn textInputRectWithHints(self: *SDLBackend, rect: ?dvui.Rect.Natural, hints: ?glass.field_hints.Hints) void {
     // Typed into whichever window has the keyboard: a viewport's, when one does — its text goes
     // to the one dvui window like its keys (`addViewportEvent`), and its IME sits over its part
     // of the frame.
     const focus = c.SDL_GetKeyboardFocus();
     const vp: ?*Viewport = if (focus) |w| self.viewportOf(w) else null;
     const window = if (vp) |v| v.window else self.window;
-    const props = text_input_props.props(glass.field_hints.current() orelse .{});
+    const props = text_input_props.props(hints orelse .{});
     // SDL_StartTextInput unconditionally re-applies text input properties every
     // call, which on iOS tears the hidden UITextField out of the view hierarchy
     // and re-adds it (see UIKit_SetTextInputProperties), thrashing the on-screen
@@ -2666,9 +2671,6 @@ pub fn textInputRect(self: *SDLBackend, rect: ?dvui.Rect.Natural) void {
     if (self.text_input_window) |was| if (was != window and self.viewportOf(was) != null) {
         _ = c.SDL_StopTextInput(was);
     };
-    defer self.text_input_rect_last = rect;
-    defer self.text_input_props_last = props;
-    defer self.text_input_window = window;
 
     if (rect) |rect_frame| {
         var r = rect_frame;
@@ -2722,6 +2724,9 @@ pub fn textInputRect(self: *SDLBackend, rect: ?dvui.Rect.Natural) void {
     } else {
         toErr(c.SDL_StopTextInput(window), "SDL_StopTextInput in textInputRect") catch return;
     }
+    self.text_input_rect_last = rect;
+    self.text_input_props_last = props;
+    self.text_input_window = window;
     self.manage_backend_tracking.check(.textInputRect);
 }
 
@@ -4396,6 +4401,8 @@ fn appIterate(_: ?*anyopaque) callconv(.c) c.SDL_AppResult {
     live_resize_trace.overlay();
     appState.back.plainFrameEnd();
 
+    // Field hints live in the current dvui window, which end() clears.
+    const text_input_hints = glass.field_hints.current();
     var end_micros = appState.win.end(.{ .manage_backend = false }) catch |err| {
         log.err("dvui.Window.end failed: {any}", .{err});
         return c.SDL_APP_FAILURE;
@@ -4408,7 +4415,7 @@ fn appIterate(_: ?*anyopaque) callconv(.c) c.SDL_AppResult {
     if (!appState.window_open) res = .close;
 
     appState.back.setCursor(appState.win.cursorRequested());
-    appState.back.textInputRect(appState.win.textInputRequested());
+    appState.back.textInputRectWithHints(appState.win.textInputRequested(), text_input_hints);
     appState.back.renderPresent();
     Health.current.frameEnd(c.SDL_GetTicksNS());
     app_frame_open = false;
