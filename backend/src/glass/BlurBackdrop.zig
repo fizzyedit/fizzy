@@ -97,6 +97,12 @@ form: f32 = 1,
 
 pub const Mode = enum { replay, readback };
 
+/// Fizzy addition: where captures are counted (the backend's `Health.Counts.captures`): one for
+/// each `deinit` that reads what is under it, none for one that keeps its capture. Null counts
+/// nothing. A pointer because the glass cannot import the backend; whoever reads the counts sets it.
+/// TODO(seam): the backend sets it as it starts, so every run counts, not only the glass test bed.
+pub var capture_count: ?*u32 = null;
+
 /// Enough for a 16k-pixel rect at radius 2^11, in both directions.
 const max_levels = 24;
 
@@ -182,6 +188,7 @@ pub fn deinit(self: *BlurBackdrop) void {
     if (!self.dirty) return;
     // As `init` left it: nothing deferred, nothing to capture.
     if (FrameTarget.unseen()) return;
+    if (capture_count) |n| n.* +|= 1;
     defer self.dirty = false;
     defer self.frostReplaces();
     if (self.mode == .readback) return self.deinitReadback();

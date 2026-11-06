@@ -69,6 +69,9 @@ pub const Counts = struct {
     /// Draws through a custom program, and the physical pixels their vertex bounds cover
     program_draws: u32 = 0,
     program_px: u32 = 0,
+    /// Screen copies a glass pane read this frame: each frost or layer that read what is under it,
+    /// not one that drew from the capture it kept (`BlurBackdrop.capture_count`).
+    captures: u32 = 0,
     /// Times the destination changed from one target (or the window) to another.
     target_switches: u32 = 0,
     /// Texture creations and updates uploaded.
@@ -336,4 +339,11 @@ test "custom program counts add across submissions" {
     counts.add(.{ .program_draws = 3, .program_px = 240 });
     try std.testing.expectEqual(@as(u32, 5), counts.program_draws);
     try std.testing.expectEqual(@as(u32, 400), counts.program_px);
+}
+
+test "captures add across submissions" {
+    var counts: Counts = .{};
+    counts.add(.{ .captures = 1 });
+    counts.add(.{ .captures = 2 });
+    try std.testing.expectEqual(@as(u32, 3), counts.captures);
 }

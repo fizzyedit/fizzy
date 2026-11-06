@@ -13,6 +13,24 @@ test "parsing requires a known scene and an output directory" {
     try expect(bed.parse("nope:/tmp/x") == null);
     try expect(bed.parse("pair:") == null);
     try expect(bed.parse("shadow:") == null);
+    try std.testing.expectEqualStrings("/tmp/z", bed.parse("pulldown:/tmp/z").?.dir);
+    try equal(.pulldown, bed.parse("pulldown:/tmp/z").?.scene);
+}
+
+test "pulldown opens and closes symmetrically over 42 steps" {
+    try equal(42, bed.steps(.pulldown));
+    for (0..42) |i| try equal(bed.openAt(i), bed.openAt(41 - i));
+    try equal(1, bed.openAt(20));
+    try equal(1, bed.openAt(21));
+    try equal(0, bed.openAt(0));
+}
+
+test "pulldown entrances run 0 to 1, the input well ahead of the bubbles" {
+    try equal(0, bed.inputEntrance(0));
+    try equal(1, bed.inputEntrance(1));
+    try equal(0, bed.bubbleEntrance(0));
+    try equal(1, bed.bubbleEntrance(1));
+    try expect(bed.inputEntrance(0.25) > 0.5);
 }
 
 test "pair steps and drop geometry follow the console join" {
