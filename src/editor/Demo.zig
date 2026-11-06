@@ -45,7 +45,6 @@ const SplitTree = @import("app").layout.State.SplitTree;
 const Editor = @import("Editor.zig");
 const Popout = @import("Popout.zig");
 const Keybinds = @import("Keybinds.zig");
-pub const catalog = @import("demos/catalog.zig");
 
 editor: *Editor,
 player: automation.Player,
@@ -185,9 +184,9 @@ pub fn materialsLacking(buf: *[std.enums.values(core.material.Kind).len][]const 
     return buf[0..n];
 }
 
-/// Build the bundled demo `name` and play it.
+/// Build the app's script demo `name` and play it.
 pub fn play(self: *Demo, name: []const u8) !void {
-    const entry = catalog.find(name) orelse {
+    const entry = self.editor.demos.scriptDemo(name) orelse {
         dvui.log.warn("demo: no demo named '{s}'", .{name});
         return error.NoSuchDemo;
     };

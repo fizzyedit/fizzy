@@ -247,7 +247,8 @@ access works from what the code and its public docs say.
   script are the `tape` library in `sdk/tape/` (std-only); the players, their input and anchors
   the `replay` library in `sdk/replay/` (dvui and `tape` only, for any dvui app); fizzy's overlay
   and plugin service in `app/automation/`; fizzy's stage and bundled demos in
-  `src/editor/Demo.zig` + `src/editor/demos/`.
+  `src/editor/Demo.zig` + `src/app_demos.zig` + `src/demos/`, with the app's demos registered at
+  startup.
 - Floating views (a view dropped on its own place's middle floats into a glass window: the rule,
   occlusion, close-home, persistence) → `app/layout/SPLITS.md` "Floating a view"; taking floats out
   into OS windows (ImGui-style viewports, per-OS dressing, the dvui replay hook) →

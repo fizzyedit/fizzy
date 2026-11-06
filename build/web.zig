@@ -549,7 +549,7 @@ fn demoTapes(b: *std.Build) std.Build.LazyPath {
     });
     const demos = b.createModule(.{
         .target = b.graph.host,
-        .root_source_file = b.path("src/editor/demos/catalog.zig"),
+        .root_source_file = b.path("src/app_demos.zig"),
     });
     demos.addImport("tape", tape);
     const tool = b.addExecutable(.{

@@ -252,9 +252,10 @@ const help_items = [_]Item{
     // macOS app menu's "About fizzy" are the same command. Named for the updates only in a build
     // that has an updater with a feed of the app's own; otherwise it is the dialog's own title.
     .{ .command = .{ .id = "fizzy.about", .title = .{ .static = if (auto_update.impl and AppInfo.own_repo_url) "Check for Updates…" else AppInfo.about_title_z } } },
+    // The app's demos that ask for a Help row (a section, so an app with none has none, and a
+    // plugin can add one beside them). `drawMenuSections` draws the separator before the group.
+    .{ .plugin_section = "fizzy.menu.help" },
     .separator,
-    // A demo of fizzy played by fizzy itself (`Editor.Demo`); the rest are in the palette.
-    .{ .command = .{ .id = "fizzy.demo.tour", .title = .{ .static = "Take the Tour" }, .sf_symbol = "play.circle" } },
     .{ .command = .{ .id = "fizzy.reportBug", .title = .{ .static = "Report Bug…" }, .sf_symbol = "ant.fill" } },
 };
 

@@ -1,4 +1,4 @@
-//! Every demo fizzy ships with (`Editor.Demo.catalog`), played through fizzy's own stage in the
+//! Every demo the app ships with (`Entry.app_demos`), played through fizzy's own stage in the
 //! whole editor, as `Entry` brings it up headless. A renamed anchor, a wait that never holds or a
 //! document owner whose snapshot does not put it back fails here, before it fails on fizzyed.it.
 //!
@@ -45,6 +45,7 @@ const BundledApp = struct {
         self.editor.* = try fizzy.Editor.init(self.entry);
         workbench.runtime.setWorkbench(&self.editor.workbench);
         try self.editor.postInit();
+        try fizzy.Entry.registerAppDemos(self.editor);
         try dvui.testing.settle(headlessFrame);
     }
 
@@ -132,8 +133,8 @@ const bundled_seek_seed: u64 = 0xf122_de40;
 const bundled_random_seeks = 16;
 
 test "demo: the rail's Files anchor the scripts spell out is the one fizzy publishes" {
-    try std.testing.expectEqualStrings("fizzy.rail:" ++ workbench.view_files, fizzy.Editor.Demo.catalog.files_icon);
-    try std.testing.expectEqualStrings("fizzy.mobile.tab:" ++ workbench.view_files, fizzy.Editor.Demo.catalog.files_tab);
+    try std.testing.expectEqualStrings("fizzy.rail:" ++ workbench.view_files, fizzy.Entry.app_demos.anchors.files_icon);
+    try std.testing.expectEqualStrings("fizzy.mobile.tab:" ++ workbench.view_files, fizzy.Entry.app_demos.anchors.files_tab);
 }
 
 const bundled_test_name = "demo: every bundled demo plays to the end through fizzy's stage, a seek lands on what playing reached, and the person's own folder is theirs again after";
@@ -160,7 +161,7 @@ test "demo: every bundled demo plays to the end through fizzy's stage, a seek la
     var prng: std.Random.DefaultPrng = .init(bundled_seek_seed);
     const random = prng.random();
 
-    for (fizzy.Editor.Demo.catalog.entries) |e| {
+    for (fizzy.Entry.app_demos.entries) |e| {
         Watchdog.enter(e.name);
         try app.editor.demo.play(e.name);
 
@@ -168,9 +169,9 @@ test "demo: every bundled demo plays to the end through fizzy's stage, a seek la
         for (0..5) |_| _ = try dvui.testing.step(headlessFrame);
         const stage = app.editor.demo.player.stage;
         var buf: [192]u8 = undefined;
-        try std.testing.expectEqualStrings("region:Main", automation.Input.resolve(stage, fizzy.Editor.Demo.catalog.documents, &buf));
+        try std.testing.expectEqualStrings("region:Main", automation.Input.resolve(stage, fizzy.Entry.app_demos.anchors.documents, &buf));
         try std.testing.expectEqualStrings("region:Sidebar", automation.Input.resolve(stage, "region:role:explorer", &buf));
-        try std.testing.expect(automation.Input.tagData(stage, fizzy.Editor.Demo.catalog.documents) != null);
+        try std.testing.expect(automation.Input.tagData(stage, fizzy.Entry.app_demos.anchors.documents) != null);
 
         // Straight through, on the testing backend's clock (100 ms a step), keeping every moment
         // a seek could be asked to reproduce.
@@ -270,7 +271,7 @@ test "demo: every bundled demo plays to the end through fizzy's stage, a seek la
     Watchdog.enter("demos service");
     // The `demos` service lists them, fizzy's own in its order, with each one's length and chapters.
     const api = app.editor.demos.api;
-    const catalog = fizzy.Editor.Demo.catalog;
+    const catalog = fizzy.Entry.app_demos;
     try std.testing.expectEqual(catalog.entries.len, api.list().len);
     for (catalog.entries, api.list()) |e, info| {
         try std.testing.expectEqualStrings(e.name, info.name);
@@ -584,7 +585,7 @@ test "demo: every bundled demo plays to the end through fizzy's stage, a seek la
 
         // A person stepping in, then playing on: a new branch, not a replay over their work, and
         // the history before it still there to seek back into.
-        try app.editor.demo.play(fizzy.Editor.Demo.catalog.entries[0].name);
+        try app.editor.demo.play(fizzy.Entry.app_demos.entries[0].name);
         frames = 0;
         while ((p.state != .playing or p.seq.now < 3000) and frames < 2_000) : (frames += 1) _ = try dvui.testing.step(headlessFrame);
         try std.testing.expectEqual(automation.Player.State.playing, p.state);
@@ -618,7 +619,7 @@ test "demo: every bundled demo plays to the end through fizzy's stage, a seek la
     try tourOnAPhone(&app);
 
     // Left loaded for `down`, which quits the way `appQuit` does.
-    try app.editor.demo.play(fizzy.Editor.Demo.catalog.entries[0].name);
+    try app.editor.demo.play(fizzy.Entry.app_demos.entries[0].name);
     for (0..5) |_| _ = try dvui.testing.step(headlessFrame);
     try std.testing.expect(app.editor.demo.active());
 }
@@ -636,7 +637,7 @@ fn revertClosesWhatTheTourOpened(app: *BundledApp) !void {
     const print_before = fizzy.Editor.Demo.layoutPrint(editor);
     const closed_before = editor.explorer.closed;
 
-    try editor.demo.play(fizzy.Editor.Demo.catalog.entries[0].name);
+    try editor.demo.play(fizzy.Entry.app_demos.entries[0].name);
     var frames: usize = 0;
     while (p.state != .ended and frames < 20_000) : (frames += 1) _ = try dvui.testing.step(headlessFrame);
     try std.testing.expectEqual(automation.Player.State.ended, p.state);
@@ -666,7 +667,7 @@ fn revertKeepsAMovedFloat(app: *BundledApp) !void {
     _ = try state.floats.add(gpa, .{ .name = state.internName(gpa, "Float 1"), .rect = at, .home = "" });
     try dvui.testing.settle(headlessFrame);
 
-    try editor.demo.play(fizzy.Editor.Demo.catalog.entries[0].name);
+    try editor.demo.play(fizzy.Entry.app_demos.entries[0].name);
     var frames: usize = 0;
     while (frames < 60) : (frames += 1) _ = try dvui.testing.step(headlessFrame);
     try std.testing.expectEqual(automation.Player.State.playing, p.state);
@@ -696,7 +697,7 @@ fn tourOnARearrangedLayout(app: *BundledApp) !void {
     Watchdog.enter("tourOnARearrangedLayout");
     const editor = app.editor;
     const p = &editor.demo.player;
-    const name = fizzy.Editor.Demo.catalog.entries[0].name;
+    const name = fizzy.Entry.app_demos.entries[0].name;
 
     const gpa = editor.app.gpa;
     const state = &editor.app.layout;

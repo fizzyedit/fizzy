@@ -2230,18 +2230,6 @@ pub fn postInit(editor: *Editor) !void {
     }
 
     editor.demo.attach(editor);
-    // `FIZZY_DEMO=tour` plays a bundled demo from launch — how a screen recording is made — and
-    // `FIZZY_DEMO=<file>.zon` (or `.tape`) a tape, read before the app moved its working directory.
-    if (comptime builtin.target.cpu.arch != .wasm32) {
-        if (Demo.env_tape) |bytes| {
-            Demo.env_tape = null;
-            defer editor.app.gpa.free(bytes);
-            editor.demo.playTapeSoon(bytes);
-        } else if (std.process.Environ.getAlloc(fizzy.core.platform.processEnviron(), editor.app.gpa, "FIZZY_DEMO")) |name| {
-            defer editor.app.gpa.free(name);
-            editor.demo.playSoon(name);
-        } else |_| {}
-    }
 
     // Fizzy commands must be registered against the Editor's *final* address — `init` returns
     // an Editor by value, so a pointer taken there would dangle the moment it's moved.

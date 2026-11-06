@@ -10,6 +10,7 @@ const icon = @import("app_icon").png;
 
 const fizzy = @import("fizzy.zig");
 const workbench = @import("workbench");
+const icons = @import("icons");
 const auto_update = @import("app").update.auto_update;
 const file_assoc = @import("backend/file_assoc.zig");
 const update_notify = @import("app").update.update_notify;
@@ -22,6 +23,7 @@ const crash = @import("app").crash;
 const paths = fizzy.core.paths;
 const Constants = @import("editor/Constants.zig");
 const AppInfo = @import("app").AppInfo;
+pub const app_demos = @import("app_demos.zig");
 
 const Entry = @This();
 const Editor = fizzy.Editor;
@@ -261,7 +263,79 @@ pub fn main(main_init: std.process.Init) !u8 {
     return 0;
 }
 
+/// The `run` for an app demo's own command, named at comptime.
+fn demoRun(comptime name: []const u8) *const fn (*anyopaque) anyerror!void { // lint-allow(anyerror): the one `Demo.play` error surface, it goes in a command and a native item
+    return struct {
+        fn run(state: *anyopaque) !void {
+            const editor: *Editor = @ptrCast(@alignCast(state));
+            try editor.demo.play(name);
+        }
+    }.run;
+}
+
+/// The `run` for the macOS Help row of an app demo that asked for one.
+fn demoNativeRun(comptime name: []const u8) *const fn (?*anyopaque) anyerror!void { // lint-allow(anyerror): the host command surface, like `Keybinds.run`
+    return struct {
+        fn run(_: ?*anyopaque) !void {
+            try fizzy.editor().app.host.runCommand("fizzy.demo." ++ name);
+        }
+    }.run;
+}
+
+/// The Help section's rows: the app's demos that asked for one. Registered once, but drawn from
+/// the runtime registry, so a later registration would appear too.
+fn drawAppDemoMenu(ctx: ?*anyopaque) !void {
+    const editor: *Editor = @ptrCast(@alignCast(ctx orelse return));
+    const arena = dvui.currentWindow().arena();
+    for (editor.demos.script_demos.items) |d| {
+        const title = d.menu_title orelse continue;
+        const id = std.fmt.allocPrint(arena, "fizzy.demo.{s}", .{d.name}) catch continue;
+        _ = editor.app.host.drawMenuItem(title, id);
+    }
+}
+
+/// Register the app's own demos: in the `demos` service, as commands, and in Help where one asks
+/// for a row. Called at startup, after `postInit` has attached the editor at its final address.
+pub fn registerAppDemos(editor: *Editor) !void {
+    var has_menu = false;
+    inline for (&app_demos.entries) |*e| {
+        const id = "fizzy.demo." ++ e.name;
+        try editor.demos.registerScript(.{
+            .name = e.name,
+            .title = e.title,
+            .build = e.build,
+            .menu_title = e.menu_title,
+            .menu_symbol = e.menu_symbol,
+        });
+        try editor.app.host.registerCommand(.{
+            .id = id,
+            .owner = Editor.Keybinds.plugin(),
+            .title = "Demo: " ++ e.title,
+            .run = demoRun(e.name),
+            .icon = icons.tvg.lucide.@"circle-play",
+        });
+        if (e.menu_title) |title| {
+            has_menu = true;
+            try editor.app.host.registerNativeMenuItem(.{
+                .id = id,
+                .parent_menu_id = "fizzy.menu.help",
+                .title = title,
+                .command = id,
+                .sf_symbol = e.menu_symbol,
+                .run = demoNativeRun(e.name),
+            });
+        }
+    }
+    if (has_menu) try editor.app.host.registerMenuSection(.{
+        .id = "fizzy.app.demos",
+        .parent_menu_id = "fizzy.menu.help",
+        .draw = drawAppDemoMenu,
+        .ctx = editor,
+    });
+}
+
 pub const panic = if (crash.supported) std.debug.FullPanic(crash.panic) else dvui.App.panic;
+
 pub const std_options: std.Options = .{
     .logFn = logFn,
     // dvui's refresh records are debug lines, which a release build would compile out; they are
@@ -320,6 +394,21 @@ fn initRefreshLogFromEnv() void {
 var refresh_log_active = false;
 
 // Runs before the first frame, after backend and dvui.Window.init()
+/// `FIZZY_DEMO=<name>` plays an app demo from launch, `FIZZY_DEMO=<file>.zon` (or `.tape`) a tape;
+/// a tape read before the app moved its working directory wins. Not on wasm: no environment there.
+fn playDemoFromEnv() void {
+    if (comptime builtin.target.cpu.arch == .wasm32) return;
+    const editor = fizzy.editor();
+    if (Editor.Demo.env_tape) |bytes| {
+        Editor.Demo.env_tape = null;
+        defer editor.app.gpa.free(bytes);
+        editor.demo.playTapeSoon(bytes);
+    } else if (std.process.Environ.getAlloc(fizzy.core.platform.processEnviron(), editor.app.gpa, "FIZZY_DEMO")) |name| {
+        defer editor.app.gpa.free(name);
+        editor.demo.playSoon(name);
+    } else |_| {}
+}
+
 pub fn AppInit(win: *dvui.Window) !void {
     fizzy.core.profile.phase(dvui.io, "window");
     // Snapshot the platform from DVUI's keybind selection. On native this is a
@@ -404,6 +493,18 @@ pub fn AppInit(win: *dvui.Window) !void {
     // workbench-api service whose `ctx` is this pointer). This loads the built-in plugins,
     // including pixi as a generic dylib that owns its own state + atlas packer.
     fizzy.editor().postInit() catch unreachable;
+
+    // The app's own demos, registered once the editor (and its demos service) is at its final
+    // address. Fizzy's tour and markdown demo are Fizzy's app's, not the shell's; an app built on
+    // fizzy registers its own here, or a plugin registers one with `Host.registerDemo`.
+    if (AppInfo.is_fizzy) registerAppDemos(fizzy.editor()) catch |err|
+        std.log.err("could not register the app's demos: {s}", .{@errorName(err)});
+
+    // `FIZZY_DEMO=tour` plays an app demo from launch — how a screen recording is made — and
+    // `FIZZY_DEMO=<file>.zon` (or `.tape`) a tape, read before the app moved its working directory.
+    // After the app's demos are registered, so a name finds one.
+    playDemoFromEnv();
+
     fizzy.core.profile.phase(dvui.io, "plugins");
 
     // Whether dvui went quiet at the end of each frame, for the `automation` service's `settled`.
