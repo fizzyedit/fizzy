@@ -21,7 +21,8 @@ if ! "$gpu"; then
     shopt -s nullglob
     drivers=(/usr/share/vulkan/icd.d/lvp_icd*.json)
     ((${#drivers[@]})) || { echo 'lavapipe ICD not found' >&2; exit 1; }
-    export VK_DRIVER_FILES="${drivers[0]}"
+    # Multiarch hosts can list the i686 ICD first; Vulkan needs every candidate.
+    export VK_DRIVER_FILES="$(IFS=:; echo "${drivers[*]}")"
 fi
 : > "$out/cost.jsonl"
 for arm in scene sheet; do
