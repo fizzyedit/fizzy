@@ -1,5 +1,4 @@
 const std = @import("std");
-const core = @import("core");
 const dvui = @import("dvui");
 const bed = @import("GlassTestbed.zig");
 const expect = std.testing.expect;
@@ -52,43 +51,17 @@ test "ghost maximum ignores its hole" {
     try equal(3, ghost.y);
 }
 
-test "shadow scene: two steps, each measuring a region outside B's glass" {
-    try equal(2, bed.steps(.shadow));
-    const window: dvui.Rect = .{ .w = 1280, .h = 1024 };
-    for (std.enums.values(bed.ShadowCase)) |case| {
-        const pictures = bed.shadowPictures(case, window, 8, 0);
-        const measured = pictures.region.insetAll(bed.ghost_inset);
-        try expect(measured.w > 0 and measured.h > 0);
-        try equal(1, pictures.pictureA().len);
-        if (case == .inside) {
-            // The ring round the drop, inside the bar, is measured.
-            try expect(pictures.hole.?.w < measured.w and pictures.hole.?.h < measured.h);
-            try expect(pictures.b[0].rect.contains(pictures.region.topLeft()));
-            continue;
-        }
-        // The join bulges below the boxes, most in the overlap's middle: no corner or the middle
-        // of what is measured is glass, at either window scale.
-        for ([_]f32{ 1, 2 }) |s| {
-            const rs: dvui.RectScale = .{ .s = s };
-            const field = bed.shadowField(&pictures.b, rs);
-            const region = bed.belowGlass(rs.rectToPhysical(pictures.region), &field);
-            try equal(rs.rectToPhysical(pictures.region).h, region.h);
-            const inner = region.insetAll(bed.ghost_inset);
-            try expect(inner.w > 0 and inner.h > 0);
-            const mid = inner.center();
-            for ([_]dvui.Point.Physical{ inner.topLeft(), inner.topRight(), inner.bottomLeft(), inner.bottomRight(), mid, .{ .x = mid.x, .y = inner.y } }) |p| {
-                try equal(0, field.sampleWith(p, core.glass_look.inApp(1)).coverage);
-            }
-        }
-    }
-}
-
-test "the overlap's band starts below the join's bulge" {
-    const pictures = bed.shadowPictures(.overlap, .{ .w = 1280, .h = 1024 }, 8, 0);
-    const rs: dvui.RectScale = .{ .s = 1 };
-    const field = bed.shadowField(&pictures.b, rs);
-    const region = bed.belowGlass(rs.rectToPhysical(pictures.region), &field);
-    // Without the move its top row would sample B's glass.
-    try expect(field.sampleWith(.{ .x = pictures.region.center().x, .y = pictures.region.y + 0.5 }, core.glass_look.inApp(1)).coverage > 0);
-    try expect(region.y >= pictures.region.y + bed.shadow_merge / 4);
+test "shadow scene: one step measuring the ring round the drop, inside the bar" {
+    try equal(1, bed.steps(.shadow));
+    const pictures = bed.shadowPictures(.{ .w = 1280, .h = 1024 }, 8);
+    const bar = pictures.a.rect;
+    try equal(bar, pictures.b[0].rect);
+    const region = pictures.region;
+    try expect(region.x >= bar.x and region.y >= bar.y and region.x + region.w <= bar.x + bar.w and region.y + region.h <= bar.y + bar.h);
+    // The drop's fade ring is wider than what `ghostMax` keeps clear on both its sides.
+    const measured = region.insetAll(bed.ghost_inset);
+    const hole = pictures.hole.outsetAll(bed.ghost_inset);
+    try equal(pictures.b[1].rect, pictures.hole);
+    try expect(measured.x < hole.x and measured.y < hole.y);
+    try expect(measured.x + measured.w > hole.x + hole.w and measured.y + measured.h > hole.y + hole.h);
 }

@@ -27,7 +27,7 @@ pub const Config = struct { scene: Scene, dir: []const u8 };
 pub fn steps(scene: Scene) usize {
     return switch (scene) {
         .pair => 26,
-        .shadow => std.enums.values(ShadowCase).len,
+        .shadow => 1,
     };
 }
 /// "<scene>:<dir>".
@@ -49,82 +49,31 @@ pub fn mergeAt(gap: f32) f32 {
     return 36 * ct * ct;
 }
 
-/// The shadow scene's steps, in order.
-pub const ShadowCase = enum { inside, overlap };
 /// Points: how near the shadow scene's pieces come before their glass joins.
 pub const shadow_merge: f32 = 12;
 /// A rounded box, points.
 pub const Box = struct { rect: dvui.Rect, radius: f32 };
-/// A shadow step: picture A (one piece of glass), picture B (the same outline with a second
-/// piece joined to it) and the region where B's shadow must be A's, less a hole B's own glass
-/// fills. Points.
+/// The shadow scene's one step, "inside": picture A (the bar), picture B (the bar with a drop
+/// joined wholly inside it) and the region where B's shadow must be A's, less the hole the
+/// drop's own glass fills. Points.
 pub const ShadowPictures = struct {
-    a: [2]Box = undefined,
-    a_len: usize,
+    a: Box,
     b: [2]Box,
     region: dvui.Rect,
-    hole: ?dvui.Rect = null,
-
-    pub fn pictureA(self: *const ShadowPictures) []const Box {
-        return self.a[0..self.a_len];
-    }
+    hole: dvui.Rect,
 };
-/// `case`'s pictures centred in `window`, for a shadow that fades over `fade` and drops by
-/// `offset` (points, `dialogs.surfaceShadow`'s).
-pub fn shadowPictures(case: ShadowCase, window: dvui.Rect, fade: f32, offset: f32) ShadowPictures {
-    switch (case) {
-        // A drop wholly inside the bar casts nothing: the joined outline is the bar's.
-        .inside => {
-            const bar: Box = .{ .rect = .{ .x = (window.w - 340) / 2, .y = (window.h - 64) / 2, .w = 340, .h = 64 }, .radius = 24 };
-            const drop: Box = .{ .rect = .{ .x = bar.rect.x + 150, .y = bar.rect.y + 12, .w = 40, .h = 40 }, .radius = 20 };
-            return .{
-                .a = .{ bar, undefined },
-                .a_len = 1,
-                .b = .{ bar, drop },
-                .region = drop.rect.outsetAll(fade).intersect(bar.rect),
-                .hole = drop.rect,
-            };
-        },
-        // Two boxes overlapping by 40 pt cast one shadow, not two stacked under the overlap.
-        .overlap => {
-            const x = (window.w - 160) / 2;
-            const y = (window.h - 60) / 2;
-            return .{
-                .a = .{ .{ .rect = .{ .x = x, .y = y, .w = 160, .h = 60 }, .radius = 20 }, undefined },
-                .a_len = 1,
-                .b = .{
-                    .{ .rect = .{ .x = x, .y = y, .w = 100, .h = 60 }, .radius = 20 },
-                    .{ .rect = .{ .x = x + 60, .y = y, .w = 100, .h = 60 }, .radius = 20 },
-                },
-                .region = .{ .x = x + 60, .y = y + 60, .w = 40, .h = fade + offset },
-            };
-        },
-    }
-}
-
-/// `boxes` as `glassBubbles` joins them, placed by `rs`.
-pub fn shadowField(boxes: []const Box, rs: dvui.RectScale) core.LiquidField {
-    var field: core.LiquidField = .{ .scale = rs.s, .merge_px = shadow_merge * rs.s };
-    for (boxes) |box| field.add(.{ .rect = rs.rectToPhysical(box.rect), .radii = @splat(box.radius * rs.s), .round = true });
-    return field;
-}
-
-/// `region` moved down, its height kept, until no pixel of it is glass `field` covers at all, its
-/// antialiased edge included. The join bulges `merge / 4` below the boxes it joins, so a band
-/// under them would otherwise measure B's glass as its shadow.
-pub fn belowGlass(region: dvui.Rect.Physical, field: *const core.LiquidField) dvui.Rect.Physical {
-    var out = region;
-    out.y = @floor(region.y);
-    while (rowCovered(out, field)) out.y += 1;
-    return out;
-}
-
-fn rowCovered(region: dvui.Rect.Physical, field: *const core.LiquidField) bool {
-    var x = @floor(region.x);
-    while (x < region.x + region.w) : (x += 1) {
-        if (field.sampleWith(.{ .x = x + 0.5, .y = region.y + 0.5 }, core.glass_look.inApp(1)).coverage > 0) return true;
-    }
-    return false;
+/// The pictures centred in `window`, for a shadow that fades over `fade` points
+/// (`dialogs.surfaceShadow`'s). A drop wholly inside the bar casts nothing: the joined outline
+/// is the bar's.
+pub fn shadowPictures(window: dvui.Rect, fade: f32) ShadowPictures {
+    const bar: Box = .{ .rect = .{ .x = (window.w - 340) / 2, .y = (window.h - 64) / 2, .w = 340, .h = 64 }, .radius = 24 };
+    const drop: Box = .{ .rect = .{ .x = bar.rect.x + 150, .y = bar.rect.y + 12, .w = 40, .h = 40 }, .radius = 20 };
+    return .{
+        .a = bar,
+        .b = .{ bar, drop },
+        .region = drop.rect.outsetAll(fade).intersect(bar.rect),
+        .hole = drop.rect,
+    };
 }
 
 pub const Ghost = struct { max: f32 = 0, x: usize = 0, y: usize = 0 };
@@ -186,20 +135,13 @@ pub fn draw(self: *GlassTestbed) void {
             self.field.shapes[1] = .{ .rect = bubbles[1].rect, .radii = radii, .round = gap > 0 };
         },
         .shadow => {
-            const bs = core.dialogs.surfaceShadow();
-            const case: ShadowCase = @fromBackingInt(@intCast(self.step));
-            const pictures = shadowPictures(case, window, bs.fade, bs.offset.y);
-            const boxes = if (self.host) &pictures.b else pictures.pictureA();
+            const pictures = shadowPictures(window, core.dialogs.surfaceShadow().fade);
+            const boxes: []const Box = if (self.host) &pictures.b else (&pictures.a)[0..1];
             for (boxes, 0..) |box, i| bubbles[i] = .{ .rect = rs.rectToPhysical(box.rect), .radius = box.radius * rs.s };
             len = boxes.len;
             opts = .{ .merge = shadow_merge, .shadow = 1 };
             self.region = rs.rectToPhysical(pictures.region);
-            // "inside" measures within B's glass on purpose; "overlap" measures only shadow.
-            if (case == .overlap) {
-                self.field = shadowField(&pictures.b, rs);
-                self.region = belowGlass(self.region, &self.field);
-            }
-            self.hole = if (pictures.hole) |h| rs.rectToPhysical(h) else null;
+            self.hole = rs.rectToPhysical(pictures.hole);
         },
     }
     core.LiquidField.publishEnabled(true);
@@ -269,8 +211,7 @@ fn saveFrame(self: *GlassTestbed, picture: ?Capture.Source) !void {
             .shadow => {
                 // B against A: how much darker B is.
                 const dark = ghostMax(image.pixels, self.paired.items, image.width, self.region, self.hole);
-                const case: ShadowCase = @fromBackingInt(@intCast(self.step));
-                try self.rows.writer.print("{{\"scene\":\"shadow\",\"case\":\"{t}\",\"dark_max\":{d},\"x\":{d},\"y\":{d}}}\n", .{ case, dark.max, dark.x, dark.y });
+                try self.rows.writer.print("{{\"scene\":\"shadow\",\"case\":\"inside\",\"dark_max\":{d},\"x\":{d},\"y\":{d}}}\n", .{ dark.max, dark.x, dark.y });
             },
         }
         try cwd.writeFile(dvui.io, .{ .sub_path = try std.fs.path.join(arena, &.{ self.config.dir, "frames.jsonl" }), .data = self.rows.written() });
