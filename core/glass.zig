@@ -615,10 +615,10 @@ test "groups do not join" {
 }
 
 /// Replay details for headless widget tests; valid until the next replay.
-pub fn drawnDetails() struct { radii: []const [4]f32, clips: []const dvui.Rect.Physical, jobs: usize, captures: usize, shadows: usize, fields: usize, shapes: usize, merge: f32 } {
+pub fn drawnDetails() struct { radii: []const [4]f32, clips: []const dvui.Rect.Physical, jobs: usize, captures: usize, fields: usize, shapes: usize, merge: f32 } {
     if (!builtin.is_test) @compileError("drawnDetails is for tests");
     const n = @min(record.glass_shapes, record.rects.len);
-    return .{ .jobs = record.jobs, .captures = record.captures, .shadows = record.shadow_shapes, .radii = record.radii[0..n], .clips = record.clips[0..n], .fields = record.fields, .shapes = record.glass_shapes, .merge = if (record.fields > 0) record.field_merge[0] else 0 };
+    return .{ .jobs = record.jobs, .captures = record.captures, .radii = record.radii[0..n], .clips = record.clips[0..n], .fields = record.fields, .shapes = record.glass_shapes, .merge = if (record.fields > 0) record.field_merge[0] else 0 };
 }
 
 fn currentFrame() !dvui.App.Result {
