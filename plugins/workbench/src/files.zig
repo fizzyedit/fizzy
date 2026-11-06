@@ -533,7 +533,7 @@ pub fn editableLabel(id_extra: usize, label: []const u8, color: dvui.Color, kind
     const editing: bool = if (edit_id) |id| id_extra == id else false;
 
     if (editing) {
-        var te = dvui.textEntry(@src(), .{}, .{
+        var te = core.widgets.TextEntry.init(@src(), .{}, .{
             .expand = .horizontal,
             .background = false,
             .padding = dvui.Rect.all(0),
@@ -543,8 +543,8 @@ pub fn editableLabel(id_extra: usize, label: []const u8, color: dvui.Color, kind
             .id_extra = id_extra,
             .font = font,
         });
-        defer core.widgets.textEntryDeinit(te);
-        _ = core.widgets.textEntryMenu(te);
+        defer te.deinit();
+        _ = core.widgets.textEntryMenu(te.entry);
 
         // Text edit should handle any click events, so if we find one unhandled after the text edit
         // we can assume the mouse was clicked anywhere else and that the edit needs to be confirmed.
@@ -560,23 +560,23 @@ pub fn editableLabel(id_extra: usize, label: []const u8, color: dvui.Color, kind
             }
         }
 
-        if (dvui.firstFrame(te.data().id)) {
-            te.textSet(label, true);
+        if (dvui.firstFrame(te.entry.data().id)) {
+            te.entry.textSet(label, true);
 
             if (std.mem.find(u8, label, ".")) |idx| {
                 if (idx == 0) {
-                    te.textLayout.selection.moveCursor(1, false);
-                    te.textLayout.selection.moveCursor(label.len - 1, true);
+                    te.entry.textLayout.selection.moveCursor(1, false);
+                    te.entry.textLayout.selection.moveCursor(label.len - 1, true);
                 } else {
-                    te.textLayout.selection.moveCursor(0, false);
-                    te.textLayout.selection.moveCursor(idx, true);
+                    te.entry.textLayout.selection.moveCursor(0, false);
+                    te.entry.textLayout.selection.moveCursor(idx, true);
                 }
             }
 
-            dvui.focusWidget(te.data().id, null, null);
+            dvui.focusWidget(te.entry.data().id, null, null);
         }
 
-        if (te.enter_pressed or !selected) {
+        if (te.entry.enter_pressed or !selected) {
             const parent_folder = std.fs.path.dirname(full_path);
             var new_path: []const u8 = undefined;
 
@@ -585,12 +585,12 @@ pub fn editableLabel(id_extra: usize, label: []const u8, color: dvui.Color, kind
             const valid_path = if (table()) |files| files.exists(full_path) else false;
 
             if (parent_folder) |folder| {
-                new_path = try core.paths.join(dvui.currentWindow().arena(), folder, te.getText());
+                new_path = try core.paths.join(dvui.currentWindow().arena(), folder, te.entry.getText());
             } else {
-                new_path = try std.fs.path.join(dvui.currentWindow().arena(), &.{te.getText()});
+                new_path = try std.fs.path.join(dvui.currentWindow().arena(), &.{te.entry.getText()});
             }
 
-            if (!std.mem.eql(u8, label, te.getText()) and te.getText().len > 0 and valid_path) {
+            if (!std.mem.eql(u8, label, te.entry.getText()) and te.entry.getText().len > 0 and valid_path) {
                 if (runtime.files()) |fs| try fs.rename(full_path, new_path, kind);
             }
         }

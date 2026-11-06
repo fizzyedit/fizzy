@@ -2,6 +2,7 @@ const std = @import("std");
 const dvui = @import("dvui");
 const TextEntry = @import("TextEntry.zig");
 const ScrollArea = @import("ScrollArea.zig");
+const widgets = @import("../widgets.zig");
 
 const text = "alpha beta gamma";
 var buffer: [64]u8 = undefined;
@@ -195,6 +196,47 @@ test "two taps more than 300 ms apart do not select" {
     try after(16);
     try std.testing.expect(focused);
     try std.testing.expectEqual(selection.start, selection.end);
+}
+
+fn filterFrame() !dvui.App.Result {
+    _ = widgets.filterRow(@src(), "Filter", .{});
+    return .ok;
+}
+
+fn afterFilter(ms: u64) !void {
+    const cw = dvui.currentWindow();
+    _ = try filterFrame();
+    _ = try cw.end(.{});
+    try cw.begin(cw.frame_time_ns + @as(i128, ms) * std.time.ns_per_ms);
+}
+
+test "filterRow: a touch drag across the field does not focus it" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 200 } });
+    defer t.deinit();
+    try dvui.testing.settle(filterFrame);
+    const cw = dvui.currentWindow();
+    // Past the search glyph, inside the field; 40 pt down is 0.2 of the window's 200.
+    _ = try cw.addEventPointer(.{ .button = .touch0, .action = .press, .xynorm = .{ .x = 0.5, .y = 0.05 } });
+    try afterFilter(16);
+    for (1..5) |step| {
+        const y = 0.05 + 0.05 * @as(f32, @floatFromInt(step));
+        _ = try cw.addEventTouchMotion(.touch0, 0.5, y, 0, 0.05);
+        try afterFilter(16);
+    }
+    _ = try cw.addEventPointer(.{ .button = .touch0, .action = .release, .xynorm = .{ .x = 0.5, .y = 0.25 } });
+    try afterFilter(16);
+    try afterFilter(16);
+    const after_drag = dvui.focusedWidgetId();
+
+    // Beyond TouchHold's double-tap interval, so the tap is a first tap.
+    try afterFilter(400);
+    _ = try cw.addEventPointer(.{ .button = .touch0, .action = .press, .xynorm = .{ .x = 0.5, .y = 0.05 } });
+    try afterFilter(30);
+    _ = try cw.addEventPointer(.{ .button = .touch0, .action = .release, .xynorm = .{ .x = 0.5, .y = 0.05 } });
+    try afterFilter(16);
+    try afterFilter(16);
+    const field = dvui.focusedWidgetId() orelse return error.TestUnexpectedResult;
+    try std.testing.expect(after_drag != field);
 }
 
 test "a tap on the focused caret opens the menu and another closes it" {

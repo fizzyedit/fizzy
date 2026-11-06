@@ -59,12 +59,12 @@ fn fieldFrame() !dvui.App.Result {
     var scroll = ScrollArea.init(@src(), .{ .horizontal = .none, .vertical_bar = .hide }, .{ .expand = .both });
     defer scroll.deinit();
     _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 100, .h = 1000 } });
-    const field = dvui.textEntry(@src(), .{ .multiline = true }, .{ .min_size_content = .{ .w = 100, .h = 20 * t_lines } });
-    dvui.focusWidget(field.data().id, null, null);
-    _ = @import("widgets.zig").textEntryMenu(field);
-    const r = field.data().borderRectScale();
+    var field = @import("widgets.zig").TextEntry.init(@src(), .{ .multiline = true }, .{ .min_size_content = .{ .w = 100, .h = 20 * t_lines } });
+    dvui.focusWidget(field.entry.data().id, null, null);
+    _ = @import("widgets.zig").textEntryMenu(field.entry);
+    const r = field.entry.data().borderRectScale();
     t_field_bottom = (r.r.y + r.r.h) / r.s;
-    @import("widgets.zig").textEntryDeinit(field);
+    field.deinit();
     return .ok;
 }
 

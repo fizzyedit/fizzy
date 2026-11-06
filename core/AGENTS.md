@@ -40,8 +40,7 @@ paths, fuzzy matching, the LSP client, the profiler.
   dvui focuses on the press, so a finger landing to scroll enters the field. The wrapper focuses
   on tap release, selects on hold or double tap, and toggles the menu on a caret tap; a drag is
   the scroll's. Mouse and pen are dvui's; `te.entry` is dvui's widget.
-  Callers left as follow-ups: `plugins/workbench/src/files.zig`, `src/editor/CommandPalette.zig`,
-  and `src/editor/dialogs/WebSaveAs.zig`. No lint rule yet. The text plugin's vendored
+  `scripts/zb build lint` flags `dvui.textEntry` (raw-text-entry). The text plugin's vendored
   `TextEntryWidget` is the editor, its own.
 - **Touch or mouse: ask dvui, never infer it.** `dvui.pointerKind()` is the window's answer,
   set as the backend adds events, the same in the app, a plugin dylib and a wasm side module.

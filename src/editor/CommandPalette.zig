@@ -760,7 +760,7 @@ pub fn draw(self: *CommandPalette, editor: *Editor) void {
             .{ .gravity_y = 0.5, .padding = dvui.Rect.all(4) },
         );
 
-        var entry = dvui.textEntry(@src(), .{
+        var te = core.widgets.TextEntry.init(@src(), .{
             .text = .{ .buffer = &self.text_buf },
             .placeholder = if (asked) |a|
                 a.param.label
@@ -774,11 +774,12 @@ pub fn draw(self: *CommandPalette, editor: *Editor) void {
             .color_text = .{ .color = text_color },
             .id_extra = 1,
         });
-        core.anchor.mark(entry.data(), "fizzy.palette", .{});
+        defer te.deinit();
+        core.anchor.mark(te.entry.data(), "fizzy.palette", .{});
         // FloatingWindow focuses its subwindow on first frame (size 0); claim the entry for a
         // few frames after that so typing works without a click.
         if (self.just_opened or self.focus_frames > 0) {
-            dvui.focusWidget(entry.data().id, win.data().id, null);
+            dvui.focusWidget(te.entry.data().id, win.data().id, null);
             self.just_opened = false;
             if (self.focus_frames > 0) self.focus_frames -= 1;
         }
@@ -786,10 +787,9 @@ pub fn draw(self: *CommandPalette, editor: *Editor) void {
         // keystroke appends instead of landing before the `>`.
         if (self.tail_frames > 0) {
             self.tail_frames -= 1;
-            entry.textLayout.selection.moveCursor(std.math.maxInt(usize), false);
+            te.entry.textLayout.selection.moveCursor(std.math.maxInt(usize), false);
         }
-        _ = core.widgets.textEntryMenu(entry);
-        core.widgets.textEntryDeinit(entry);
+        _ = core.widgets.textEntryMenu(te.entry);
     }
 
     if (asked) |a| self.drawAskedHint(a, text_color);
