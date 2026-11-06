@@ -20,14 +20,19 @@ region: dvui.Rect.Physical = .{},
 hole: ?dvui.Rect.Physical = null,
 field: core.LiquidField = .{},
 
+/// The backend keeps health counters (fizzy's native backend does; the test backend does not).
+const has_health = builtin.target.cpu.arch != .wasm32 and @hasDecl(dvui.backend, "Health");
+
 /// `pair`: a drop meeting the bar, glass against glass. `shadow`: the shadow joined glass casts,
-/// against the same outline drawn as one piece.
-pub const Scene = enum { pair, shadow };
+/// against the same outline drawn as one piece. `pulldown`: the console's pull-down sheet opening
+/// and closing over a blur field, with what each frame cost.
+pub const Scene = enum { pair, shadow, pulldown };
 pub const Config = struct { scene: Scene, dir: []const u8 };
 pub fn steps(scene: Scene) usize {
     return switch (scene) {
         .pair => 26,
         .shadow => 1,
+        .pulldown => 42,
     };
 }
 /// "<scene>:<dir>".
@@ -76,6 +81,27 @@ pub fn shadowPictures(window: dvui.Rect, fade: f32) ShadowPictures {
     };
 }
 
+/// Points: the pull-down's phone-sized frame, centred in the window.
+pub const pulldown_size: dvui.Size = .{ .w = 412, .h = 915 };
+/// How open the pull-down is at `step`, 0…1: opening over the first 21 steps, closing over the rest.
+pub fn openAt(step: usize) f32 {
+    std.debug.assert(step < steps(.pulldown));
+    const i: f32 = @floatFromInt(if (step < 21) step else 41 - step);
+    return i / 20;
+}
+/// How far the input has come down from the bar at openness `o`, 0…1.
+pub fn inputEntrance(o: f32) f32 {
+    return smoothstep(o / 0.35);
+}
+/// How far the bubbles have come out of the bar at openness `o`, 0…1: after the input has mostly.
+pub fn bubbleEntrance(o: f32) f32 {
+    return smoothstep((o - 0.25) / 0.4);
+}
+fn smoothstep(x: f32) f32 {
+    const t = std.math.clamp(x, 0, 1);
+    return t * t * (3 - 2 * t);
+}
+
 pub const Ghost = struct { max: f32 = 0, x: usize = 0, y: usize = 0 };
 /// Physical pixels `ghostMax` keeps clear of its rect's edges and its hole's, where edges blend.
 pub const ghost_inset: f32 = 2;
@@ -113,6 +139,12 @@ pub fn draw(self: *GlassTestbed) void {
     const rs = dvui.parentGet().screenRectScale(.{});
     const window = rs.rectFromPhysical(dvui.windowRectPixels());
     backdrop(rs, window);
+    if (self.config.scene == .pulldown) {
+        if (!self.warm()) return;
+        self.drawPulldown(rs, window);
+        self.serial = self.capture.request("");
+        return;
+    }
     var bubbles: [2]core.dialogs.Bubble = undefined;
     var len: usize = 0;
     var opts: core.dialogs.BubblesOptions = undefined;
@@ -143,20 +175,80 @@ pub fn draw(self: *GlassTestbed) void {
             self.region = rs.rectToPhysical(pictures.region);
             self.hole = rs.rectToPhysical(pictures.hole);
         },
+        .pulldown => unreachable,
     }
-    core.LiquidField.publishEnabled(true);
-    // Native programs compile on first use. Do not measure their fallback frame.
-    if (!core.LiquidField.ready()) {
-        self.warmup_frames += 1;
-        if (self.warmup_frames > 600) {
-            std.log.err("glass testbed: liquid shader unavailable", .{});
-            std.process.exit(1);
-        }
-        dvui.refresh(null, @src(), null);
-        return;
-    }
+    if (!self.warm()) return;
     core.dialogs.glassBubbles(dvui.Id.zero.update("glass-testbed"), bubbles[0..len], rs.s, opts);
     self.serial = self.capture.request("");
+}
+
+/// False while the glass program is still compiling: native programs compile on first use, and
+/// their fallback frame is not measured.
+fn warm(self: *GlassTestbed) bool {
+    core.LiquidField.publishEnabled(true);
+    if (core.LiquidField.ready()) return true;
+    self.warmup_frames += 1;
+    if (self.warmup_frames > 600) {
+        std.log.err("glass testbed: liquid shader unavailable", .{});
+        std.process.exit(1);
+    }
+    dvui.refresh(null, @src(), null);
+    return false;
+}
+
+/// The console's pull-down at this step's openness, in its draw order: the field layer, the
+/// content, the sheet layer. Picture B (`host`) leaves the bubbles, and their icons, out.
+fn drawPulldown(self: *const GlassTestbed, rs: dvui.RectScale, window: dvui.Rect) void {
+    const o = openAt(self.step);
+    const frame: dvui.Rect = .{ .x = (window.w - pulldown_size.w) / 2, .y = (window.h - pulldown_size.h) / 2, .w = pulldown_size.w, .h = pulldown_size.h };
+    const bar: dvui.Rect = .{ .x = frame.x + (frame.w - 380) / 2, .y = frame.y + 16, .w = 380, .h = 56 };
+    const bar_bottom = bar.y + bar.h;
+    const bar_x = bar.x + bar.w / 2;
+    const bar_y = bar.y + bar.h / 2;
+
+    // The page: a block of text lines, never changing.
+    for (0..12) |i| {
+        const width: f32 = if (i % 4 == 3) 0.55 else 1;
+        rs.rectToPhysical(.{ .x = frame.x + 32, .y = bar_bottom + 40 + 8 * @as(f32, @floatFromInt(i)), .w = (frame.w - 64) * width, .h = 1 }).fill(.{}, .{ .color = .{ .color = .{ .r = 20, .g = 20, .b = 30, .a = 220 } } });
+    }
+
+    const open: dvui.Rect = .{ .x = frame.x + 20, .y = bar_bottom, .w = frame.w - 40, .h = frame.y + frame.h - 20 - bar_bottom };
+    var field_rect = open;
+    field_rect.h *= o;
+    var field = core.glass.layer(dvui.Id.zero.update("glass-testbed-field"), .{
+        .witness = 1,
+        .reach = .{ .w = open.w * rs.s, .h = open.h * rs.s },
+        .blur_field = .{ .rect = rs.rectToPhysical(field_rect), .feather = 24 * rs.s, .strength = smoothstep(o / 0.3) },
+    });
+    field.end();
+
+    const e_in = inputEntrance(o);
+    const e_b = bubbleEntrance(o);
+    const cell_y = bar_bottom + 24 + 23;
+    if (!self.host and e_b > 0.85) for (0..3) |i| {
+        const cx = bar_x + 72 * (@as(f32, @floatFromInt(i)) - 1);
+        rs.rectToPhysical(.{ .x = cx - 11, .y = cell_y - 11, .w = 22, .h = 22 }).fill(dvui.CornerRect.Physical.all(11 * rs.s), .{ .color = .{ .color = .{ .r = 30, .g = 30, .b = 40 } } });
+    };
+
+    var sheet = core.glass.layer(dvui.Id.zero.update("glass-testbed-sheet"), .{ .merge = 14, .shadow = 1 });
+    defer sheet.end();
+    _ = sheet.add(pill(rs, bar_x, bar_y, bar.w, bar.h, 1, 1));
+    const input_y = std.math.lerp(bar_y, frame.y + frame.h - 16 - 22, e_in);
+    _ = sheet.add(pill(rs, bar_x, input_y, 380, 44, 1, 1));
+    if (!self.host) for (0..3) |i| {
+        const cx = bar_x + 72 * (@as(f32, @floatFromInt(i)) - 1);
+        _ = sheet.add(pill(rs, std.math.lerp(bar_x, cx, e_b), std.math.lerp(bar_y, cell_y, e_b), 46, 46, 0, e_b));
+    };
+}
+
+/// A round-ended piece of the sheet, group 1, centred at (`cx`, `cy`). Points.
+fn pill(rs: dvui.RectScale, cx: f32, cy: f32, w: f32, h: f32, blur: f32, lens: f32) core.glass.Item {
+    return .{
+        .shape = .{ .box = .{ .rect = rs.rectToPhysical(.{ .x = cx - w / 2, .y = cy - h / 2, .w = w, .h = h }), .radii = @splat(h / 2 * rs.s), .round = true } },
+        .group = 1,
+        .blur = blur,
+        .lens = lens,
+    };
 }
 
 fn backdrop(rs: dvui.RectScale, window: dvui.Rect) void {
@@ -194,7 +286,24 @@ fn saveFrame(self: *GlassTestbed, picture: ?Capture.Source) !void {
     const arena = dvui.currentWindow().arena();
     const cwd = std.Io.Dir.cwd();
     try cwd.createDirPath(dvui.io, self.config.dir);
-    if (!self.host) {
+    if (self.config.scene == .pulldown) {
+        // Picture A's frame, which drew the whole sheet, as of its completed capture.
+        if (!self.host) {
+            var captures: u32 = 0;
+            var program_px: u32 = 0;
+            var passes: u32 = 0;
+            var frame_ms: f32 = 0;
+            if (comptime has_health) {
+                const health = &dvui.backend.Health.current;
+                captures = health.counts.captures;
+                program_px = health.counts.program_px;
+                passes = health.counts.passes;
+                frame_ms = @as(f32, @floatFromInt(dvui.backend.c.SDL_GetTicksNS() -| health.frame_start_ns)) / std.time.ns_per_ms;
+            }
+            try self.rows.writer.print("{{\"scene\":\"pulldown\",\"step\":{d},\"open\":{d},\"captures\":{d},\"program_px\":{d},\"passes\":{d},\"frame_ms\":{d:.3}}}\n", .{ self.step, openAt(self.step), captures, program_px, passes, frame_ms });
+            try cwd.writeFile(dvui.io, .{ .sub_path = try std.fs.path.join(arena, &.{ self.config.dir, "frames.jsonl" }), .data = self.rows.written() });
+        }
+    } else if (!self.host) {
         try self.paired.resize(self.capture.gpa, image.pixels.len);
         @memcpy(self.paired.items, image.pixels);
     } else {
@@ -213,6 +322,7 @@ fn saveFrame(self: *GlassTestbed, picture: ?Capture.Source) !void {
                 const dark = ghostMax(image.pixels, self.paired.items, image.width, self.region, self.hole);
                 try self.rows.writer.print("{{\"scene\":\"shadow\",\"case\":\"inside\",\"dark_max\":{d},\"x\":{d},\"y\":{d}}}\n", .{ dark.max, dark.x, dark.y });
             },
+            .pulldown => unreachable,
         }
         try cwd.writeFile(dvui.io, .{ .sub_path = try std.fs.path.join(arena, &.{ self.config.dir, "frames.jsonl" }), .data = self.rows.written() });
     }

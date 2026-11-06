@@ -12,7 +12,7 @@ while (($#)); do
         *) echo "unknown option: $1" >&2; exit 1 ;;
     esac
 done
-[[ $scene == pair || $scene == shadow ]] || { echo "unknown scene: $scene" >&2; exit 1; }
+[[ $scene == pair || $scene == shadow || $scene == pulldown ]] || { echo "unknown scene: $scene" >&2; exit 1; }
 if [[ -z $out ]]; then out=$(mktemp -d /tmp/fizzy-glass-testbed.XXXXXX); fi
 mkdir -p "$out"
 out=$(cd "$out" && pwd)
@@ -31,8 +31,16 @@ bins=(zig-out/*/fizzy)
 SDL_VIDEO_DRIVER=x11 xvfb-run -a -s "-screen 0 1280x1024x24" "${bins[0]}"
 python3 - "$out/frames.jsonl" "$scene" <<'PY'
 import json, sys
-key = {'pair': 'ghost_max', 'shadow': 'dark_max'}[sys.argv[2]]
 with open(sys.argv[1]) as f:
-    print(json.dumps(max((json.loads(line) for line in f), key=lambda row: row[key])))
+    rows = [json.loads(line) for line in f]
+if sys.argv[2] == 'pulldown':
+    # Steps after the first whose frame read more than one capture, and the nearest-rank p95 frame time.
+    over = [row['step'] for row in rows if row['step'] > 0 and row['captures'] > 1]
+    ms = sorted(row['frame_ms'] for row in rows)
+    p95 = ms[max(-(-len(ms) * 95 // 100), 1) - 1]
+    print(json.dumps({'scene': 'pulldown', 'rows': len(rows), 'steps_captures_over_1': len(over), 'over_steps': over, 'frame_ms_p95': p95}))
+else:
+    key = {'pair': 'ghost_max', 'shadow': 'dark_max'}[sys.argv[2]]
+    print(json.dumps(max(rows, key=lambda row: row[key])))
 PY
 echo "Pictures and measurements: $out"
