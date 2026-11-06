@@ -15,17 +15,30 @@ serial: u32 = 0,
 warmup_frames: usize = 0,
 paired: std.ArrayList(u8) = .empty,
 rows: std.Io.Writer.Allocating,
-bar: dvui.Rect.Physical = .{},
+/// Where B is measured against A this step, and the hole in it B's own glass fills, physical.
+region: dvui.Rect.Physical = .{},
+hole: ?dvui.Rect.Physical = null,
 field: core.LiquidField = .{},
 
-pub const Config = struct { dir: []const u8 };
-pub const steps = 26;
+/// `pair`: a drop meeting the bar, glass against glass. `shadow`: the shadow joined glass casts,
+/// against the same outline drawn as one piece.
+pub const Scene = enum { pair, shadow };
+pub const Config = struct { scene: Scene, dir: []const u8 };
+pub fn steps(scene: Scene) usize {
+    return switch (scene) {
+        .pair => 26,
+        .shadow => 1,
+    };
+}
+/// "<scene>:<dir>".
 pub fn parse(raw: []const u8) ?Config {
-    if (!std.mem.startsWith(u8, raw, "pair:") or raw.len == 5) return null;
-    return .{ .dir = raw[5..] };
+    const colon = std.mem.indexOfScalar(u8, raw, ':') orelse return null;
+    const scene = std.meta.stringToEnum(Scene, raw[0..colon]) orelse return null;
+    if (colon + 1 == raw.len) return null;
+    return .{ .scene = scene, .dir = raw[colon + 1 ..] };
 }
 pub fn gapAt(step: usize) f32 {
-    std.debug.assert(step < steps);
+    std.debug.assert(step < steps(.pair));
     return if (step == 25) -40 else 12 - @as(f32, @floatFromInt(step));
 }
 pub fn dropRadii(gap: f32) [4]f32 {
@@ -36,9 +49,39 @@ pub fn mergeAt(gap: f32) f32 {
     return 36 * ct * ct;
 }
 
+/// Points: how near the shadow scene's pieces come before their glass joins.
+pub const shadow_merge: f32 = 12;
+/// A rounded box, points.
+pub const Box = struct { rect: dvui.Rect, radius: f32 };
+/// The shadow scene's one step, "inside": picture A (the bar), picture B (the bar with a drop
+/// joined wholly inside it) and the region where B's shadow must be A's, less the hole the
+/// drop's own glass fills. Points.
+pub const ShadowPictures = struct {
+    a: Box,
+    b: [2]Box,
+    region: dvui.Rect,
+    hole: dvui.Rect,
+};
+/// The pictures centred in `window`, for a shadow that fades over `fade` points
+/// (`dialogs.surfaceShadow`'s). A drop wholly inside the bar casts nothing: the joined outline
+/// is the bar's.
+pub fn shadowPictures(window: dvui.Rect, fade: f32) ShadowPictures {
+    const bar: Box = .{ .rect = .{ .x = (window.w - 340) / 2, .y = (window.h - 64) / 2, .w = 340, .h = 64 }, .radius = 24 };
+    const drop: Box = .{ .rect = .{ .x = bar.rect.x + 150, .y = bar.rect.y + 12, .w = 40, .h = 40 }, .radius = 20 };
+    return .{
+        .a = bar,
+        .b = .{ bar, drop },
+        .region = drop.rect.outsetAll(fade).intersect(bar.rect),
+        .hole = drop.rect,
+    };
+}
+
 pub const Ghost = struct { max: f32 = 0, x: usize = 0, y: usize = 0 };
-/// Rec. 709 luma difference on encoded RGBA, inside rect inset by two physical pixels.
-pub fn ghostMax(a: []const u8, b: []const u8, width: usize, rect: dvui.Rect.Physical) Ghost {
+/// Physical pixels `ghostMax` keeps clear of its rect's edges and its hole's, where edges blend.
+pub const ghost_inset: f32 = 2;
+/// Rec. 709 luma difference b − a on encoded RGBA, inside `rect` inset by `ghost_inset` and
+/// outside `hole` outset by it.
+pub fn ghostMax(a: []const u8, b: []const u8, width: usize, rect: dvui.Rect.Physical, hole: ?dvui.Rect.Physical) Ghost {
     std.debug.assert(a.len == b.len and a.len % (width * 4) == 0);
     var result: Ghost = .{};
     for (0..a.len / 4) |i| {
@@ -46,7 +89,8 @@ pub fn ghostMax(a: []const u8, b: []const u8, width: usize, rect: dvui.Rect.Phys
         const y = i / width;
         const px = @as(f32, @floatFromInt(x)) + 0.5;
         const py = @as(f32, @floatFromInt(y)) + 0.5;
-        if (px < rect.x + 2 or px >= rect.x + rect.w - 2 or py < rect.y + 2 or py >= rect.y + rect.h - 2) continue;
+        if (px < rect.x + ghost_inset or px >= rect.x + rect.w - ghost_inset or py < rect.y + ghost_inset or py >= rect.y + rect.h - ghost_inset) continue;
+        if (hole) |h| if (px >= h.x - ghost_inset and px < h.x + h.w + ghost_inset and py >= h.y - ghost_inset and py < h.y + h.h + ghost_inset) continue;
         var diff: f32 = 0;
         for ([_]f32{ 0.2126, 0.7152, 0.0722 }, 0..) |weight, channel| {
             diff += weight * (@as(f32, @floatFromInt(b[i * 4 + channel])) - @as(f32, @floatFromInt(a[i * 4 + channel]))) / 255;
@@ -69,19 +113,37 @@ pub fn draw(self: *GlassTestbed) void {
     const rs = dvui.parentGet().screenRectScale(.{});
     const window = rs.rectFromPhysical(dvui.windowRectPixels());
     backdrop(rs, window);
-    const bar: dvui.Rect = .{ .x = (window.w - 340) / 2, .y = (window.h - 64) / 2, .w = 340, .h = 64 };
-    self.bar = rs.rectToPhysical(bar);
-    const gap = gapAt(self.step);
-    const drop: dvui.Rect = .{ .x = bar.x + 150, .y = bar.y - gap - 40, .w = 40, .h = 40 };
-    var radii = dropRadii(gap);
-    for (&radii) |*r| r.* *= rs.s;
-    const bubbles = [_]core.dialogs.Bubble{
-        .{ .rect = self.bar, .radius = 24 * rs.s },
-        .{ .rect = rs.rectToPhysical(drop), .radii = radii },
-    };
-    self.field = .{ .len = 2, .scale = rs.s, .merge_px = mergeAt(gap) * rs.s, .refraction = core.dialogs.refraction() };
-    self.field.shapes[0] = .{ .rect = self.bar, .radii = @splat(24 * rs.s), .round = true };
-    self.field.shapes[1] = .{ .rect = bubbles[1].rect, .radii = radii, .round = gap > 0 };
+    var bubbles: [2]core.dialogs.Bubble = undefined;
+    var len: usize = 0;
+    var opts: core.dialogs.BubblesOptions = undefined;
+    switch (self.config.scene) {
+        .pair => {
+            const bar: dvui.Rect = .{ .x = (window.w - 340) / 2, .y = (window.h - 64) / 2, .w = 340, .h = 64 };
+            self.region = rs.rectToPhysical(bar);
+            const gap = gapAt(self.step);
+            const drop: dvui.Rect = .{ .x = bar.x + 150, .y = bar.y - gap - 40, .w = 40, .h = 40 };
+            var radii = dropRadii(gap);
+            for (&radii) |*r| r.* *= rs.s;
+            bubbles = .{
+                .{ .rect = self.region, .radius = 24 * rs.s },
+                .{ .rect = rs.rectToPhysical(drop), .radii = radii },
+            };
+            len = if (self.host) 1 else 2;
+            opts = .{ .merge = mergeAt(gap), .shadow = 0 };
+            self.field = .{ .len = 2, .scale = rs.s, .merge_px = mergeAt(gap) * rs.s, .refraction = core.dialogs.refraction() };
+            self.field.shapes[0] = .{ .rect = self.region, .radii = @splat(24 * rs.s), .round = true };
+            self.field.shapes[1] = .{ .rect = bubbles[1].rect, .radii = radii, .round = gap > 0 };
+        },
+        .shadow => {
+            const pictures = shadowPictures(window, core.dialogs.surfaceShadow().fade);
+            const boxes: []const Box = if (self.host) &pictures.b else (&pictures.a)[0..1];
+            for (boxes, 0..) |box, i| bubbles[i] = .{ .rect = rs.rectToPhysical(box.rect), .radius = box.radius * rs.s };
+            len = boxes.len;
+            opts = .{ .merge = shadow_merge, .shadow = 1 };
+            self.region = rs.rectToPhysical(pictures.region);
+            self.hole = rs.rectToPhysical(pictures.hole);
+        },
+    }
     core.LiquidField.publishEnabled(true);
     // Native programs compile on first use. Do not measure their fallback frame.
     if (!core.LiquidField.ready()) {
@@ -93,7 +155,7 @@ pub fn draw(self: *GlassTestbed) void {
         dvui.refresh(null, @src(), null);
         return;
     }
-    core.dialogs.glassBubbles(dvui.Id.zero.update("glass-testbed"), bubbles[0..if (self.host) 1 else 2], rs.s, .{ .merge = mergeAt(gap), .shadow = 0 });
+    core.dialogs.glassBubbles(dvui.Id.zero.update("glass-testbed"), bubbles[0..len], rs.s, opts);
     self.serial = self.capture.request("");
 }
 
@@ -137,12 +199,21 @@ fn saveFrame(self: *GlassTestbed, picture: ?Capture.Source) !void {
         @memcpy(self.paired.items, image.pixels);
     } else {
         if (self.paired.items.len != image.pixels.len) return error.FrameSizeChanged;
-        const ghost = ghostMax(self.paired.items, image.pixels, image.width, self.bar);
-        var area: usize = 0;
-        for (0..image.height) |y| for (0..image.width) |x| {
-            if (self.field.sampleWith(.{ .x = @as(f32, @floatFromInt(x)) + 0.5, .y = @as(f32, @floatFromInt(y)) + 0.5 }, core.glass_look.inApp(1)).coverage > 0.5) area += 1;
-        };
-        try self.rows.writer.print("{{\"step\":{d},\"gap_pt\":{d},\"k_px\":{d},\"area_px\":{d},\"ghost_max\":{d},\"ghost_x\":{d},\"ghost_y\":{d}}}\n", .{ self.step, gapAt(self.step), self.field.merge_px, area, ghost.max, ghost.x, ghost.y });
+        switch (self.config.scene) {
+            .pair => {
+                const ghost = ghostMax(self.paired.items, image.pixels, image.width, self.region, null);
+                var area: usize = 0;
+                for (0..image.height) |y| for (0..image.width) |x| {
+                    if (self.field.sampleWith(.{ .x = @as(f32, @floatFromInt(x)) + 0.5, .y = @as(f32, @floatFromInt(y)) + 0.5 }, core.glass_look.inApp(1)).coverage > 0.5) area += 1;
+                };
+                try self.rows.writer.print("{{\"step\":{d},\"gap_pt\":{d},\"k_px\":{d},\"area_px\":{d},\"ghost_max\":{d},\"ghost_x\":{d},\"ghost_y\":{d}}}\n", .{ self.step, gapAt(self.step), self.field.merge_px, area, ghost.max, ghost.x, ghost.y });
+            },
+            .shadow => {
+                // B against A: how much darker B is.
+                const dark = ghostMax(image.pixels, self.paired.items, image.width, self.region, self.hole);
+                try self.rows.writer.print("{{\"scene\":\"shadow\",\"case\":\"inside\",\"dark_max\":{d},\"x\":{d},\"y\":{d}}}\n", .{ dark.max, dark.x, dark.y });
+            },
+        }
         try cwd.writeFile(dvui.io, .{ .sub_path = try std.fs.path.join(arena, &.{ self.config.dir, "frames.jsonl" }), .data = self.rows.written() });
     }
     var png: std.Io.Writer.Allocating = .init(self.capture.gpa);
@@ -152,6 +223,6 @@ fn saveFrame(self: *GlassTestbed, picture: ?Capture.Source) !void {
     try cwd.writeFile(dvui.io, .{ .sub_path = try std.fs.path.join(arena, &.{ self.config.dir, name }), .data = png.written() });
     if (self.host) self.step += 1;
     self.host = !self.host;
-    if (self.step == steps) std.process.exit(0);
+    if (self.step == steps(self.config.scene)) std.process.exit(0);
     dvui.refresh(null, @src(), null);
 }
