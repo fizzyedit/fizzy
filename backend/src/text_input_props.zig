@@ -62,3 +62,16 @@ test "equal hints produce equal properties for the restart guard" {
     try std.testing.expect(std.meta.eql(props(.{ .kind = .code }), props(.{ .kind = .search })));
     try std.testing.expect(!std.meta.eql(props(h), props(.{})));
 }
+
+test "each keyboard property change invalidates the restart guard" {
+    const original = props(.{});
+    const changed = [_]field_hints.Hints{
+        .{ .kind = .email },
+        .{ .capitalize = false },
+        .{ .autocorrect = false },
+        .{ .enter = .done },
+    };
+    for (changed) |h| {
+        try std.testing.expect(!std.meta.eql(original, props(h)));
+    }
+}
