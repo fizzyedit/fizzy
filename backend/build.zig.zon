@@ -5,12 +5,12 @@
     .minimum_zig_version = "0.17.0",
     .dependencies = .{
         // SDL3 for the window, its events and the GPU: upstream SDL, patched at build time with
-        // `patches/sdl` (marler8997/zig-patch), built by fizzyedit/sdl_zig's `fizzy` branch, which
+        // `patches/sdl` (marler8997/zig-patch), built by fizzyedit/sdl_zig's `zig-0.17` branch, which
         // takes the patched tree (`-Dsdl_source`). How the patches are made and how SDL is updated:
         // fizzy's docs/DEPENDENCIES.md. Pinned here, by the package that uses them, and nowhere else.
         .sdl = .{
-            .url = "https://github.com/fizzyedit/sdl_zig/archive/ef7eb36b0b28aeac933d1bcdc152c56654891780.tar.gz",
-            .hash = "sdl-1.0.3+3.4.16-i4QD0fEMqgARU41cFUViN07xvtpE9OeVQ6bDHadi1OfP",
+            .url = "https://github.com/fizzyedit/sdl_zig/archive/21a1953174f279234b441260f6c4deea5ee05439.tar.gz",
+            .hash = "sdl-1.0.3+3.4.16-i4QD0eMLqgCVXCGQozmvzb12GBuZrxTfvUqjCKfgGyUa",
             .lazy = true,
         },
         // The release sdl_zig's own `.sdl` pins: the same tarball, fetched once.

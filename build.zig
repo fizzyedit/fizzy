@@ -65,6 +65,20 @@ pub fn build(b: *std.Build) !void {
             "macosx --show-sdk-path`)",
     );
 
+    const android_dir = b.option([]const u8, "android-sdk", "The Android SDK directory (platform 35, build-tools 35.0.0, NDK 27.2.12479018)");
+    const android_ndk = b.option([]const u8, "android-ndk", "NDK under <sdk>/ndk") orelse "27.2.12479018";
+    const android_build_tools = b.option([]const u8, "android-build-tools", "Build-tools under <sdk>/build-tools") orelse "35.0.0";
+    const android_platform = b.option([]const u8, "android-platform", "Platform under <sdk>/platforms") orelse "android-35";
+    const android_keystore = b.option([]const u8, "android-keystore", "Debug keystore (alias androiddebugkey, password android)") orelse
+        b.pathJoin(&.{ b.graph.environ_map.get("HOME") orelse ".", ".android/debug.keystore" });
+    const android: ?@import("build/android.zig").AndroidSdk = if (android_dir) |dir| .{
+        .dir = dir,
+        .ndk = android_ndk,
+        .build_tools = android_build_tools,
+        .platform = android_platform,
+        .keystore = android_keystore,
+    } else null;
+
     // Windows 10 1803 at least: AF_UNIX arrived there, and std offers it only to a target whose
     // minimum is that (`std.Io.net.has_unix_sockets`) — the control server's socket
     // (`app/control/Server.zig`). Every Windows still supported by Microsoft is newer.
@@ -88,6 +102,7 @@ pub fn build(b: *std.Build) !void {
         .macos_sign_install_identity = macos_sign_install_identity,
         .macos_notary_profile = macos_notary_profile,
         .macos_sdk = macos_sdk,
+        .android = android,
         // What fizzy-the-app ships in its web build beyond the built-ins. The browser cannot
         // load a plugin at runtime, so this is the one place a third-party plugin is named
         // in this repo — as build data, the way an app built on fizzy lists its own. By
@@ -112,7 +127,7 @@ pub fn build(b: *std.Build) !void {
         } else null,
     };
 
-    if (b.pkg_hash.len == 0) @import("build/android.zig").add(b);
+    if (b.pkg_hash.len == 0) @import("build/android.zig").add(b, android);
 
     // A consumer that bundles plugins of its own cannot say so through `b.dependency`
     // options (a plugin is a module from another package, not a value), so it passes
@@ -412,21 +427,21 @@ pub fn addDvui(fizzy_dep: *std.Build.Dependency, root_module: *std.Build.Module,
     const exe = @import("build/exe.zig");
     const target = root_module.resolved_target orelse @panic("fizzy.addDvui: give the root module its target first");
     const optimize = root_module.optimize orelse .debug;
-    const macos_sdl_paths = try @import("build/common.zig").macosSdlPathsForExplicitTarget(b, target, null);
-    const native = exe.nativeDvui(b, backend, target, optimize, .off, macos_sdl_paths);
+    const sdl_paths = try @import("build/common.zig").sdlSystemPaths(b, target, null, null);
+    const native = exe.nativeDvui(b, backend, target, optimize, .off, sdl_paths);
     root_module.addImport("dvui", native.dvui);
     root_module.addImport("backend", native.backend);
     const backend_dep = exe.backendDependency(b);
     root_module.addImport("viewports_none", @import("fizzy_backend").viewportsNoneModule(backend_dep, native.dvui));
     if (backend == .fizzy) {
-        root_module.addImport("platform", exe.platformModule(b, native, target, optimize, macos_sdl_paths));
+        root_module.addImport("platform", exe.platformModule(b, native, target, optimize, sdl_paths));
         @import("fizzy_backend").addPlatformObjC(
             backend_dep,
             root_module,
             exe.backendOptions(
                 target,
                 optimize,
-                macos_sdl_paths,
+                sdl_paths,
             ),
         );
     }

@@ -2,7 +2,8 @@
 
 An SDL3 window with dvui drawing, packaged as an APK: the first step of fizzyedit/plans#60. A tap
 on the button changes what is drawn. Plugins are compiled in (there are no plugin libraries on
-mobile); this hello draws no plugin yet, and it is dvui's own SDL3 backend, not fizzy's.
+mobile); this hello draws no plugin yet. The hello runs on fizzy's backend with SDL's Java
+from `backend/`'s pinned SDL.
 
 ## Build
 
@@ -28,7 +29,7 @@ native library, installed at `zig-out/android/x86_64/libfizzy_hello.so` (or `and
 for aarch64). It does not require Java, APK signing, or an emulator. Neither Android step is
 part of a default desktop build.
 
-dvui's `sdl3` dependency is lazy: the first `scripts/zb build apk` configures, fetches it and configures
+The backend's SDL dependency is lazy: the first `scripts/zb build apk` configures, fetches it and configures
 again. Other options: `-Dandroid-ndk`, `-Dandroid-build-tools`, `-Dandroid-platform`, `-Dandroid-keystore`. The app id is `dev.fizzy.hello` (`build/bundle_id.zig`).
 
 ## Run in the emulator (pop-os)
@@ -59,11 +60,5 @@ image alone does not prove that touch input reached the button.
 See `AGENTS.md`: the Zig cache, minSdk 24, linking with the NDK's clang, and why Java stays
 (SDL3 runs only under its `SDLActivity`; a NativeActivity would be a second platform layer).
 
-## What is not here yet
-
-This hello is dvui on dvui's own SDL3 backend and its lazy `sdl3` package: a second SDL pin beside
-`backend/build.zig.zon`'s, kept as a stated, temporary exception. Fizzy's backend (`backend/`: its
-GPU renderer, glass, OS windows) has no Android target in its build yet, and linking the hello
-against it, with SDL's Java sources from the same pinned `sdl_source`, was not attempted here. The
-editor is not built for Android either, and `app/store/registry/compat.zig`'s `hostKey()` must map
-Android to `android-aarch64` before any Android build downloads a plugin.
+The proposed **Android (library)** CI job builds the native library on Ubuntu with the Android
+SDK and NDK 27.x; the maintainer adds this job separately. Device verification follows a green PR.

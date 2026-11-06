@@ -15,7 +15,7 @@ const workbench_plugin = plugins.workbench;
 const text_plugin = plugins.text;
 const markdown_plugin = plugins.markdown;
 const image_plugin = plugins.image;
-const MacosSdlPaths = common.MacosSdlPaths;
+const SdlSystemPaths = common.SdlSystemPaths;
 
 /// Install stripped exe + built-in plugin dylibs for `vpk pack --packDir`.
 pub fn addVelopackPackDirInstall(
@@ -94,12 +94,12 @@ pub fn nativeDvui(
     target: std.Build.ResolvedTarget,
     optimize: std.lang.OptimizeMode,
     accesskit: dvui.AccesskitOptions,
-    macos_sdl_paths: ?MacosSdlPaths,
+    sdl_paths: ?SdlSystemPaths,
 ) NativeDvui {
     return switch (native_backend) {
-        .fizzy => fizzyNativeDvui(b, target, optimize, accesskit, macos_sdl_paths),
+        .fizzy => fizzyNativeDvui(b, target, optimize, accesskit, sdl_paths),
         .sdl3 => blk: {
-            const dep = if (macos_sdl_paths) |p|
+            const dep = if (sdl_paths) |p|
                 sdk.dvuiDependency(b, .{
                     .target = target,
                     .optimize = optimize,
@@ -127,12 +127,13 @@ fn fizzyNativeDvui(
     target: std.Build.ResolvedTarget,
     optimize: std.lang.OptimizeMode,
     accesskit: dvui.AccesskitOptions,
-    macos_sdl_paths: ?MacosSdlPaths,
+    sdl_paths: ?SdlSystemPaths,
 ) NativeDvui {
     const dep = sdk.dvuiDependency(b, .{
         .target = target,
         .optimize = optimize,
         .backend = .custom,
+        .android_include_path = if (target.result.abi.isAndroid()) sdl_paths.?.include else @as(?std.Build.LazyPath, null),
         .accesskit = accesskit,
         .libc = true,
         .freetype = true,
@@ -141,10 +142,31 @@ fn fizzyNativeDvui(
         .@"tree-sitter" = true,
     });
     const dvui_mod = dep.module("dvui");
+    if (target.result.abi.isAndroid()) {
+        const include = sdl_paths.?.include;
+        const triple = include.path(b, b.fmt("{s}-linux-android", .{@tagName(target.result.cpu.arch)}));
+        dvui_mod.addSystemIncludePath(include);
+        dvui_mod.addSystemIncludePath(triple);
+        dvui_mod.pic = true;
+        // These C libraries are enabled by the same options above; Zig has no Android libc headers.
+        const freetype = dep.builder.lazyDependency("freetype", .{ .target = target, .optimize = optimize });
+        const tree_sitter = dep.builder.lazyDependency("tree_sitter", .{ .target = target, .optimize = optimize });
+        if (freetype) |ft| {
+            ft.artifact("freetype").root_module.addSystemIncludePath(include);
+            ft.artifact("freetype").root_module.addSystemIncludePath(triple);
+            ft.artifact("freetype").root_module.pic = true;
+        }
+        if (tree_sitter) |ts| {
+            ts.artifact("tree-sitter").root_module.addSystemIncludePath(include);
+            ts.artifact("tree-sitter").root_module.addSystemIncludePath(triple);
+            ts.artifact("tree-sitter").root_module.pic = true;
+        }
+    }
+
     const backend = fizzy_backend.backendModule(
         backendDependency(b),
         dvui_mod,
-        backendOptions(target, optimize, macos_sdl_paths),
+        backendOptions(target, optimize, sdl_paths),
     );
     return .{ .dep = dep, .dvui = dvui_mod, .backend = backend };
 }
@@ -157,12 +179,12 @@ pub fn backendDependency(b: *std.Build) *std.Build.Dependency {
 pub fn backendOptions(
     target: std.Build.ResolvedTarget,
     optimize: std.lang.OptimizeMode,
-    macos_sdl_paths: ?MacosSdlPaths,
+    sdl_paths: ?SdlSystemPaths,
 ) fizzy_backend.Options {
     return .{
         .target = target,
         .optimize = optimize,
-        .macos_sdk = if (macos_sdl_paths) |p| .{
+        .sdk = if (sdl_paths) |p| .{
             .include = p.include,
             .framework = p.framework,
             .lib = p.lib,
@@ -177,13 +199,13 @@ pub fn platformModule(
     native: NativeDvui,
     target: std.Build.ResolvedTarget,
     optimize: std.lang.OptimizeMode,
-    macos_sdl_paths: ?MacosSdlPaths,
+    sdl_paths: ?SdlSystemPaths,
 ) *std.Build.Module {
     return fizzy_backend.platformModule(
         backendDependency(b),
         native.dvui,
         native.backend,
-        backendOptions(target, optimize, macos_sdl_paths),
+        backendOptions(target, optimize, sdl_paths),
     );
 }
 
@@ -205,9 +227,9 @@ pub fn nativeFramework(
     optimize: std.lang.OptimizeMode,
     accesskit: dvui.AccesskitOptions,
     native_backend: NativeBackend,
-    macos_sdl_paths: ?MacosSdlPaths,
+    sdl_paths: ?SdlSystemPaths,
 ) NativeFramework {
-    const native = nativeDvui(b, native_backend, target, optimize, accesskit, macos_sdl_paths);
+    const native = nativeDvui(b, native_backend, target, optimize, accesskit, sdl_paths);
     const glass_look = fizzy_backend.glassLookModule(backendDependency(b));
     // Its in-app glass, the backend's (`glassModule`): `core` over the same dvui takes the same
     // one.
@@ -255,7 +277,7 @@ pub fn addFizzyExecutableForTarget(
     app_icon_module: *std.Build.Module,
     /// The resource script embedded on Windows (`app.Branding.rc`).
     windows_rc: std.Build.LazyPath,
-    macos_sdl_paths: ?MacosSdlPaths,
+    sdl_paths: ?SdlSystemPaths,
     velopack_enabled: bool,
     /// The application's short name (see app/AppInfo.zig) — the executable's name. Passed in
     /// rather than hardcoded so an app built on fizzy as a library names its own binary.
@@ -323,7 +345,7 @@ pub fn addFizzyExecutableForTarget(
 
     exe.root_module.addImport("dvui", dvui_mod);
     exe.root_module.addImport("backend", native.backend);
-    exe.root_module.addImport("platform", platformModule(b, native, resolved_target, optimize, macos_sdl_paths));
+    exe.root_module.addImport("platform", platformModule(b, native, resolved_target, optimize, sdl_paths));
     // On dvui's own SDL3 backend (`-Dnative-backend=sdl3`), which has no viewports.
     exe.root_module.addImport("viewports_none", fizzy_backend.viewportsNoneModule(backendDependency(b), dvui_mod));
     // Which of the two the executable links (`backend_native.viewports`).
@@ -489,26 +511,26 @@ pub fn addFizzyExecutableForTarget(
     }) |entry| if (entry[1]) |compile| try dylibs.append(b.allocator, .{ .id = entry[0], .compile = compile });
 
     if (resolved_target.result.os.tag == .macos) {
-        if (macos_sdl_paths) |p| {
+        if (sdl_paths) |p| {
             // Non-"native" macOS targets (`-Dtarget=aarch64-macos` on Apple Silicon, etc.) need the
             // same SDK layout for Obj-C sources as for SDL; zig-objc paths do not always reach .m
             // compiles (e.g. Security.framework → <libDER/DERItem.h>).
             exe.root_module.addSystemIncludePath(p.include);
-            exe.root_module.addSystemFrameworkPath(p.framework);
-            exe.root_module.addLibraryPath(p.lib);
+            if (p.framework) |path| exe.root_module.addSystemFrameworkPath(path);
+            if (p.lib) |path| exe.root_module.addLibraryPath(path);
         }
         // zig-objc from the backend package's pin, and the platform's Objective-C, which calls back
         // into the platform's Zig and so is linked here, where the executable reaches it.
         if (fizzy_backend.objcModule(
             backendDependency(b),
-            backendOptions(resolved_target, optimize, macos_sdl_paths),
+            backendOptions(resolved_target, optimize, sdl_paths),
         )) |objc| {
             exe.root_module.addImport("objc", objc);
         }
         fizzy_backend.addPlatformObjC(
             backendDependency(b),
             exe.root_module,
-            backendOptions(resolved_target, optimize, macos_sdl_paths),
+            backendOptions(resolved_target, optimize, sdl_paths),
         );
     } else if (resolved_target.result.os.tag == .windows) {
         if (fizzy_backend.win32Module(backendDependency(b))) |win32| {

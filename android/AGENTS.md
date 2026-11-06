@@ -1,7 +1,8 @@
 # android/: the Android hello
 
 The host shell of an APK (`AndroidManifest.xml`, `src/FizzyActivity.java`) and a hello
-(`src/main.zig`: dvui on SDL3, a tap changes what is drawn). The build is `build/android.zig`
+(`src/main.zig`: dvui on fizzy's backend, a tap changes what is drawn).
+SDL's Java comes from `backend/`'s pinned SDL. The build is `build/android.zig`
 (`scripts/zb build apk -Dandroid-sdk=<dir>`); `README.md` has the steps and the emulator run. The hello
 is not an app entry: fizzy on Android is `build/exe.zig` with an Android target.
 
@@ -13,7 +14,8 @@ is not an app entry: fizzy on Android is `build/exe.zig` with an Android target.
 - **minSdk is 24:** `std.Io` calls `preadv64`/`pwritev64`, which bionic has from API 24.
 - **Use a Zig global cache of its own** (`ZIG_GLOBAL_CACHE_DIR`) when the shared one holds dvui's
   other lazy dependencies: Zig unpacks them into `zig-pkg`, and cairo/expat then fail to compile.
-- **Nothing in CI builds this yet.** `scripts/zb build apk` needs the NDK and SDK.
+- **Android (library)** is the proposed Ubuntu CI job, added separately by the maintainer.
+  `scripts/zb build apk` needs the NDK and SDK.
   `scripts/zb build android -Dandroid-sdk=<dir>` builds only the native library into
   `zig-out/android/<abi>/libfizzy_hello.so`, without Java or signing. Both steps accept
   `-Dandroid-arch=x86_64` (emulator) or `aarch64` (phone, the default).

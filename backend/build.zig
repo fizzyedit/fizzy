@@ -125,19 +125,19 @@ pub const unit_tests = [_]struct {
     .{ .name = "backend-gpu-tests", .root = "gpu/root.zig" },
 };
 
-/// Where the macOS SDK is, for a macOS target that is not the host's own (`-Dtarget=aarch64-macos`
-/// on Apple Silicon): Zig finds it alone for a native build only.
-pub const MacosSdk = struct {
+/// The target SDK's paths for SDL: an explicit macOS target's, or the NDK sysroot's
+/// `usr/include` for Android.
+pub const SdkPaths = struct {
     include: std.Build.LazyPath,
-    framework: std.Build.LazyPath,
-    lib: std.Build.LazyPath,
+    framework: ?std.Build.LazyPath = null,
+    lib: ?std.Build.LazyPath = null,
 };
 
 pub const Options = struct {
     target: std.Build.ResolvedTarget,
     optimize: std.lang.OptimizeMode,
     /// Null on a native build.
-    macos_sdk: ?MacosSdk = null,
+    sdk: ?SdkPaths = null,
 };
 
 /// The `backend` module wired into each dvui: one per dvui module, however many executables use
@@ -177,6 +177,20 @@ pub fn glassModule(dep: *std.Build.Dependency, dvui_mod: *std.Build.Module) *std
 /// The `platform` module for each backend module, for the same reason.
 var platform_modules: std.AutoHashMapUnmanaged(*std.Build.Module, *std.Build.Module) = .empty;
 
+pub const AndroidSdl = struct {
+    lib: *std.Build.Step.Compile,
+    java: std.Build.LazyPath,
+};
+
+/// Null until lazy dependencies are fetched. SDL finds its JNI entry points by name, so the
+/// caller links `lib` whole.
+pub fn androidSdl(dep: *std.Build.Dependency, opts: Options) ?AndroidSdl {
+    const b = dep.builder;
+    const optimize: std.lang.OptimizeMode = if (opts.optimize == .debug) .fast else opts.optimize;
+    const sdl = sdlDependency(b, opts.target, optimize, opts.sdk) orelse return null;
+    return .{ .lib = sdl.artifact("SDL3"), .java = patchedSdl(b).?.path(b, "android-project/app/src/main/java") };
+}
+
 /// The backend under `dvui_mod`, a dvui built with `.backend = .custom`, and imported by it as
 /// `backend`. Call `platformModule` with the result too: the backend imports the platform pieces.
 pub fn backendModule(dep: *std.Build.Dependency, dvui_mod: *std.Build.Module, opts: Options) *std.Build.Module {
@@ -189,7 +203,7 @@ pub fn backendModule(dep: *std.Build.Dependency, dvui_mod: *std.Build.Module, op
     // window's way into full screen ran at half the display's rate in Debug alone. The app's own
     // code stays Debug; stepping into SDL's C is what a Debug app gives up.
     const sdl_optimize: std.lang.OptimizeMode = if (opts.optimize == .debug) .fast else opts.optimize;
-    const sdl_dep = sdlDependency(b, opts.target, sdl_optimize, opts.macos_sdk);
+    const sdl_dep = sdlDependency(b, opts.target, sdl_optimize, opts.sdk);
 
     const sdl_translate_c: Translator = .init(b.dependency("translate_c", .{}), .{
         .c_source_file = b.path("src/sdl3-c.h"),
@@ -198,6 +212,20 @@ pub fn backendModule(dep: *std.Build.Dependency, dvui_mod: *std.Build.Module, op
         .default_init = true,
     });
     if (sdl_dep) |sdl| sdl_translate_c.addIncludePath(sdl.artifact("SDL3").getEmittedIncludeTree());
+    if (opts.sdk) |paths| {
+        sdl_translate_c.addIncludePath(paths.include);
+        if (opts.target.result.abi.isAndroid()) {
+            sdl_translate_c.addIncludePath(paths.include.path(b, b.fmt("{s}-linux-android", .{@tagName(opts.target.result.cpu.arch)})));
+            // Bionic's fortify wrappers and nullable array parameters are not translator input.
+            const api = b.fmt("{d}", .{opts.target.result.os.version_range.linux.android});
+            sdl_translate_c.defineCMacro("__ANDROID_API__", api);
+            sdl_translate_c.defineCMacro("__ANDROID_MIN_SDK_VERSION__", api);
+            sdl_translate_c.defineCMacro("__clang_analyzer__", "1");
+            sdl_translate_c.defineCMacro("_Nullable", "");
+            sdl_translate_c.defineCMacro("_Nonnull", "");
+            sdl_translate_c.defineCMacro("_Null_unspecified", "");
+        }
+    }
 
     const m = b.createModule(.{
         .root_source_file = b.path("src/SDLBackend.zig"),
@@ -260,10 +288,10 @@ fn sdlDependency(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
     optimize: std.lang.OptimizeMode,
-    macos_sdk: ?MacosSdk,
+    sdk: ?SdkPaths,
 ) ?*std.Build.Dependency {
     const source = patchedSdl(b) orelse return null;
-    return if (macos_sdk) |p|
+    return if (sdk) |p|
         b.lazyDependency("sdl", .{
             .target = target,
             .optimize = optimize,
@@ -343,8 +371,9 @@ pub fn win32Module(dep: *std.Build.Dependency) ?*std.Build.Module {
 /// A non-native macOS target's SDK, for a module's Objective-C: zig-objc's paths do not always
 /// reach `.m` compiles (Security.framework's `<libDER/DERItem.h>`).
 fn addMacosSdk(m: *std.Build.Module, opts: Options) void {
-    const p = opts.macos_sdk orelse return;
+    if (opts.target.result.os.tag != .macos) return;
+    const p = opts.sdk orelse return;
     m.addSystemIncludePath(p.include);
-    m.addSystemFrameworkPath(p.framework);
-    m.addLibraryPath(p.lib);
+    if (p.framework) |path| m.addSystemFrameworkPath(path);
+    if (p.lib) |path| m.addLibraryPath(path);
 }

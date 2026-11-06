@@ -10,7 +10,7 @@ bump it; keep it current whenever a pin or a patch moves.
 | [`fizzyedit/dvui`](https://github.com/fizzyedit/dvui) | [`david-vanderson/dvui`](https://github.com/david-vanderson/dvui) | branch `zig-0.17` (on 0.16, `fizzy-dev`) | `sdk/build.zig.zon` | dvui changes fizzy needs |
 | dvui's `web.js` | the dvui `sdk/build.zig.zon` pins | `web/patches/dvui` | `build.zig.zon` (`.patch`) | the web backend's JavaScript, patched by zig-patch for the web build (below) |
 | SDL | [`libsdl-org/SDL`](https://github.com/libsdl-org/SDL) `release-3.4.16` | `backend/patches/sdl` | `backend/build.zig.zon` (`.sdl_source`) | SDL C patches, applied by [zig-patch](https://github.com/marler8997/zig-patch) (below) |
-| [`fizzyedit/sdl_zig`](https://github.com/fizzyedit/sdl_zig) | [`Games-By-Mason/sdl_zig`](https://github.com/Games-By-Mason/sdl_zig) | branch `fizzy` | `backend/build.zig.zon` (`.sdl`) | the Zig build of SDL, taking the patched tree |
+| [`fizzyedit/sdl_zig`](https://github.com/fizzyedit/sdl_zig) | [`Games-By-Mason/sdl_zig`](https://github.com/Games-By-Mason/sdl_zig) | branch `zig-0.17` | `backend/build.zig.zon` (`.sdl`) | the Zig build of SDL, taking the patched tree |
 | [`fizzyedit/nightwatch`](https://github.com/fizzyedit/nightwatch) | [`neurocyte/nightwatch`](https://github.com/neurocyte/nightwatch) | branch `fizzy` | `build.zig.zon` | a fix to its macOS FSEvents backend |
 
 SDL is fizzy's own dependency, not dvui's: fizzy's native backend (the `backend/` package) pins it
@@ -298,18 +298,20 @@ the stack as it was before it moved here, which older fizzy commits still build.
 
 ## fizzyedit/sdl_zig
 
-`fizzy` = upstream `main` (`0a9d5c3`, SDL 3.4.16) plus:
+`zig-0.17` = upstream `main` (`0a9d5c3`, SDL 3.4.16) plus:
 
 1. **macOS: take the SDK paths when they are given** (`efc3583`): `include_path`,
    `framework_path` and `library_path` reached only the iOS and Android builds, so an explicit
    `-Dtarget=*-macos` (the other half of a universal build, `build/common.zig`'s
-   `macosSdlPathsForExplicitTarget`) could not find Cocoa. Upstream: worth proposing.
+   `sdlSystemPaths`) could not find Cocoa. Upstream: worth proposing.
 2. **build: the SDL source can be given (`-Dsdl_source`)** (`a99807d`): the library is built from
    that tree instead of the `sdl` dependency, which must be the same release (it sets the SO
    version). Upstream: worth proposing; with 1 upstream too, the fork goes.
 
 Tags: `fizzy-1.0.3+3.4.16-1` to `-11` (`d0c70fe`) are the stack that built `fizzyedit/SDL`, kept
-for older fizzy commits; `fizzy-1.0.3+3.4.16-12` → `a99807d`, what fizzy pins now.
+for older fizzy commits; `fizzy-1.0.3+3.4.16-12` → `a99807d`;
+`fizzy-1.0.3+3.4.16-13` → `21a1953174f279234b441260f6c4deea5ee05439`, pinned now,
+includes the Android/iOS configuration fix for Zig 0.17.
 
 ## fizzyedit/nightwatch
 
