@@ -12,7 +12,7 @@ while (($#)); do
         *) echo "unknown option: $1" >&2; exit 1 ;;
     esac
 done
-[[ $scene == pair ]] || { echo "unknown scene: $scene" >&2; exit 1; }
+[[ $scene == pair || $scene == shadow ]] || { echo "unknown scene: $scene" >&2; exit 1; }
 if [[ -z $out ]]; then out=$(mktemp -d /tmp/fizzy-glass-testbed.XXXXXX); fi
 mkdir -p "$out"
 out=$(cd "$out" && pwd)
@@ -29,9 +29,10 @@ fi
 bins=(zig-out/*/fizzy)
 [[ ${#bins[@]} == 1 && -x ${bins[0]} ]] || { echo "expected one built fizzy executable" >&2; exit 1; }
 SDL_VIDEO_DRIVER=x11 xvfb-run -a -s "-screen 0 1280x1024x24" "${bins[0]}"
-python3 - "$out/frames.jsonl" <<'PY'
+python3 - "$out/frames.jsonl" "$scene" <<'PY'
 import json, sys
+key = {'pair': 'ghost_max', 'shadow': 'dark_max'}[sys.argv[2]]
 with open(sys.argv[1]) as f:
-    print(json.dumps(max((json.loads(line) for line in f), key=lambda row: row['ghost_max'])))
+    print(json.dumps(max((json.loads(line) for line in f), key=lambda row: row[key])))
 PY
 echo "Pictures and measurements: $out"
