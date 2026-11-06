@@ -60,5 +60,6 @@ image alone does not prove that touch input reached the button.
 See `AGENTS.md`: the Zig cache, minSdk 24, linking with the NDK's clang, and why Java stays
 (SDL3 runs only under its `SDLActivity`; a NativeActivity would be a second platform layer).
 
-The proposed **Android (library)** CI job builds the native library on Ubuntu with the Android
-SDK and NDK 27.x; the maintainer adds this job separately. Device verification follows a green PR.
+Nothing in CI builds this yet. The proposed **Android (library)** job builds the native library
+on Ubuntu with the Android SDK and NDK 27.x; the maintainer adds this job separately.
+Device verification follows a green PR.
