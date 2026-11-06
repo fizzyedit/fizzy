@@ -17,6 +17,7 @@ const dvui = @import("dvui");
 const GpuRenderer = @import("GpuRenderer.zig");
 pub const viewport_map = @import("viewport_map.zig");
 pub const materials = @import("materials.zig");
+const text_input_props = @import("text_input_props.zig");
 const TouchSlots = @import("touch_slots.zig");
 const glass_look = @import("glass_look");
 /// The OS windows besides the main one an app draws with (`Viewport`).
@@ -82,6 +83,7 @@ last_pixel_size: dvui.Size.Physical = .{ .w = 800, .h = 600 },
 last_window_size: dvui.Size.Natural = .{ .w = 800, .h = 600 },
 cursor_last: dvui.enums.Cursor = .arrow,
 text_input_rect_last: ?dvui.Rect.Natural = null,
+text_input_props_last: ?text_input_props.Props = null,
 /// The window text input was last started in (`textInputRect`): this one, or a viewport's.
 text_input_window: ?*c.SDL_Window = null,
 cursor_backing: [cursor_enum_count]?*c.SDL_Cursor = @splat(null),
@@ -2648,22 +2650,27 @@ pub fn setCursor(self: *SDLBackend, cursor: dvui.enums.Cursor) void {
 }
 
 pub fn textInputRect(self: *SDLBackend, rect: ?dvui.Rect.Natural) void {
+    // dvui calls this backend hook during Window.end(), while the window is current.
+    self.textInputRectWithHints(rect, glass.field_hints.current());
+}
+
+fn textInputRectWithHints(self: *SDLBackend, rect: ?dvui.Rect.Natural, hints: ?glass.field_hints.Hints) void {
     // Typed into whichever window has the keyboard: a viewport's, when one does — its text goes
     // to the one dvui window like its keys (`addViewportEvent`), and its IME sits over its part
     // of the frame.
     const focus = c.SDL_GetKeyboardFocus();
     const vp: ?*Viewport = if (focus) |w| self.viewportOf(w) else null;
     const window = if (vp) |v| v.window else self.window;
+    const props = text_input_props.props(hints orelse .{});
     // SDL_StartTextInput unconditionally re-applies text input properties every
     // call, which on iOS tears the hidden UITextField out of the view hierarchy
     // and re-adds it (see UIKit_SetTextInputProperties), thrashing the on-screen
     // keyboard if called every frame. Only call through on an actual change.
-    if (std.meta.eql(rect, self.text_input_rect_last) and window == (self.text_input_window orelse self.window)) return;
+    if (std.meta.eql(rect, self.text_input_rect_last) and window == (self.text_input_window orelse self.window) and
+        std.meta.eql(@as(?text_input_props.Props, props), self.text_input_props_last)) return;
     if (self.text_input_window) |was| if (was != window and self.viewportOf(was) != null) {
         _ = c.SDL_StopTextInput(was);
     };
-    defer self.text_input_rect_last = rect;
-    defer self.text_input_window = window;
 
     if (rect) |rect_frame| {
         var r = rect_frame;
@@ -2696,10 +2703,30 @@ pub fn textInputRect(self: *SDLBackend, rect: ?dvui.Rect.Natural) void {
             },
             cursor,
         ), "SDL_SetTextInputArea in textInputRect") catch return;
-        toErr(c.SDL_StartTextInput(window), "SDL_StartTextInput in textInputRect") catch return;
+        const properties = c.SDL_CreateProperties();
+        if (properties == 0) {
+            logErr("SDL_CreateProperties in textInputRect") catch return;
+            return;
+        }
+        defer c.SDL_DestroyProperties(properties);
+        toErr(c.SDL_SetNumberProperty(properties, c.SDL_PROP_TEXTINPUT_TYPE_NUMBER, switch (props.kind) {
+            .text, .url => c.SDL_TEXTINPUT_TYPE_TEXT,
+            .email => c.SDL_TEXTINPUT_TYPE_TEXT_EMAIL,
+            .number => c.SDL_TEXTINPUT_TYPE_NUMBER,
+        }), "SDL_SetNumberProperty text input type") catch return;
+        toErr(c.SDL_SetNumberProperty(properties, c.SDL_PROP_TEXTINPUT_CAPITALIZATION_NUMBER, switch (props.capitalize) {
+            .none => c.SDL_CAPITALIZE_NONE,
+            .sentences => c.SDL_CAPITALIZE_SENTENCES,
+        }), "SDL_SetNumberProperty text input capitalization") catch return;
+        toErr(c.SDL_SetBooleanProperty(properties, c.SDL_PROP_TEXTINPUT_AUTOCORRECT_BOOLEAN, props.autocorrect), "SDL_SetBooleanProperty text input autocorrect") catch return;
+        toErr(c.SDL_SetBooleanProperty(properties, c.SDL_PROP_TEXTINPUT_MULTILINE_BOOLEAN, props.multiline), "SDL_SetBooleanProperty text input multiline") catch return;
+        toErr(c.SDL_StartTextInputWithProperties(window, properties), "SDL_StartTextInputWithProperties in textInputRect") catch return;
     } else {
         toErr(c.SDL_StopTextInput(window), "SDL_StopTextInput in textInputRect") catch return;
     }
+    self.text_input_rect_last = rect;
+    self.text_input_props_last = props;
+    self.text_input_window = window;
     self.manage_backend_tracking.check(.textInputRect);
 }
 
@@ -4374,6 +4401,8 @@ fn appIterate(_: ?*anyopaque) callconv(.c) c.SDL_AppResult {
     live_resize_trace.overlay();
     appState.back.plainFrameEnd();
 
+    // Field hints live in the current dvui window, which end() clears.
+    const text_input_hints = glass.field_hints.current();
     var end_micros = appState.win.end(.{ .manage_backend = false }) catch |err| {
         log.err("dvui.Window.end failed: {any}", .{err});
         return c.SDL_APP_FAILURE;
@@ -4386,7 +4415,7 @@ fn appIterate(_: ?*anyopaque) callconv(.c) c.SDL_AppResult {
     if (!appState.window_open) res = .close;
 
     appState.back.setCursor(appState.win.cursorRequested());
-    appState.back.textInputRect(appState.win.textInputRequested());
+    appState.back.textInputRectWithHints(appState.win.textInputRequested(), text_input_hints);
     appState.back.renderPresent();
     Health.current.frameEnd(c.SDL_GetTicksNS());
     app_frame_open = false;
@@ -4444,6 +4473,7 @@ fn appIterate(_: ?*anyopaque) callconv(.c) c.SDL_AppResult {
 }
 
 test {
+    _ = text_input_props;
     //std.debug.print("{s} backend test\n", .{if (sdl3) "SDL3" else "SDL2"});
     std.testing.refAllDecls(@This());
 }
