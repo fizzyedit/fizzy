@@ -1420,11 +1420,12 @@ fn addTests(
     });
     glass_testbed_module.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
     glass_testbed_module.addImport("core", core_module_test);
-    try unit_test_artifacts.append(b.allocator, b.addTest(.{
+    const glass_testbed_tests = b.addTest(.{
         .name = "fizzy-glass-testbed-tests",
         .root_module = glass_testbed_module,
         .filters = test_filters,
-    }));
+    });
+    try unit_test_artifacts.append(b.allocator, glass_testbed_tests);
 
     // The liquid field's packing and edge-light arithmetic needs dvui's geometry types,
     // but no Window or native backend. Keep it in `test`, apart from the glass window tests.
@@ -1484,6 +1485,10 @@ fn addTests(
     const test_all_step = b.step("test-all", "Run unit + integration tests");
     test_all_step.dependOn(test_step);
     test_all_step.dependOn(test_integration_step);
+    // The test bed's scene geometry backs `scripts/glass-testbed.sh`, whose acceptance is
+    // `test-integration`.
+    test_integration_step.dependOn(&b.addRunArtifact(glass_testbed_tests).step);
+    check_integration_step.dependOn(&glass_testbed_tests.step);
 
     const test_sdk_version_step = b.step(
         "test-sdk-version",

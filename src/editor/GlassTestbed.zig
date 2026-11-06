@@ -102,6 +102,31 @@ pub fn shadowPictures(case: ShadowCase, window: dvui.Rect, fade: f32, offset: f3
     }
 }
 
+/// `boxes` as `glassBubbles` joins them, placed by `rs`.
+pub fn shadowField(boxes: []const Box, rs: dvui.RectScale) core.LiquidField {
+    var field: core.LiquidField = .{ .scale = rs.s, .merge_px = shadow_merge * rs.s };
+    for (boxes) |box| field.add(.{ .rect = rs.rectToPhysical(box.rect), .radii = @splat(box.radius * rs.s), .round = true });
+    return field;
+}
+
+/// `region` moved down, its height kept, until no pixel of it is glass `field` covers at all, its
+/// antialiased edge included. The join bulges `merge / 4` below the boxes it joins, so a band
+/// under them would otherwise measure B's glass as its shadow.
+pub fn belowGlass(region: dvui.Rect.Physical, field: *const core.LiquidField) dvui.Rect.Physical {
+    var out = region;
+    out.y = @floor(region.y);
+    while (rowCovered(out, field)) out.y += 1;
+    return out;
+}
+
+fn rowCovered(region: dvui.Rect.Physical, field: *const core.LiquidField) bool {
+    var x = @floor(region.x);
+    while (x < region.x + region.w) : (x += 1) {
+        if (field.sampleWith(.{ .x = x + 0.5, .y = region.y + 0.5 }, core.glass_look.inApp(1)).coverage > 0) return true;
+    }
+    return false;
+}
+
 pub const Ghost = struct { max: f32 = 0, x: usize = 0, y: usize = 0 };
 /// Physical pixels `ghostMax` keeps clear of its rect's edges and its hole's, where edges blend.
 pub const ghost_inset: f32 = 2;
@@ -162,12 +187,18 @@ pub fn draw(self: *GlassTestbed) void {
         },
         .shadow => {
             const bs = core.dialogs.surfaceShadow();
-            const pictures = shadowPictures(@fromBackingInt(@intCast(self.step)), window, bs.fade, bs.offset.y);
+            const case: ShadowCase = @fromBackingInt(@intCast(self.step));
+            const pictures = shadowPictures(case, window, bs.fade, bs.offset.y);
             const boxes = if (self.host) &pictures.b else pictures.pictureA();
             for (boxes, 0..) |box, i| bubbles[i] = .{ .rect = rs.rectToPhysical(box.rect), .radius = box.radius * rs.s };
             len = boxes.len;
             opts = .{ .merge = shadow_merge, .shadow = 1 };
             self.region = rs.rectToPhysical(pictures.region);
+            // "inside" measures within B's glass on purpose; "overlap" measures only shadow.
+            if (case == .overlap) {
+                self.field = shadowField(&pictures.b, rs);
+                self.region = belowGlass(self.region, &self.field);
+            }
             self.hole = if (pictures.hole) |h| rs.rectToPhysical(h) else null;
         },
     }
