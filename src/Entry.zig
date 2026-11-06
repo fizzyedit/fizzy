@@ -34,6 +34,9 @@ allocator: std.mem.Allocator = undefined,
 
 root_path: [:0]const u8 = undefined,
 should_close: bool = false,
+bench_out: ?[]const u8 = null,
+bench_frames: usize = 0,
+bench_times: [120]u32 = @splat(0),
 window: *dvui.Window = undefined,
 
 // SafeAllocator only where the safety checks are on (Debug, ReleaseSafe): its per-allocation footer
@@ -384,6 +387,14 @@ pub fn AppInit(win: *dvui.Window) !void {
             if (editor_ptr.glass_bench == null) std.log.warn("Ignoring invalid FIZZY_GLASS_BENCH: {s}", .{std.mem.span(raw)});
         }
     }
+    if (comptime builtin.target.cpu.arch != .wasm32) {
+        if (editor_ptr.glass_bench != null) {
+            if (std.c.getenv("FIZZY_GLASS_BENCH_OUT")) |raw| {
+                app_ptr.bench_out = std.mem.span(raw);
+                editor_ptr.app.settings.in_app_material = .liquid;
+            }
+        }
+    }
     fizzy.core.profile.phase(dvui.io, "editor");
 
     // Workbench fizzy-owned state: wire before plugin `register`.
@@ -519,6 +530,44 @@ pub fn AppDeinit(_: *dvui.Window) void {
 
 // Run each frame to do normal UI
 pub fn AppFrame() !dvui.App.Result {
+    if (comptime @hasDecl(dvui.backend, "Health")) {
+        const entry = fizzy.entry();
+        if (entry.bench_out) |path| {
+            const health = &dvui.backend.Health.current;
+            // The previous frame has presented before AppFrame runs again.
+            if (health.frame_ns_written > 0) {
+                const frame = entry.bench_frames;
+                entry.bench_frames += 1;
+                if (frame >= 30 and frame < 150) {
+                    const snapshot = health.snapshot();
+                    entry.bench_times[frame - 30] = health.lastFrameNs();
+                    if (frame == 149) {
+                        const Bench = fizzy.GlassBench;
+                        const cfg = fizzy.editor().glass_bench.?;
+                        const counts = snapshot.last_frame;
+                        var buffer: [1024]u8 = undefined;
+                        var writer: std.Io.Writer = .fixed(&buffer);
+                        try Bench.writeRow(&writer, .{
+                            .arm = cfg.arm,
+                            .panes = cfg.panes,
+                            .frame_ms_p50 = Bench.percentile(&entry.bench_times, 50),
+                            .frame_ms_p95 = Bench.percentile(&entry.bench_times, 95),
+                            .program_draws = counts.program_draws,
+                            .program_px = counts.program_px,
+                            .passes = counts.passes,
+                            .target_switches = counts.target_switches,
+                            .targets = counts.targets,
+                        });
+                        const file = try std.Io.Dir.cwd().createFile(dvui.io, path, .{ .truncate = false });
+                        defer file.close(dvui.io);
+                        const stat = try file.stat(dvui.io);
+                        try file.writePositionalAll(dvui.io, writer.buffered(), stat.size);
+                        std.process.exit(0);
+                    }
+                }
+            }
+        }
+    }
     fizzy.core.hitch.frameBegin();
     defer fizzy.core.hitch.frameEnd();
     // dvui's refresh records, while someone reads them: the profiler, as frame causes, or a

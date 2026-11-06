@@ -14567,6 +14567,64 @@ test "parse reads the two arms" {
     }
 }
 
+test "sheet parses and lays out header input and separate round bubbles" {
+    const Bench = fizzy.GlassBench;
+    try std.testing.expectEqual(Bench.Config{ .arm = .sheet, .panes = 15 }, Bench.parse("sheet:15").?);
+    const window: dvui.Rect = .{ .x = 10, .y = 20, .w = 1000, .h = 800 };
+    var storage: [15]dvui.Rect = undefined;
+    for ([_]u8{ 1, 4, 8, 15 }) |n| {
+        const rects = Bench.sheetRects(window, n, &storage);
+        try std.testing.expectEqual(n, rects.len);
+        try std.testing.expectEqual(dvui.Rect{ .x = 10, .y = 20, .w = 1000, .h = 56 }, rects[0]);
+        if (n > 1) try std.testing.expectEqual(dvui.Rect{ .x = 10, .y = 764, .w = 1000, .h = 56 }, rects[1]);
+        for (rects, 0..) |rect, i| {
+            try std.testing.expect(rect.x >= window.x and rect.y >= window.y);
+            try std.testing.expect(rect.x + rect.w <= window.x + window.w);
+            try std.testing.expect(rect.y + rect.h <= window.y + window.h);
+            if (i >= 2) {
+                try std.testing.expectEqual(@as(f32, 96), rect.w);
+                try std.testing.expectEqual(@as(f32, 96), rect.h);
+                try std.testing.expectEqual(window.x + @as(f32, @floatFromInt((i - 2) % 4)) * 108, rect.x);
+                try std.testing.expectEqual(window.y + 72 + @as(f32, @floatFromInt((i - 2) / 4)) * 108, rect.y);
+            }
+            for (rects[0..i]) |other| {
+                try std.testing.expect(rect.x + rect.w <= other.x or other.x + other.w <= rect.x or
+                    rect.y + rect.h <= other.y or other.y + other.h <= rect.y);
+            }
+        }
+    }
+}
+
+test "glass benchmark row documents counts and measured percentiles" {
+    const Bench = fizzy.GlassBench;
+    var ns = [_]u32{ 5_000_000, 1_000_000, 4_000_000, 2_000_000, 3_000_000 };
+    try std.testing.expectEqual(@as(f64, 3), Bench.percentile(&ns, 50));
+    try std.testing.expectEqual(@as(f64, 5), Bench.percentile(&ns, 95));
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    try Bench.writeRow(&out.writer, .{
+        .arm = .sheet,
+        .panes = 15,
+        .frame_ms_p50 = 3,
+        .frame_ms_p95 = 5,
+        .program_draws = 2,
+        .program_px = 100,
+        .passes = 3,
+        .target_switches = 4,
+        .targets = 0,
+    });
+    const parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, out.written(), .{});
+    defer parsed.deinit();
+    const object = parsed.value.object;
+    try std.testing.expectEqual(@as(usize, 9), object.count());
+    for ([_][]const u8{ "arm", "panes", "frame_ms_p50", "frame_ms_p95", "program_draws", "program_px", "passes", "target_switches", "targets" }) |key| {
+        try std.testing.expect(object.contains(key));
+    }
+    try std.testing.expectEqualStrings("sheet", object.get("arm").?.string);
+    try std.testing.expectEqual(@as(i64, 15), object.get("panes").?.integer);
+    try std.testing.expectEqual(@as(u8, '\n'), out.written()[out.written().len - 1]);
+}
+
 test "scene:20 draws twenty joined panes" {
     var t = try dvui.testing.init(.{ .window_size = .{ .w = 1000, .h = 800 } });
     defer t.deinit();
