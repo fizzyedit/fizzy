@@ -306,7 +306,10 @@ the stack as it was before it moved here, which older fizzy commits still build.
    `sdlSystemPaths`) could not find Cocoa. Upstream: worth proposing.
 2. **build: the SDL source can be given (`-Dsdl_source`)** (`a99807d`): the library is built from
    that tree instead of the `sdl` dependency, which must be the same release (it sets the SO
-   version). Upstream: worth proposing; with 1 upstream too, the fork goes.
+   version). Upstream: worth proposing.
+3. **Android/iOS: fix configuration for Zig 0.17** (`21a1953`): updates the Android and iOS
+   configuration to build with Zig 0.17. Upstream: worth proposing; with all three changes
+   upstream, the fork goes.
 
 Tags: `fizzy-1.0.3+3.4.16-1` to `-11` (`d0c70fe`) are the stack that built `fizzyedit/SDL`, kept
 for older fizzy commits; `fizzy-1.0.3+3.4.16-12` → `a99807d`;
