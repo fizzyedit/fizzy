@@ -127,11 +127,9 @@ pub fn ghostMax(a: []const u8, b: []const u8, width: usize, rect: dvui.Rect.Phys
 }
 
 pub fn init(config: Config, gpa: std.mem.Allocator) GlassTestbed {
-    if (comptime has_health) core.widgets.BlurBackdrop.capture_count = &dvui.backend.Health.current.counts.captures;
     return .{ .config = config, .capture = .init(gpa), .rows = .init(gpa) };
 }
 pub fn deinit(self: *GlassTestbed) void {
-    if (comptime has_health) core.widgets.BlurBackdrop.capture_count = null;
     self.paired.deinit(self.capture.gpa);
     self.capture.deinit();
     self.rows.deinit();

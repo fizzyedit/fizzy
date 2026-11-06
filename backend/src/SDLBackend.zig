@@ -844,6 +844,8 @@ fn configureBackend(back: *SDLBackend, options: InitOptions) !void {
 
 pub fn init(io: std.Io, window: *c.SDL_Window, gpu: *GpuRenderer) SDLBackend {
     dvui.io = io;
+    // Every frame's glass reads land in its counts, not only a test bed's.
+    glass.BlurBackdrop.capture_count = &Health.current.counts.captures;
     if (builtin.target.os.tag == .macos) {
         fizzy_native_monitor_install();
         if (cocoaWindow(window)) |nswindow| {

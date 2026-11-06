@@ -97,10 +97,11 @@ form: f32 = 1,
 
 pub const Mode = enum { replay, readback };
 
-/// Fizzy addition: where captures are counted (the backend's `Health.Counts.captures`): one for
-/// each `deinit` that reads what is under it, none for one that keeps its capture. Null counts
-/// nothing. A pointer because the glass cannot import the backend; whoever reads the counts sets it.
-/// TODO(seam): the backend sets it as it starts, so every run counts, not only the glass test bed.
+/// Fizzy addition: where captures are counted (the backend's `Health.Counts.captures`, set as the
+/// backend starts): one for each copy of what is under a pane actually taken, after the rect
+/// proved non-empty and on the target and the read succeeded; none for a pane that keeps its
+/// capture or has nothing to read. Null counts nothing. A pointer because the glass cannot
+/// import the backend.
 pub var capture_count: ?*u32 = null;
 
 /// Enough for a 16k-pixel rect at radius 2^11, in both directions.
@@ -188,7 +189,6 @@ pub fn deinit(self: *BlurBackdrop) void {
     if (!self.dirty) return;
     // As `init` left it: nothing deferred, nothing to capture.
     if (FrameTarget.unseen()) return;
-    if (capture_count) |n| n.* +|= 1;
     defer self.dirty = false;
     defer self.frostReplaces();
     if (self.mode == .readback) return self.deinitReadback();
@@ -247,6 +247,7 @@ pub fn deinit(self: *BlurBackdrop) void {
     const prev1 = dvui.renderTarget(.{ .texture = full_target, .offset = r.topLeft() });
     defer _ = dvui.renderTarget(prev1);
     cw.renderCommands(cmds) catch {};
+    if (capture_count) |n| n.* +|= 1;
 
     const cur = dvui.textureFromTarget(full_target) catch return; // destroys full_target
     defer dvui.textureDestroyLater(cur);
@@ -338,6 +339,7 @@ fn deinitFromTarget(self: *BlurBackdrop) bool {
             dvui.renderTexture(src, .{ .r = dest, .s = 1 }, .{ .uv = uv }) catch {};
         }
     }
+    if (capture_count) |n| n.* +|= 1;
     // Straight from the copy into the passes, and back to the frame once at the end: the frame's
     // target is the whole window, and on a tiling GPU (a phone's) every bind of it reloads all of
     // it — rebinding it between the copy and the passes did that once more per capture, for no
@@ -455,6 +457,7 @@ fn deinitReadback(self: *BlurBackdrop) void {
         const vh: usize = @intFromFloat(vr.h);
         const read = cw.arena().alloc(u8, vw * vh * 4) catch return;
         cw.backend.readPixels(vr, read.ptr) catch return;
+        if (capture_count) |n| n.* +|= 1;
         const ox: usize = @intFromFloat(vr.x - r.x);
         const oy: usize = @intFromFloat(vr.y - r.y);
         // The drawable holds what dvui blended into it, and dvui blends premultiplied — so
@@ -1583,6 +1586,27 @@ fn passStrength(a: u32, b: u32) f32 {
     const bf: f32 = @floatFromInt(b);
     const ratio = @min(af, bf) / @max(af, bf);
     return @min(1.0, 2 * (1 - ratio));
+}
+
+test "a dirty pane over an empty rect counts no capture" {
+    const fns = struct {
+        fn frame() !dvui.App.Result {
+            for ([_]Mode{ .replay, .readback }) |mode| {
+                var pane: BlurBackdrop = .{ .mode = mode };
+                pane.init(.{ .x = 10, .y = 10 }, @as(u32, 0));
+                pane.deinit();
+                pane.releaseLevels();
+            }
+            return .ok;
+        }
+    };
+    var count: u32 = 0;
+    capture_count = &count;
+    defer capture_count = null;
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 200 } });
+    defer t.deinit();
+    _ = try dvui.testing.step(fns.frame);
+    try std.testing.expectEqual(@as(u32, 0), count);
 }
 
 test "a frost scrolled away for two frames keeps its birth and last queued rect" {
