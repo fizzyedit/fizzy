@@ -11040,6 +11040,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
     errdefer if (!quit) editor.deinit() catch {};
     workbench.runtime.setWorkbench(&editor.workbench);
     try editor.postInit();
+    try fizzy.Entry.registerAppDemos(editor);
     try dvui.testing.settle(headlessFrame);
     try std.testing.expectEqualStrings(root, editor.app.config_folder);
     // The person's choices stay in the profile too, not in the shared config folder.

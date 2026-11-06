@@ -296,7 +296,7 @@ fn drawAppDemoMenu(ctx: ?*anyopaque) !void {
 
 /// Register the app's own demos: in the `demos` service, as commands, and in Help where one asks
 /// for a row. Called at startup, after `postInit` has attached the editor at its final address.
-fn registerAppDemos(editor: *Editor) !void {
+pub fn registerAppDemos(editor: *Editor) !void {
     var has_menu = false;
     inline for (&app_demos.entries) |*e| {
         const id = "fizzy.demo." ++ e.name;
@@ -394,6 +394,21 @@ fn initRefreshLogFromEnv() void {
 var refresh_log_active = false;
 
 // Runs before the first frame, after backend and dvui.Window.init()
+/// `FIZZY_DEMO=<name>` plays an app demo from launch, `FIZZY_DEMO=<file>.zon` (or `.tape`) a tape;
+/// a tape read before the app moved its working directory wins. Not on wasm: no environment there.
+fn playDemoFromEnv() void {
+    if (comptime builtin.target.cpu.arch == .wasm32) return;
+    const editor = fizzy.editor();
+    if (Editor.Demo.env_tape) |bytes| {
+        Editor.Demo.env_tape = null;
+        defer editor.app.gpa.free(bytes);
+        editor.demo.playTapeSoon(bytes);
+    } else if (std.process.Environ.getAlloc(fizzy.core.platform.processEnviron(), editor.app.gpa, "FIZZY_DEMO")) |name| {
+        defer editor.app.gpa.free(name);
+        editor.demo.playSoon(name);
+    } else |_| {}
+}
+
 pub fn AppInit(win: *dvui.Window) !void {
     fizzy.core.profile.phase(dvui.io, "window");
     // Snapshot the platform from DVUI's keybind selection. On native this is a
@@ -488,17 +503,7 @@ pub fn AppInit(win: *dvui.Window) !void {
     // `FIZZY_DEMO=tour` plays an app demo from launch — how a screen recording is made — and
     // `FIZZY_DEMO=<file>.zon` (or `.tape`) a tape, read before the app moved its working directory.
     // After the app's demos are registered, so a name finds one.
-    if (comptime builtin.target.cpu.arch != .wasm32) {
-        const editor = fizzy.editor();
-        if (Editor.Demo.env_tape) |bytes| {
-            Editor.Demo.env_tape = null;
-            defer editor.app.gpa.free(bytes);
-            editor.demo.playTapeSoon(bytes);
-        } else if (std.process.Environ.getAlloc(fizzy.core.platform.processEnviron(), editor.app.gpa, "FIZZY_DEMO")) |name| {
-            defer editor.app.gpa.free(name);
-            editor.demo.playSoon(name);
-        } else |_| {}
-    }
+    playDemoFromEnv();
 
     fizzy.core.profile.phase(dvui.io, "plugins");
 

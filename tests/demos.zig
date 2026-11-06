@@ -45,6 +45,7 @@ const BundledApp = struct {
         self.editor.* = try fizzy.Editor.init(self.entry);
         workbench.runtime.setWorkbench(&self.editor.workbench);
         try self.editor.postInit();
+        try fizzy.Entry.registerAppDemos(self.editor);
         try dvui.testing.settle(headlessFrame);
     }
 
