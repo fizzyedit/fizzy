@@ -96,7 +96,6 @@ test "no shadow or edge on the field" {
     glass.LiquidField.readyInTest(true);
     try drawField(field, 0, null);
     const details = ink.drawnDetails();
-    try std.testing.expectEqual(0, details.shadows);
     try std.testing.expectEqual(0, details.fields);
     try std.testing.expectEqual(0, details.shapes);
 }

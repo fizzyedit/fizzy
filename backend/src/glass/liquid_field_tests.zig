@@ -540,3 +540,113 @@ test "edge coverage follows pixel density at straight and rounded edges" {
         }
     }
 }
+
+// ── The shadow the joined glass casts ───────────────────────────────────────────────────────────
+
+const shadow_look = glass_look.inApp(1);
+const shadow_alpha: f32 = 0.25;
+const shadow_fade: f32 = 8;
+const shadow_offset: [2]f32 = .{ 0, 2 };
+
+/// A field joining at 36 px that casts the floating surfaces' shadow, holding `boxes` (radius 12).
+fn shadowField(boxes: []const dvui.Rect.Physical) LiquidField {
+    var f: LiquidField = .{ .merge_px = 36, .shadow = .{ .alpha = shadow_alpha, .fade_px = shadow_fade, .offset = shadow_offset } };
+    for (boxes) |r| f.add(.{ .rect = r, .radii = @splat(12) });
+    return f;
+}
+
+fn shadowAt(f: *const LiquidField, x: f32, y: f32) f32 {
+    return f.sampleWith(.{ .x = x, .y = y }, shadow_look).shadow;
+}
+
+test "overlapping pieces never stack their shadows" {
+    const f = shadowField(&.{ .{ .x = 0, .y = 0, .w = 100, .h = 60 }, .{ .x = 60, .y = 0, .w = 100, .h = 60 } });
+    var y: f32 = -20;
+    while (y <= 80) : (y += 1) {
+        var x: f32 = -20;
+        while (x <= 180) : (x += 1) try testing.expect(shadowAt(&f, x, y) <= shadow_alpha + 1e-4);
+    }
+}
+
+test "a drop inside a bar casts no second shadow" {
+    const bar: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 300, .h = 60 };
+    // The joined outline swells up to merge / 4 over an inner drop: that is the glass's own shape,
+    // so the shadow is checked against the field's own joined distance, not against the bar alone.
+    for ([_]LiquidField{ shadowField(&.{bar}), shadowField(&.{ bar, .{ .x = 130, .y = 10, .w = 40, .h = 40 } }) }) |f| {
+        var y: f32 = -20;
+        while (y <= 80) : (y += 1) {
+            var x: f32 = -20;
+            while (x <= 320) : (x += 1) {
+                const s = f.sampleWith(.{ .x = x, .y = y }, shadow_look);
+                if (s.coverage == 1) try testing.expectEqual(@as(f32, 0), s.shadow);
+                if (s.coverage > 0) continue;
+                const d = f.sampleWith(.{ .x = x - shadow_offset[0], .y = y - shadow_offset[1] }, shadow_look).d;
+                const fall = 1 - std.math.clamp(d / shadow_fade, 0, 1);
+                try testing.expectApproxEqAbs(shadow_alpha * fall * fall * std.math.clamp(s.lens, 0, 1), s.shadow, 1e-5);
+            }
+        }
+    }
+}
+
+test "a neck shades as one piece" {
+    const f = shadowField(&.{ .{ .x = 0, .y = 0, .w = 100, .h = 60 }, .{ .x = 120, .y = 0, .w = 100, .h = 60 } });
+    // Along a line 4 px below them, half a pixel at a time: no step where one piece's shadow
+    // meets the other's.
+    var prev = shadowAt(&f, -20, 64);
+    var x: f32 = -19.5;
+    while (x <= 240) : (x += 0.5) {
+        const s = shadowAt(&f, x, 64);
+        try testing.expect(@abs(s - prev) < 0.05);
+        prev = s;
+    }
+    try testing.expect(shadowAt(&f, 110, 64) > 0);
+}
+
+test "lens 0 casts no shadow" {
+    var f = shadowField(&.{ .{ .x = 0, .y = 0, .w = 100, .h = 60 }, .{ .x = 120, .y = 0, .w = 100, .h = 60 } });
+    for (f.shapes[0..f.len]) |*sh| sh.lens = 0;
+    var y: f32 = -20;
+    while (y <= 80) : (y += 2) {
+        var x: f32 = -20;
+        while (x <= 240) : (x += 2) try testing.expectEqual(@as(f32, 0), shadowAt(&f, x, y));
+    }
+}
+
+test "inside the glass the shadow is 0 where coverage is 1" {
+    const f = shadowField(&.{ .{ .x = 0, .y = 0, .w = 100, .h = 60 }, .{ .x = 120, .y = 0, .w = 100, .h = 60 } });
+    var saw_inside = false;
+    var y: f32 = -20;
+    while (y <= 80) : (y += 1) {
+        var x: f32 = -20;
+        while (x <= 240) : (x += 1) {
+            const s = f.sampleWith(.{ .x = x, .y = y }, shadow_look);
+            if (s.coverage < 1) continue;
+            saw_inside = true;
+            try testing.expectEqual(@as(f32, 0), s.shadow);
+        }
+    }
+    try testing.expect(saw_inside);
+    // Just outside, it is there.
+    try testing.expect(shadowAt(&f, 50, 63) > 0.1);
+}
+
+test "an edge field has no shadow" {
+    var f = shadowField(&.{.{ .x = 20, .y = 20, .w = 100, .h = 60 }});
+    f.edge = .{ .rect = .{ .x = 0, .y = 0, .w = 200, .h = 120 }, .radii = @splat(16) };
+    const u = f.pack(.{ .x = 0, .y = 0, .w = 200, .h = 120 }, false, &.{0});
+    try testing.expectEqual([4]f32{ 0, 0, 0, 0 }, u.shadow);
+    try testing.expectEqual(@as(f32, 0), shadowAt(&f, 70, 84));
+}
+
+test "the shadow grows the bounds and packs in vec4 11" {
+    var f = shadowField(&.{.{ .x = 20, .y = 20, .w = 100, .h = 60 }});
+    const with = f.bounds();
+    f.shadow = .{};
+    const without = f.bounds();
+    const grow = shadow_fade + @max(@abs(shadow_offset[0]), @abs(shadow_offset[1]));
+    try testing.expectApproxEqAbs(without.x - grow, with.x, 1e-4);
+    try testing.expectApproxEqAbs(without.w + 2 * grow, with.w, 1e-4);
+    f = shadowField(&.{.{ .x = 20, .y = 20, .w = 100, .h = 60 }});
+    const u = f.pack(.{ .x = 0, .y = 0, .w = 200, .h = 120 }, false, &.{0});
+    try testing.expectEqual([4]f32{ shadow_fade, shadow_offset[0], shadow_offset[1], shadow_alpha }, u.vec4s()[11]);
+}

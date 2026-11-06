@@ -300,8 +300,8 @@ pub const BubblesOptions = struct {
     /// Points: how near two bubbles come before their glass runs together (`LiquidField.merge_px`);
     /// 0 never joins.
     merge: f32 = 0,
-    /// The shadows' share, 0…1: bubbles still run together into one want none, a ring round each
-    /// lying dark across the bridges.
+    /// The shadow's share, 0…1: one cast by the joined glass, so bubbles run together cast one
+    /// between them (`core.glass.LayerOptions.shadow`).
     shadow: f32 = 1,
     /// A signature of what lies under the bubbles, as `frostPaneKept`'s: the frost is read again
     /// only when it changes. Null reads it every frame.
@@ -309,7 +309,7 @@ pub const BubblesOptions = struct {
     /// The size the bubbles are growing into, as `core.glass.LayerOptions.reach`.
     reach: ?dvui.Size.Physical = null,
     /// The place the bubbles belong to (`LiquidField.edge`): a bubble near its outline joins it by a
-    /// neck, and none crosses it. Physical. No shadow rings with it (`shadow`). Without the glass
+    /// neck, and none crosses it. Physical. No shadow with it (`shadow`). Without the glass
     /// program, the bubbles are only cut to its rect.
     edge: ?widgets.LiquidField.Edge = null,
     /// The glass's colour and how much of it, over the dialog style's (`LiquidField.surface`): for
@@ -336,21 +336,16 @@ const round_corner: f32 = 4;
 /// Controls of glass over content, one look wherever they float: the demo player's transport, a
 /// plugin's buttons over its canvas. Each bubble is drawn as a drop is (`LiquidField`, its edge
 /// bending along its own outline — a capsule's ends round, as a circle's are), lit by its
-/// `light`, whole from the first frame, with the floating surfaces' shadow as a ring round it.
+/// `light`, whole from the first frame, casting the floating surfaces' shadow.
 /// Where the glass program is not there to draw it, or the blur is off, each is frosted (or
 /// filled) on its own and lit with the menus' hover and press. `id` keys the frost.
 pub fn glassBubbles(id: dvui.Id, bubbles: []const Bubble, scale: f32, opts: BubblesOptions) void {
     const bs = surfaceShadow();
-    // The ring after the glass, so the glass never blurs it in.
-    // None for bubbles merged with an edge: a ring round each bubble's own outline would lie across
-    // its neck, splitting it from the edge it is one glass with.
-    defer if (opts.shadow > 0 and opts.edge == null) for (bubbles) |b| {
-        if (b.rect.w < 1 or b.rect.h < 1) continue;
-        glassShadow(b.rect, b.corners(scale), scale, bs, opts.shadow);
-    };
-    // One layer: the bubbles' glass is of where they are this frame, from one capture.
+    // One layer: the bubbles' glass is of where they are this frame, from one capture, and the
+    // shadow the joined glass casts (none with an edge, `LiquidField.shadow`).
     var layer = ink.layer(id, .{
         .merge = opts.merge,
+        .shadow = opts.shadow,
         .edge = opts.edge,
         .tint = if (opts.window) windowBase() else opts.tint,
         .mix = if (opts.window) 1 else opts.mix,
@@ -383,6 +378,12 @@ pub fn glassBubbles(id: dvui.Id, bubbles: []const Bubble, scale: f32, opts: Bubb
         }
         return;
     }
+    // Without the program, a ring round each pane, after it so its frost never blurs the ring in.
+    // None with an edge: round each bubble's own outline it would lie across the neck to it.
+    defer if (opts.shadow > 0 and opts.edge == null) for (bubbles) |b| {
+        if (b.rect.w < 1 or b.rect.h < 1) continue;
+        glassShadow(b.rect, b.corners(scale), scale, bs, opts.shadow);
+    };
     const prev_clip = dvui.clipGet();
     defer dvui.clipSet(prev_clip);
     if (opts.edge) |e| dvui.clipSet(prev_clip.intersect(e.rect));
