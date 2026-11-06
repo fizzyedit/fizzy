@@ -184,13 +184,13 @@ pub fn dialog(id: dvui.Id) fizzy.core.dialogs.Error!bool {
     // Sized to its content up to `max_list_h`, then scrolls — `.expand = .both` would claim the
     // whole capped window height and leave a two-row list floating in empty space.
     {
-        var scroll = dvui.scrollArea(@src(), .{}, .{
+        var scroll = fizzy.core.widgets.ScrollArea.init(@src(), .{}, .{
             .expand = .horizontal,
             .background = false,
             .max_size_content = .{ .w = std.math.floatMax(f32), .h = max_list_h },
         });
         defer scroll.deinit();
-        defer fizzy.core.widgets.scrollShadows(scroll);
+        defer fizzy.core.widgets.scrollShadows(scroll.area);
 
         for (rows, 0..) |*row, i| {
             var line = dvui.box(@src(), .{ .dir = .horizontal }, .{
