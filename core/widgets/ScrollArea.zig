@@ -6,7 +6,7 @@
 //! bursts and the last one before `touchend` is often tiny, the momentum drops out. This keeps
 //! dvui's area (its container, `ScrollInfo`, bars, `scrollTo`, `scrollDrag`, nesting) and takes
 //! over only the touch drag: it samples (position, time), releases with the velocity of the
-//! last `window_s` through `Fling.releaseWindowed`, and coasts on one decay per second.
+//! last `feel.window_s` through `Fling.releaseWindowed`, and coasts on one decay per second.
 //!
 //! Local copy of upstream behaviour, kept so it can be deleted once dvui has it (plans#51):
 //! `fizzyedit/dvui 3d90fdd src/widgets/ScrollContainerWidget.zig` — the touch branch of `processEvent`
@@ -104,32 +104,45 @@ const Segment = struct {
     low: f32 = 0,
     /// Points a second at the start.
     vel: f32 = 0,
-    /// A coast's decay: `tuning.decay`, or the one that ends it on a notch.
-    decay: f32 = tuning.decay,
+    /// A coast's decay, set where it starts: `feel.coast.decay`, or the one that ends it on a notch.
+    decay: f32 = 0,
     /// A settle: whether the edge it returns to is the end (`scrollMax`) and not the start.
     end: bool = false,
 };
 
-/// The seat: a lift near a notch that starts no coast comes to rest on it, critically damped at
-/// every motion level, about 500 ms after a lift 30 points off.
-pub const seat: Spring.Tune = .{ .hz = 3, .playful_damping = 1 };
+/// How a finger's scroll feels: its coast, seat, release window and glide.
+pub const Feel = struct {
+    /// Viewport points per second. `decay` 2 leaves 13.5% of the speed after one second, iOS's
+    /// `UIScrollView.DecelerationRate.normal` (0.998 per ms), at every speed.
+    coast: Fling.Tuning,
+    /// The seat: a lift near a notch that starts no coast comes to rest on it, critically damped at
+    /// every motion level, about 500 ms after a lift 30 points off.
+    seat: Spring.Tune,
+    /// Seconds of recent motion the release velocity averages over: native scrollers read the last
+    /// 50 to 100 ms.
+    window_s: f32,
+    /// Seconds for a glide to cover 63% of what is left; about 95% in 150 ms.
+    glide_tau_s: f32,
 
-/// Seconds of recent motion the release velocity averages over: native scrollers read the last
-/// 50 to 100 ms.
-pub const window_s: f32 = 0.1;
+    pub const default: Feel = .{
+        .coast = .{
+            .decay = 2.0,
+            .min_start = 80.0,
+            .stop = 20.0,
+            .max = 8000.0,
+            .idle_s = 0.08,
+        },
+        .seat = .{ .hz = 3, .playful_damping = 1 },
+        .window_s = 0.1,
+        .glide_tau_s = 0.05,
+    };
+};
+
+/// Read on the UI thread each frame; an app may set it (a tuning panel) and the next frame uses it.
+pub var feel: Feel = .default;
 
 /// Milliseconds after the last wheel event before pixel settling and rest snapping.
 pub const wheel_rest_ms = 120;
-
-/// Viewport points per second. `decay` 2 leaves 13.5% of the speed after one second, iOS's
-/// `UIScrollView.DecelerationRate.normal` (0.998 per ms), at every speed.
-pub const tuning: Fling.Tuning = .{
-    .decay = 2.0,
-    .min_start = 80.0,
-    .stop = 20.0,
-    .max = 8000.0,
-    .idle_s = 0.08,
-};
 
 /// A piece outside the area that takes part of its vertical scroll: a top sheet.
 pub const Lead = struct {
@@ -221,14 +234,14 @@ pub fn initWith(src: std.builtin.SourceLocation, init_opts: dvui.ScrollAreaWidge
         t.x.begin();
         t.y.begin();
         t.pull = .{
-            .x = Fling.pullFor(t.over.x, self.si.viewport.w, tuning.edge),
-            .y = Fling.pullFor(t.over.y, self.si.viewport.h, tuning.edge),
+            .x = Fling.pullFor(t.over.x, self.si.viewport.w, feel.coast.edge),
+            .y = Fling.pullFor(t.over.y, self.si.viewport.h, feel.coast.edge),
         };
         if (self.lead) |piece| {
             const k = if (piece.after) 0 else @min(-@min(t.over.y, 0), piece.range(piece.ctx) - piece.extent(piece.ctx));
             _ = piece.take(piece.ctx, -k);
             t.over.y += k;
-            t.pull.y = Fling.pullFor(t.over.y, self.si.viewport.h, tuning.edge);
+            t.pull.y = Fling.pullFor(t.over.y, self.si.viewport.h, feel.coast.edge);
         }
     }
 
@@ -332,8 +345,8 @@ pub fn deinit(self: *ScrollArea) void {
     }
     if (released) {
         t.dragging = false;
-        _ = t.x.releaseWindowedAt(tuning, window_s, release_ns);
-        _ = t.y.releaseWindowedAt(tuning, window_s, release_ns);
+        _ = t.x.releaseWindowedAt(feel.coast, feel.window_s, release_ns);
+        _ = t.y.releaseWindowedAt(feel.coast, feel.window_s, release_ns);
         t.pull = .{};
         const now = dvui.frameTimeNS();
         release(&t.x, &t.seg_x, self.si.viewport.x, &t.over.x, self.si.viewport.w, now);
@@ -430,9 +443,6 @@ fn pageMax(self: *const ScrollArea) f32 {
     return @max(0, self.si.scrollMax(.vertical) - if (self.lead != null) self.touch.pad else @as(f32, 0));
 }
 
-/// Seconds for a glide to cover 63% of what is left; about 95% in 150 ms.
-pub const glide_tau_s: f32 = 0.05;
-
 /// Slide to `to` along `axis`, clamped to its range, from the next frame's `init`.
 /// Vertical targets include the lead: page offset minus its extent.
 pub fn glideTo(self: *ScrollArea, axis: dvui.enums.Direction, to: f32) void {
@@ -480,7 +490,7 @@ fn glideStep(self: *ScrollArea) void {
         const clamped = std.math.clamp(to, low, high);
         // A glide started during a return starts where the content is drawn, past the edge.
         const drawn = pos + over.*;
-        var next = if (glass.motion.off()) clamped else drawn + (clamped - drawn) * (1 - @exp(-dt * glass.motion.rate() / glide_tau_s));
+        var next = if (glass.motion.off()) clamped else drawn + (clamped - drawn) * (1 - @exp(-dt * glass.motion.rate() / feel.glide_tau_s));
         const done = @abs(clamped - next) <= 0.5;
         if (done) next = clamped;
         const in_range = std.math.clamp(next, low, high);
@@ -540,7 +550,7 @@ fn wheelEvent(self: *ScrollArea, e: *dvui.Event) void {
     self.touch.x.cancel();
     self.touch.y.cancel();
     // The band stays drawn where it is; the input below moves it from there.
-    const w = 2 * std.math.pi * @as(f64, tuning.edge.hz) * glass.motion.rate();
+    const w = 2 * std.math.pi * @as(f64, feel.coast.edge.hz) * glass.motion.rate();
     const return_vel: f32 = if (segment.kind == .settle and w > 0)
         Fling.settle(segment.origin, segment.vel, @as(f64, @floatFromInt(dvui.frameTimeNS() - segment.start_ns)) / std.time.ns_per_s, w).vel
     else
@@ -684,7 +694,7 @@ fn drag(pos: *f32, pull: *f32, over: *f32, max: f32, extent: f32, by: f32, bands
     const in_range = std.math.clamp(finger, 0, max);
     const before = pos.* + over.*;
     pull.* = if (bands) finger - in_range else 0;
-    over.* = Fling.band(pull.*, extent, tuning.edge);
+    over.* = Fling.band(pull.*, extent, feel.coast.edge);
     pos.* = in_range;
     return pos.* + over.* - before;
 }
@@ -703,7 +713,7 @@ fn release(fling: *Fling, seg: *Segment, viewport: f32, over: *f32, extent: f32,
         }
         return;
     }
-    seg.* = if (fling.coasting) .{ .kind = .coast, .start_ns = now, .origin = viewport, .vel = vel } else .{};
+    seg.* = if (fling.coasting) .{ .kind = .coast, .start_ns = now, .origin = viewport, .vel = vel, .decay = feel.coast.decay } else .{};
 }
 
 /// The most notches within the content's range a release looks at.
@@ -723,7 +733,7 @@ fn aimOrSeat(self: *ScrollArea) void {
         n += 1;
     }
     if (self.snap_with) |provider| {
-        const at = if (t.y.coasting) Fling.landing(y, t.y.vel, tuning) else y;
+        const at = if (t.y.coasting) Fling.landing(y, t.y.vel, feel.coast) else y;
         for ([_]f32{ -1, 1 }) |dir| {
             if (provider.near(provider.ctx, at, dir)) |notch| {
                 if (notch.at < 0 or notch.at > max) continue;
@@ -734,7 +744,7 @@ fn aimOrSeat(self: *ScrollArea) void {
     }
     n += self.leadNotches(buf[n..]);
     if (t.y.coasting) {
-        if (Fling.aim(y, t.y.vel, tuning, buf[0..n])) |a| {
+        if (Fling.aim(y, t.y.vel, feel.coast, buf[0..n])) |a| {
             t.seg_y.decay = a.decay;
             if (self.lead != null and !self.lead.?.after and a.at == self.lowY()) t.seg_y.low = self.lowY() - 1;
             t.coast_aimed = true;
@@ -804,7 +814,7 @@ fn seatStep(self: *ScrollArea) void {
     const t = self.touch;
     if (!t.seating) return;
     const max_step_s = @as(f32, @floatFromInt(FrameClock.max_step_ns)) / std.time.ns_per_s;
-    const moving = t.seat_spring.step(.{}, @min(dvui.secondsSinceLastFrame(), max_step_s), seat);
+    const moving = t.seat_spring.step(.{}, @min(dvui.secondsSinceLastFrame(), max_step_s), feel.seat);
     const to = std.math.clamp(if (moving) t.seat_at + t.seat_spring.pos.y else t.seat_at, self.lowY(), self.pageMax());
     const before = self.si.viewport.y;
     _ = self.moveY(to - self.positionY(), false);
@@ -862,7 +872,7 @@ fn advance(self: *ScrollArea, fling: *Fling, seg: *Segment, pos: *f32, over: *f3
         .coast => {
             const elapsed = @as(f64, @floatFromInt(now - seg.start_ns)) / std.time.ns_per_s;
             const edge: f32 = if (seg.vel > 0) max else seg.low;
-            if (Fling.edgeTime(seg.origin, seg.vel, edge, seg.decay, tuning.stop)) |hit| {
+            if (Fling.edgeTime(seg.origin, seg.vel, edge, seg.decay, feel.coast.stop)) |hit| {
                 if (hit <= elapsed) {
                     pos.* = edge;
                     fling.cancel();
@@ -892,7 +902,7 @@ fn advance(self: *ScrollArea, fling: *Fling, seg: *Segment, pos: *f32, over: *f3
         },
         .settle => {
             pos.* = if (seg.end) max else seg.low;
-            const w = 2 * std.math.pi * @as(f64, tuning.edge.hz) * glass.motion.rate();
+            const w = 2 * std.math.pi * @as(f64, feel.coast.edge.hz) * glass.motion.rate();
             if (w <= 0) {
                 over.* = 0;
                 seg.* = .{};
@@ -905,11 +915,11 @@ fn advance(self: *ScrollArea, fling: *Fling, seg: *Segment, pos: *f32, over: *f3
                 if (cross <= elapsed) {
                     const at = Fling.settle(seg.origin, seg.vel, cross, w);
                     over.* = 0;
-                    if (@abs(at.vel) <= tuning.stop) {
+                    if (@abs(at.vel) <= feel.coast.stop) {
                         seg.* = .{};
                         return;
                     }
-                    seg.* = .{ .kind = .coast, .low = seg.low, .start_ns = seg.start_ns + @as(i128, @intFromFloat(cross * std.time.ns_per_s)), .origin = pos.*, .vel = at.vel };
+                    seg.* = .{ .kind = .coast, .low = seg.low, .start_ns = seg.start_ns + @as(i128, @intFromFloat(cross * std.time.ns_per_s)), .origin = pos.*, .vel = at.vel, .decay = feel.coast.decay };
                     if (seg == &self.touch.seg_y) self.touch.coast_aimed = false;
                     fling.coasting = true;
                     fling.vel = at.vel;
@@ -917,7 +927,7 @@ fn advance(self: *ScrollArea, fling: *Fling, seg: *Segment, pos: *f32, over: *f3
                 }
             }
             const at = Fling.settle(seg.origin, seg.vel, elapsed, w);
-            if (@abs(at.pos) < 0.5 and @abs(at.vel) < tuning.stop) {
+            if (@abs(at.pos) < 0.5 and @abs(at.vel) < feel.coast.stop) {
                 over.* = 0;
                 seg.* = .{};
             } else {
@@ -931,7 +941,7 @@ fn advance(self: *ScrollArea, fling: *Fling, seg: *Segment, pos: *f32, over: *f3
 /// Keep an outward return inside the inverse band's catchable range without moving its origin.
 fn settleVelocity(offset: f32, vel: f32, extent: f32) f32 {
     if (offset * vel < 0) return vel;
-    const w = 2 * std.math.pi * tuning.edge.hz * glass.motion.rate();
+    const w = 2 * std.math.pi * feel.coast.edge.hz * glass.motion.rate();
     // (1 + w·t)·exp(-w·t) <= 1, and t·exp(-w·t) peaks at 1/(w·e).
     const limit = @max(0, extent * 0.999 - @abs(offset)) * w * std.math.e;
     return std.math.clamp(vel, -limit, limit);
@@ -974,7 +984,7 @@ fn settleBy(area_px: f32, viewport: f32, low: f32, max: f32, scale: f32) f32 {
 // Clamp time at the stop speed so the final position also agrees across frame schedules.
 fn coastPosition(fling: *Fling, origin: f32, velocity: f32, coast_decay: f32, elapsed: f64) f32 {
     const decay: f64 = coast_decay;
-    const duration = @log(@as(f64, @abs(velocity)) / tuning.stop) / decay;
+    const duration = @log(@as(f64, @abs(velocity)) / feel.coast.stop) / decay;
     const time = std.math.clamp(elapsed, 0, duration);
     const keep = @exp(-decay * time);
     fling.vel = @floatCast(velocity * keep);
@@ -1202,8 +1212,8 @@ test "coast displacement follows each frame gap" {
         const displacement = previous_y - t_raw_y;
         const from_s = @as(f64, @floatFromInt(previous_time - release_time)) / std.time.ns_per_s;
         const to_s = @as(f64, @floatFromInt(time - release_time)) / std.time.ns_per_s;
-        const expected: f32 = @floatCast(release_speed / tuning.decay *
-            (@exp(-tuning.decay * from_s) - @exp(-tuning.decay * to_s)));
+        const expected: f32 = @floatCast(release_speed / feel.coast.decay *
+            (@exp(-feel.coast.decay * from_s) - @exp(-feel.coast.decay * to_s)));
         std.debug.print("coast frame: gap={d} ms, float={d:.6} px, integral={d:.6} px, error={d:.6} px\n", .{
             @divTrunc(time - previous_time, std.time.ns_per_ms), displacement, expected, displacement - expected,
         });
@@ -1240,13 +1250,13 @@ test "coast position matches the release integral through jitter and a long stal
     for ([_]f64{ 0.008, 0.025, 0.008, 0.025, 0.5, 0.008, 0.025 }) |gap| {
         elapsed += gap;
         const expected = origin + velocity / 2.0 * (1 - @exp(-2.0 * elapsed));
-        try std.testing.expectApproxEqAbs(@as(f32, @floatCast(expected)), coastPosition(&fling, origin, velocity, tuning.decay, elapsed), 0.0001);
+        try std.testing.expectApproxEqAbs(@as(f32, @floatCast(expected)), coastPosition(&fling, origin, velocity, feel.coast.decay, elapsed), 0.0001);
         try std.testing.expect(fling.coasting);
     }
-    const stopped = coastPosition(&fling, origin, velocity, tuning.decay, 10);
-    try std.testing.expectApproxEqAbs(origin + (velocity + tuning.stop) / tuning.decay, stopped, 0.0001);
+    const stopped = coastPosition(&fling, origin, velocity, feel.coast.decay, 10);
+    try std.testing.expectApproxEqAbs(origin + (velocity + feel.coast.stop) / feel.coast.decay, stopped, 0.0001);
     try std.testing.expect(!fling.coasting);
-    try std.testing.expectEqual(stopped, coastPosition(&fling, origin, velocity, tuning.decay, 20));
+    try std.testing.expectEqual(stopped, coastPosition(&fling, origin, velocity, feel.coast.decay, 20));
 }
 
 test "a slow coast preserves pixel snapping while its position stays fractional" {
@@ -1280,7 +1290,7 @@ test "a slow coast preserves pixel snapping while its position stays fractional"
             if (t_drawn_y == prev) repeated_pixels += 1;
         }
         // At decay 2, the final 300 ms spans speeds 20..20*exp(2*0.3) points/s.
-        if (speed > tuning.stop and speed < tuning.stop * @exp(tuning.decay * 0.3)) {
+        if (speed > feel.coast.stop and speed < feel.coast.stop * @exp(feel.coast.decay * 0.3)) {
             tail_frames += 1;
             const drawn_delta = @abs(t_drawn_y - prev);
             const raw_delta = @abs(t_raw_y - prev_raw);
@@ -1511,7 +1521,7 @@ test "a drag 300 points past the top shows the band, and the viewport stays in r
     const rest_y = t_raw_y;
 
     try dragBy(300, 10, true, 10);
-    const shown = Fling.band(300, 400, tuning.edge);
+    const shown = Fling.band(300, 400, feel.coast.edge);
     try std.testing.expectApproxEqAbs(@as(f32, 116.8), shown, 0.5);
     try std.testing.expectApproxEqAbs(-shown, t_over_y, 0.5);
     // The content is drawn that far down, and the area's own viewport is at the edge.
@@ -1533,7 +1543,7 @@ test "a drag 300 points past the bottom is symmetric" {
     try std.testing.expect(end > 1000);
 
     try dragBy(-300, 10, true, 10);
-    try std.testing.expectApproxEqAbs(Fling.band(300, 400, tuning.edge), t_over_y, 0.5);
+    try std.testing.expectApproxEqAbs(Fling.band(300, 400, feel.coast.edge), t_over_y, 0.5);
     try std.testing.expectEqual(end, t_viewport_y);
     try std.testing.expect(!t_range_broken);
 }
@@ -1563,7 +1573,7 @@ test "a release settles within 400 ms without reversing, however the frames cut 
     var uneven: [13]f32 = undefined;
     try settleTrace(&.{ 16, 17 }, &steady);
     try settleTrace(&.{ 25, 8 }, &uneven);
-    var prev: f32 = -Fling.band(300, 400, tuning.edge);
+    var prev: f32 = -Fling.band(300, 400, feel.coast.edge);
     for (steady, uneven) |a, b| {
         try std.testing.expect(a >= prev and a <= 0);
         prev = a;
@@ -1733,7 +1743,7 @@ test "a mouse notch during a return glides from where the content is drawn" {
     try frameAfter(16);
     try frameAfter(0);
     // The first glide frame covers part of one 80-point step, from the drawn position.
-    const step = 80 * (1 - @exp(-0.016 / glide_tau_s));
+    const step = 80 * (1 - @exp(-0.016 / feel.glide_tau_s));
     const moved = before - t_raw_y / t_draw_scale;
     try std.testing.expect(moved > 0 and moved <= step + 0.01);
     try wheelFrames(60);
@@ -1795,7 +1805,7 @@ test "a finger catching the hardest bounce keeps it where it is" {
     try dragBy(-300, 10, true, 10);
     try lift();
     for (0..10) |_| try frameAfter(16);
-    // A flick back at the speed clamp (`tuning.max`), released near the top: the fastest bounce.
+    // A flick back at the speed clamp (`feel.coast.max`), released near the top: the fastest bounce.
     try dragBy(260, 130, true, 0);
     try lift();
     var deepest: f32 = 0;
@@ -1906,9 +1916,9 @@ test "a fast flick passes a notch" {
 
 test "an aimed coast ends where the landing says" {
     var fling: Fling = .{ .coasting = true };
-    const a = Fling.aim(0, 600, tuning, &.{.{ .at = 300 }}).?;
+    const a = Fling.aim(0, 600, feel.coast, &.{.{ .at = 300 }}).?;
     try std.testing.expectApproxEqAbs(@as(f32, 300), coastPosition(&fling, 0, 600, a.decay, 60), 1e-3);
-    try std.testing.expectApproxEqAbs(Fling.landing(0, 600, tuning), coastPosition(&fling, 0, 600, tuning.decay, 60), 1e-3);
+    try std.testing.expectApproxEqAbs(Fling.landing(0, 600, feel.coast), coastPosition(&fling, 0, 600, feel.coast.decay, 60), 1e-3);
 }
 
 test "an aimed coast is a function of time" {
@@ -2033,16 +2043,16 @@ test "fast returns stay catchable in short panes at every motion rate" {
     try dvui.testing.settle(testFrame);
     for ([_]f32{ 0, 0.5, 1 }) |speed| {
         glass.motion.publish(1, speed, false, false, 1);
-        const w = 2 * std.math.pi * tuning.edge.hz * glass.motion.rate();
+        const w = 2 * std.math.pi * feel.coast.edge.hz * glass.motion.rate();
         for ([_]f32{ 50, 100, 150, 250 }) |extent| {
             for ([_]f32{ -1, 1 }) |sign| {
                 for ([_]f32{ 0, 0.5, 0.99 }) |fraction| {
                     const origin = sign * extent * fraction;
-                    const vel = settleVelocity(origin, sign * tuning.max, extent);
+                    const vel = settleVelocity(origin, sign * feel.coast.max, extent);
                     for (0..1000) |ms| {
                         const at = Fling.settle(origin, vel, @as(f64, @floatFromInt(ms)) / 1000, w);
                         try std.testing.expect(@abs(at.pos) <= extent * 0.999);
-                        const caught = Fling.band(Fling.pullFor(at.pos, extent, tuning.edge), extent, tuning.edge);
+                        const caught = Fling.band(Fling.pullFor(at.pos, extent, feel.coast.edge), extent, feel.coast.edge);
                         try std.testing.expectApproxEqAbs(at.pos, caught, 0.001);
                     }
                 }
@@ -2656,7 +2666,7 @@ test "a touch coast that runs out between rest notches settles" {
         t_notches = &stops;
         defer t_notches = &.{};
         const r = try swipeAt(10, 10);
-        const coast_end_s = @log(@abs(t_release_velocity) / tuning.stop) / tuning.decay;
+        const coast_end_s = @log(@abs(t_release_velocity) / feel.coast.stop) / feel.coast.decay;
         const end_ns = t_release_time + @as(i128, @intFromFloat(coast_end_s * std.time.ns_per_s));
         const target = pair[if (index == 0) @as(usize, 1) else 0];
         while (dvui.currentWindow().frame_time_ns < end_ns + 300 * std.time.ns_per_ms) try frameAfter(16);

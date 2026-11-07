@@ -122,7 +122,7 @@ fn step(state: *State) void {
     state.stepped_ns = now;
     const target = state.target.?;
     const elapsed = @as(f64, @floatFromInt(now - state.settle_ns)) / std.time.ns_per_s;
-    const at = Fling.settle(state.settle_offset, state.settle_speed, elapsed, 2 * std.math.pi * ScrollArea.seat.hz * glass.motion.rate());
+    const at = Fling.settle(state.settle_offset, state.settle_speed, elapsed, 2 * std.math.pi * ScrollArea.feel.seat.hz * glass.motion.rate());
     state.extent = std.math.clamp(target + at.pos, 0, state.range);
     if (glass.motion.off() or (@abs(at.pos) < 0.1 and @abs(at.vel) < 2)) {
         state.extent = target;
