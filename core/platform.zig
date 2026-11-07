@@ -40,6 +40,10 @@ pub var cached_form_override: ?FormFactor = null;
 /// out above it. Written on the UI thread.
 pub var keyboard_inset: f32 = 0;
 
+/// True while an on-screen keyboard is shown. The native backend writes it each frame, on the UI
+/// thread; an app reads it to tell a soft keyboard's Enter from a hardware one's.
+pub var soft_keyboard: bool = false;
+
 /// The person's Layout setting, written by the editor each frame (held while a demo plays).
 pub var cached_layout_mode: form_factor.LayoutMode = .auto;
 
