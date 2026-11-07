@@ -86,8 +86,17 @@ test "pulldown: the calm metric's gaps lie outside every bubble's coverage when 
     }
 }
 
+test "pulldown: each gap square holds a word's top and bottom edge" {
+    const p = bed.pulldownAt(window, 1);
+    for (p.gaps()) |gap| {
+        const top = p.pageRowTop(0);
+        try expect(top > gap.y and top + bed.page_row_h < gap.y + gap.h);
+        try expect(p.pageRowTop(1) > gap.y + gap.h);
+    }
+}
+
 test "pulldown: no neck while a bubble is inside the bar" {
-    for ([_]f32{ 0, 0.25, 0.3 }) |o| {
+    for ([_]f32{ 0, 0.25, 0.3, 0.35, 0.4 }) |o| {
         const p = bed.pulldownAt(window, o);
         const field = bed.pulldownField(p, one);
         for (0..3) |k| {
@@ -121,7 +130,7 @@ test "pulldown: each metric is null exactly where its definition says" {
         try equal(p.o == 1, m.calm != null);
         try equal(p.o >= 0.5, m.edge_ramp_pt != null);
         try equal(p.e_b >= 0.9, m.rim_min != null);
-        try equal(p.e_b < 0.05, m.hidden_dark_max != null);
+        try equal(p.e_b == 0, m.hidden_dark_max != null);
         for (m.neck, 0..) |n, k| if (p.neckPoint(k) == null) try expect(!n);
     }
 }
@@ -131,6 +140,62 @@ test "pulldown scene: the field's blur fades in over at least 20 pt and keeps it
     try expect(0.608 * bed.field_feather_pt >= 20);
     // BlurField.fittedFeather caps the feather under half the field's height, about 600 pt open.
     try expect(bed.field_feather_pt < 600 / 2);
+    // The field calms the page; the menu frost's radius would erase it.
+    try expect(bed.field_blur > 0 and bed.field_blur <= 12);
+}
+
+test "pulldown: each bubble necks to the bar on at least 3 steps, never when open" {
+    var necks: [3]usize = @splat(0);
+    for (0..21) |step| {
+        const p = bed.pulldownAt(window, bed.openAt(step));
+        const field = bed.pulldownField(p, one);
+        for (&necks, 0..) |*n, k| if (bed.neckAt(p, &field, one, k)) {
+            try expect(p.o < 1);
+            n.* += 1;
+        };
+    }
+    for (necks) |n| try expect(n >= 3);
+}
+
+test "pulldown: a bubble on the bar's centre line in the sheet lies merge deep inside the bar" {
+    var seen: usize = 0;
+    for (0..10_001) |i| {
+        const p = bed.pulldownAt(window, @as(f32, @floatFromInt(i)) / 10_000);
+        if (p.e_b == 0) {
+            try equal(2, bed.pulldownField(p, one).len);
+            continue;
+        }
+        const bar_y = p.bar.y + p.bar.h / 2;
+        for (p.bubbles) |b| {
+            if (@abs(b.y + b.h / 2 - bar_y) > 0.05) continue;
+            seen += 1;
+            try expect(p.bar.y + p.bar.h - (b.y + b.h) >= bed.pulldown_merge - 0.05);
+        }
+    }
+    // The bubbles' first frames in the sheet.
+    try expect(seen > 0);
+    try equal(28, bed.bubbleDrop(0.25).d);
+    try equal(0, bed.bubbleDrop(0.25).y);
+}
+
+test "pulldown: the drip has no jump between steps and rests 24 pt below the bar" {
+    for (1..21) |step| {
+        const a = bed.bubbleDrop(bed.openAt(step - 1));
+        const b = bed.bubbleDrop(bed.openAt(step));
+        try expect(@abs(b.y - a.y) <= 16);
+    }
+    var prev = bed.bubbleDrop(0);
+    for (1..1001) |i| {
+        const next = bed.bubbleDrop(@as(f32, @floatFromInt(i)) / 1000);
+        try expect(@abs(next.y - prev.y) < 1 and @abs(next.d - prev.d) < 1);
+        prev = next;
+    }
+    for ([_]f32{ 0.85, 0.9, 1 }) |o| {
+        const d = bed.bubbleDrop(o);
+        try std.testing.expectApproxEqAbs(@as(f32, 24), d.y - 28 - d.d / 2, 0.001);
+    }
+    const p = bed.pulldownAt(window, 1);
+    try std.testing.expectApproxEqAbs(@as(f32, 24), p.bubbles[0].y - (p.bar.y + p.bar.h), 0.001);
 }
 
 test "shadow scene: one step measuring the ring round the drop, inside the bar" {
