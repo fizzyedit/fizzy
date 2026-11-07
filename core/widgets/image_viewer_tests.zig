@@ -97,3 +97,68 @@ test "ImageViewer close button closes it" {
     try std.testing.expect(!viewer.isOpen());
     try std.testing.expectEqual(@as(u32, 0), under_clicks);
 }
+
+test "ImageViewer keeps its close bubble inside a small rect" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 600, .h = 700 } });
+    defer t.deinit();
+    const gpa = std.testing.allocator;
+    const pixels = try solidImage(gpa, 300, 200, .{ 40, 120, 200, 255 });
+    defer gpa.free(pixels);
+    defer viewer.deinit();
+    const prev_content = content;
+    defer content = prev_content;
+    content = .{ .x = 100, .y = 50, .w = 30, .h = 30 };
+    try openTestImage(pixels);
+
+    try std.testing.expect(viewer.isOpen());
+    const inside: dvui.Rect = .cast(content);
+    // Every subwindow over the base one is the viewer's or a bubble of it.
+    const stack = dvui.currentWindow().subwindows.stack.items;
+    try std.testing.expect(stack.len > 1);
+    for (stack[1..]) |sw| {
+        try std.testing.expect(sw.rect.x >= inside.x and sw.rect.y >= inside.y);
+        try std.testing.expect(sw.rect.x + sw.rect.w <= inside.x + inside.w);
+        try std.testing.expect(sw.rect.y + sw.rect.h <= inside.y + inside.h);
+    }
+}
+
+var pair: [2]ImageViewer = .{ .{}, .{} };
+const pair_rects: [2]dvui.Rect.Natural = .{
+    .{ .x = 0, .y = 0, .w = 290, .h = 600 },
+    .{ .x = 300, .y = 0, .w = 290, .h = 600 },
+};
+
+fn pairFrame() !dvui.App.Result {
+    for (&pair, pair_rects) |*v, r| try v.draw(r, .{ .pan_zoom_scheme = .mouse });
+    return .ok;
+}
+
+test "ImageViewer: two under one parent keep their own subwindow and canvas" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 600, .h = 700 } });
+    defer t.deinit();
+    const gpa = std.testing.allocator;
+    const pixels = try solidImage(gpa, 300, 200, .{ 40, 120, 200, 255 });
+    defer gpa.free(pixels);
+    defer for (&pair) |*v| v.deinit();
+
+    pair = .{ .{}, .{} };
+    for (&pair) |*v| v.open(.{ .source = .{ .pixels = .{ .rgba = pixels, .width = 300, .height = 200 } }, .width = 300, .height = 200 });
+    try dvui.testing.settle(pairFrame);
+
+    try std.testing.expect(pair[0].isOpen() and pair[1].isOpen());
+    try std.testing.expect(pair[0].view.canvas.id != pair[1].view.canvas.id);
+    const stack = dvui.currentWindow().subwindows.stack.items;
+    for (pair_rects) |r| {
+        const found = for (stack) |sw| {
+            if (std.meta.eql(sw.rect, @as(dvui.Rect, .cast(r)))) break true;
+        } else false;
+        try std.testing.expect(found);
+    }
+
+    // One closing fades out on its own: the other's fade and image are its own.
+    pair[1].close();
+    for (0..3) |_| _ = try dvui.testing.step(pairFrame);
+    try dvui.testing.settle(pairFrame);
+    try std.testing.expect(pair[0].isOpen());
+    try std.testing.expect(!pair[1].isOpen());
+}

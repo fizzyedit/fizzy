@@ -33,6 +33,8 @@ const fade_us = 180_000;
 const fade_key = "image_viewer_fade";
 const backdrop_opacity = 0.92;
 const close_inset: f32 = 10;
+/// The smallest close bubble drawn, in points.
+const close_min_size: f32 = 24;
 
 /// Shows `image`, fitted to the rect until the person moves it.
 pub fn open(self: *ImageViewer, image: ImageView.Image) void {
@@ -57,10 +59,15 @@ pub fn close(self: *ImageViewer) void {
 pub fn draw(self: *ImageViewer, rect: dvui.Rect.Natural, opts: ImageView.Options) !void {
     const image = self.image orelse return;
 
+    // Keyed by the state's address, so two viewers under one parent keep their own subwindow,
+    // fade and canvas. State that moves starts its fade over.
     var fw: dvui.FloatingWidget = undefined;
-    fw.init(@src(), .{}, .{ .rect = .cast(rect), .expand = .none, .background = false });
+    fw.init(@src(), .{}, .{ .rect = .cast(rect), .expand = .none, .background = false, .id_extra = @intFromPtr(self) });
     defer fw.deinit();
     const id = fw.data().id;
+    // A floating widget clips to the window; what the viewer draws stays in its rect.
+    const prev_clip = dvui.clip(fw.data().rectScale().r);
+    defer dvui.clipSet(prev_clip);
 
     if (self.fade_pending) {
         self.fade_pending = false;
@@ -84,15 +91,20 @@ pub fn draw(self: *ImageViewer, rect: dvui.Rect.Natural, opts: ImageView.Options
     self.view.canvas.id = id.update("canvas");
     try self.view.draw(image, .{ .pan_zoom_scheme = opts.pan_zoom_scheme, .fit_button = true });
 
+    // The bubble floats clipped only to the screen, so it is sized to stay inside the rect, and
+    // left out where it would be too small to hit: Esc still closes.
     const pad = fw.data().options.paddingGet();
-    const size = glass_button.size;
-    const close_rect: dvui.Rect = .{
-        .x = rect.x + rect.w - pad.w - close_inset - size,
-        .y = rect.y + pad.y + close_inset,
-        .w = size,
-        .h = size,
-    };
-    if (glass_button.bubble(@src(), close_rect, icons.tvg.lucide.x, .{ .label = "Close" })) self.close();
+    const room = @min(rect.w - pad.x - pad.w, rect.h - pad.y - pad.h) - 2 * close_inset;
+    const size = @min(glass_button.size, room);
+    if (size >= close_min_size) {
+        const close_rect: dvui.Rect = .{
+            .x = rect.x + rect.w - pad.w - close_inset - size,
+            .y = rect.y + pad.y + close_inset,
+            .w = size,
+            .h = size,
+        };
+        if (glass_button.bubble(@src(), close_rect, icons.tvg.lucide.x, .{ .label = "Close" })) self.close();
+    }
 
     // Drawn last, so an Esc still unhandled here was wanted by nothing under it.
     for (dvui.events()) |*e| {
