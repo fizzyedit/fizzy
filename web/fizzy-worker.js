@@ -224,6 +224,9 @@ const fizzyImports = (target) => ({
     fizzy_web_now_real_ms() {
         return Date.now();
     },
+    fizzy_clipboard_can_read() {
+        return globalThis.isSecureContext === true && !!globalThis.navigator?.clipboard;
+    },
     fizzy_web_focus_epoch() { return focusEpoch; },
     fizzy_web_storage_get(keyPtr, keyLen, bufPtr, bufLen) {
         const value = storageGet(fileKey(str(keyPtr, keyLen)));
@@ -656,6 +659,8 @@ async function start(init) {
     imports.wasm_clipboardTextSet = (ptr, len) => {
         if (len > 0) postMessage({ type: "clipboard", text: app.stringFromPointer(ptr, len) });
     };
+    // Only the page reads the clipboard; its text comes back as `{type: "text"}`.
+    imports.wasm_clipboardRead = () => postMessage({ type: "clipboardRead" });
 
     const wasmImports = {
         dvui: imports,

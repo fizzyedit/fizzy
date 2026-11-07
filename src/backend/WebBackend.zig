@@ -266,6 +266,7 @@ pub const wasm = if (!builtin.is_test) struct {
         data_len: usize,
     ) void;
     pub extern "dvui" fn wasm_clipboardTextSet(ptr: [*]const u8, len: usize) void;
+    pub extern "dvui" fn wasm_clipboardRead() void;
 
     // NOTE: bool in extern becomes 0 and 1 in js, which is falsy and truthy respectively
     pub extern "dvui" fn wasm_open_file_picker(
@@ -369,6 +370,7 @@ pub const wasm = if (!builtin.is_test) struct {
     }
     pub fn wasm_download_data(_: [*]const u8, _: usize, _: [*]const u8, _: usize) void {}
     pub fn wasm_clipboardTextSet(_: [*]const u8, _: usize) void {}
+    pub fn wasm_clipboardRead() void {}
 
     pub fn wasm_open_file_picker(_: u64, _: [*]const u8, _: usize, _: bool) void {}
     pub fn wasm_get_number_of_files_available(_: u64) usize {
@@ -1192,17 +1194,19 @@ pub fn textInputRect(self: *WebBackend, rect: ?dvui.Rect.Natural) void {
     }
 }
 
+/// Always "": a browser hands over clipboard text only asynchronously. A keyboard paste is the
+/// browser's own (it puts the text in the hidden input, whose beforeinput we see as typed text),
+/// so a frame holding a key-down of the `paste` bind asks for nothing. Any other paste (the touch
+/// menu, a field's right-click Paste) asks the page to read the clipboard; the text arrives on a
+/// later frame as a text event and lands where the caret is then, normally the same field, since
+/// the menu returns focus to it.
 pub fn clipboardText(_: *WebBackend) ![]const u8 {
-    // Current strategy is to return nothing:
-    // - let the browser continue with the paste operation
-    // - puts the text into the hidden_input
-    // - fires the "beforeinput" event
-    // - we see as normal text input
-    //
-    // Problem is that we can't initiate a paste, so our touch popup menu paste
-    // will do nothing.  I think this could be fixed in the future once
-    // browsers are all implementing the navigator.Clipboard.readText()
-    // function.
+    for (dvui.events()) |*e| {
+        if (e.evt != .key) continue;
+        const ke = e.evt.key;
+        if (ke.action == .down and ke.matchBind("paste")) return "";
+    }
+    wasm.wasm_clipboardRead();
     return "";
 }
 
