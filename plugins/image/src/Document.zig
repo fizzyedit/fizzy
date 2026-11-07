@@ -1,4 +1,4 @@
-//! A single open image document: path, decoded pixels, and per-document canvas state.
+//! A single open image document: path, decoded pixels, and per-document view state.
 const std = @import("std");
 const builtin = @import("builtin");
 const dvui = @import("dvui");
@@ -6,8 +6,6 @@ const core = @import("core");
 const sdk = @import("fizzy_sdk");
 
 const is_wasm = builtin.target.cpu.arch == .wasm32;
-
-const CanvasWidget = core.widgets.CanvasWidget;
 
 const Document = @This();
 
@@ -22,8 +20,7 @@ height: u32,
 /// Every frame, when the file has more than one. The view advances `frame` on its own timer.
 animation: ?core.image.Animation = null,
 frame: usize = 0,
-checkerboard_tile: ?dvui.Texture = null,
-canvas: CanvasWidget = .{},
+view: core.widgets.ImageView = .{},
 
 pub fn fromBytes(path: []const u8, bytes: []const u8) !Document {
     const gpa = sdk.allocator();
@@ -91,7 +88,7 @@ pub fn isDirty(_: *const Document) bool {
 
 pub fn save(_: *Document) !void {}
 
-/// Re-decode pixels from `path`, keeping id/path/grouping/canvas. Used when the file
+/// Re-decode pixels from `path`, keeping id/path/grouping/view. Used when the file
 /// changes on disk while this tab is open.
 pub fn reloadFromDisk(self: *Document) !void {
     if (comptime is_wasm) return error.Unsupported;
@@ -102,10 +99,9 @@ pub fn reloadFromDisk(self: *Document) !void {
     const size = core.image.size(decoded.source);
 
     self.freePixels();
-    if (self.checkerboard_tile) |t| {
-        dvui.textureDestroyLater(t);
-        self.checkerboard_tile = null;
-    }
+    // Drops the checkerboard tile; the canvas is installed only inside a draw, so its zoom and
+    // pan survive the reload.
+    self.view.deinit();
 
     self.source = decoded.source;
     self.animation = decoded.animation;
@@ -118,6 +114,5 @@ pub fn deinit(self: *Document) void {
     const gpa = sdk.allocator();
     self.freePixels();
     gpa.free(self.path);
-    if (self.checkerboard_tile) |t| dvui.textureDestroyLater(t);
-    if (self.canvas.installed) self.canvas.deinit();
+    self.view.deinit();
 }

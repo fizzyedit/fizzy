@@ -4,9 +4,9 @@
 const std = @import("std");
 const sdk = @import("fizzy_sdk");
 const dvui = @import("dvui");
+const core = @import("core");
 const State = @import("src/State.zig");
 const Document = @import("src/Document.zig");
-const ImageView = @import("src/ImageView.zig");
 const DocHandle = sdk.DocHandle;
 
 /// Injected at build time from `plugin.zig.zon` (see `static/integration.zig` /
@@ -82,7 +82,7 @@ fn cmdFitView(_: *anyopaque) anyerror!void {
     const handle = sdk.host().activeDoc() orelse return;
     if (handle.owner != &plugin) return;
     const doc = docFrom(handle) orelse return;
-    doc.canvas.fitToView();
+    doc.view.canvas.fitToView();
 }
 fn cmdFitViewEnabled(_: *anyopaque) bool {
     const handle = sdk.host().activeDoc() orelse return false;
@@ -190,7 +190,7 @@ fn setDocumentPath(_: *anyopaque, handle: DocHandle, path: []const u8) anyerror!
 }
 fn bindDocumentToPane(_: *anyopaque, handle: DocHandle, canvas_id: dvui.Id, _: *anyopaque, _: bool) void {
     const doc = docFrom(handle) orelse return;
-    doc.canvas.id = canvas_id;
+    doc.view.canvas.id = canvas_id;
 }
 fn documentHasNativeExtension(_: *anyopaque, _: DocHandle) bool {
     return true;
@@ -201,7 +201,32 @@ fn documentHasRecognizedSaveExtension(_: *anyopaque, _: DocHandle) bool {
 
 fn drawDocument(_: *anyopaque, handle: DocHandle) anyerror!void {
     const doc = docFrom(handle) orelse return;
-    try ImageView.draw(doc);
+    advanceAnimation(doc);
+    try doc.view.draw(.{ .source = doc.source, .width = doc.width, .height = doc.height, .frame = doc.frame }, .{ .pan_zoom_scheme = canvasPanZoomScheme() });
+}
+
+/// Step an animation to whichever frame is due, and arm a timer for the next one.
+///
+/// The timer is dvui's own: it wakes the window exactly when the frame's delay elapses, so an
+/// idle viewer with a GIF open redraws at the GIF's rate and not at all otherwise. A frame
+/// that is *overdue* (the window was hidden, a long frame) is not skipped ahead — the next one
+/// simply shows now, which is what every browser does with a stalled GIF.
+fn advanceAnimation(doc: *Document) void {
+    const anim = &(doc.animation orelse return);
+    const id = doc.view.canvas.id.update("gif frame");
+    if (dvui.timerGet(id)) |remaining| {
+        if (remaining > 0) return;
+        doc.frame = (doc.frame + 1) % anim.frames.len;
+        doc.source = anim.frames[doc.frame];
+    }
+    dvui.timer(id, @intCast(@as(u64, anim.delays_ms[doc.frame]) * std.time.us_per_ms));
+}
+
+fn canvasPanZoomScheme() core.widgets.CanvasWidget.PanZoomScheme {
+    return switch (sdk.host().panZoomScheme()) {
+        .mouse => .mouse,
+        .trackpad => .trackpad,
+    };
 }
 
 fn infobarEntries(_: *anyopaque, active_doc: ?DocHandle) []const sdk.infobar.Entry {
