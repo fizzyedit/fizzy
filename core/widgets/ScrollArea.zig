@@ -412,6 +412,16 @@ fn positionY(self: *const ScrollArea) f32 {
     return self.si.viewport.y - if (self.lead) |piece| (if (piece.after) 0 else piece.extent(piece.ctx)) else @as(f32, 0);
 }
 
+/// Where the content is drawn along `axis`: its position in range plus the band past an edge.
+fn drawnAt(self: *const ScrollArea, axis: dvui.enums.Direction) f32 {
+    return if (axis == .horizontal) self.si.viewport.x + self.touch.over.x else self.positionY() + self.touch.over.y;
+}
+
+/// Ease `over` back to the edge at `low` (or the end, past it) from `vel`, starting this frame.
+fn returnFrom(seg: *Segment, over: f32, low: f32, vel: f32) void {
+    seg.* = .{ .kind = .settle, .low = low, .start_ns = dvui.frameTimeNS(), .origin = over, .vel = vel, .end = over > 0 };
+}
+
 fn lowY(self: *const ScrollArea) f32 {
     return if (self.lead) |piece| (if (piece.after) 0 else -piece.range(piece.ctx)) else 0;
 }
@@ -456,23 +466,33 @@ fn glideStep(self: *ScrollArea) void {
         const to = target.* orelse continue;
         const pos = if (horizontal) self.si.viewport.x else self.positionY();
         const at = if (horizontal) &t.glide_at.x else &t.glide_at.y;
+        const seg = if (horizontal) &t.seg_x else &t.seg_y;
+        const over = if (horizontal) &t.over.x else &t.over.y;
+        const low = if (horizontal) @as(f32, 0) else self.lowY();
+        const high = if (horizontal) self.si.scrollMax(axis) else self.pageMax();
         if (@abs(pos - at.*) > 0.01) {
             target.* = null;
+            // A band the glide was carrying home returns on its own.
+            if (over.* != 0 and seg.kind == .none) returnFrom(seg, over.*, low, 0);
             continue;
         }
-        const seg = if (horizontal) t.seg_x else t.seg_y;
         if (seg.kind != .none or (!horizontal and t.seating)) continue;
-        const clamped = std.math.clamp(to, if (horizontal) 0 else self.lowY(), if (horizontal) self.si.scrollMax(axis) else self.pageMax());
-        var next = if (glass.motion.off()) clamped else pos + (clamped - pos) * (1 - @exp(-dt * glass.motion.rate() / glide_tau_s));
+        const clamped = std.math.clamp(to, low, high);
+        // A glide started during a return starts where the content is drawn, past the edge.
+        const drawn = pos + over.*;
+        var next = if (glass.motion.off()) clamped else drawn + (clamped - drawn) * (1 - @exp(-dt * glass.motion.rate() / glide_tau_s));
         const done = @abs(clamped - next) <= 0.5;
         if (done) next = clamped;
+        const in_range = std.math.clamp(next, low, high);
         if (horizontal) {
-            self.scrollBy(.{ .x = next - pos });
+            self.scrollBy(.{ .x = in_range - pos });
         } else {
             const before = self.si.viewport.y;
-            _ = self.moveY(next - pos, false);
+            _ = self.moveY(in_range - pos, false);
             if (self.area.scroll.?.init_opts.user_scroll) |us| us.y += self.si.viewport.y - before;
         }
+        // After the move: without a lead, `moveY` redraws the band from the finger's pull.
+        over.* = next - in_range;
         if (done) {
             target.* = null;
             self.settle(horizontal, !horizontal);
@@ -501,9 +521,11 @@ fn wheelEvent(self: *ScrollArea, e: *dvui.Event) void {
         if (dir == .horizontal) self.touch.glide_x = null else self.touch.glide_y = null;
     }
     const position = if (dir == .vertical) self.positionY() else self.si.viewport.x;
-    const segment = if (dir == .vertical) self.touch.seg_y else self.touch.seg_x;
-    const over = if (dir == .vertical) self.touch.over.y else self.touch.over.x;
-    const at = position + if (segment.kind == .settle) over else @as(f32, 0);
+    const seg = if (dir == .vertical) &self.touch.seg_y else &self.touch.seg_x;
+    const segment = seg.*;
+    const over = if (dir == .vertical) &self.touch.over.y else &self.touch.over.x;
+    // Input starts where the content is drawn: a return's band, or one a glide still carries.
+    const at = self.drawnAt(dir);
     const low = if (dir == .vertical) self.lowY() else 0;
     const max = if (dir == .vertical) self.pageMax() else self.si.scrollMax(dir);
     if (max <= low or (by < 0 and at <= low) or (by > 0 and at >= max)) return;
@@ -517,27 +539,30 @@ fn wheelEvent(self: *ScrollArea, e: *dvui.Event) void {
     dvui.timer(self.data().id, wheel_rest_ms * 1000);
     self.touch.x.cancel();
     self.touch.y.cancel();
-    // Input starts at `at`, including the return's drawn offset before clearing it.
-    if (segment.kind == .settle) {
-        if (dir == .horizontal) {
-            self.touch.seg_x = .{};
-            self.touch.over.x = 0;
-        } else {
-            self.touch.seg_y = .{};
-            self.touch.over.y = 0;
-        }
-    }
+    // The band stays drawn where it is; the input below moves it from there.
+    const w = 2 * std.math.pi * @as(f64, tuning.edge.hz) * glass.motion.rate();
+    const return_vel: f32 = if (segment.kind == .settle and w > 0)
+        Fling.settle(segment.origin, segment.vel, @as(f64, @floatFromInt(dvui.frameTimeNS() - segment.start_ns)) / std.time.ns_per_s, w).vel
+    else
+        0;
+    if (segment.kind == .settle) seg.* = .{};
     if (self.touch.seg_x.kind == .coast) self.touch.seg_x = .{};
     if (self.touch.seg_y.kind == .coast) self.touch.seg_y = .{};
     self.touch.seating = false;
     if (trackpad) {
-        const delta = std.math.clamp(at + by, low, max) - position;
-        if (dir == .vertical) _ = self.moveY(delta, false) else self.si.scrollByOffset(dir, delta);
+        const to = at + by;
+        const in_range = std.math.clamp(to, low, max);
+        const before = if (dir == .vertical) self.si.viewport.y else self.si.viewport.x;
+        if (dir == .vertical) _ = self.moveY(in_range - position, false) else self.si.scrollByOffset(dir, in_range - position);
+        // A delta smaller than the band leaves the rest of it to return from the speed it had.
+        over.* = to - in_range;
+        if (over.* != 0) returnFrom(seg, over.*, low, return_vel);
         if (c.init_opts.user_scroll) |us| {
-            if (dir == .vertical) us.y += by else us.x += by;
+            if (dir == .vertical) us.y += self.si.viewport.y - before else us.x += self.si.viewport.x - before;
         }
     } else {
-        if (segment.kind == .settle) self.glideTo(dir, at + by) else self.glideBy(dir, by);
+        const glide = if (dir == .vertical) self.touch.glide_y else self.touch.glide_x;
+        self.glideTo(dir, (if (segment.kind == .settle) at else glide orelse at) + by);
     }
     dvui.refresh(null, @src(), self.data().id);
 }
@@ -1664,6 +1689,72 @@ test "wheel glide increments during an overscroll return move the page" {
     try std.testing.expectEqual(@as(f32, 0), t_over_y);
     try wheelFrames(60);
     try std.testing.expectApproxEqAbs(destination, t_viewport_y, 0.5);
+    try std.testing.expect(!t_moving);
+}
+
+/// Pull past the top and let go, then run the return until it is drawn within 30 points of the
+/// top. Returns where the content is drawn in the last frame, in points.
+fn returnAt30() !f32 {
+    try wheelStart();
+    try dragBy(100, 10, true, 0);
+    try frameAfter(100);
+    try lift();
+    try frameAfter(16);
+    try std.testing.expect(t_over_y < -30);
+    while (t_over_y < -30) try frameAfter(4);
+    try frameAfter(0);
+    try std.testing.expect(t_over_y > -31 and t_over_y < -25);
+    try std.testing.expect(t_moving);
+    return t_raw_y / t_draw_scale;
+}
+
+test "a trackpad delta smaller than the return's band moves the content by the delta" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    const before = try returnAt30();
+    try wheel(5, .trackpad);
+    try frameAfter(0);
+    try frameAfter(0);
+    try std.testing.expectApproxEqAbs(before - 5, t_raw_y / t_draw_scale, 0.001);
+    try std.testing.expect(t_over_y < 0);
+    // The rest of the band still returns to the edge.
+    try wheelFrames(60);
+    try std.testing.expectEqual(@as(f32, 0), t_over_y);
+    try std.testing.expectEqual(@as(f32, 0), t_viewport_y);
+    try std.testing.expect(!t_moving);
+}
+
+test "a mouse notch during a return glides from where the content is drawn" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    const before = try returnAt30();
+    const destination = t_viewport_y + t_over_y + 80;
+    try wheel(80, .mouse);
+    try frameAfter(16);
+    try frameAfter(0);
+    // The first glide frame covers part of one 80-point step, from the drawn position.
+    const step = 80 * (1 - @exp(-0.016 / glide_tau_s));
+    const moved = before - t_raw_y / t_draw_scale;
+    try std.testing.expect(moved > 0 and moved <= step + 0.01);
+    try wheelFrames(60);
+    try std.testing.expectApproxEqAbs(destination, t_viewport_y, 0.5);
+    try std.testing.expectEqual(@as(f32, 0), t_over_y);
+    try std.testing.expect(!t_moving);
+}
+
+test "a trackpad delta interrupting a mouse glide during a return moves the content by the delta" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    const before = try returnAt30();
+    // In one frame, so the glide has not advanced: the band is still drawn where the return left it.
+    try wheel(80, .mouse);
+    try wheel(5, .trackpad);
+    try frameAfter(0);
+    try frameAfter(0);
+    try std.testing.expectApproxEqAbs(before - 5, t_raw_y / t_draw_scale, 0.001);
+    try wheelFrames(60);
+    try std.testing.expectEqual(@as(f32, 0), t_over_y);
+    try std.testing.expectEqual(@as(f32, 0), t_viewport_y);
     try std.testing.expect(!t_moving);
 }
 
