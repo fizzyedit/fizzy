@@ -1,5 +1,6 @@
 const std = @import("std");
 const dvui = @import("dvui");
+const core = @import("core");
 const bed = @import("GlassTestbed.zig");
 const expect = std.testing.expect;
 const equal = std.testing.expectEqual;
@@ -67,6 +68,62 @@ test "ghost maximum ignores its hole" {
     const ghost = bed.ghostMax(&a, &b, 16, .{ .w = 16, .h = 16 }, .{ .x = 8, .y = 8, .w = 1, .h = 1 });
     try equal(3, ghost.x);
     try equal(3, ghost.y);
+}
+
+const window: dvui.Rect = .{ .w = 1280, .h = 1024 };
+const one: dvui.RectScale = .{ .s = 1 };
+
+test "pulldown: the calm metric's gaps lie outside every bubble's coverage when open" {
+    const p = bed.pulldownAt(window, 1);
+    const field = bed.pulldownField(p, one);
+    for (p.gaps()) |gap| {
+        for (p.bubbles) |b| try expect(gap.intersect(b).empty());
+        var y = gap.y;
+        while (y <= gap.y + gap.h) : (y += 1) {
+            var x = gap.x;
+            while (x <= gap.x + gap.w) : (x += 1) try equal(0, field.sampleWith(.{ .x = x, .y = y }, core.glass_look.inApp(1)).coverage);
+        }
+    }
+}
+
+test "pulldown: no neck while a bubble is inside the bar" {
+    for ([_]f32{ 0, 0.25, 0.3 }) |o| {
+        const p = bed.pulldownAt(window, o);
+        const field = bed.pulldownField(p, one);
+        for (0..3) |k| {
+            try expect(p.bubbles[k].y <= p.bar.y + p.bar.h);
+            try expect(!bed.neckAt(p, &field, one, k));
+        }
+    }
+}
+
+test "pulldown: each metric is null exactly where its definition says" {
+    const gpa = std.testing.allocator;
+    const w: usize = 1280;
+    const len = w * 1024 * 4;
+    const a = try gpa.alloc(u8, len);
+    defer gpa.free(a);
+    const bare = try gpa.alloc(u8, len);
+    defer gpa.free(bare);
+    for (0..len / 4) |i| {
+        const x = i % w;
+        const y = i / w;
+        for (0..3) |c| {
+            bare[i * 4 + c] = @intCast((x * 7 + y * 13) % 256);
+            a[i * 4 + c] = @intCast((x * 3 + y * 5) % 256);
+        }
+        bare[i * 4 + 3] = 255;
+        a[i * 4 + 3] = 255;
+    }
+    for (0..bed.steps(.pulldown)) |step| {
+        const p = bed.pulldownAt(window, bed.openAt(step));
+        const m = bed.measure(p, one, .{ .a = a, .b = bare, .bare = bare, .width = w }, 8);
+        try equal(p.o == 1, m.calm != null);
+        try equal(p.o >= 0.5, m.edge_ramp_pt != null);
+        try equal(p.e_b >= 0.9, m.rim_min != null);
+        try equal(p.e_b < 0.05, m.hidden_dark_max != null);
+        for (m.neck, 0..) |n, k| if (p.neckPoint(k) == null) try expect(!n);
+    }
 }
 
 test "shadow scene: one step measuring the ring round the drop, inside the bar" {

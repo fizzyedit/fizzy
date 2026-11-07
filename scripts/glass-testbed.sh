@@ -34,11 +34,22 @@ import json, sys
 with open(sys.argv[1]) as f:
     rows = [json.loads(line) for line in f]
 if sys.argv[2] == 'pulldown':
-    # Steps after the first whose frame read more than one capture, and the nearest-rank p95 frame time.
+    # Steps after the first whose frame read more than one capture, each metric's worst, the
+    # steps each bubble had a neck on, and the nearest-rank p95 frame time.
     over = [row['step'] for row in rows if row['step'] > 0 and row['captures'] > 1]
     ms = sorted(row['frame_ms'] for row in rows)
     p95 = ms[max(-(-len(ms) * 95 // 100), 1) - 1]
-    print(json.dumps({'scene': 'pulldown', 'rows': len(rows), 'steps_captures_over_1': len(over), 'over_steps': over, 'frame_ms_p95': p95}))
+    def worst(key, pick):
+        values = [row[key] for row in rows if row[key] is not None]
+        return pick(values) if values else None
+    print(json.dumps({
+        'scene': 'pulldown', 'rows': len(rows),
+        'steps_captures_over_1': len(over), 'over_steps': over,
+        'calm_min': worst('calm', min), 'edge_ramp_pt_min': worst('edge_ramp_pt', min),
+        'rim_min': worst('rim_min', min), 'hidden_dark_max': worst('hidden_dark_max', max),
+        'neck_steps': [sum(row['neck'][k] for row in rows) for k in range(3)],
+        'frame_ms_p95': p95,
+    }))
 else:
     key = {'pair': 'ghost_max', 'shadow': 'dark_max'}[sys.argv[2]]
     print(json.dumps(max(rows, key=lambda row: row[key])))
