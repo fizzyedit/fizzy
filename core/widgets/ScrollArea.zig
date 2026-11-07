@@ -261,8 +261,8 @@ pub fn initWith(src: std.builtin.SourceLocation, init_opts: dvui.ScrollAreaWidge
     }
     // A bounce ends its coast past an edge; only in-range axes settle onto pixels.
     self.settle(was_coasting_x and t.seg_x.kind != .coast and t.over.x == 0, (was_coasting_y and t.seg_y.kind != .coast or was_seating and !t.seating) and t.over.y == 0);
-    if (was_moving_x) t.glide_at.x = self.si.viewport.x;
-    if (was_moving_y) t.glide_at.y = self.positionY();
+    if (was_moving_x) t.glide_at.x = self.drawnAt(.horizontal);
+    if (was_moving_y) t.glide_at.y = self.drawnAt(.vertical);
     if (c.init_opts.frame_viewport == null) {
         c.frame_viewport = self.si.viewport.topLeft().plus(t.over);
         if (self.lead) |piece| {
@@ -420,23 +420,28 @@ fn pageMax(self: *const ScrollArea) f32 {
     return @max(0, self.si.scrollMax(.vertical) - if (self.lead != null) self.touch.pad else @as(f32, 0));
 }
 
+/// Where `axis` is drawn: the viewport (the page's, along a lead) plus a return's band.
+fn drawnAt(self: *const ScrollArea, axis: dvui.enums.Direction) f32 {
+    return if (axis == .horizontal) self.si.viewport.x + self.touch.over.x else self.positionY() + self.touch.over.y;
+}
+
 /// Seconds for a glide to cover 63% of what is left; about 95% in 150 ms.
 pub const glide_tau_s: f32 = 0.05;
 
-/// Slide to `to` along `axis`, clamped to its range, from the next frame's `init`.
-/// Vertical targets include the lead: page offset minus its extent.
+/// Slide to `to` along `axis`, clamped to its range, from the next frame's `init`, starting where
+/// the content is drawn. Vertical targets include the lead: page offset minus its extent.
 pub fn glideTo(self: *ScrollArea, axis: dvui.enums.Direction, to: f32) void {
     const target = if (axis == .horizontal) &self.touch.glide_x else &self.touch.glide_y;
     target.* = std.math.clamp(to, if (axis == .vertical) self.lowY() else 0, if (axis == .vertical) self.pageMax() else self.si.scrollMax(axis));
-    if (axis == .horizontal) self.touch.glide_at.x = self.si.viewport.x else self.touch.glide_at.y = self.positionY();
+    (if (axis == .horizontal) &self.touch.glide_at.x else &self.touch.glide_at.y).* = self.drawnAt(axis);
     dvui.refresh(null, @src(), self.data().id);
 }
 
-/// Add `by` to the glide's target (the viewport when none runs), clamped. Notches accumulate on the target.
+/// Add `by` to the glide's target (where the content is drawn when none runs), clamped. Notches
+/// accumulate on the target.
 pub fn glideBy(self: *ScrollArea, axis: dvui.enums.Direction, by: f32) void {
     const target = if (axis == .horizontal) self.touch.glide_x else self.touch.glide_y;
-    const pos = if (axis == .horizontal) self.si.viewport.x else self.positionY();
-    self.glideTo(axis, (target orelse pos) + by);
+    self.glideTo(axis, (target orelse self.drawnAt(axis)) + by);
 }
 
 /// Whether either axis is gliding.
@@ -454,7 +459,7 @@ fn glideStep(self: *ScrollArea) void {
         const horizontal = axis == .horizontal;
         const target = if (horizontal) &t.glide_x else &t.glide_y;
         const to = target.* orelse continue;
-        const pos = if (horizontal) self.si.viewport.x else self.positionY();
+        const pos = self.drawnAt(axis);
         const at = if (horizontal) &t.glide_at.x else &t.glide_at.y;
         if (@abs(pos - at.*) > 0.01) {
             target.* = null;
@@ -466,18 +471,27 @@ fn glideStep(self: *ScrollArea) void {
         var next = if (glass.motion.off()) clamped else pos + (clamped - pos) * (1 - @exp(-dt * glass.motion.rate() / glide_tau_s));
         const done = @abs(clamped - next) <= 0.5;
         if (done) next = clamped;
+        // A glide that took over a return starts past the edge: it draws the band in first.
+        var by = next - pos;
+        const over = if (horizontal) &t.over.x else &t.over.y;
+        if (over.* != 0) {
+            const was = over.*;
+            over.* = if (was < 0) @min(was + by, 0) else @max(was + by, 0);
+            by -= over.* - was;
+        }
         if (horizontal) {
-            self.scrollBy(.{ .x = next - pos });
-        } else {
+            self.scrollBy(.{ .x = by });
+        } else if (by != 0) {
+            // `drag` derives the band from `pull`, so only travel left past the band moves the page.
             const before = self.si.viewport.y;
-            _ = self.moveY(next - pos, false);
+            _ = self.moveY(by, false);
             if (self.area.scroll.?.init_opts.user_scroll) |us| us.y += self.si.viewport.y - before;
         }
         if (done) {
             target.* = null;
             self.settle(horizontal, !horizontal);
         } else dvui.refresh(null, @src(), self.data().id);
-        at.* = if (horizontal) self.si.viewport.x else self.positionY();
+        at.* = self.drawnAt(axis);
     }
 }
 
@@ -515,25 +529,32 @@ fn wheelEvent(self: *ScrollArea, e: *dvui.Event) void {
     dvui.timer(self.data().id, wheel_rest_ms * 1000);
     self.touch.x.cancel();
     self.touch.y.cancel();
-    // Input starts at `at`, including the return's drawn offset before clearing it.
-    if (segment.kind == .settle) {
-        if (dir == .horizontal) {
-            self.touch.seg_x = .{};
-            self.touch.over.x = 0;
-        } else {
-            self.touch.seg_y = .{};
-            self.touch.over.y = 0;
-        }
-    }
+    // Input starts at `at`, where the return draws the content, so its band never jumps away.
+    const seg = if (dir == .vertical) &self.touch.seg_y else &self.touch.seg_x;
+    const band = if (dir == .vertical) &self.touch.over.y else &self.touch.over.x;
+    if (segment.kind == .settle) seg.* = .{};
     if (self.touch.seg_x.kind == .coast) self.touch.seg_x = .{};
     if (self.touch.seg_y.kind == .coast) self.touch.seg_y = .{};
     self.touch.seating = false;
     if (trackpad) {
-        const delta = std.math.clamp(at + by, low, max) - position;
-        if (dir == .vertical) _ = self.moveY(delta, false) else self.si.scrollByOffset(dir, delta);
-        if (c.init_opts.user_scroll) |us| {
-            if (dir == .vertical) us.y += by else us.x += by;
+        const to = at + by;
+        const before = self.si.viewport.topLeft();
+        if (segment.kind == .settle and (if (over < 0) to < low else to > max)) {
+            // Still past the edge: the rest returns from here at the return's speed, short of
+            // one that would carry it across the edge into a coast.
+            band.* = if (over < 0) to - low else to - max;
+            const now = dvui.frameTimeNS();
+            const w = 2 * std.math.pi * @as(f64, tuning.edge.hz) * glass.motion.rate();
+            const elapsed = @as(f64, @floatFromInt(now - segment.start_ns)) / std.time.ns_per_s;
+            const limit: f32 = @floatCast(w * @abs(band.*));
+            const vel = std.math.clamp(Fling.settle(segment.origin, segment.vel, elapsed, w).vel, -limit, limit);
+            seg.* = .{ .kind = .settle, .start_ns = now, .origin = band.*, .low = segment.low, .vel = vel, .end = band.* > 0 };
+        } else {
+            band.* = 0;
+            const delta = std.math.clamp(to, low, max) - position;
+            if (dir == .vertical) _ = self.moveY(delta, false) else self.si.scrollByOffset(dir, delta);
         }
+        if (c.init_opts.user_scroll) |us| us.* = us.plus(self.si.viewport.topLeft().diff(before));
     } else {
         if (segment.kind == .settle) self.glideTo(dir, at + by) else self.glideBy(dir, by);
     }
@@ -1007,6 +1028,9 @@ var t_peak: f32 = 0;
 var t_snap: ?Snap = null;
 /// Viewport before deinit handles wheel events, written by testFrame on the test thread.
 var t_wheel_origin: f32 = 0;
+/// Set by return tests on the test thread: start a top or bottom return this far past the edge,
+/// from rest, after the next frame's layout.
+var t_return_from: ?f32 = null;
 
 fn testFrame() !dvui.App.Result {
     if (t_motion_off) glass.motion.publish(0, 0.5, false, false, 1);
@@ -1026,6 +1050,11 @@ fn testFrame() !dvui.App.Result {
         if (t_glide_by) |by| scroll.glideBy(.vertical, by);
         t_glide_to = null;
         t_glide_by = null;
+        if (t_return_from) |from| {
+            scroll.touch.seg_y = .{ .kind = .settle, .start_ns = dvui.frameTimeNS(), .origin = from, .end = from > 0 };
+            scroll.touch.over.y = from;
+        }
+        t_return_from = null;
         t_moving = scroll.touch.anyMoving();
         // Read the final viewport after the area's event handling and edge correction.
         const si = scroll.si;
@@ -1658,6 +1687,48 @@ test "wheel glide increments during an overscroll return move the page" {
     try wheelFrames(60);
     try std.testing.expectApproxEqAbs(destination, t_viewport_y, 0.5);
     try std.testing.expect(!t_moving);
+}
+
+/// A top return 30 points past the edge, drawn and not yet moved. Returns where the child is drawn.
+fn returnFromTop() !f32 {
+    try wheelStart();
+    t_return_from = -30;
+    try frameAfter(0);
+    try frameAfter(0);
+    try std.testing.expectEqual(@as(f32, -30), t_over_y);
+    return t_raw_y / t_draw_scale;
+}
+
+test "a trackpad delta smaller than the return's band moves the drawn page by the delta" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    const before = try returnFromTop();
+    try wheel(5, .trackpad);
+    try frameAfter(0);
+    try frameAfter(0);
+    const moved = before - t_raw_y / t_draw_scale;
+    try std.testing.expect(moved > 0 and moved <= 5.001);
+    try std.testing.expectApproxEqAbs(@as(f32, -25), t_over_y, 0.001);
+    // What is left still returns to the edge.
+    try wheelFrames(60);
+    try std.testing.expectEqual(@as(f32, 0), t_over_y);
+    try std.testing.expectEqual(@as(f32, 0), t_viewport_y);
+}
+
+test "a wheel notch during a return glides from where the page is drawn" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    const before = try returnFromTop();
+    try wheel(80, .mouse);
+    try frameAfter(16);
+    try frameAfter(0);
+    // One glide step from the drawn -30 toward 50, over the 16 ms between the frames.
+    const step = 80 * (1 - @exp(-0.016 * glass.motion.rate() / glide_tau_s));
+    const moved = before - t_raw_y / t_draw_scale;
+    try std.testing.expect(moved > 0 and moved <= step + 0.01);
+    try wheelFrames(60);
+    try std.testing.expectApproxEqAbs(@as(f32, 50), t_viewport_y, 0.5);
+    try std.testing.expectEqual(@as(f32, 0), t_over_y);
 }
 
 test "a press during the return catches it where it is drawn" {
