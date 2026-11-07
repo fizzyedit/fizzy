@@ -19,7 +19,7 @@ the `tape` library (`sdk/tape/`): std-only, no window, shipped with the SDK so a
 author a demo too. The `Player`, the live driver and their input are the `replay` library
 (`sdk/replay/`: dvui and `tape`, nothing of fizzy's), which any dvui app can drive by filling in
 a `Stage`; fizzy's glass overlay and its plugin service are host framework (`app/automation/`). `src/editor/Demo.zig` is fizzy's stage and
-`src/app_demos.zig` + `src/demos/` the app's demos, registered at startup. Where this is going: `plans/AUTOMATION_PLAN.md`.
+`src/app_demos.zig` + `src/demos/` Fizzy's own app's demos, registered at startup (an app built on fizzy adds its demos through a plugin). Where this is going: `plans/AUTOMATION_PLAN.md`.
 
 ## Playing one
 
@@ -27,7 +27,7 @@ a `Stage`; fizzy's glass overlay and its plugin service are host framework (`app
 |---|---|
 | Command palette | **Demo: A Tour of Fizzy**, **Demo: Markdown, Previewed as You Type**; **Demo: Play / Pause**, **Demo: Restart**, **Demo: Stop**; **Demo: Play by Name…** (`fizzy.demo.play`, with a `name` and a start `at`) plays any demo the `demos` service lists, a plugin's too |
 | A plugin | `host.registerDemo(.{ .name, .title, .tape })` in `register` adds its demo to the list; the `demos` service (`sdk.services.demos`) lists every demo and plays one by name |
-| An app | `editor.demos.registerScript(...)` at startup adds its own; Fizzy's app registers its tour and markdown demo in `Entry` |
+| An app | Through a plugin it bundles (`host.registerDemo`, above). Fizzy's app registers its tour and markdown demo in `Entry` (`registerAppDemos`, only when the app is fizzy); a startup hook for an app's own demos is not built yet (the `TODO(seam)` in `Entry.AppInit`) |
 | Menu | Help › Take the Tour |
 | Desktop | `FIZZY_DEMO=tour fizzy` plays from launch (how a screen recording is made); `FIZZY_DEMO=<file>.zon` (or `.tape`) plays a tape file, a live one through the live driver |
 | Web | `?demo=tour` plays a bundled demo; `?demo=<url>.zon` (or `.tape`) fetches a tape and plays it. Add `&storage=<name>` to an embed so it keeps its own settings and layout |

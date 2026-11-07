@@ -1,6 +1,6 @@
-//! The `demos` service (`sdk.services.demos`): every demo the app can play, and playing one. The
-//! app registers its own script demos at startup (`Demos.registerScript`); a plugin registers a
-//! tape (`Host.registerDemo`).
+//! The `demos` service (`sdk.services.demos`): every demo the app can play, and playing one.
+//! Fizzy's own app registers its script demos at startup (`Demos.registerScript`, from `Entry`); a
+//! plugin registers a tape (`Host.registerDemo`), which is how any other app adds one today.
 //!
 //! The list is built when it is first asked for and again only once a registration or the form
 //! factor changes: each script demo is built when listed, so it reads the keymap, window and form
@@ -28,8 +28,6 @@ pub const ScriptDemo = struct {
     build: *const fn (s: *automation.Script) anyerror!void, // lint-allow(anyerror): the script's own error set
     /// Help row title, when the app asks for one. Null: palette and service only.
     menu_title: ?[]const u8 = null,
-    /// SF Symbol name for the Help row's macOS item.
-    menu_symbol: ?[]const u8 = null,
 };
 
 editor: *Editor,
@@ -79,14 +77,11 @@ pub fn registerScript(self: *Demos, demo: ScriptDemo) !void {
     errdefer gpa.free(title);
     const menu_title: ?[]u8 = if (demo.menu_title) |t| try gpa.dupe(u8, t) else null;
     errdefer if (menu_title) |t| gpa.free(t);
-    const menu_symbol: ?[]u8 = if (demo.menu_symbol) |s| try gpa.dupe(u8, s) else null;
-    errdefer if (menu_symbol) |s| gpa.free(s);
     try self.script_demos.append(gpa, .{
         .name = name,
         .title = title,
         .build = demo.build,
         .menu_title = menu_title,
-        .menu_symbol = menu_symbol,
     });
     self.script_generation +%= 1;
 }
@@ -103,7 +98,6 @@ pub fn deinit(self: *Demos) void {
         gpa.free(d.name);
         gpa.free(d.title);
         if (d.menu_title) |t| gpa.free(t);
-        if (d.menu_symbol) |s| gpa.free(s);
     }
     self.script_demos.deinit(gpa);
     self.forgetPlaying();

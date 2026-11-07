@@ -85,7 +85,8 @@ pub fn register() !void {
 /// ever fires on it and `removeOwned` never touches its commands. The alternative — adding a
 /// `state` field to `sdk.Command` — would move the ABI fingerprint and force every
 /// third-party plugin to be rebuilt, which isn't worth it for a pointer we can supply this way.
-var fizzy_plugin: sdk.Plugin = .{
+/// The app's demo commands (`Entry.registerAppDemos`) hang off it too.
+pub var fizzy_plugin: sdk.Plugin = .{
     .state = undefined, // set to the Editor in `registerCommands`
     .vtable = &fizzy_vtable,
     .id = "fizzy",
@@ -923,12 +924,6 @@ fn cmdReportBug(_: *anyopaque) anyerror!void {
 /// An app with nowhere to send reports greys Report a Bug out rather than sending them to fizzy.
 fn canReportBug(_: *anyopaque) bool {
     return AppInfo.current.issues_url.len > 0;
-}
-
-/// The pseudo-plugin Fizzy's own commands hang off (`registerCommands`): an app demo command uses
-/// it too, so `runCommand` has an owner to report against.
-pub fn plugin() *sdk.Plugin {
-    return &fizzy_plugin;
 }
 
 /// Register every fizzy action in the Host command registry. Called once during `Editor.init`.

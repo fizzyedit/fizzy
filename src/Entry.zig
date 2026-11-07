@@ -305,11 +305,10 @@ pub fn registerAppDemos(editor: *Editor) !void {
             .title = e.title,
             .build = e.build,
             .menu_title = e.menu_title,
-            .menu_symbol = e.menu_symbol,
         });
         try editor.app.host.registerCommand(.{
             .id = id,
-            .owner = Editor.Keybinds.plugin(),
+            .owner = &Editor.Keybinds.fizzy_plugin,
             .title = "Demo: " ++ e.title,
             .run = demoRun(e.name),
             .icon = icons.tvg.lucide.@"circle-play",
@@ -393,7 +392,6 @@ fn initRefreshLogFromEnv() void {
 /// Set by `initRefreshLogFromEnv`; keeps refresh-log output out of the Output panel.
 var refresh_log_active = false;
 
-// Runs before the first frame, after backend and dvui.Window.init()
 /// `FIZZY_DEMO=<name>` plays an app demo from launch, `FIZZY_DEMO=<file>.zon` (or `.tape`) a tape;
 /// a tape read before the app moved its working directory wins. Not on wasm: no environment there.
 fn playDemoFromEnv() void {
@@ -409,6 +407,7 @@ fn playDemoFromEnv() void {
     } else |_| {}
 }
 
+// Runs before the first frame, after backend and dvui.Window.init()
 pub fn AppInit(win: *dvui.Window) !void {
     fizzy.core.profile.phase(dvui.io, "window");
     // Snapshot the platform from DVUI's keybind selection. On native this is a
@@ -495,8 +494,12 @@ pub fn AppInit(win: *dvui.Window) !void {
     fizzy.editor().postInit() catch unreachable;
 
     // The app's own demos, registered once the editor (and its demos service) is at its final
-    // address. Fizzy's tour and markdown demo are Fizzy's app's, not the shell's; an app built on
-    // fizzy registers its own here, or a plugin registers one with `Host.registerDemo`.
+    // address. Fizzy's tour and markdown demo are Fizzy's app's, not the shell's. An app built on
+    // fizzy runs this same `AppInit` and registers nothing here: it adds a demo through a plugin
+    // (`Host.registerDemo`).
+    // TODO(seam): an app-side startup hook, a function the app's build hands fizzy (beside its
+    // `AppInfo`) and called here in place of the `is_fizzy` check, through which an app built on
+    // fizzy registers its own script demos (`Demos.registerScript`).
     if (AppInfo.is_fizzy) registerAppDemos(fizzy.editor()) catch |err|
         std.log.err("could not register the app's demos: {s}", .{@errorName(err)});
 

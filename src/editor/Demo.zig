@@ -255,7 +255,8 @@ pub fn readEnvTape(gpa: std.mem.Allocator, io: std.Io) void {
     };
 }
 
-/// Start the bundled demo `name` on the next frame — for callers outside one.
+/// Start the demo `name` on the next frame, a bundled one or a script demo the app registered
+/// (`Demos.registerScript`) — for callers outside one.
 pub fn playSoon(self: *Demo, name: []const u8) void {
     const gpa = self.editor.app.gpa;
     self.queue(.{ .name = gpa.dupe(u8, name) catch return });
