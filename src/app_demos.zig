@@ -1,7 +1,8 @@
 //! The demos this application ships with. Fizzy the shell knows how to play a demo and lists
 //! whatever is registered at startup; this is Fizzy's own app's list, registered by `Entry` when
-//! `AppInfo.is_fizzy`. An app built on fizzy registers its own the same way, or a plugin registers
-//! a tape with `Host.registerDemo`.
+//! `AppInfo.is_fizzy`. An app built on fizzy has no list of its own yet: it adds a demo through a
+//! plugin, which registers a tape with `Host.registerDemo` (the app-side hook is the `TODO(seam)`
+//! in `Entry.AppInit`).
 //!
 //! Each entry is a script (`tape.Script`) built when it is played, so it reads the keymap and
 //! window it plays in rather than the ones it was written against. A row with a `menu_title` also

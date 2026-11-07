@@ -253,9 +253,9 @@ const help_items = [_]Item{
     // that has an updater with a feed of the app's own; otherwise it is the dialog's own title.
     .{ .command = .{ .id = "fizzy.about", .title = .{ .static = if (auto_update.impl and AppInfo.own_repo_url) "Check for Updates…" else AppInfo.about_title_z } } },
     // The app's demos that ask for a Help row (a section, so an app with none has none, and a
-    // plugin can add one beside them). `drawMenuSections` draws the separator before the group.
+    // plugin can add one beside them). `drawMenuSections` draws the separator before the group,
+    // so none follows it.
     .{ .plugin_section = "fizzy.menu.help" },
-    .separator,
     .{ .command = .{ .id = "fizzy.reportBug", .title = .{ .static = "Report Bug…" }, .sf_symbol = "ant.fill" } },
 };
 
