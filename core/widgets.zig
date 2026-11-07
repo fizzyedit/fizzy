@@ -25,6 +25,8 @@ const anchor = @import("replay").anchor;
 const icon_tex = @import("gfx/icon.zig");
 
 pub const CanvasWidget = @import("widgets/CanvasWidget.zig");
+/// A read-only image on a `CanvasWidget`: zoom, pan, a checkerboard under transparency, Fit.
+pub const ImageView = @import("widgets/ImageView.zig");
 pub const ReorderWidget = @import("widgets/ReorderWidget.zig");
 pub const FloatingWindowWidget = @import("widgets/FloatingWindowWidget.zig");
 /// A tooltip placed on the screen its anchor is on (`core.screens`): fizzy's copy of dvui's.
