@@ -105,6 +105,32 @@ pub fn inputEntrance(o: f32) f32 {
 pub fn bubbleEntrance(o: f32) f32 {
     return smoothstep((o - 0.25) / 0.4);
 }
+/// A bubble's drip at openness `o`: its centre's offset below the bar's centre, and its diameter.
+/// Points. It grows from 28 to 46 while it sinks to touch the bar's bottom edge (o 0.45), the gap
+/// then opens to 6 (the neck thins, o 0.65), springs past `drip_rest` and back (o 0.85), and rests.
+pub fn bubbleDrop(o: f32) struct { y: f32, d: f32 } {
+    const half_bar = 28;
+    const t = std.math.clamp((o - 0.25) / 0.2, 0, 1);
+    const d = std.math.lerp(28, 46, smoothstep(t));
+    // Half linear, half smoothstep: it leaves the bar's centre at once, with no step over 16 pt.
+    const touch = half_bar + 46 / 2;
+    if (o <= 0.45) return .{ .y = touch * (t + smoothstep(t)) / 2, .d = d };
+    const gap = if (o <= 0.65)
+        std.math.lerp(0, 6, (o - 0.45) / 0.2)
+    else if (o <= 0.85)
+        std.math.lerp(6, drip_rest, easeOutBack((o - 0.65) / 0.2))
+    else
+        drip_rest;
+    return .{ .y = touch + gap, .d = d };
+}
+/// Points from the bar's bottom edge to a resting bubble's top.
+pub const drip_rest: f32 = 24;
+/// 0 to 1 over `t`, about 14 % past 1 before it settles.
+fn easeOutBack(t: f32) f32 {
+    const c = 2.1;
+    const u = t - 1;
+    return 1 + (c + 1) * u * u * u + c * u * u;
+}
 fn smoothstep(x: f32) f32 {
     const t = std.math.clamp(x, 0, 1);
     return t * t * (3 - 2 * t);
@@ -114,6 +140,11 @@ fn smoothstep(x: f32) f32 {
 pub const pulldown_merge: f32 = 14;
 /// Points, how far in from the field's edge its blur fades in; S1 wants a 10-90 % ramp of at least 20 pt.
 pub const field_feather_pt: f32 = 56;
+/// The field's blur, `BlurBackdrop.Pane.radius` units: a calm, not the menu frost.
+pub const field_blur: f32 = 8;
+/// The page under the field: rows of word blocks this tall, points, 16 pt apart.
+pub const page_rows = 12;
+pub const page_row_h: f32 = 7;
 /// The pull-down at openness `o`, centred in `window`: where the draw puts each piece and where
 /// the measurements look. Points.
 pub const Pulldown = struct {
@@ -139,6 +170,15 @@ pub const Pulldown = struct {
             .{ .x = bar_x + 36 - 6, .y = p.cell_y - 6, .w = 12, .h = 12 },
         };
     }
+    /// The top of the page's row `i`: the first crosses the resting row, so each of `gaps` holds
+    /// a word's edge.
+    pub fn pageRowTop(p: Pulldown, i: usize) f32 {
+        return p.cell_y - page_row_h / 2 + 16 * @as(f32, @floatFromInt(i));
+    }
+    /// Bubble `k`'s icon, a 22 pt dot on the resting row wherever the bubble is.
+    pub fn icon(p: Pulldown, k: usize) dvui.Rect {
+        return centred(p.bar.x + p.bar.w / 2 + 72 * (@as(f32, @floatFromInt(k)) - 1), p.cell_y, 22, 22);
+    }
     /// Halfway between the bar's bottom edge and bubble `k`'s top edge, or null while the bubble
     /// has not cleared the bar.
     pub fn neckPoint(p: Pulldown, k: usize) ?dvui.Point {
@@ -159,11 +199,12 @@ pub fn pulldownAt(window: dvui.Rect, o: f32) Pulldown {
     field.h *= o;
     const e_in = inputEntrance(o);
     const e_b = bubbleEntrance(o);
-    const cell_y = bar_bottom + 24 + 23;
+    const cell_y = bar_bottom + drip_rest + 23;
+    const drop = bubbleDrop(o);
     var bubbles: [3]dvui.Rect = undefined;
     for (&bubbles, 0..) |*b, i| {
         const cx = bar_x + 72 * (@as(f32, @floatFromInt(i)) - 1);
-        b.* = centred(std.math.lerp(bar_x, cx, e_b), std.math.lerp(bar_y, cell_y, e_b), 46, 46);
+        b.* = centred(std.math.lerp(bar_x, cx, e_b), bar_y + drop.y, drop.d, drop.d);
     }
     return .{
         .o = o,
@@ -182,11 +223,12 @@ fn centred(cx: f32, cy: f32, w: f32, h: f32) dvui.Rect {
     return .{ .x = cx - w / 2, .y = cy - h / 2, .w = w, .h = h };
 }
 
-/// The CPU mirror of the sheet layer picture A draws: the bar, the input and the bubbles.
+/// The CPU mirror of the sheet layer picture A draws: the bar, the input and, once they have begun
+/// to come out (`e_b` > 0), the bubbles.
 pub fn pulldownField(p: Pulldown, rs: dvui.RectScale) core.LiquidField {
     var field: core.LiquidField = .{ .scale = rs.s, .merge_px = pulldown_merge * rs.s };
     const pieces = [_]struct { dvui.Rect, f32, f32 }{ .{ p.bar, 1, 1 }, .{ p.input, 1, 1 }, .{ p.bubbles[0], 0, p.e_b }, .{ p.bubbles[1], 0, p.e_b }, .{ p.bubbles[2], 0, p.e_b } };
-    for (pieces) |piece| {
+    for (pieces[0..if (p.e_b > 0) pieces.len else 2]) |piece| {
         const item = pill(rs, piece[0], piece[1], piece[2]);
         const box = item.shape.box;
         field.add(.{ .rect = box.rect, .radii = box.radii, .round = box.round, .blur = item.blur, .lens = item.lens });
@@ -235,9 +277,9 @@ pub const Metrics = struct {
     calm: ?f32 = null,
     /// Points from 10 % to 90 % of A's difference from bare, across the field's left edge. Open half or more.
     edge_ramp_pt: ?f32 = null,
-    /// The least luma step from a bubble's rim to its centre. Bubbles nearly out.
+    /// The least luma step from a bubble's rim to the glass just inside it. Bubbles nearly out.
     rim_min: ?f32 = null,
-    /// How much darker A is than B round the bar. Bubbles still hidden in it.
+    /// How much darker A is than B round the bar. Bubbles not yet out (`e_b` 0), so not in A.
     hidden_dark_max: ?f32 = null,
     /// Whether the outline bridges the bar and each bubble.
     neck: [3]bool = @splat(false),
@@ -260,10 +302,10 @@ pub fn measure(p: Pulldown, rs: dvui.RectScale, pics: Pictures, shadow_reach: f3
     }
     if (p.e_b >= 0.9) {
         var rim: f32 = std.math.floatMax(f32);
-        for (p.bubbles) |b| rim = @min(rim, rimStep(pics.a, pics.width, rs.rectToPhysical(b)));
+        for (p.bubbles, 0..) |b, k| rim = @min(rim, rimStep(pics.a, pics.width, rs.rectToPhysical(b), rs.rectToPhysical(p.icon(k))));
         m.rim_min = rim;
     }
-    if (p.e_b < 0.05) {
+    if (p.e_b == 0) {
         const around = rs.rectToPhysical(p.bar.outsetAll(shadow_reach));
         // `ghostMax(x, y)` is how much darker x is than y.
         m.hidden_dark_max = ghostMax(pics.a, pics.b, pics.width, around, null).max;
@@ -312,31 +354,29 @@ fn edgeRamp(a: []const u8, bare: []const u8, width: usize, y: usize) f32 {
     }
     return 0;
 }
-/// |mean luma of the 2 px ring inside the circle in `r` − mean of its centre's 6×6 px|.
-fn rimStep(pixels: []const u8, width: usize, r: dvui.Rect.Physical) f32 {
+/// |mean luma of the 2 px ring inside the circle in `r` − mean of the ring from radius − 8 to
+/// radius − 6 px|, both outside the round icon in `icon`: the rim against the glass beside it.
+fn rimStep(pixels: []const u8, width: usize, r: dvui.Rect.Physical, icon: dvui.Rect.Physical) f32 {
     const height = pixels.len / 4 / width;
     const cx = r.x + r.w / 2;
     const cy = r.y + r.h / 2;
     const radius = @min(r.w, r.h) / 2;
-    var ring: f32 = 0;
-    var ring_n: f32 = 0;
+    const icon_x = icon.x + icon.w / 2;
+    const icon_y = icon.y + icon.h / 2;
+    var sum: [2]f32 = @splat(0);
+    var n: [2]f32 = @splat(0);
     const s = span(r, width, height);
     for (s[1]..s[3]) |y| for (s[0]..s[2]) |x| {
-        const d = std.math.hypot(@as(f32, @floatFromInt(x)) + 0.5 - cx, @as(f32, @floatFromInt(y)) + 0.5 - cy);
-        if (d >= radius - 2 and d < radius) {
-            ring += luma(pixels, y * width + x);
-            ring_n += 1;
-        }
+        const px = @as(f32, @floatFromInt(x)) + 0.5;
+        const py = @as(f32, @floatFromInt(y)) + 0.5;
+        if (std.math.hypot(px - icon_x, py - icon_y) < @min(icon.w, icon.h) / 2) continue;
+        const d = std.math.hypot(px - cx, py - cy);
+        const ring: usize = if (d >= radius - 2 and d < radius) 0 else if (d >= radius - 8 and d < radius - 6) 1 else continue;
+        sum[ring] += luma(pixels, y * width + x);
+        n[ring] += 1;
     };
-    var centre: f32 = 0;
-    var centre_n: f32 = 0;
-    const c = span(.{ .x = cx - 3, .y = cy - 3, .w = 6, .h = 6 }, width, height);
-    for (c[1]..c[3]) |y| for (c[0]..c[2]) |x| {
-        centre += luma(pixels, y * width + x);
-        centre_n += 1;
-    };
-    if (ring_n == 0 or centre_n == 0) return 0;
-    return @abs(ring / ring_n - centre / centre_n);
+    if (n[0] == 0 or n[1] == 0) return 0;
+    return @abs(sum[0] / n[0] - sum[1] / n[1]);
 }
 
 fn writePng(image: Capture.Image, path: []const u8, gpa: std.mem.Allocator) !void {
@@ -424,33 +464,38 @@ fn warm(self: *GlassTestbed) bool {
 /// The bare picture (`bare`) is the page alone: no field, no sheet.
 fn drawPulldown(self: *const GlassTestbed, rs: dvui.RectScale, window: dvui.Rect) void {
     const p = pulldownAt(window, openAt(self.step));
-    const bar_bottom = p.bar.y + p.bar.h;
-    const bar_x = p.bar.x + p.bar.w / 2;
 
-    // The page: a block of text lines, never changing.
-    for (0..12) |i| {
-        const width: f32 = if (i % 4 == 3) 0.55 else 1;
-        rs.rectToPhysical(.{ .x = p.frame.x + 32, .y = bar_bottom + 40 + 8 * @as(f32, @floatFromInt(i)), .w = (p.frame.w - 64) * width, .h = 1 }).fill(.{}, .{ .color = .{ .color = .{ .r = 20, .g = 20, .b = 30, .a = 220 } } });
+    // The page: rows of words about the console's text size, never changing.
+    const words = [_]f32{ 22, 14, 34, 10, 26, 18 };
+    for (0..page_rows) |i| {
+        const right = p.frame.x + p.frame.w - 32 - if (i % 4 == 3) (p.frame.w - 64) * 0.45 else 0;
+        var x = p.frame.x + 32;
+        var k = i;
+        while (x < right) : (k += 1) {
+            const w = @min(words[k % words.len], right - x);
+            rs.rectToPhysical(.{ .x = x, .y = p.pageRowTop(i), .w = w, .h = page_row_h }).fill(.{}, .{ .color = .{ .color = .{ .r = 20, .g = 20, .b = 30, .a = 220 } } });
+            x += w + 5;
+        }
     }
     if (self.bare) return;
 
     var field = core.glass.layer(dvui.Id.zero.update("glass-testbed-field"), .{
+        .radius = field_blur,
         .witness = 1,
         .reach = .{ .w = p.open.w * rs.s, .h = p.open.h * rs.s },
         .blur_field = .{ .rect = rs.rectToPhysical(p.field), .feather = field_feather_pt * rs.s, .strength = smoothstep(p.o / 0.3) },
     });
     field.end();
 
-    if (!self.host and p.e_b > 0.85) for (0..3) |i| {
-        const cx = bar_x + 72 * (@as(f32, @floatFromInt(i)) - 1);
-        rs.rectToPhysical(centred(cx, p.cell_y, 22, 22)).fill(dvui.CornerRect.Physical.all(11 * rs.s), .{ .color = .{ .color = .{ .r = 30, .g = 30, .b = 40 } } });
+    if (!self.host and p.e_b > 0.85) for (0..3) |k| {
+        rs.rectToPhysical(p.icon(k)).fill(dvui.CornerRect.Physical.all(11 * rs.s), .{ .color = .{ .color = .{ .r = 30, .g = 30, .b = 40 } } });
     };
 
     var sheet = core.glass.layer(dvui.Id.zero.update("glass-testbed-sheet"), .{ .merge = pulldown_merge, .shadow = 1 });
     defer sheet.end();
     _ = sheet.add(pill(rs, p.bar, 1, 1));
     _ = sheet.add(pill(rs, p.input, 1, 1));
-    if (!self.host) for (p.bubbles) |b| {
+    if (!self.host and p.e_b > 0) for (p.bubbles) |b| {
         _ = sheet.add(pill(rs, b, 0, p.e_b));
     };
 }
