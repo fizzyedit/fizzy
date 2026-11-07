@@ -87,6 +87,12 @@ const errors = [_]Error{
     error.Timeout,
 };
 
+// A member of `Error` with no row would reach `codeOf`'s `unreachable` at run time. The rows
+// are distinct members, so equal lengths mean the table covers the set.
+comptime {
+    std.debug.assert(errors.len == @typeInfo(Error).error_set.error_names.?.len);
+}
+
 fn codeOf(err: Error) u8 {
     inline for (errors, 1..) |e, i| {
         if (err == e) return i;

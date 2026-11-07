@@ -509,6 +509,15 @@ test "cancel returns at once while the server is still holding the connection" {
     // Let the worker finish and free the orphan, then tear down.
     release.store(true, .release);
     holder.join();
+    // Before `deinit`, so the worker takes its own path: out of `orphans`, detached, freed.
+    while (true) {
+        nt.mutex.lock();
+        const left = nt.orphans.count();
+        nt.mutex.unlock();
+        if (left == 0) break;
+        if (std.Io.Clock.boot.now(io).nanoseconds - before > 5 * std.time.ns_per_s) return error.OrphanStayed;
+        std.Io.sleep(io, .fromMicroseconds(1000), .awake) catch {};
+    }
     nt.deinit();
     server.deinit(io);
 }

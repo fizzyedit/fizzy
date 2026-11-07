@@ -34,7 +34,8 @@ pub const Request = struct {
     headers: []const Header = &.{},
     body: []const u8 = &.{},
     /// 0: no limit. Past it the callback gets `error.Timeout` from `pump`; the request is
-    /// dropped as by `cancel`.
+    /// dropped as by `cancel`. That releases the callback, not the transport's worker: it stays
+    /// in its fetch for as long as the server holds the connection open.
     timeout_ms: u32 = 30_000,
     /// false: a 3xx is the response, `Location` unread. true: std's rule, up to 3 on a
     /// request without a body.
