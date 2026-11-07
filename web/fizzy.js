@@ -180,6 +180,21 @@ export function keyboardInset(win, send, canvas = null, owns = () => true) {
 
 import { Dvui, TextInput } from "./web.js?cache-buster=TEMPLATE_HASH_WITH_PADDING__ITS_64_BYTES_LONG_THE_SAME_AS_SHA256";
 
+// dvui's Paste (the touch menu, a field's right-click menu) on the web: the wasm asks
+// (`wasm_clipboardRead`) and the clipboard's text comes back later through `text`, as typed
+// text. Only a secure page has `readText`; a refused read or an empty clipboard does nothing.
+// Returns the read's promise.
+function clipboardRead(nav, secure, text) {
+  if (!secure || !nav.clipboard?.readText) return Promise.resolve();
+  return nav.clipboard.readText().then(
+    (str) => {
+      if (typeof str === "string" && str.length > 0) text(str);
+      else console.debug("clipboard: nothing to paste");
+    },
+    (err) => console.debug("clipboard: read refused", err),
+  );
+}
+
 // The name this build files what it keeps in the browser under: its own files, the plugins it
 // remembers and their cached bytes. Every copy of the app served from one site shares the
 // browser's storage for it, so a test build beside the real one (fizzyed.it/testapp/ beside
@@ -480,6 +495,10 @@ export class Fizzy {
         // `Clock.real` for the app's `Io` (src/backend/web_io.zig).
         fizzy_web_now_real_ms() {
           return Date.now();
+        },
+        // Whether dvui's Paste can read the clipboard here (`core/widgets/clipboard.zig`).
+        fizzy_clipboard_can_read() {
+          return globalThis.isSecureContext === true && !!globalThis.navigator?.clipboard;
         },
         // `core.fs` on the web: the app's own small files (settings.zon, recents.zon,
         // keybinds.zon) live in localStorage, keyed by the path the app would have used.
@@ -1271,6 +1290,9 @@ export class Fizzy {
             input.click();
             break;
           }
+          case "clipboardRead":
+            clipboardRead(navigator, isSecureContext, (t) => post({ type: "text", text: t }));
+            break;
           case "clipboard":
             if (navigator.clipboard) navigator.clipboard.writeText(m.text);
             else {
@@ -1405,6 +1427,9 @@ export class Fizzy {
             fizzy: fizzyImports(() => wasmInstance),
             env: { __indirect_function_table: functionTable },
           };
+          // The pasted text arrives as typed text does, through web.js's own sink.
+          imports.dvui.wasm_clipboardRead = () =>
+            clipboardRead(navigator, isSecureContext, (t) => app.textInput.sink.text(t));
           return compiledEditor(wasmUrl).then((module) => module
             ? WebAssembly.instantiate(module, imports).then((instance) => ({ instance }))
             : WebAssembly.instantiateStreaming(fetch(wasmUrl), imports)
