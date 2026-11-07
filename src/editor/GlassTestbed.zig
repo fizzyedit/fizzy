@@ -112,6 +112,8 @@ fn smoothstep(x: f32) f32 {
 
 /// Points, LiquidField's `merge` for the pull-down's sheet.
 pub const pulldown_merge: f32 = 14;
+/// Points, how far in from the field's edge its blur fades in; S1 wants a 10-90 % ramp of at least 20 pt.
+pub const field_feather_pt: f32 = 56;
 /// The pull-down at openness `o`, centred in `window`: where the draw puts each piece and where
 /// the measurements look. Points.
 pub const Pulldown = struct {
@@ -435,7 +437,7 @@ fn drawPulldown(self: *const GlassTestbed, rs: dvui.RectScale, window: dvui.Rect
     var field = core.glass.layer(dvui.Id.zero.update("glass-testbed-field"), .{
         .witness = 1,
         .reach = .{ .w = p.open.w * rs.s, .h = p.open.h * rs.s },
-        .blur_field = .{ .rect = rs.rectToPhysical(p.field), .feather = 24 * rs.s, .strength = smoothstep(p.o / 0.3) },
+        .blur_field = .{ .rect = rs.rectToPhysical(p.field), .feather = field_feather_pt * rs.s, .strength = smoothstep(p.o / 0.3) },
     });
     field.end();
 

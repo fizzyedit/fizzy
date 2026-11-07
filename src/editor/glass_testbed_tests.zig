@@ -126,6 +126,13 @@ test "pulldown: each metric is null exactly where its definition says" {
     }
 }
 
+test "pulldown scene: the field's blur fades in over at least 20 pt and keeps it once open" {
+    // A smoothstep goes from 10 % to 90 % over 0.608 of its width (S1 line 1).
+    try expect(0.608 * bed.field_feather_pt >= 20);
+    // BlurField.fittedFeather caps the feather under half the field's height, about 600 pt open.
+    try expect(bed.field_feather_pt < 600 / 2);
+}
+
 test "shadow scene: one step measuring the ring round the drop, inside the bar" {
     try equal(1, bed.steps(.shadow));
     const pictures = bed.shadowPictures(.{ .w = 1280, .h = 1024 }, 8);
