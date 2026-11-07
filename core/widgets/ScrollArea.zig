@@ -515,14 +515,15 @@ fn wheelEvent(self: *ScrollArea, e: *dvui.Event) void {
     dvui.timer(self.data().id, wheel_rest_ms * 1000);
     self.touch.x.cancel();
     self.touch.y.cancel();
-    // New input owns its axis; a return must not pin it to the edge on the next frame.
-    if (dir == .horizontal and self.touch.seg_x.kind == .settle) {
-        self.touch.seg_x = .{};
-        self.touch.over.x = 0;
-    }
-    if (dir == .vertical and self.touch.seg_y.kind == .settle) {
-        self.touch.seg_y = .{};
-        self.touch.over.y = 0;
+    // Input starts at `at`, including the return's drawn offset before clearing it.
+    if (segment.kind == .settle) {
+        if (dir == .horizontal) {
+            self.touch.seg_x = .{};
+            self.touch.over.x = 0;
+        } else {
+            self.touch.seg_y = .{};
+            self.touch.over.y = 0;
+        }
     }
     if (self.touch.seg_x.kind == .coast) self.touch.seg_x = .{};
     if (self.touch.seg_y.kind == .coast) self.touch.seg_y = .{};
@@ -1615,13 +1616,18 @@ test "a trackpad event during an overscroll return moves the page and ends the r
     try frameAfter(0);
     try std.testing.expect(t_over_y < 0);
     try std.testing.expect(t_moving);
+    // A small inward delta crosses the edge from the drawn position, not from the edge.
+    while (t_over_y <= -4) try frameAfter(16);
+    try frameAfter(0);
+    try std.testing.expect(t_over_y < 0);
+    try std.testing.expect(t_moving);
     const before = t_raw_y / t_draw_scale;
-    const destination = t_viewport_y + t_over_y + 100;
-    try wheel(100, .trackpad);
+    const destination = t_viewport_y + t_over_y + 5;
+    try wheel(5, .trackpad);
     try frameAfter(0);
     try std.testing.expectApproxEqAbs(destination, t_viewport_y, 0.001);
     try frameAfter(0);
-    try std.testing.expectApproxEqAbs(before - 100, t_raw_y / t_draw_scale, 0.001);
+    try std.testing.expectApproxEqAbs(before - 5, t_raw_y / t_draw_scale, 0.001);
     for (0..6) |_| {
         try frameAfter(16);
         try std.testing.expectApproxEqAbs(destination, t_viewport_y, 0.001);
