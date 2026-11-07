@@ -213,13 +213,13 @@ pub fn filterRow(src: std.lang.SourceLocation, placeholder: []const u8, opts: dv
         .{ .stroke_color = .{ .color = dvui.themeGet().color(.window, .text) } },
         .{ .gravity_y = 0.5, .padding = dvui.Rect.all(0) },
     );
-    const entry = dvui.textEntry(@src(), .{ .placeholder = placeholder }, .{
+    var te = TextEntry.init(@src(), .{ .placeholder = placeholder }, .{
         .expand = .horizontal,
         .background = false,
     });
-    defer textEntryDeinit(entry);
-    _ = textEntryMenu(entry);
-    return entry.getText();
+    defer te.deinit();
+    _ = textEntryMenu(te.entry);
+    return te.entry.getText();
 }
 
 /// Finish a text field and scroll its enclosing area on focus, growth or keyboard movement.

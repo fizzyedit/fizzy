@@ -12,6 +12,7 @@ const Rule = enum {
     @"changelog-words",
     @"raw-transient-surface",
     @"raw-scroll-area",
+    @"raw-text-entry",
     @"todo-seam",
 };
 const Finding = struct { rule: Rule, line: usize, message: []const u8 };
@@ -269,7 +270,7 @@ const raw_calls = blk: {
         "popup",   "PopupWidget",           "floatingWindow", "FloatingWindowWidget",
         "dialog",  "toast",                 "contextMenu",    "dropdown",
     };
-    var calls: [surfaces.len + 1]RawCall = undefined;
+    var calls: [surfaces.len + 2]RawCall = undefined;
     for (surfaces, 0..) |name, i| calls[i] = .{
         .name = name,
         .rule = .@"raw-transient-surface",
@@ -279,6 +280,12 @@ const raw_calls = blk: {
         .name = "scrollArea",
         .rule = .@"raw-scroll-area",
         .message = "dvui.scrollArea bypasses touch scrolling; use core.widgets.ScrollArea.init",
+        .call_only = true,
+    };
+    calls[surfaces.len + 1] = .{
+        .name = "textEntry",
+        .rule = .@"raw-text-entry",
+        .message = "dvui.textEntry focuses on a touch press; use core.widgets.TextEntry.init",
         .call_only = true,
     };
     break :blk calls;
@@ -868,6 +875,23 @@ test "dvui.scrollArea is flagged" {
     const findings = try analyze(arena.allocator(), "fn f() void { _ = dvui.scrollArea(@src(), .{}, .{}); }");
     try std.testing.expectEqual(@as(usize, 1), findings.len);
     try std.testing.expectEqual(Rule.@"raw-scroll-area", findings[0].rule);
+}
+
+test "dvui.textEntry is flagged" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const findings = try analyze(arena.allocator(), "fn f() void { _ = dvui.textEntry(@src(), .{}, .{}); }");
+    try std.testing.expectEqual(@as(usize, 1), findings.len);
+    try std.testing.expectEqual(Rule.@"raw-text-entry", findings[0].rule);
+}
+
+test "core.widgets.TextEntry.init is not flagged" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    for ([_][:0]const u8{
+        "fn f() void { _ = core.widgets.TextEntry.init(@src(), .{}, .{}); }",
+        "const W = dvui.TextEntryWidget;",
+    }) |source| try std.testing.expectEqual(@as(usize, 0), (try analyze(arena.allocator(), source)).len);
 }
 
 test "a lint-allow with a reason silences it" {

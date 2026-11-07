@@ -113,15 +113,15 @@ pub fn dialog(id: dvui.Id) fizzy.core.dialogs.Error!bool {
     );
 
     const placeholder = if (current_kind == .export_to) "filename" else "filename.fiz";
-    const te = dvui.textEntry(@src(), .{ .placeholder = placeholder }, .{ .expand = .horizontal });
-    defer fizzy.core.widgets.textEntryDeinit(te);
-    _ = fizzy.core.widgets.textEntryMenu(te);
+    var te = fizzy.core.widgets.TextEntry.init(@src(), .{ .placeholder = placeholder }, .{ .expand = .horizontal });
+    defer te.deinit();
+    _ = fizzy.core.widgets.textEntryMenu(te.entry);
 
-    if (dvui.firstFrame(te.data().id)) {
-        if (default_name_storage) |def| te.textSet(def, false);
+    if (dvui.firstFrame(te.entry.data().id)) {
+        if (default_name_storage) |def| te.entry.textSet(def, false);
     }
 
-    const name = te.getText();
+    const name = te.entry.getText();
     dvui.dataSetSlice(null, id, "_save_as_name", name);
     return name.len > 0;
 }
