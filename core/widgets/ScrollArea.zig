@@ -500,7 +500,10 @@ fn wheelEvent(self: *ScrollArea, e: *dvui.Event) void {
     if (trackpad) {
         if (dir == .horizontal) self.touch.glide_x = null else self.touch.glide_y = null;
     }
-    const at = if (dir == .vertical) self.positionY() else self.si.viewport.x;
+    const position = if (dir == .vertical) self.positionY() else self.si.viewport.x;
+    const segment = if (dir == .vertical) self.touch.seg_y else self.touch.seg_x;
+    const over = if (dir == .vertical) self.touch.over.y else self.touch.over.x;
+    const at = position + if (segment.kind == .settle) over else @as(f32, 0);
     const low = if (dir == .vertical) self.lowY() else 0;
     const max = if (dir == .vertical) self.pageMax() else self.si.scrollMax(dir);
     if (max <= low or (by < 0 and at <= low) or (by > 0 and at >= max)) return;
@@ -525,12 +528,13 @@ fn wheelEvent(self: *ScrollArea, e: *dvui.Event) void {
     if (self.touch.seg_y.kind == .coast) self.touch.seg_y = .{};
     self.touch.seating = false;
     if (trackpad) {
-        if (dir == .vertical) _ = self.moveY(std.math.clamp(at + by, low, max) - at, false) else self.si.scrollByOffset(dir, by);
+        const delta = std.math.clamp(at + by, low, max) - position;
+        if (dir == .vertical) _ = self.moveY(delta, false) else self.si.scrollByOffset(dir, delta);
         if (c.init_opts.user_scroll) |us| {
             if (dir == .vertical) us.y += by else us.x += by;
         }
     } else {
-        self.glideBy(dir, by);
+        if (segment.kind == .settle) self.glideTo(dir, at + by) else self.glideBy(dir, by);
     }
     dvui.refresh(null, @src(), self.data().id);
 }
@@ -1604,45 +1608,50 @@ test "a trackpad event during an overscroll return moves the page and ends the r
     var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
     defer t.deinit();
     try wheelStart();
-    try dragBy(300, 10, true, 10);
+    try dragBy(100, 10, true, 0);
+    try frameAfter(100);
     try lift();
-    try wheelFrames(6);
+    try frameAfter(16);
+    try frameAfter(0);
     try std.testing.expect(t_over_y < 0);
     try std.testing.expect(t_moving);
-
-    try wheel(40, .trackpad);
-    try frameAfter(16);
-    try std.testing.expectApproxEqAbs(@as(f32, 40), t_viewport_y, 0.01);
-    try frameAfter(16);
-    try std.testing.expectApproxEqAbs(@as(f32, 40), t_viewport_y, 0.01);
-    try std.testing.expectEqual(@as(f32, 0), t_over_y);
-    try std.testing.expect(!t_moving);
-    try wheelFrames(30);
-    try std.testing.expectApproxEqAbs(@as(f32, 40), t_viewport_y, 0.01);
+    const before = t_raw_y / t_draw_scale;
+    const destination = t_viewport_y + t_over_y + 100;
+    try wheel(100, .trackpad);
+    try frameAfter(0);
+    try std.testing.expectApproxEqAbs(destination, t_viewport_y, 0.001);
+    try frameAfter(0);
+    try std.testing.expectApproxEqAbs(before - 100, t_raw_y / t_draw_scale, 0.001);
+    for (0..6) |_| {
+        try frameAfter(16);
+        try std.testing.expectApproxEqAbs(destination, t_viewport_y, 0.001);
+        try std.testing.expectEqual(@as(f32, 0), t_over_y);
+        try std.testing.expect(!t_moving);
+    }
 }
 
 test "wheel glide increments during an overscroll return move the page" {
     var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
     defer t.deinit();
     try wheelStart();
-    try dragBy(300, 10, true, 10);
+    try dragBy(100, 10, true, 0);
+    try frameAfter(100);
     try lift();
-    try wheelFrames(6);
+    try frameAfter(16);
+    try frameAfter(0);
     try std.testing.expect(t_over_y < 0);
     try std.testing.expect(t_moving);
-
-    try wheel(100, .mouse);
+    const destination = t_viewport_y + t_over_y + 160;
+    try wheel(80, .mouse);
     try frameAfter(16);
-    var previous = t_viewport_y;
-    for (0..6) |_| {
-        try frameAfter(16);
-        try std.testing.expect(t_viewport_y > previous);
-        try std.testing.expect(t_viewport_y < 100);
-        try std.testing.expectEqual(@as(f32, 0), t_over_y);
-        previous = t_viewport_y;
-    }
+    try wheel(80, .mouse);
+    try frameAfter(16);
+    try frameAfter(16);
+    try std.testing.expect(t_viewport_y > 0);
+    try std.testing.expectEqual(@as(f32, 0), t_over_y);
     try wheelFrames(60);
-    try std.testing.expectApproxEqAbs(@as(f32, 100), t_viewport_y, 0.01);
+    try std.testing.expectApproxEqAbs(destination, t_viewport_y, 0.5);
+    try std.testing.expect(!t_moving);
 }
 
 test "a press during the return catches it where it is drawn" {
