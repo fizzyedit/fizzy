@@ -82,6 +82,17 @@ pub fn frameInsets(win: *dvui.Window) dvui.Rect {
     const in = platform.linux_titlebar.frameInsets(win.backend.impl.window);
     return .{ .x = in.left, .y = in.top, .w = in.right, .h = in.bottom };
 }
+/// Writes `core.platform.soft_keyboard` from the backend, once a frame on the UI thread, and logs
+/// a change when the backend logs events. Stays false with dvui's stock backend, which cannot say.
+pub fn pollSoftKeyboard(win: *dvui.Window) void {
+    if (comptime !@import("native_backend").fizzy) return;
+    const shown = win.backend.impl.screenKeyboardShown();
+    if (shown != fizzy.core.platform.soft_keyboard and win.backend.impl.log_events) {
+        std.log.debug("soft_keyboard {}", .{shown});
+    }
+    fizzy.core.platform.soft_keyboard = shown;
+}
+
 /// Linux: the desktop's blur behind the window's frame this frame — inside its shadow's margin,
 /// its corners rounded by `radius` points — or none (null). Whether the compositor blurs behind
 /// windows at all (`platform.linux_titlebar.blurBehind`); false elsewhere.

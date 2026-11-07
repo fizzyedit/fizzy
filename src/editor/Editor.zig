@@ -4685,6 +4685,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         }
     }
 
+    fizzy.backend.pollSoftKeyboard(dvui.currentWindow());
     if (fizzy.backend.pollPendingAbout()) {
         // The app menu's "About fizzy" is AppKit's own item, so it has no model tag.
         editor.app.host.runCommand("fizzy.about") catch |err| {

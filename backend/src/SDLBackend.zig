@@ -2651,6 +2651,11 @@ pub fn setCursor(self: *SDLBackend, cursor: dvui.enums.Cursor) void {
     self.manage_backend_tracking.check(.setCursor);
 }
 
+/// Whether the OS shows its on-screen keyboard over the main window now.
+pub fn screenKeyboardShown(self: *SDLBackend) bool {
+    return c.SDL_ScreenKeyboardShown(self.window);
+}
+
 pub fn textInputRect(self: *SDLBackend, rect: ?dvui.Rect.Natural) void {
     // dvui calls this backend hook during Window.end(), while the window is current.
     self.textInputRectWithHints(rect, glass.field_hints.current());
