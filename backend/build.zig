@@ -220,7 +220,12 @@ pub fn backendModule(dep: *std.Build.Dependency, dvui_mod: *std.Build.Module, op
             const api = b.fmt("{d}", .{opts.target.result.os.version_range.linux.android});
             sdl_translate_c.defineCMacro("__ANDROID_API__", api);
             sdl_translate_c.defineCMacro("__ANDROID_MIN_SDK_VERSION__", api);
+            // `__clang_analyzer__` turns bionic's fortify wrappers off, but SDL_stdinc.h reads it
+            // too: its analyzer block redefines SDL_malloc, SDL_free, SDL_memcpy, SDL_strlen and
+            // the rest as the libc functions. `SDL_DISABLE_ANALYZE_MACROS` skips that block, so
+            // the translation keeps SDL's own functions.
             sdl_translate_c.defineCMacro("__clang_analyzer__", "1");
+            sdl_translate_c.defineCMacro("SDL_DISABLE_ANALYZE_MACROS", "1");
             sdl_translate_c.defineCMacro("_Nullable", "");
             sdl_translate_c.defineCMacro("_Nonnull", "");
             sdl_translate_c.defineCMacro("_Null_unspecified", "");

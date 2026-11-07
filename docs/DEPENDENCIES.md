@@ -307,9 +307,26 @@ the stack as it was before it moved here, which older fizzy commits still build.
 2. **build: the SDL source can be given (`-Dsdl_source`)** (`a99807d`): the library is built from
    that tree instead of the `sdl` dependency, which must be the same release (it sets the SO
    version). Upstream: worth proposing.
-3. **Android/iOS: fix configuration for Zig 0.17** (`21a1953`): updates the Android and iOS
-   configuration to build with Zig 0.17. Upstream: worth proposing; with all three changes
-   upstream, the fork goes.
+3. **Android/iOS: fix configuration for Zig 0.17** (`21a1953`): built with Zig 0.17 for an
+   Android or iOS target, `src/android.zig` and `src/ios.zig` did not give a library that
+   compiles and links (Zig bundles neither the NDK's headers nor the iOS SDK's). The commit
+   changes, in those two files:
+   - Android: takes the NDK sysroot's `usr/include` (`include_path`, an error naming the option
+     when it is missing) and its per-triple directory (`aarch64-linux-android`, …) for bionic's
+     arch headers; builds the library position-independent, since Android loads native code
+     only as a JNI shared library; stops listing the core, video, audio, sensor and camera
+     sources that `build.zig`'s generic group already compiles (duplicate symbols); compiles
+     `hidapi/android/hid.cpp` with HIDAPI off, because `SDL_android.c` registers
+     `HIDDeviceManager_tab`, which only that file defines; turns GPU and Vulkan off on 32-bit
+     ARM, as upstream SDL does.
+   - iOS: adds the SDK's `SubFrameworks` directory beside `Frameworks` (UIKit's headers reach into
+     UIUtilities, which Apple's clang driver finds by itself and a plain `-F` does not), and
+     links OpenGLES (EAGL) and, weakly, GameController and CoreHaptics (controller rumble).
+
+   Each is a change to sdl_zig's own Android/iOS support with nothing fizzy-specific in it.
+   One thing to settle first: `src/android.zig` still takes its sources from the `sdl`
+   dependency, not the tree `-Dsdl_source` gives (change 2), which `src/ios.zig` takes.
+   Upstream: worth proposing; with all three changes upstream, the fork goes.
 
 Tags: `fizzy-1.0.3+3.4.16-1` to `-11` (`d0c70fe`) are the stack that built `fizzyedit/SDL`, kept
 for older fizzy commits; `fizzy-1.0.3+3.4.16-12` → `a99807d`;
