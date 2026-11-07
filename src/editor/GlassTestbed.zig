@@ -142,6 +142,12 @@ pub const pulldown_merge: f32 = 14;
 pub const field_feather_pt: f32 = 56;
 /// The field's blur, `BlurBackdrop.Pane.radius` units: a calm, not the menu frost.
 pub const field_blur: f32 = 8;
+/// How much of the page's blur the field takes: a veil, not a frost; foxnne chose it 2026-11-07.
+pub const field_strength: f32 = 0.6;
+/// The field's `BlurField.strength` at openness `o`: 0 shut, `field_strength` from o 0.3 on.
+pub fn fieldStrengthAt(o: f32) f32 {
+    return field_strength * smoothstep(o / 0.3);
+}
 /// The page under the field: rows of word blocks this tall, points, 16 pt apart.
 pub const page_rows = 12;
 pub const page_row_h: f32 = 7;
@@ -483,7 +489,7 @@ fn drawPulldown(self: *const GlassTestbed, rs: dvui.RectScale, window: dvui.Rect
         .radius = field_blur,
         .witness = 1,
         .reach = .{ .w = p.open.w * rs.s, .h = p.open.h * rs.s },
-        .blur_field = .{ .rect = rs.rectToPhysical(p.field), .feather = field_feather_pt * rs.s, .strength = smoothstep(p.o / 0.3) },
+        .blur_field = .{ .rect = rs.rectToPhysical(p.field), .feather = field_feather_pt * rs.s, .strength = fieldStrengthAt(p.o) },
     });
     field.end();
 

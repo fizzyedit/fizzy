@@ -144,6 +144,13 @@ test "pulldown scene: the field's blur fades in over at least 20 pt and keeps it
     try expect(bed.field_blur > 0 and bed.field_blur <= 12);
 }
 
+test "pulldown scene: the field takes field_strength of the blur open, none shut" {
+    try equal(0.6, bed.field_strength);
+    try equal(bed.field_strength, bed.fieldStrengthAt(bed.openAt(20)));
+    try equal(0, bed.fieldStrengthAt(bed.openAt(0)));
+    try equal(0, bed.fieldStrengthAt(0));
+}
+
 test "pulldown: each bubble necks to the bar on at least 3 steps, never when open" {
     var necks: [3]usize = @splat(0);
     for (0..21) |step| {
