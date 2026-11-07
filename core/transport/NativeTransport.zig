@@ -23,7 +23,7 @@ wake: ?*const fn () void = null,
 mutex: SpinLock = .{},
 /// Every request started and not yet delivered or cancelled.
 jobs: std.AutoArrayHashMapUnmanaged(u64, *Job) = .empty,
-/// Cancelled while the worker was still inside `fetch` (which has no timeout). The worker
+/// Cancelled while the worker was still inside `fetch`. The worker
 /// owns them from then on and destroys them when it returns — waiting for it here would stall
 /// the UI thread for a round trip, or forever.
 orphans: std.AutoArrayHashMapUnmanaged(u64, *Job) = .empty,
@@ -52,6 +52,8 @@ const Job = struct {
     url: []u8,
     headers: []std.http.Header,
     body: []u8,
+    deadline: ?i96,
+    follow: bool,
     /// Written by the worker under the owner's mutex, read by `pump` under it.
     result: ?vfs.Error!vfs.http.Response = null,
     cancelled: bool = false,
@@ -134,6 +136,8 @@ fn request(
         .cb = cb,
         .ctx = ctx,
         .method = req.method,
+        .deadline = if (req.timeout_ms == 0) null else std.Io.Clock.boot.now(self.io).nanoseconds + @as(i96, req.timeout_ms) * std.time.ns_per_ms,
+        .follow = req.follow_redirects,
         .url = try a.dupe(u8, req.url),
         .headers = &.{},
         .body = &.{},
@@ -230,6 +234,7 @@ fn perform(job: *Job) vfs.Error!vfs.http.Response {
         .payload = if (job.body.len != 0) job.body else null,
         .extra_headers = job.headers,
         .response_writer = &body.writer,
+        .redirect_behavior = if (job.follow) null else .unhandled,
     }) catch return error.Http;
     const bytes = body.toOwnedSlice() catch return error.OutOfMemory;
     return .{ .status = @backingInt(result.status), .body = bytes };
@@ -267,18 +272,38 @@ fn cancel(ptr: *anyopaque, handle: vfs.http.Job) void {
 
 fn pump(ptr: *anyopaque) void {
     const self: *NativeTransport = @ptrCast(@alignCast(ptr));
+    const now = std.Io.Clock.boot.now(self.io).nanoseconds;
+    const Completion = struct { cb: vfs.http.DoneFn, ctx: ?*anyopaque };
+    var timed_out: std.ArrayList(Completion) = .empty;
+    defer timed_out.deinit(self.gpa);
     var done: std.ArrayList(*Job) = .empty;
     defer done.deinit(self.gpa);
     {
         self.mutex.lock();
         defer self.mutex.unlock();
-        for (self.jobs.values()) |job| {
+        var i: usize = 0;
+        while (i < self.jobs.count()) {
+            const job = self.jobs.values()[i];
+            if (job.result == null and !job.in_batch and
+                (if (job.deadline) |deadline| now >= deadline else false))
+            {
+                // Reserve before transferring ownership: an allocation failure leaves it
+                // pending for the next pump, with its callback and worker still tracked.
+                timed_out.ensureUnusedCapacity(self.gpa, 1) catch break;
+                self.orphans.put(self.gpa, job.id, job) catch break;
+                _ = self.jobs.swapRemove(job.id);
+                job.cancelled = true;
+                timed_out.appendAssumeCapacity(.{ .cb = job.cb, .ctx = job.ctx });
+                continue;
+            }
+            i += 1;
             if (job.result != null and !job.in_batch) {
                 job.in_batch = true;
                 done.append(self.gpa, job) catch break;
             }
         }
     }
+    for (timed_out.items) |completion| completion.cb(completion.ctx, error.Timeout);
     // Outside the lock: a callback may start another request, or cancel a later job of this
     // batch — which is then skipped here rather than delivered.
     for (done.items) |job| {

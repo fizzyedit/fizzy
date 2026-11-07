@@ -4,7 +4,7 @@
 //! Same completion model as `Fs`: `request` starts, the callback runs from `pump()` on the
 //! calling thread. A transport that answers synchronously (a canned test double) still queues
 //! the response until `pump`, so a client built on it never sees a completion re-enter the
-//! call that started it.
+//! call that started it. Timeout and redirect policy are the transport's to honour.
 
 const std = @import("std");
 const Fs = @import("Fs.zig");
@@ -33,6 +33,12 @@ pub const Request = struct {
     url: []const u8,
     headers: []const Header = &.{},
     body: []const u8 = &.{},
+    /// 0: no limit. Past it the callback gets `error.Timeout` from `pump`; the request is
+    /// dropped as by `cancel`.
+    timeout_ms: u32 = 30_000,
+    /// false: a 3xx is the response, `Location` unread. true: std's rule, up to 3 on a
+    /// request without a body.
+    follow_redirects: bool = true,
 };
 
 /// `body` is allocated with the allocator passed to `request` and owned by the callback.

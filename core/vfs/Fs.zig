@@ -41,15 +41,17 @@ pub const Error = error{
     /// `writeFile` with `if_unmodified_ms`: the file changed since then. Nothing was written.
     Conflict,
     OutOfMemory,
+    /// The request ran past its `timeout_ms`.
+    Timeout,
 };
 
 /// `Error!T` as it crosses between binaries — a plugin's filesystem answering fizzy, or fizzy's
 /// answering a plugin. Zig numbers errors per compilation, so an error value made on one side is
-/// a different error, or none, on the other; this carries it by its place in `Error` instead,
+/// a different error, or none, on the other; this carries it by its stable wire code instead,
 /// which both sides compile from this file.
 pub fn Result(comptime T: type) type {
     return struct {
-        /// 0 on success, else one past the error's index in `Error`.
+        /// 0 on success, else the stable code in `errors`.
         code: u8,
         value: T,
 
@@ -65,18 +67,36 @@ pub fn Result(comptime T: type) type {
     };
 }
 
-const errors = @typeInfo(Error).error_set.error_names.?;
+// Wire order is independent of Zig's compilation-dependent error ordering. Append only.
+const errors = [_]Error{
+    error.Io,
+    error.OutOfMemory,
+    error.Unsupported,
+    error.NotFound,
+    error.NotADirectory,
+    error.NotAFile,
+    error.NotEmpty,
+    error.Exists,
+    error.NotBinary,
+    error.Unauthorized,
+    error.Forbidden,
+    error.Http,
+    error.InvalidJson,
+    error.Cancelled,
+    error.Conflict,
+    error.Timeout,
+};
 
 fn codeOf(err: Error) u8 {
     inline for (errors, 1..) |e, i| {
-        if (err == @field(Error, e)) return i;
+        if (err == e) return i;
     }
     unreachable;
 }
 
 fn errorOf(code: u8) Error {
     inline for (errors, 1..) |e, i| {
-        if (code == i) return @field(Error, e);
+        if (code == i) return e;
     }
     return error.Io;
 }
