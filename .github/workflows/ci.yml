@@ -426,7 +426,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 22
     steps:
       - uses: actions/checkout@v4
       # The Zig cache as in the test job: a fixed key, one cold build saved once.
@@ -456,7 +456,9 @@ jobs:
         run: bash scripts/ci-retry.sh zig build --fetch
       - name: Run integration tests
         shell: bash
-        run: bash scripts/ci-retry.sh zig build test-integration --summary all
+        # A test binary that stalls (seen twice on 2026-11-07, it stays silent until the job limit) now
+        # fails at 16 minutes with `timeout`'s exit 124; a normal run takes about 12 minutes.
+        run: timeout -s TERM --kill-after=30 16m bash scripts/ci-retry.sh zig build test-integration --summary all
       # Every `test` block is in a test binary some step builds; one no root reaches compiles
       # nowhere, and the green run above says nothing about it. Reuses the binaries just built.
       - name: Every test is compiled
