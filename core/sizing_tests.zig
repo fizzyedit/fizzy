@@ -28,6 +28,8 @@ test {
     _ = @import("widgets/top_sheet_handle_tests.zig");
     // An image viewer fits its image and frees its checkerboard.
     _ = @import("widgets/image_view_tests.zig");
+    // A picture over its rect: takes the taps there, closes on Esc and on its bubble.
+    _ = @import("widgets/image_viewer_tests.zig");
     // Hold to select, tap to clear, on a text layout.
     _ = @import("widgets/SelectableText.zig");
     _ = @import("widgets/text_entry_tests.zig");
