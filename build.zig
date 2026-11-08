@@ -427,8 +427,11 @@ pub fn addApkSteps(b: *std.Build, fizzy_dep: *std.Build.Dependency) !void {
         return;
     };
     const lib = d.apk_lib.?;
-    if (d.target.result.os.version_range.linux.android < 26)
-        @panic("App APK needs Android API 26 or newer (pthread_getname_np)");
+    if (d.target.result.os.version_range.linux.android < 26) {
+        step.dependOn(&b.addFail("APK build: app APKs need Android API 26 or newer (pthread_getname_np); " ++
+            "pass -Dtarget=aarch64-linux-android (29) or .26").step);
+        return;
+    }
     const name = b.fmt("{s}.apk", .{d.cfg.app_name});
     const apk = @import("build/android.zig").addApk(fizzy_dep.builder, sdk, d.target.result.cpu.arch, lib, .{
         .id = d.cfg.app_bundle_id,

@@ -11,7 +11,9 @@ is not an app entry: fizzy on Android is `build/exe.zig` with an Android target.
   Zig windowing library (plans#51) grows an Android backend.
 - **Zig cannot link the library:** it ships no Android libc, so the NDK's clang does, with the
   hello and SDL archives whole (SDL finds its JNI entry points and `SDL_main` by name).
-- **minSdk is 24:** `std.Io` calls `preadv64`/`pwritev64`, which bionic has from API 24.
+- **minSdk is 26 for an app APK, 24 for the hello:** `std.Io` calls `preadv64`/`pwritev64`,
+  which bionic has from API 24; the editor also calls `pthread_getname_np`, which it has from
+  API 26, so `addApkSteps` fails below it.
 - **Use a Zig global cache of its own** (`ZIG_GLOBAL_CACHE_DIR`) when the shared one holds dvui's
   other lazy dependencies: Zig unpacks them into `zig-pkg`, and cairo/expat then fail to compile.
 - **Android (library)** is the proposed Ubuntu CI job, added separately by the maintainer.

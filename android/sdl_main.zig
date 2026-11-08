@@ -1,7 +1,9 @@
 const std = @import("std");
 
 extern "c" var environ: ?[*:null]?[*:0]u8;
-extern fn SDL_GetAndroidInternalStoragePath() [*:0]const u8;
+/// Null when SDL cannot get the app's files directory from Java.
+extern fn SDL_GetAndroidInternalStoragePath() ?[*:0]const u8;
+// Declared here: std.c has getenv but no setenv, and std.process cannot change the environment.
 extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
 
 /// SDL calls this from its activity thread in a JNI library: Zig's start.zig never runs,
@@ -23,7 +25,8 @@ fn runMain(comptime main: anytype, argc: c_int, argv: [*][*:0]u8) !u8 {
     defer arena_allocator.deinit();
 
     if (std.c.getenv("XDG_CONFIG_HOME") == null) {
-        _ = setenv("XDG_CONFIG_HOME", SDL_GetAndroidInternalStoragePath(), 0);
+        // Unset, localConfigRoot falls back as on any Linux host.
+        if (SDL_GetAndroidInternalStoragePath()) |path| _ = setenv("XDG_CONFIG_HOME", path, 0);
     }
 
     const args_vector: std.process.Args.Vector = argv[0..@intCast(argc)];
