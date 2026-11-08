@@ -563,7 +563,7 @@ fn drawMotion() void {
     var level = fizzy.core.person.motionLevel(editor.person, build_opts.look_motion);
     if (editor.person.motion == null) dvui.label(@src(), "System default ({d:0.01})", .{level}, .{});
     dvui.labelNoFmt(@src(), "Applies to every fizzy app.", .{}, .{});
-    if (editor.person.motion != null and dvui.button(@src(), "Reset to system default", .{}, .{})) {
+    if (editor.person.motion != null and core.widgets.button(@src(), "Reset to system default", .{}, .{})) {
         editor.person.motion = null;
         level = fizzy.core.person.motionLevel(editor.person, build_opts.look_motion);
         editor.savePerson();
@@ -759,7 +759,7 @@ fn drawKeptHistory() void {
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .y = 4 } });
     defer row.deinit();
     dvui.label(@src(), "{d} documents, {d:.1} MB", .{ size.files, @as(f64, @floatFromInt(size.bytes)) / (1 << 20) }, .{ .gravity_y = 0.5, .color_text = .{ .color = dvui.themeGet().color(.control, .text) } });
-    if (size.files > 0 and dvui.button(@src(), "Forget kept history", .{}, .{ .gravity_x = 1, .gravity_y = 0.5 })) {
+    if (size.files > 0 and core.widgets.button(@src(), "Forget kept history", .{}, .{ .gravity_x = 1, .gravity_y = 0.5 })) {
         _ = t.forgetKept();
         dvui.refresh(null, @src(), null);
     }

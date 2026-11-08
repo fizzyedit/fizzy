@@ -134,7 +134,7 @@ fn drawRow(editor: *Editor, layout: *Editor.Layout, region: Editor.Region, idx: 
         dvui.labelNoFmt(@src(), region.name, .{}, .{ .gravity_y = 0.5, .font = dvui.Font.theme(.title) });
         // The picker itself is framework (`app/layout/Picker.zig`), drawn by the frame above
         // everything; this only opens it, anchored under this row.
-        if (dvui.button(@src(), "Settings…", .{}, .{ .gravity_y = 0.5, .gravity_x = 1.0 })) {
+        if (core.widgets.button(@src(), "Settings…", .{}, .{ .gravity_y = 0.5, .gravity_x = 1.0 })) {
             editor.app.layout.openPicker(editor.app.gpa, region.name, head.data().rectScale().r.toNatural().bottomLeft());
         }
     }
