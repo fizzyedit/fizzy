@@ -130,6 +130,7 @@ fn announceEnd(gpa: std.mem.Allocator, host: *sdk.Host, s: Sessions.Session) voi
 
 /// A session id as its header carries it: 16 hex digits.
 pub fn formatSession(id: u64, buf: *[16]u8) []const u8 {
+    // A u64 is at most 16 hex digits, the size of `buf`.
     return std.mem.print(buf, "{x:0>16}", .{id}) catch unreachable;
 }
 

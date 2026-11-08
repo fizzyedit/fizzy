@@ -460,7 +460,7 @@ pub fn AppInit(win: *dvui.Window) !void {
 
     const editor_ptr = try allocator.create(Editor);
     fizzy.setInstances(app_ptr, editor_ptr);
-    editor_ptr.* = Editor.init(app_ptr) catch unreachable;
+    editor_ptr.* = try Editor.init(app_ptr);
     if (comptime builtin.target.cpu.arch != .wasm32) {
         if (std.c.getenv("FIZZY_GLASS_TESTBED")) |raw| {
             const cfg = Editor.GlassTestbed.parse(std.mem.span(raw)) orelse {

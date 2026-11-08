@@ -61,7 +61,8 @@ const Stage = struct {
     fn end(_: *anyopaque) void {}
     fn keyframe(_: *anyopaque, kf: *const automation.Tape.Keyframe) void {
         text.clearRetainingCapacity();
-        text.appendSlice(std.testing.allocator, kf.files[0].text) catch unreachable;
+        // Allocation can fail, and the player's callback returns no error.
+        text.appendSlice(std.testing.allocator, kf.files[0].text) catch @panic("out of memory");
         presses = 0;
     }
     fn idle(_: *anyopaque) bool {
@@ -78,13 +79,15 @@ const Stage = struct {
     fn capture(_: *anyopaque) ?*anyopaque {
         if (!snapshots_on) return null;
         const snap = std.testing.allocator.create(Snap) catch return null;
-        snap.* = .{ .text = std.testing.allocator.dupe(u8, text.items) catch unreachable, .presses = presses };
+        // Allocation can fail, and the player's callback returns no error.
+        snap.* = .{ .text = std.testing.allocator.dupe(u8, text.items) catch @panic("out of memory"), .presses = presses };
         return snap;
     }
     fn restore(_: *anyopaque, raw: *anyopaque) bool {
         const snap: *Snap = @ptrCast(@alignCast(raw));
         text.clearRetainingCapacity();
-        text.appendSlice(std.testing.allocator, snap.text) catch unreachable;
+        // Allocation can fail, and the player's callback returns no error.
+        text.appendSlice(std.testing.allocator, snap.text) catch @panic("out of memory");
         presses = snap.presses;
         return true;
     }

@@ -216,6 +216,7 @@ pub fn percentiles(ns: []u32) FrameTimes {
 
 /// The smallest value at least `p` percent of `sorted` is at or below.
 fn rank(sorted: []const u32, comptime p: u32) u32 {
+    // divCeil fails only on a zero or negative divisor, and 100 is neither.
     const at = std.math.divCeil(usize, sorted.len * p, 100) catch unreachable;
     return sorted[@max(at, 1) - 1];
 }

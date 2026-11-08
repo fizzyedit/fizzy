@@ -1004,6 +1004,7 @@ const TestTree = struct {
 
     /// `rel` under the root, with `/` for the separator. Valid until the next call.
     fn path(self: *TestTree, rel: []const u8) []const u8 {
+        // The tests' tmp root and short relative names fit max_path_bytes.
         const out = std.mem.print(&self.scratch, "{s}{s}{s}", .{ self.root, std.fs.path.sep_str, rel }) catch unreachable;
         for (out[self.root.len..]) |*c| if (c.* == '/') {
             c.* = std.fs.path.sep;
@@ -1013,7 +1014,8 @@ const TestTree = struct {
 
     /// `rel` under the root, owned by the caller.
     fn own(self: *TestTree, rel: []const u8) []u8 {
-        return testing.allocator.dupe(u8, self.path(rel)) catch unreachable;
+        // Allocation can fail; a test helper that returns no error stops the test.
+        return testing.allocator.dupe(u8, self.path(rel)) catch @panic("out of memory");
     }
 
     fn watches(self: *TestTree) Watches {

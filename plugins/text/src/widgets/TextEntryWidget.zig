@@ -818,6 +818,7 @@ pub fn draw(self: *TextEntryWidget) void {
                 if (scursor == null and sel.cursor == bytes) scursor = count * pc.len;
                 if (send == null and sel.end == bytes) send = count * pc.len;
                 count += 1;
+                // `codepoint` was just decoded, so it is a valid scalar with a length.
                 bytes += std.unicode.utf8CodepointSequenceLength(codepoint) catch unreachable;
             } else {
                 if (sstart == null and sel.start >= bytes) sstart = count * pc.len;
@@ -859,6 +860,7 @@ pub fn draw(self: *TextEntryWidget) void {
                 if (scursor == null and sel.cursor == count * pc.len) scursor = bytes;
                 if (send == null and sel.end == count * pc.len) send = bytes;
                 count += 1;
+                // `codepoint` was just decoded, so it is a valid scalar with a length.
                 bytes += std.unicode.utf8CodepointSequenceLength(codepoint) catch unreachable;
             } else {
                 if (sstart == null and sel.start >= count * pc.len) sstart = bytes;

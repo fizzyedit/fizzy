@@ -64,13 +64,13 @@ pub fn pack(gpa: std.mem.Allocator, bytes: []const u8) std.mem.Allocator.Error![
     const out = try gpa.alloc(u8, @as(usize, 1) + best_len + @as(usize, if (best == .deflated) length_room else 0));
     errdefer gpa.free(out);
     var w: std.Io.Writer = .fixed(out);
-    w.writeByte(@backingInt(best)) catch unreachable;
+    w.writeByte(@backingInt(best)) catch unreachable; // sized at :64
     switch (best) {
-        .raw => w.writeAll(bytes) catch unreachable,
-        .zero_runs => w.writeAll(form) catch unreachable,
+        .raw => w.writeAll(bytes) catch unreachable, // sized at :64
+        .zero_runs => w.writeAll(form) catch unreachable, // sized at :64
         .deflated => {
-            w.writeUleb128(form.len) catch unreachable;
-            w.writeAll(zipped.?) catch unreachable;
+            w.writeUleb128(form.len) catch unreachable; // sized at :64, length_room
+            w.writeAll(zipped.?) catch unreachable; // sized at :64
         },
     }
     return gpa.realloc(out, w.end);

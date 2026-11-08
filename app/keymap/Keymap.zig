@@ -453,6 +453,7 @@ fn km(gpa: Allocator, entries: []const Binding) !Keymap {
 }
 
 fn keys(s: []const u8) Stroke {
+    // Only the tests below call this, each with a stroke literal that parses.
     return parseKeys(s, .other) catch unreachable;
 }
 
