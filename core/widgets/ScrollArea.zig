@@ -84,6 +84,7 @@ const Touch = struct {
     seat_spring: Spring = .{},
     /// The finger that owns the drag; another finger's release or motion is not this area's.
     finger: dvui.enums.Button = .none,
+    press_point: ?dvui.Point.Physical = null,
     /// How far the content is drawn past its ends this frame: negative past the start, positive
     /// past the end, zero along an axis that is in range.
     over: dvui.Point = .{},
@@ -195,12 +196,15 @@ pub fn initWith(src: std.builtin.SourceLocation, init_opts: dvui.ScrollAreaWidge
     if (self.lead) |lead_piece| _ = lead_piece.extent(lead_piece.ctx);
 
     const dragging = dvui.currentWindow().dragging;
-    if (dragging.state == .prestart) self.press_point = dragging.pt;
+    self.press_point = self.touch.press_point;
+    if (self.press_point == null and dragging.state == .prestart) self.press_point = dragging.pt;
     for (dvui.events()) |*e| {
         if (!dvui.eventMatch(e, .{ .id = c.data().id, .r = c.init_opts.event_rect orelse c.data().borderRectScale().r })) continue;
         if (e.evt == .mouse and e.evt.mouse.action == .press and e.evt.mouse.button.touch()) {
+            if (self.touch.finger != .none) continue;
+            self.touch.finger = e.evt.mouse.button;
+            self.touch.press_point = e.evt.mouse.p;
             self.press_point = e.evt.mouse.p;
-            if (!self.touch.dragging) self.touch.finger = e.evt.mouse.button;
         }
     }
 
@@ -341,7 +345,10 @@ pub fn deinit(self: *ScrollArea) void {
     }
 
     for (dvui.events()) |e| {
-        if (e.evt == .mouse and e.evt.mouse.action == .release and e.evt.mouse.button == t.finger) t.finger = .none;
+        if (e.evt == .mouse and e.evt.mouse.action == .release and e.evt.mouse.button == t.finger) {
+            t.finger = .none;
+            t.press_point = null;
+        }
     }
     if (released) {
         t.dragging = false;
@@ -412,10 +419,13 @@ fn touchMotion(self: *ScrollArea, e: *dvui.Event) void {
     }
     const motion = me.action.motion;
     const travel = if (taking_over and self.press_point != null) me.p.diff(self.press_point.?) else motion;
-    _ = self.processMotionScroll(travel, rs.s);
+    const moved = self.processMotionScroll(travel, rs.s);
     self.finger_delta = self.finger_delta.plus(travel.scale(1 / rs.s, dvui.Point));
-    // Catch-up changes position only: velocity measures the actual event's finger motion.
-    const delta = motion.scale(-1 / rs.s, dvui.Point);
+    // Sample only the event's share of the carried content movement, excluding catch-up.
+    const delta: dvui.Point = .{
+        .x = if (travel.x != 0) moved.x * motion.x / travel.x else 0,
+        .y = if (travel.y != 0) moved.y * motion.y / travel.y else 0,
+    };
     const time_ns = input_time.get(e.num);
     t.x.sampleTimed(delta.x, time_ns);
     t.y.sampleTimed(delta.y, time_ns);
@@ -2208,7 +2218,7 @@ test "the take-over catch-up is not a velocity spike (a fling leaves at the fing
     }
 }
 
-test "a press elsewhere during take-over leaves the carried travel at 8 points" {
+test "a second finger's press does not replace the first finger's drag origin" {
     var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
     defer t.deinit();
     t_use_dvui = false;
@@ -2221,8 +2231,8 @@ test "a press elsewhere during take-over leaves the carried travel at 8 points" 
     _ = try cw.addEventPointer(.{ .button = .touch0, .action = .press, .xynorm = .{ .x = 0.1, .y = 0.5 } });
     try frameAfter(16);
     _ = try cw.addEventTouchMotion(.touch0, 0.1, 0.48, 0, -0.02);
-    // A second finger presses above this area, inside the same window in the take-over frame.
-    _ = try cw.addEventPointer(.{ .button = .touch1, .action = .press, .xynorm = .{ .x = 0.5, .y = 0.1 } });
+    // A second finger presses inside this area in the take-over frame.
+    _ = try cw.addEventPointer(.{ .button = .touch1, .action = .press, .xynorm = .{ .x = 0.5, .y = 0.7 } });
     try frameAfter(16);
     try std.testing.expectApproxEqAbs(@as(f32, 8), t_viewport_y, 0.01);
 }
@@ -2270,7 +2280,9 @@ fn releaseSpeedCase(kind: @TypeOf(t_speed_case)) !void {
     _ = try speedFrame();
     _ = try cw.end(.{});
     try cw.begin(cw.frame_time_ns + 16 * std.time.ns_per_ms);
-    for (0..4) |_| {
+    var content_start: f32 = 0;
+    for (0..4) |i| {
+        if (i == 1) content_start = t_speed_over;
         if (kind == .unscrollable) x += 10.0 / 300.0 else y += 10.0 / 400.0;
         _ = try cw.addEventTouchMotion(.touch0, x, y, if (kind == .unscrollable) 10.0 / 300.0 else 0, if (kind == .unscrollable) 0 else 10.0 / 400.0);
         input_time.set(cw, cw.event_num, cw.frame_time_ns);
@@ -2281,7 +2293,8 @@ fn releaseSpeedCase(kind: @TypeOf(t_speed_case)) !void {
     _ = try cw.addEventPointer(.{ .button = .touch0, .action = .release, .xynorm = .{ .x = x, .y = y } });
     input_time.set(cw, cw.event_num, cw.frame_time_ns);
     _ = try speedFrame();
-    try std.testing.expectApproxEqAbs(@as(f32, -625), if (kind == .unscrollable) t_speed.x else t_speed.y, 0.01);
+    const expected = if (kind == .band) (t_speed_over - content_start) / 0.048 else @as(f32, 0);
+    try std.testing.expectApproxEqAbs(expected, if (kind == .unscrollable) t_speed.x else t_speed.y, 0.01);
     try std.testing.expectEqual(@as(f32, 0), if (kind == .unscrollable) t_speed_position.x else t_speed_position.y);
     if (kind == .band) {
         try std.testing.expect(t_speed_over < 0 and t_speed_over > -40);
@@ -2291,15 +2304,15 @@ fn releaseSpeedCase(kind: @TypeOf(t_speed_case)) !void {
     }
 }
 
-test "past an end the band releases at the finger speed of minus 625 points per second" {
+test "release speed inside the band equals the damped content speed" {
     try releaseSpeedCase(.band);
 }
 
-test "an unscrollable axis releases at the finger speed of minus 625 points per second" {
+test "an axis that cannot scroll hands no velocity to the settle" {
     try releaseSpeedCase(.unscrollable);
 }
 
-test "a nested area at its start releases at the finger speed of minus 625 points per second" {
+test "a nested area at its start releases without velocity" {
     try releaseSpeedCase(.nested);
 }
 
