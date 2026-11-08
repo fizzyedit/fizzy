@@ -19,11 +19,11 @@ hover: bool = false,
 focus: bool = false,
 click: bool = false,
 
-pub const InitOptions = dvui.ButtonWidget.InitOptions;
+pub const InitOptions = dvui.ButtonWidget.InitOptions; // lint-allow(raw-button): the core button wraps dvui's
 
 /// Initializes an undefined button and makes it the current parent.
 pub fn init(self: *Button, src: std.lang.SourceLocation, init_options: InitOptions, opts: Options) void {
-    var options = dvui.ButtonWidget.defaults.override(opts);
+    var options = dvui.ButtonWidget.defaults.override(opts); // lint-allow(raw-button): the core button wraps dvui's
     if (init_options.grayed) {
         options.color_text = .{ .color = dvui.Color.average(options.color(.text).toColor(), options.color(.fill).toColor()) };
     }
