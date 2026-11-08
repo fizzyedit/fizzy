@@ -1,15 +1,17 @@
-//! The menu over a touch selection: one row of text buttons (Copy, Select all) above the selected
-//! text, or below it where there is no room above, drawn from dvui's own selection state
-//! (`selection`, `state.touch_editing`, `state.sel_start_r` / `sel_end_r`) and the bit
+//! The menu over a touch selection: one row of text buttons (Cut, Copy, Paste, Select all) above
+//! the selected text, or below it where there is no room above, drawn from dvui's own selection
+//! state (`selection`, `state.touch_editing`, `state.sel_start_r` / `sel_end_r`) and the bit
 //! `takeWanted` keeps of dvui's wish to show its menu.
 //!
 //! It is fizzy's because dvui draws its own inside `dvui.textLayout`
-//! (`TextLayoutWidget.touchEditingMenu`), before a caller can reach it: two 20-point icons with no
-//! labels, at the layout's corner. Here the buttons say what they do and are tall enough for a
-//! finger, the selection itself stays dvui's.
+//! (`TextLayoutWidget.touchEditingMenu`) and `TextEntryWidget.init`, before a caller can reach
+//! it: 20-point icons with no labels at the layout's corner, a field's Paste even where the
+//! clipboard cannot be read. Here the buttons say what they do and are tall enough for a finger,
+//! the selection itself stays dvui's.
 const std = @import("std");
 const builtin = @import("builtin");
 const dvui = @import("dvui");
+const clipboard = @import("clipboard.zig");
 
 /// How the menu looks and reports. Sizes are in points.
 pub const Style = struct {
@@ -34,6 +36,23 @@ pub const Action = enum { select_all, copy, cut, paste };
 pub const Target = union(enum) {
     /// Read-only text: Copy and Select all.
     layout: *dvui.TextLayoutWidget,
+    /// A text field: Cut, Copy, Paste and Select all. Its layout is `entry.textLayout`.
+    entry: *dvui.TextEntryWidget,
+
+    fn textLayout(target: Target) *dvui.TextLayoutWidget {
+        return switch (target) {
+            .layout => |tl| tl,
+            .entry => |entry| &entry.textLayout,
+        };
+    }
+
+    /// The widget that holds focus while the text is edited: the field, not its layout.
+    fn focusId(target: Target) dvui.Id {
+        return switch (target) {
+            .layout => |tl| tl.data().id,
+            .entry => |entry| entry.data().id,
+        };
+    }
 };
 
 /// The order buttons take in the row, when shown.
@@ -61,19 +80,15 @@ pub fn restoreWanted(tl: *dvui.TextLayoutWidget) void {
 
 /// Whether `win`, a press's `floating_win`, is the window of the menu drawn for `target`.
 pub fn isMenuWindow(target: Target, win: dvui.Id) bool {
-    const tl = switch (target) {
-        .layout => |tl| tl,
-    };
-    return dvui.dataGet(null, tl.data().id, "_menu_win", dvui.Id) == win;
+    return dvui.dataGet(null, target.textLayout().data().id, "_menu_win", dvui.Id) == win;
 }
 
 /// Draws the menu for `target` when `wanted`, the text is touch editing, focused and visible.
-/// Draw it before the text is added: dvui applies `copy` while adding text.
+/// Draw a `.layout`'s before the text is added: dvui applies its `copy` while adding text. Draw
+/// an `.entry`'s after `entry.draw()`, where the selection's rects are this frame's.
 pub fn menu(target: Target, wanted: bool, style: Style) void {
-    const tl = switch (target) {
-        .layout => |tl| tl,
-    };
-    if (!wanted or !tl.state.touch_editing or dvui.focusedWidgetId() != tl.data().id or !tl.data().visible()) return;
+    const tl = target.textLayout();
+    if (!wanted or !tl.state.touch_editing or dvui.focusedWidgetId() != target.focusId() or !tl.data().visible()) return;
 
     var actions: [order.len]Action = undefined;
     var n: usize = 0;
@@ -127,6 +142,11 @@ fn shown(target: Target, action: Action) bool {
             .select_all => true,
             .cut, .paste => false,
         },
+        .entry => |entry| switch (action) {
+            .cut, .copy => !entry.textLayout.selection.empty(),
+            .paste => clipboard.canPaste(),
+            .select_all => true,
+        },
     };
 }
 
@@ -141,6 +161,17 @@ fn apply(target: Target, action: Action) void {
             },
             .select_all => tl.selection.selectAll(),
             .cut, .paste => {},
+        },
+        .entry => |entry| {
+            switch (action) {
+                .cut => entry.cut(),
+                .copy => entry.copy(),
+                .paste => entry.paste(),
+                .select_all => return entry.textLayout.selection.selectAll(),
+            }
+            // The edit is done; the selection, or the caret a cut or paste leaves, stays.
+            entry.textLayout.state.te_show_context_menu = false;
+            dvui.dataSet(null, entry.textLayout.data().id, "_menu", false);
         },
     }
 }

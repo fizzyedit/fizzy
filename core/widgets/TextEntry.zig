@@ -1,7 +1,8 @@
 //! A text field whose touch focus waits for a tap and whose selection waits for a hold.
 //! dvui adds a `.focus` before every press (`Window.addEventMouseButton`), so otherwise a
 //! finger landing on a field to scroll enters it. Wrap its widget and suppress that focus;
-//! the mouse, text editing, selection handles and menu remain dvui's.
+//! the mouse, text editing and selection handles remain dvui's. The touch menu is fizzy's,
+//! `SelectionControls`, drawn at the end of `init`; `deinit` turns dvui's off.
 const std = @import("std");
 const dvui = @import("dvui");
 const field_edit = @import("glass").field_edit;
@@ -9,17 +10,25 @@ const field_hints = @import("glass").field_hints;
 const TouchHold = @import("../TouchHold.zig");
 const touch = @import("touch.zig");
 const SelectableText = @import("SelectableText.zig");
+const SelectionControls = @import("SelectionControls.zig");
 const widgets = @import("../widgets.zig");
 
 const TextEntry = @This();
 entry: *dvui.TextEntryWidget,
 hold: *TouchHold,
+style: SelectionControls.Style,
 
 /// Starts the field, reads this frame's touch events and draws it. Call `deinit`, as for `dvui.textEntry`.
 pub fn init(src: std.lang.SourceLocation, init_opts: dvui.TextEntryWidget.InitOptions, opts: dvui.Options) TextEntry {
+    return initStyled(src, init_opts, opts, .{});
+}
+
+/// `init`, with the selection menu drawn in `style`.
+pub fn initStyled(src: std.lang.SourceLocation, init_opts: dvui.TextEntryWidget.InitOptions, opts: dvui.Options, style: SelectionControls.Style) TextEntry {
     const unhandled = touch.unhandledPresses();
     const entry = dvui.widgetAlloc(dvui.TextEntryWidget);
     entry.init(src, init_opts, opts);
+    SelectionControls.restoreWanted(&entry.textLayout);
     // Unfocused fields leave edits queued so only the intended focused field consumes them.
     if (dvui.focusedWidgetId() == entry.data().id) {
         for (field_edit.take()) |edit| {
@@ -50,6 +59,7 @@ pub fn init(src: std.lang.SourceLocation, init_opts: dvui.TextEntryWidget.InitOp
     const self: TextEntry = .{
         .entry = entry,
         .hold = dvui.dataGetPtrDefault(null, entry.data().id, "_hold", TouchHold, .{}),
+        .style = style,
     };
     self.keepFocusOnTouchdown();
     // dvui turns the menu and handles on when a touch-editing finger lifts.
@@ -57,6 +67,8 @@ pub fn init(src: std.lang.SourceLocation, init_opts: dvui.TextEntryWidget.InitOp
     entry.processEvents();
     self.processTouch(unhandled, touch_editing);
     entry.draw();
+    // A hold selects with the finger still down; the menu waits for its release.
+    SelectionControls.menu(.{ .entry = entry }, entry.textLayout.state.te_show_context_menu and !self.hold.armed, style);
     if (dvui.focusedWidgetId() == entry.data().id) {
         const sel = entry.textLayout.selection;
         const text = entry.getText();
@@ -75,7 +87,14 @@ pub fn init(src: std.lang.SourceLocation, init_opts: dvui.TextEntryWidget.InitOp
 
 /// Ends the field and scrolls its enclosing area to it when focus or its size changes.
 pub fn deinit(self: *TextEntry) void {
+    // dvui's set flag draws dvui's own menu in the next `TextEntryWidget.init`; `init` draws
+    // fizzy's from the bit kept. The layout's `deinit` runs dvui's `matchEvent` again, which sets
+    // the flag on a touch release, so it is cleared once more through the state, which outlives
+    // the widget.
+    const state = self.entry.textLayout.state;
+    _ = SelectionControls.takeWanted(&self.entry.textLayout);
     widgets.textEntryDeinit(self.entry);
+    state.te_show_context_menu = false;
     self.* = undefined;
 }
 
@@ -105,7 +124,9 @@ fn processTouch(self: TextEntry, unhandled: touch.Presses, touch_editing: bool) 
         switch (me.action) {
             .press => {
                 if (me.floating_win != dvui.subwindowCurrentId()) {
-                    if (!touch.tookPress(unhandled, i, e)) {
+                    if (SelectionControls.isMenuWindow(.{ .entry = self.entry }, me.floating_win)) {
+                        // A button of the menu, drawn after this, takes it.
+                    } else if (!touch.tookPress(unhandled, i, e)) {
                         hold.cancel();
                         tl.state.touch_editing = false;
                     }

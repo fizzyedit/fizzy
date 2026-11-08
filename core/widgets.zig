@@ -53,8 +53,10 @@ pub const TopSheet = @import("widgets/TopSheet.zig");
 pub const VirtualList = @import("widgets/VirtualList.zig");
 /// A `dvui.textLayout` whose touch selection is a hold, not a tap (`core/TouchHold.zig`).
 pub const SelectableText = @import("widgets/SelectableText.zig");
-/// The Copy / Select all menu over a touch selection, fizzy's in place of dvui's.
+/// The Cut / Copy / Paste / Select all menu over a touch selection, fizzy's in place of dvui's.
 pub const SelectionControls = @import("widgets/SelectionControls.zig");
+/// Whether a Paste can read the clipboard here.
+pub const clipboard = @import("widgets/clipboard.zig");
 /// A `dvui.textEntry` whose touch focus and selection are taps and holds, not a press.
 pub const TextEntry = @import("widgets/TextEntry.zig");
 
@@ -270,7 +272,7 @@ pub fn textEntryMenu(te: *dvui.TextEntryWidget) bool {
         te.copy();
         menu_popup.close();
     }
-    if (menuRow(@src(), "Paste", .{ .icon = icons.tvg.lucide.@"clipboard-paste", .keybind = keybinds.get("paste") orelse .{} }) != null) {
+    if (clipboard.canPaste() and menuRow(@src(), "Paste", .{ .icon = icons.tvg.lucide.@"clipboard-paste", .keybind = keybinds.get("paste") orelse .{} }) != null) {
         te.paste();
         menu_popup.close();
         dvui.focusWidget(te.data().id, null, null);
