@@ -472,6 +472,62 @@ jobs:
           path: .zig-cache
           key: ${{ steps.zig-cache-key.outputs.key }}
 
+  # The library an Android app is built from: Fizzy's code for aarch64 Android with SDL's own
+  # JNI entry point exported (`SDL_main`). Not part of `ci-ok` yet: it informs, and joins the
+  # required checks after it has been green for a few runs. The hosted image carries an Android
+  # SDK; the step below installs the exact NDK and platform the project builds with.
+  android:
+    name: Android library (aarch64)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Zig cache key
+        id: zig-cache-key
+        shell: bash
+        run: |
+          prefix="zig-${{ env.ZIG_VERSION }}-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-"
+          echo "key=${prefix}${{ hashFiles('**/build.zig.zon') }}" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" = pull_request ]; then echo "fallback=$prefix" >> "$GITHUB_OUTPUT"; fi
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+          use-cache: false
+      - name: Restore Zig cache
+        id: zig-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .zig-cache
+          key: ${{ steps.zig-cache-key.outputs.key }}
+          restore-keys: ${{ steps.zig-cache-key.outputs.fallback }}
+      - name: Pre-create Zig cache tmp/
+        shell: bash
+        run: mkdir -p "$ZIG_GLOBAL_CACHE_DIR/tmp" "$ZIG_LOCAL_CACHE_DIR/tmp"
+      - name: Android SDK pieces
+        shell: bash
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;27.2.12479018" "platforms;android-35" "build-tools;35.0.0"
+      - name: Fetch dependencies (with retries)
+        shell: bash
+        run: bash scripts/ci-retry.sh zig build --fetch
+      - name: Build the Android library
+        shell: bash
+        run: timeout -s TERM --kill-after=30 20m bash scripts/ci-retry.sh zig build -Dtarget=aarch64-linux-android -Dandroid-sdk="$ANDROID_HOME" -Ddynamic-plugins=false --summary all
+      - name: The app entry point is exported
+        shell: bash
+        run: |
+          nm_bin=$(ls "$ANDROID_HOME"/ndk/27.2.12479018/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm)
+          "$nm_bin" zig-out/lib/libmain.a | grep -w 'T SDL_main'
+      - name: Save Zig cache
+        if: success() && steps.zig-cache.outputs.cache-matched-key == ''
+        uses: actions/cache/save@v4
+        with:
+          path: .zig-cache
+          key: ${{ steps.zig-cache-key.outputs.key }}
+
   # A run of the real app that plays the soak tape to its end and exits with a verdict
   # (`src/editor/verdict.zig`, docs/AUTOMATION.md "A run that ends in a verdict"): no wait gave up,
   # SDL logged no error, the OS windows came back to one. Debug, so the debug allocator looks for
