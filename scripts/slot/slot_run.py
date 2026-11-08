@@ -56,8 +56,13 @@ def unlock_keychain():
 
 
 def rmtree(path, ignore_errors=False):
-    def fix(func, p, *_):
-        os.chmod(p, stat.S_IWRITE)  # git objects are read-only on Windows
+    def fix(func, p, exc):
+        exc = exc[1] if isinstance(exc, tuple) else exc  # onerror passes exc_info, onexc the exception
+        # Only a read-only file is repaired (git objects on Windows); a directory that failed
+        # ENOTEMPTY keeps its mode, so the caller's retry can still list it.
+        if not isinstance(exc, PermissionError) or func not in (os.unlink, os.remove):
+            raise exc
+        os.chmod(p, stat.S_IWRITE)
         func(p)
     kw = {'onexc': fix} if sys.version_info >= (3, 12) else {'onerror': fix}
     try:
@@ -68,7 +73,17 @@ def rmtree(path, ignore_errors=False):
 
 
 def still_running(work):
-    """What still runs in the workspace, as 'pid command' lines: its directory there (Linux) or its path in the command line."""
+    """What still runs in the workspace, as 'pid command' lines: its directory there (Linux) or its path in the command line.
+
+    Best-effort: a failure to look is logged and reads as nothing running."""
+    try:
+        return processes_in(work)
+    except Exception as exc:  # noqa: BLE001 - only a log line depends on it
+        print(f'cleanup: could not list processes: {exc}', file=sys.stderr)
+        return []
+
+
+def processes_in(work):
     found = {}
     if Path('/proc').is_dir():
         for entry in Path('/proc').iterdir():
@@ -95,7 +110,7 @@ def stop_groups(groups):
     # A command's group outlives it when it backgrounded a zig build or dev server, which keeps
     # writing into the workspace while rmtree empties it (Errno 39, Directory not empty).
     if os.name == 'nt':
-        return  # taskkill /T needs a live parent; the timeout path already ran it
+        return  # no-op on Windows: taskkill /T needs a live parent; the timeout path already ran it
     for pgid in groups:
         try:
             os.killpg(pgid, signal.SIGKILL)
@@ -443,7 +458,10 @@ def run(job, job_dir, out, keep):
         thread.join()
         if not keep:
             # Never raises: main() would take an OSError here for a broken slot and drop the result.
-            remove_checkout(work, groups)
+            try:
+                remove_checkout(work, groups)
+            except Exception as exc:  # noqa: BLE001 - the result is written; cleanup only logs
+                print(f'cleanup: failed: {exc!r}; left behind {work}', file=sys.stderr)
 
 
 def main(argv=None):

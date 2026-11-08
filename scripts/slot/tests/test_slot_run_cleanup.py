@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -54,6 +55,57 @@ class CleanupRunTests(unittest.TestCase):
         self.assertTrue((self.out / 'change.mbox').is_file())
         self.assertFalse(self.work().exists())
 
+    def test_late_file_at_rmdir_goes_through_shutil_handler_and_retry(self):
+        # The race itself: a file appears just before the checkout's own os.rmdir, so the real
+        # shutil error handler sees ENOTEMPTY and the retry must still be able to list the tree.
+        real = os.rmdir
+        seen = []
+
+        def racing(path, *args, **kwargs):
+            if os.path.basename(os.fsdecode(path)) == self.job['id'] and not seen:
+                seen.append((self.out / 'result.json').is_file())
+                (self.work() / 'late.txt').write_text('late')
+            return real(path, *args, **kwargs)
+
+        with mock.patch.object(slot_run.os, 'rmdir', side_effect=racing), \
+                mock.patch('sys.stderr') as stderr:
+            self.assertEqual(self.main(), 0)
+        self.assertEqual(seen, [True], 'result.json must exist before the first rmdir of the checkout')
+        logged = ''.join(c.args[0] for c in stderr.write.call_args_list)
+        self.assertIn('attempt 1/5', logged)
+        self.assertIn('Directory not empty', logged)
+        self.result('done')
+        self.assertTrue((self.out / 'change.mbox').is_file())
+        self.assertFalse(self.work().exists())
+
+    @unittest.skipIf(not shutil.which('pgrep'), 'needs pgrep')
+    def test_pgrep_failure_keeps_the_result_and_still_removes_tree(self):
+        real = subprocess.run
+
+        def run(args, *rest, **kwargs):
+            if isinstance(args, list) and args[0] == 'pgrep':
+                raise OSError(errno.EAGAIN, os.strerror(errno.EAGAIN))
+            return real(args, *rest, **kwargs)
+
+        with mock.patch.object(slot_run.subprocess, 'run', side_effect=run), \
+                mock.patch('sys.stderr') as stderr:
+            self.assertEqual(self.main(), 0)
+        logged = ''.join(c.args[0] for c in stderr.write.call_args_list)
+        self.assertIn('could not list processes', logged)
+        self.result('done')
+        self.assertTrue((self.out / 'change.mbox').is_file())
+        self.assertFalse(self.work().exists())
+
+    def test_cleanup_error_never_replaces_a_done_result(self):
+        with mock.patch.object(slot_run, 'remove_checkout', side_effect=TypeError('boom')), \
+                mock.patch('sys.stderr') as stderr:
+            self.assertEqual(self.main(), 0)
+        logged = ''.join(c.args[0] for c in stderr.write.call_args_list)
+        self.assertIn('cleanup: failed', logged)
+        self.result('done')
+        self.assertTrue((self.out / 'change.mbox').is_file())
+        shutil.rmtree(self.work())
+
     @unittest.skipIf(os.name == 'nt', 'process groups are POSIX')
     def test_background_gate_process_is_killed_before_rmtree(self):
         marker = 'slot-cleanup-' + str(os.getpid())
@@ -89,6 +141,24 @@ class RemoveCheckoutTests(unittest.TestCase):
         logged = ''.join(c.args[0] for c in stderr.write.call_args_list)
         self.assertIn('attempt 3/3', logged)
         self.assertIn('left behind', logged)
+
+    @unittest.skipIf(os.name == 'nt', 'permission bits are POSIX')
+    def test_rmtree_keeps_directory_mode_on_enotempty(self):
+        real = os.rmdir
+        mode = stat.S_IMODE(self.work.stat().st_mode)
+
+        def racing(path, *args, **kwargs):
+            if os.fsdecode(path) in (str(self.work), self.work.name):
+                (self.work / 'late.txt').write_text('late')
+            return real(path, *args, **kwargs)
+
+        with mock.patch.object(slot_run.os, 'rmdir', side_effect=racing):
+            with self.assertRaises(OSError) as raised:
+                slot_run.rmtree(self.work)
+        self.assertEqual(raised.exception.errno, errno.ENOTEMPTY)
+        self.assertEqual(stat.S_IMODE(self.work.stat().st_mode), mode)
+        slot_run.rmtree(self.work)
+        self.assertFalse(self.work.exists())
 
     @unittest.skipIf(not Path('/proc').is_dir(), 'reads /proc')
     def test_still_running_names_a_process_in_the_workspace(self):
