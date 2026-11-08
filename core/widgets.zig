@@ -53,6 +53,8 @@ pub const TopSheet = @import("widgets/TopSheet.zig");
 pub const VirtualList = @import("widgets/VirtualList.zig");
 /// A `dvui.textLayout` whose touch selection is a hold, not a tap (`core/TouchHold.zig`).
 pub const SelectableText = @import("widgets/SelectableText.zig");
+/// The Copy / Select all menu over a touch selection, fizzy's in place of dvui's.
+pub const SelectionControls = @import("widgets/SelectionControls.zig");
 /// A `dvui.textEntry` whose touch focus and selection are taps and holds, not a press.
 pub const TextEntry = @import("widgets/TextEntry.zig");
 
