@@ -2,13 +2,17 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="dev.fizzyedit.hello">
 
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-sdk android:minSdkVersion="26"/>
+
     <uses-feature android:glEsVersion="0x00020000" />
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
 
-    <application android:label="Fizzy" android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
+    <application android:label="APP_LABEL" APP_ICON android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
         <activity
             android:name=".FizzyActivity"
             android:exported="true"
+            android:windowSoftInputMode="adjustResize"
             android:configChanges="layoutDirection|locale|orientation|uiMode|screenLayout|screenSize|smallestScreenSize|keyboard|keyboardHidden|navigation">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
