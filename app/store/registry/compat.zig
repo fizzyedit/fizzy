@@ -15,6 +15,8 @@ pub fn hostKey() []const u8 {
     return comptime hostKeyFor(builtin.target);
 }
 
+/// The `os-arch` registry key for a given comptime `target`, as `hostKey` gives it
+/// for the host (e.g. "android-aarch64", "web-wasm32").
 pub fn hostKeyFor(comptime target: std.Target) []const u8 {
     // The web: one key for the wasm side module a plugin publishes for the browser.
     if (target.cpu.arch == .wasm32) return "web-wasm32";
