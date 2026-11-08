@@ -14,7 +14,6 @@
 const std = @import("std");
 const dvui = @import("dvui");
 const glass = @import("../../glass.zig");
-const motion = @import("glass").motion;
 const dialogs = @import("../../dialogs.zig");
 const BlurBackdrop = @import("glass").BlurBackdrop;
 const screens = @import("../../screens.zig");
@@ -92,9 +91,10 @@ pub const InitOptions = struct {
     /// Blur what is behind the panel, as a dialog does. The tint *is* the fill, so a frosted
     /// menu paints no background of its own. Null draws `opts.color_fill` the ordinary way.
     frost: ?BlurBackdrop.Pane = null,
-    /// The control it grows out of (`reveal`): it opens as that rect and its round corners, and
-    /// they become its own — the button turning into the menu rather than opening one — its rows
-    /// coming in once there is room for them. Null slides open from the edge nearest `from`.
+    /// The control it grows out of (`reveal`), placed in the control's corner: it opens as that
+    /// rect and its round corners, and they become its own — the button turning into the menu
+    /// rather than opening one — its rows coming in once there is room for them. Every menu grows
+    /// out of its source: this, else `from` (placed beside it), else its own centre.
     grow_from: ?Rect.Natural = null,
 };
 
@@ -111,7 +111,7 @@ have_popup_child: bool = false,
 focus_in_child: bool = false,
 prevClip: Rect.Physical,
 scale_val: f32,
-/// Sliding open this frame (`reveal`), so its scroll area shows no bar.
+/// Growing open this frame, before it first lands (`reveal`), so its scroll area shows no bar.
 revealing: bool = false,
 /// Corners follow the spring's size progress so they open with the box, natural units.
 grown: ?struct { radius: f32, alpha: f32 } = null,
@@ -290,56 +290,35 @@ pub fn init(self: *FloatingMenu, src: std.lang.SourceLocation, init_opts: InitOp
     self.menu.init(@src(), .{ .dir = .vertical, .parentSubwindowId = self.prev_windowInfo.id, .keyboard_nav = self.style }, options.strip().override(.{ .role = .none, .expand = .horizontal }));
 }
 
-/// The menu slides open: from nothing to its full height on the app's arrival curve
-/// (`core.motion.enter`) — plain at minimal, carrying past and settling back when motion is
-/// playful — as a dialog and the palette open. It grows from the edge nearest where it was
-/// opened: down from a menu placed below its anchor, up from one placed above it. Only once its
-/// size is known (its second frame); a menu that comes back slides open anew.
-///
-/// Given `grow_from`, it grows out of that control instead: its rect carried from the control's
-/// to its own by Spring, keeping its speed when turned round mid-grow; corners follow size
-/// progress so they open with the box (`grown`).
+/// The menu grows out of its source: its rect carried from the source's to its own by Spring,
+/// keeping its speed when turned round mid-grow, its corners following size progress so they
+/// open with the box (`grown`). The source is `grow_from` (placed in the control's corner), else
+/// `from` (placed beside it), else its own centre. How far it swings past follows the app's
+/// motion level (`core.Spring`). Only once its size is known (its second frame); a menu that
+/// comes back grows anew.
 fn reveal(self: *FloatingMenu, from: ?Rect.Natural, grow_from: ?Rect.Natural, radius: f32) void {
     const id = self.data().id;
     if (dvui.minSizeGet(id) == null) return;
     const full = self.wd.rect;
     if (full.h <= 0) return;
-    if (grow_from) |g| {
-        const scale = dvui.windowNaturalScale();
-        var m = dvui.dataGet(null, id, "_morph", glass.Morph) orelse fresh: {
-            var m: glass.Morph = .{};
-            m.start(.{ .rect = g.scale(scale, Rect.Physical), .radii = @splat(@min(g.w, g.h) * scale / 2), .round = true });
-            break :fresh m;
-        };
-        const f = m.step(.{ .rect = full.scale(scale, Rect.Physical), .radii = @splat(radius * scale), .round = true }, dvui.secondsSinceLastFrame(), scale, .{});
-        dvui.dataSet(null, id, "_morph", m);
-        self.wd.rect = f.box.rect.scale(1 / scale, Rect);
-        self.revealing = f.moving;
-        self.grown = .{ .radius = f.box.radii[0] / scale, .alpha = f.content_alpha };
-        if (f.moving) dvui.refresh(null, @src(), id);
-        return;
-    }
-    if (dvui.dataGet(null, id, "_revealed", bool) == null) {
-        dvui.dataSet(null, id, "_revealed", true);
-        dvui.animation(id, "_reveal", .{
-            .start_val = 0,
-            .end_val = 1,
-            .end_time = motion.duration(reveal_us),
-            .easing = motion.enter,
-        });
-    }
-    const a = dvui.animationGet(id, "_reveal") orelse return;
-    self.revealing = true;
-    const k = @max(0, a.value());
-    self.wd.rect.h = full.h * k;
-    // Placed above what opened it: grow up, from its bottom edge.
-    const above = if (from) |fr| full.y + full.h <= fr.y + 1 else false;
-    if (above) self.wd.rect.y = full.y + full.h - self.wd.rect.h;
-    dvui.refresh(null, @src(), id);
+    const g = grow_from orelse from orelse Rect.Natural.fromPoint(.cast(full.center()));
+    const scale = dvui.windowNaturalScale();
+    var m = dvui.dataGet(null, id, "_morph", glass.Morph) orelse fresh: {
+        var m: glass.Morph = .{};
+        m.start(.{ .rect = g.scale(scale, Rect.Physical), .radii = @splat(@min(g.w, g.h) * scale / 2), .round = true });
+        break :fresh m;
+    };
+    const f = m.step(.{ .rect = full.scale(scale, Rect.Physical), .radii = @splat(radius * scale), .round = true }, dvui.secondsSinceLastFrame(), scale, .{});
+    dvui.dataSet(null, id, "_morph", m);
+    self.wd.rect = f.box.rect.scale(1 / scale, Rect);
+    // Only until it first lands: the bar it then shows widens the menu, and hiding it again for
+    // that move would narrow it back, every frame.
+    const landed = dvui.dataGet(null, id, "_landed", void) != null;
+    if (!f.moving) dvui.dataSet(null, id, "_landed", {});
+    self.revealing = f.moving and !landed;
+    self.grown = .{ .radius = f.box.radii[0] / scale, .alpha = f.content_alpha };
+    if (f.moving) dvui.refresh(null, @src(), id);
 }
-
-/// Microseconds, as written, a menu takes to slide open: a floating surface's (`core.motion`).
-const reveal_us: i32 = motion.open_us;
 
 pub fn close(self: *FloatingMenu) void {
     self.menu.close();

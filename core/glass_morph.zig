@@ -14,7 +14,7 @@ to: glass.Box = .{ .rect = .{} },
 started: bool = false,
 
 pub const Tune = struct {
-    spring: Spring.Tune = .{ .hz = 4.5, .playful_damping = 0.72 },
+    spring: Spring.Tune = .playful,
     flex: f32 = 0.35,
     /// Points per second at which the lens reaches its full flex.
     flex_speed: f32 = 1800,
