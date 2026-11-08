@@ -61,6 +61,7 @@ pub fn add(b: *std.Build, android: ?AndroidSdk) void {
         .optimize = optimize,
         .pic = true, // linked into the app's JNI .so
     });
+    mod.addImport("android_sdl_main", sdlMainModule(b, target, optimize));
     mod.addImport("dvui", native.dvui);
     mod.addImport("backend", native.backend);
     mod.addImport("platform", exe.platformModule(b, native, target, optimize, sdl_paths));
@@ -106,4 +107,12 @@ pub fn add(b: *std.Build, android: ?AndroidSdk) void {
     package.addArgs(&.{ b.pathJoin(&.{ paths.dir, "build-tools", paths.build_tools }), abi, paths.keystore, app_id });
 
     apk_step.dependOn(&b.addInstallFile(apk, "fizzy-hello.apk").step);
+}
+
+pub fn sdlMainModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.OptimizeMode) *std.Build.Module {
+    return b.createModule(.{
+        .root_source_file = b.path("android/sdl_main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
 }

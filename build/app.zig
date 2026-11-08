@@ -310,7 +310,7 @@ pub fn readConfig(b: *std.Build, target: std.Build.ResolvedTarget, opts: Options
     // configures the app all the same, leaving out only what links Velopack (packaging, the
     // MSVC setup, `-Dvelopack`), which nothing else waits on. Returning early instead left the
     // app unconfigured, and an app built on fizzy (`buildApp`) found no artifact and no options.
-    const vz = b.lazyDependency("velopack_zig", .{});
+    const vz = if (target.result.abi.isAndroid()) null else b.lazyDependency("velopack_zig", .{});
 
     const common = @import("common.zig");
 
@@ -350,7 +350,7 @@ pub fn readConfig(b: *std.Build, target: std.Build.ResolvedTarget, opts: Options
     // it via a second compile, so `zig build` / `run` / `test` never pull dotnet
     // or the static Velopack lib unless you ask. Windows *-gnu targets are
     // unchanged (no Velopack prebuilt for that ABI).
-    const velopack_supported_for_target = !(target.result.os.tag == .windows and target.result.abi != .msvc);
+    const velopack_supported_for_target = !target.result.abi.isAndroid() and !(target.result.os.tag == .windows and target.result.abi != .msvc);
     const velopack_enabled = b.option(
         bool,
         "velopack",
@@ -712,7 +712,11 @@ pub fn construct(
         app_icon_module,
     );
     install(b, target, optimize, cfg, w, built);
-    try addTests(b, target, optimize, cfg, built, assets_module, app_icon_module);
+    if (target.result.abi.isAndroid()) {
+        const fail = b.addFail("tests run on the host; build without -Dtarget=...-android");
+        b.step("test", "Run unit tests").dependOn(&fail.step);
+        b.step("test-integration", "Run headless integration tests").dependOn(&fail.step);
+    } else try addTests(b, target, optimize, cfg, built, assets_module, app_icon_module);
     return .{ .native = built, .web = w };
 }
 
@@ -887,6 +891,10 @@ fn install(
     web.install(b, w);
 
     const exe = built.main.exe;
+    if (target.result.abi.isAndroid()) {
+        b.installArtifact(exe);
+        return;
+    }
     const plugins_install_dir: std.Build.InstallDir = .{ .custom = b.fmt("{s}/plugins", .{zig_out_subdir}) };
     if (no_emit) {
         b.getInstallStep().dependOn(&exe.step);
