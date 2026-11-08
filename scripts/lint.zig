@@ -13,6 +13,7 @@ const Rule = enum {
     @"raw-transient-surface",
     @"raw-scroll-area",
     @"raw-text-entry",
+    @"raw-button",
     @"todo-seam",
     @"catch-unreachable-comment",
 };
@@ -287,7 +288,13 @@ const raw_calls = blk: {
         "popup",   "PopupWidget",           "floatingWindow", "FloatingWindowWidget",
         "dialog",  "toast",                 "contextMenu",    "dropdown",
     };
-    var calls: [surfaces.len + 2]RawCall = undefined;
+    const buttons = [_]struct { name: []const u8, call_only: bool }{
+        .{ .name = "button", .call_only = true },
+        .{ .name = "buttonIcon", .call_only = true },
+        .{ .name = "buttonLabelAndIcon", .call_only = true },
+        .{ .name = "ButtonWidget", .call_only = false },
+    };
+    var calls: [surfaces.len + 2 + buttons.len]RawCall = undefined;
     for (surfaces, 0..) |name, i| calls[i] = .{
         .name = name,
         .rule = .@"raw-transient-surface",
@@ -304,6 +311,12 @@ const raw_calls = blk: {
         .rule = .@"raw-text-entry",
         .message = "dvui.textEntry focuses on a touch press; use core.widgets.TextEntry.init",
         .call_only = true,
+    };
+    for (buttons, 0..) |button, i| calls[surfaces.len + 2 + i] = .{
+        .name = button.name,
+        .rule = .@"raw-button",
+        .message = "dvui." ++ button.name ++ " has no 44-point touch target; use the core.widgets button",
+        .call_only = button.call_only,
     };
     break :blk calls;
 };
@@ -922,6 +935,26 @@ test "dvui.textEntry is flagged" {
     const findings = try analyze(arena.allocator(), "fn f() void { _ = dvui.textEntry(@src(), .{}, .{}); }");
     try std.testing.expectEqual(@as(usize, 1), findings.len);
     try std.testing.expectEqual(Rule.@"raw-text-entry", findings[0].rule);
+}
+
+test "a raw dvui button is flagged and the core button is not" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    for ([_][:0]const u8{
+        "fn f() void { _ = dvui.button(@src(), \"A\", .{}, .{}); }",
+        "fn f() void { _ = dvui.buttonIcon(@src(), \"A\", icon, .{}, .{}, .{}); }",
+        "fn f() void { _ = dvui.buttonLabelAndIcon(@src(), \"A\", icon, .{}, .{}); }",
+        "fn f() void { var bw: dvui.ButtonWidget = undefined; _ = &bw; }",
+    }) |source| {
+        const findings = try analyze(arena.allocator(), source);
+        try std.testing.expectEqual(@as(usize, 1), findings.len);
+        try std.testing.expectEqual(Rule.@"raw-button", findings[0].rule);
+    }
+    for ([_][:0]const u8{
+        "fn f() void { _ = core.widgets.button(@src(), \"A\", .{}, .{}); }",
+        "fn f() void { var bw: core.widgets.Button = undefined; _ = &bw; }",
+        "const f = dvui.button;",
+    }) |source| try std.testing.expectEqual(@as(usize, 0), (try analyze(arena.allocator(), source)).len);
 }
 
 test "core.widgets.TextEntry.init is not flagged" {

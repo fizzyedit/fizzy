@@ -42,6 +42,10 @@ paths, fuzzy matching, the LSP client, the profiler.
   the scroll's. Mouse and pen are dvui's; `te.entry` is dvui's widget.
   `scripts/zb build lint` flags `dvui.textEntry` (raw-text-entry). The text plugin's vendored
   `TextEntryWidget` is the editor, its own.
+- **Buttons are `widgets.button` / `widgets.Button`, not dvui's.** On touch the target grows to
+  44 pt, centred on the button; the drawing is unchanged. `scripts/zb build lint` flags
+  `dvui.button`, `buttonIcon`, `buttonLabelAndIcon` and `ButtonWidget` (raw-button), and the
+  budgets in `scripts/lint-allow.zon` only go down.
 - **Touch or mouse: ask dvui, never infer it.** `dvui.pointerKind()` is the window's answer,
   set as the backend adds events, the same in the app, a plugin dylib and a wasm side module.
   State kept by scanning events (a global, a per-frame key) differs per module and per frame.
