@@ -34,7 +34,7 @@ pub fn add(b: *std.Build, android: ?AndroidSdk) void {
     };
     const arch = b.option(enum { aarch64, x86_64 }, "android-arch", "aarch64 (phones, the default) or x86_64 (the emulator on an x86_64 host)") orelse .aarch64;
     // The activity's Java package stays `dev.fizzyedit.hello` (its source); this is the app's id.
-    const app_id = b.fmt("dev.fizzy.{s}", .{@import("bundle_id.zig").component(b.allocator, "hello")});
+    const app_id = "dev.fizzy.hello";
 
     const target = b.resolveTargetQuery(.{
         .cpu_arch = switch (arch) {
@@ -46,12 +46,6 @@ pub fn add(b: *std.Build, android: ?AndroidSdk) void {
         .android_api_level = 24, // Zig's std.Io calls preadv64/pwritev64, which bionic has from API 24
     });
     const optimize: std.lang.OptimizeMode = .ReleaseSafe;
-    const abi = switch (arch) {
-        .aarch64 => "arm64-v8a",
-        .x86_64 => "x86_64",
-    };
-    const triple = b.fmt("{s}-linux-android", .{@tagName(arch)});
-    const sysroot = paths.sysroot(b, b.graph.host.result.os.tag);
     const sdl_paths = @import("common.zig").sdlSystemPaths(b, target, null, paths) catch @panic("Android SDK paths unavailable");
     const native = exe.nativeDvui(b, .fizzy, target, optimize, .off, sdl_paths);
 
@@ -65,48 +59,71 @@ pub fn add(b: *std.Build, android: ?AndroidSdk) void {
     mod.addImport("dvui", native.dvui);
     mod.addImport("backend", native.backend);
     mod.addImport("platform", exe.platformModule(b, native, target, optimize, sdl_paths));
-    const hello = b.addLibrary(.{ .name = "fizzy_hello", .root_module = mod });
+    const hello = b.addLibrary(.{ .name = "main", .root_module = mod });
     // Debug C code (SDL, stb) calls __ubsan_handle_*, which the NDK linker has no runtime for.
     hello.bundle_ubsan_rt = true;
     hello.bundle_compiler_rt = true; // ubsan_rt needs __extendxftf2, which the NDK lacks
 
-    // Artifact publication waits for lazy dependencies; Zig retries configuration after fetching.
-    const sdl = backend.androidSdl(exe.backendDependency(b), exe.backendOptions(target, optimize, sdl_paths)) orelse return;
-
-    // Zig ships no Android libc, so the NDK's clang links. SDL finds its JNI entry points and
-    // `SDL_main` by name at runtime, so both archives link whole.
-    const link = b.addSystemCommand(&.{ b.pathJoin(&.{ sysroot, "../bin/clang" }), b.fmt("--target={s}24", .{triple}), "-shared" });
-    const so = link.addPrefixedOutputFileArg("-o", "libfizzy_hello.so");
-    link.addArgs(&.{ "-s", "-Wl,--gc-sections", "-Wl,-z,max-page-size=16384", "-Wl,--whole-archive" });
-    link.addArtifactArg(hello);
-    link.addArtifactArg(sdl.lib);
-    link.addArgs(&.{
-        "-Wl,--no-whole-archive",
-        "-landroid",
-        "-llog",
-        "-lEGL",
-        "-lGLESv1_CM",
-        "-lGLESv2",
-        "-lOpenSLES",
-        "-ldl",
-        "-lm",
+    const linked = linkLibrary(b, paths, target.result.cpu.arch, hello);
+    android_step.dependOn(&b.addInstallFile(linked.so, b.fmt("android/{s}/libmain.so", .{linked.abi})).step);
+    const apk = addApk(b, paths, target.result.cpu.arch, hello, .{
+        .id = app_id,
+        .label = "Fizzy",
+        .icon = null,
+        .apk_name = "fizzy-hello.apk",
     });
+    apk_step.dependOn(&b.addInstallFile(apk, "fizzy-hello.apk").step);
+}
 
-    android_step.dependOn(&b.addInstallFile(so, b.fmt("android/{s}/libfizzy_hello.so", .{abi})).step);
-
-    // SDL's Java side (the same source the native side is built from), dexed with FizzyActivity,
-    // beside the manifest and the library.
+/// Links and packages an Android static app library. The library's target sets minSdk.
+pub fn addApk(b: *std.Build, sdk: AndroidSdk, arch: std.Target.Cpu.Arch, lib: *std.Build.Step.Compile, app: struct {
+    id: []const u8,
+    label: []const u8,
+    icon: ?std.Build.LazyPath,
+    apk_name: []const u8,
+}) std.Build.LazyPath {
+    const linked = linkLibrary(b, sdk, arch, lib);
     const package = b.addSystemCommand(&.{"sh"});
     package.addFileArg(b.path("android/package.sh"));
-    package.addFileArg(so);
+    package.addFileArg(linked.so);
     package.addFileArg(b.path("android/AndroidManifest.xml"));
     package.addFileArg(b.path("android/src/FizzyActivity.java"));
-    package.addDirectoryArg(sdl.java);
-    package.addArg(b.pathJoin(&.{ paths.dir, "platforms", paths.platform, "android.jar" }));
-    const apk = package.addOutputFileArg("fizzy-hello.apk");
-    package.addArgs(&.{ b.pathJoin(&.{ paths.dir, "build-tools", paths.build_tools }), abi, paths.keystore, app_id });
+    package.addDirectoryArg(linked.java);
+    package.addArg(b.pathJoin(&.{ sdk.dir, "platforms", sdk.platform, "android.jar" }));
+    const apk = package.addOutputFileArg(app.apk_name);
+    package.addArgs(&.{ b.pathJoin(&.{ sdk.dir, "build-tools", sdk.build_tools }), linked.abi, sdk.keystore, app.id, app.label, b.fmt("{d}", .{lib.root_module.resolved_target.?.result.os.version_range.linux.android}) });
+    if (app.icon) |icon| package.addFileArg(icon);
+    return apk;
+}
 
-    apk_step.dependOn(&b.addInstallFile(apk, "fizzy-hello.apk").step);
+fn linkLibrary(b: *std.Build, paths: AndroidSdk, arch: std.Target.Cpu.Arch, lib: *std.Build.Step.Compile) struct { so: std.Build.LazyPath, java: std.Build.LazyPath, abi: []const u8 } {
+    const target = lib.root_module.resolved_target.?;
+    const optimize = lib.root_module.optimize.?;
+    const abi = switch (arch) {
+        .aarch64 => "arm64-v8a",
+        .x86_64 => "x86_64",
+        else => @panic("Android APK supports aarch64 and x86_64"),
+    };
+    const sysroot = paths.sysroot(b, b.graph.host.result.os.tag);
+    const sdl_paths = @import("common.zig").sdlSystemPaths(b, target, null, paths) catch @panic("Android SDK paths unavailable");
+    const native = exe.nativeDvui(b, .fizzy, target, optimize, .off, sdl_paths);
+    // Zig retries configuration after fetching these lazy dependencies.
+    const sdl = backend.androidSdl(exe.backendDependency(b), exe.backendOptions(target, optimize, sdl_paths)) orelse
+        return .{ .so = b.path("android/AndroidManifest.xml"), .java = b.path("android/src"), .abi = abi };
+    const link = b.addSystemCommand(&.{ b.pathJoin(&.{ sysroot, "../bin/clang" }), b.fmt("--target={s}-linux-android{d}", .{ @tagName(arch), target.result.os.version_range.linux.android }), "-shared" });
+    const so = link.addPrefixedOutputFileArg("-o", "libmain.so");
+    // SDL resolves JNI entry points and SDL_main by name at runtime.
+    link.addArgs(&.{ "-s", "-Wl,--gc-sections", "-Wl,-z,max-page-size=16384", "-Wl,--whole-archive" });
+    link.addArtifactArg(lib);
+    link.addArtifactArg(sdl.lib);
+    link.addArg("-Wl,--no-whole-archive");
+    // Zig static archives do not contain dvui's linked C libraries.
+    if (native.dep.builder.lazyDependency("freetype", .{ .target = target, .optimize = optimize })) |ft|
+        link.addArtifactArg(ft.artifact("freetype"));
+    if (native.dep.builder.lazyDependency("tree_sitter", .{ .target = target, .optimize = optimize })) |ts|
+        link.addArtifactArg(ts.artifact("tree-sitter"));
+    link.addArgs(&.{ "-landroid", "-llog", "-lEGL", "-lGLESv1_CM", "-lGLESv2", "-lOpenSLES", "-ldl", "-lm" });
+    return .{ .so = so, .java = sdl.java, .abi = abi };
 }
 
 pub fn sdlMainModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.OptimizeMode) *std.Build.Module {

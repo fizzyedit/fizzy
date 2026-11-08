@@ -8,7 +8,7 @@ from `backend/`'s pinned SDL.
 ## Build
 
 `zig build apk` (`build/android.zig`, in the root build graph) cross-compiles `android/src/main.zig`, dvui and SDL3, links them with the NDK's clang into
-`libfizzy_hello.so`, and packages `zig-out/fizzy-hello.apk` with the Android SDK's tools (`javac`,
+`libmain.so`, and packages `zig-out/fizzy-hello.apk` with the Android SDK's tools (`javac`,
 `d8`, `aapt2`, `zipalign`, `apksigner`). There is no Gradle project: SDL's Java side is compiled
 from the same SDL source the native side is built from, with the 9-line `src/FizzyActivity.java`.
 
@@ -25,12 +25,42 @@ scripts/zb build apk -Dandroid-sdk=$ANDROID_HOME                         # a pho
 ```
 
 `scripts/zb build android -Dandroid-sdk=$ANDROID_HOME -Dandroid-arch=x86_64` builds only the
-native library, installed at `zig-out/android/x86_64/libfizzy_hello.so` (or `android/arm64-v8a/`
+native library, installed at `zig-out/android/x86_64/libmain.so` (or `android/arm64-v8a/`
 for aarch64). It does not require Java, APK signing, or an emulator. Neither Android step is
 part of a default desktop build.
 
 The backend's SDL dependency is lazy: the first `scripts/zb build apk` configures, fetches it and configures
 again. Other options: `-Dandroid-ndk`, `-Dandroid-build-tools`, `-Dandroid-platform`, `-Dandroid-keystore`. The app id is `dev.fizzy.hello` (`build/bundle_id.zig`).
+
+## An app as an APK
+
+An app built on fizzy adds the APK step after `buildApp` in its `build.zig`:
+
+```zig
+try fizzy.buildApp(fizzy_dep, &.{ fizzy.plugins.workbench, fizzy.plugins.text });
+try fizzy.addApkSteps(b, fizzy_dep);
+```
+
+Pass `.@"defer-app" = true`, the Android target, and `android-sdk` to the fizzy dependency,
+just as for the other build options. Then run:
+
+```sh
+export PATH=/opt/android-jdk/bin:$PATH
+export ANDROID_HOME=/opt/android-sdk
+zig build apk -Dtarget=aarch64-linux-android -Dandroid-sdk=$ANDROID_HOME
+```
+
+The result is `zig-out/<app-name>.apk`. Its package id comes from `app-bundle-id`, its
+launcher label from `app-package-title` (or `app-name`), and its PNG launcher icon from
+`app-icon` (fizzy's icon by default). The shared library is always `libmain.so`; the activity's
+Java package stays `dev.fizzyedit.hello` independently of the app id. APKs request INTERNET
+permission and resize the window for the software keyboard.
+
+App APKs require API 26 or newer because the crash reporter uses `pthread_getname_np`;
+the hello keeps API 24. The default Android target API is also supported. Packaging uses the
+debug keystore selected by `android-keystore`. Updates need the same package id and the
+same keystore: keep that key to install an update over an existing installation. This step
+does not create a release key. A non-Android `apk` step explains which target to pass.
 
 ## Run in the emulator (pop-os)
 

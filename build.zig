@@ -159,6 +159,7 @@ var deferred: ?struct {
     cfg: @import("build/app.zig").Config,
     /// `buildApp` has run (`addPackageSteps` needs its steps).
     built: bool = false,
+    apk_lib: ?*std.Build.Step.Compile = null,
     /// What `framework` made before `buildApp`, which builds the executables with it.
     frameworks: @import("build/app.zig").Frameworks = .{},
 } = null;
@@ -304,6 +305,7 @@ pub fn addApp(fizzy_dep: *std.Build.Dependency, linked: []const BundledPlugin) !
         &deferred.?.frameworks,
     );
     deferred.?.built = true;
+    deferred.?.apk_lib = built.native.main.exe;
     return .{
         .exe = built.native.main.exe,
         .packaged = built.native.package.exe,
@@ -402,6 +404,39 @@ pub fn addWebSteps(b: *std.Build, fizzy_dep: *std.Build.Dependency) !void {
         .install_dir = .{ .custom = "web" },
         .install_subdir = "",
     }).step);
+}
+
+/// Adds `apk` to an app built with `buildApp`, installing `<app-name>.apk`.
+/// Returns `error.ApkStepTaken` if the app already has an `apk` step.
+///
+/// ```zig
+/// try fizzy.buildApp(fizzy_dep, &.{ fizzy.plugins.workbench, fizzy.plugins.text });
+/// try fizzy.addApkSteps(b, fizzy_dep);
+/// ```
+pub fn addApkSteps(b: *std.Build, fizzy_dep: *std.Build.Dependency) !void {
+    if (b.top_level_steps.contains("apk")) return error.ApkStepTaken;
+    const d = deferred orelse @panic("fizzy.addApkSteps: pass defer-app = true and call fizzy.buildApp first");
+    if (!d.built) @panic("fizzy.addApkSteps: call fizzy.buildApp first");
+    const step = b.step("apk", "Build the Android app APK");
+    if (!d.target.result.abi.isAndroid()) {
+        step.dependOn(&b.addFail("APK build: pass -Dtarget=aarch64-linux-android").step);
+        return;
+    }
+    const sdk = d.base.android orelse {
+        step.dependOn(&b.addFail("APK build: pass -Dandroid-sdk=<Android SDK directory>").step);
+        return;
+    };
+    const lib = d.apk_lib.?;
+    if (d.target.result.os.version_range.linux.android < 26)
+        @panic("App APK needs Android API 26 or newer (pthread_getname_np)");
+    const name = b.fmt("{s}.apk", .{d.cfg.app_name});
+    const apk = @import("build/android.zig").addApk(fizzy_dep.builder, sdk, d.target.result.cpu.arch, lib, .{
+        .id = d.cfg.app_bundle_id,
+        .label = d.cfg.branding.package_title,
+        .icon = d.cfg.branding.png,
+        .apk_name = name,
+    });
+    step.dependOn(&b.addInstallFile(apk, name).step);
 }
 
 /// What a dvui app of its own builds on (`addDvui`): fizzy's backend, with OS windows besides the
