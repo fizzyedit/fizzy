@@ -84,6 +84,8 @@ const Touch = struct {
     seat_spring: Spring = .{},
     /// The finger that owns the drag; another finger's release or motion is not this area's.
     finger: dvui.enums.Button = .none,
+    /// Where `finger` last pressed in this area, in physical pixels; null once it lifts. A take-over
+    /// measures its catch-up from here.
     press_point: ?dvui.Point.Physical = null,
     /// How far the content is drawn past its ends this frame: negative past the start, positive
     /// past the end, zero along an axis that is in range.
@@ -201,7 +203,7 @@ pub fn initWith(src: std.builtin.SourceLocation, init_opts: dvui.ScrollAreaWidge
     for (dvui.events()) |*e| {
         if (!dvui.eventMatch(e, .{ .id = c.data().id, .r = c.init_opts.event_rect orelse c.data().borderRectScale().r })) continue;
         if (e.evt == .mouse and e.evt.mouse.action == .press and e.evt.mouse.button.touch()) {
-            if (self.touch.finger != .none) continue;
+            if (self.touch.finger != .none and self.touch.finger != e.evt.mouse.button) continue;
             self.touch.finger = e.evt.mouse.button;
             self.touch.press_point = e.evt.mouse.p;
             self.press_point = e.evt.mouse.p;
@@ -2237,6 +2239,32 @@ test "a second finger's press does not replace the first finger's drag origin" {
     try std.testing.expectApproxEqAbs(@as(f32, 8), t_viewport_y, 0.01);
 }
 
+test "a press whose release never arrives leaves the same finger's next drag at its own point" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 400 } });
+    defer t.deinit();
+    t_use_dvui = false;
+    t_top = 100;
+    defer t_top = 0;
+    t_touch_text = true;
+    defer t_touch_text = false;
+    try dvui.testing.settle(testFrame);
+    const cw = dvui.currentWindow();
+    // The system drops this touch (the app goes to the background): no release comes.
+    _ = try cw.addEventPointer(.{ .button = .touch0, .action = .press, .xynorm = .{ .x = 0.1, .y = 0.5 } });
+    try frameAfter(16);
+    // The text that took the press is not drawn for a frame, so dvui lets its capture go; the
+    // area's record of the finger stays.
+    t_touch_text = false;
+    try frameAfter(16);
+    t_touch_text = true;
+    try frameAfter(16);
+    _ = try cw.addEventPointer(.{ .button = .touch0, .action = .press, .xynorm = .{ .x = 0.1, .y = 0.3 } });
+    try frameAfter(16);
+    _ = try cw.addEventTouchMotion(.touch0, 0.1, 0.28, 0, -0.02);
+    try frameAfter(16);
+    try std.testing.expectApproxEqAbs(@as(f32, 8), t_viewport_y, 0.01);
+}
+
 // Written and read only by the release-speed tests and their callback on the test thread.
 var t_speed_case: enum { band, unscrollable, nested } = .band;
 var t_speed: dvui.Point = .{};
@@ -2312,6 +2340,9 @@ test "an axis that cannot scroll hands no velocity to the settle" {
     try releaseSpeedCase(.unscrollable);
 }
 
+// Intended: the child at its start passes all of the finger's motion to its parent and moves
+// nothing, so it samples zero. The velocity belongs to the area that moved; the child starts no
+// coast of its own.
 test "a nested area at its start releases without velocity" {
     try releaseSpeedCase(.nested);
 }
