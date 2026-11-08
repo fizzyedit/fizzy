@@ -56,8 +56,13 @@ def unlock_keychain():
 
 
 def rmtree(path, ignore_errors=False):
-    def fix(func, p, *_):
-        os.chmod(p, stat.S_IWRITE)  # git objects are read-only on Windows
+    def fix(func, p, exc):
+        exc = exc[1] if isinstance(exc, tuple) else exc  # onerror passes exc_info, onexc the exception
+        # Only a read-only file is repaired (git objects on Windows); a directory that failed
+        # ENOTEMPTY keeps its mode, so the caller's retry can still list it.
+        if not isinstance(exc, PermissionError) or func not in (os.unlink, os.remove):
+            raise exc
+        os.chmod(p, stat.S_IWRITE)
         func(p)
     kw = {'onexc': fix} if sys.version_info >= (3, 12) else {'onerror': fix}
     try:
@@ -65,6 +70,74 @@ def rmtree(path, ignore_errors=False):
     except OSError:
         if not ignore_errors:
             raise
+
+
+def still_running(work):
+    """What still runs in the workspace, as 'pid command' lines: its directory there (Linux) or its path in the command line.
+
+    Best-effort: a failure to look is logged and reads as nothing running."""
+    try:
+        return processes_in(work)
+    except Exception as exc:  # noqa: BLE001 - only a log line depends on it
+        print(f'cleanup: could not list processes: {exc}', file=sys.stderr)
+        return []
+
+
+def processes_in(work):
+    found = {}
+    if Path('/proc').is_dir():
+        for entry in Path('/proc').iterdir():
+            if not entry.name.isdigit():
+                continue
+            try:
+                cwd = Path(os.readlink(entry / 'cwd'))
+                if cwd == work or work in cwd.parents:
+                    found[int(entry.name)] = (entry / 'cmdline').read_bytes().replace(b'\0', b' ').decode(errors='replace').strip()
+            except OSError:
+                pass
+    if os.name != 'nt' and shutil.which('pgrep'):
+        listed = subprocess.run(['pgrep', '-af' if sys.platform.startswith('linux') else '-lf', '--', str(work)],
+                                capture_output=True, text=True, check=False)
+        for line in listed.stdout.splitlines():
+            pid, _, cmd = line.partition(' ')
+            if pid.isdigit():
+                found.setdefault(int(pid), cmd)
+    found.pop(os.getpid(), None)
+    return [f'{pid} {cmd}' for pid, cmd in sorted(found.items())]
+
+
+def stop_groups(groups):
+    # A command's group outlives it when it backgrounded a zig build or dev server, which keeps
+    # writing into the workspace while rmtree empties it (Errno 39, Directory not empty).
+    if os.name == 'nt':
+        return  # no-op on Windows: taskkill /T needs a live parent; the timeout path already ran it
+    for pgid in groups:
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+
+
+def remove_checkout(work, groups, attempts=5, pause=1.0):
+    """Remove the job's checkout without ever raising: the result is already written and signed."""
+    left = still_running(work)
+    if left:
+        print('cleanup: still running at job end: ' + '; '.join(left), file=sys.stderr)
+    stop_groups(groups)
+    for attempt in range(1, attempts + 1):
+        try:
+            rmtree(work)
+            return
+        except OSError as exc:
+            if not os.path.lexists(work):
+                return
+            print(f'cleanup: attempt {attempt}/{attempts}: {exc}; still running: '
+                  + ('; '.join(still_running(work)) or 'nothing'), file=sys.stderr)
+            if attempt < attempts:
+                time.sleep(pause)
+    rmtree(work, ignore_errors=True)
+    if os.path.lexists(work):
+        print('cleanup: left behind ' + str(work), file=sys.stderr)
 
 
 def git(repo, *args, env=None):
@@ -208,7 +281,7 @@ def stop_tree(proc):
     proc.wait()
 
 
-def execute(command, repo, log, deadline, prompt=None, shell=False, tmpdir=None):
+def execute(command, repo, log, deadline, prompt=None, shell=False, tmpdir=None, groups=None):
     options = {'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == 'nt' else {'start_new_session': True}
     env = clean_env()
     unlock_keychain()
@@ -221,6 +294,8 @@ def execute(command, repo, log, deadline, prompt=None, shell=False, tmpdir=None)
     with subprocess.Popen(command, cwd=repo, env=env, shell=shell,
                           stdin=subprocess.PIPE if prompt is not None else subprocess.DEVNULL,
                           stdout=log, stderr=subprocess.STDOUT, **options) as proc:
+        if groups is not None:
+            groups.append(proc.pid)  # also its group id, by start_new_session
         try:
             proc.communicate(input=prompt, timeout=max(0, deadline - time.monotonic()))
         except subprocess.TimeoutExpired:
@@ -273,6 +348,7 @@ def run(job, job_dir, out, keep):
     started = utc()
     deadline = time.monotonic() + job['limits']['minutes'] * 60
     phase = ['agent']
+    groups = []
     stop = threading.Event()
 
     def heartbeat():
@@ -307,7 +383,7 @@ def run(job, job_dir, out, keep):
                 log.flush()
                 try:
                     rc = execute(command, work, log, deadline,
-                                 prompt.encode() if config['prompt'] == 'stdin' else None)
+                                 prompt.encode() if config['prompt'] == 'stdin' else None, groups=groups)
                 finally:
                     # Collect sandbox outputs before staging the implementation patch.
                     for name in ('pr-body.md', 'report.md', 'review.json', 'decline.md'):
@@ -354,7 +430,7 @@ def run(job, job_dir, out, keep):
                         with build_lock(locks, slots, deadline):
                             for gate in job['gates']:
                                 before = time.monotonic()
-                                code = execute(['bash', '-c', gate] if os.name == 'nt' else gate, work, log, deadline, shell=os.name != 'nt', tmpdir=tempfile.mkdtemp(prefix='s', dir='/tmp') if os.name != 'nt' else None)
+                                code = execute(['bash', '-c', gate] if os.name == 'nt' else gate, work, log, deadline, shell=os.name != 'nt', tmpdir=tempfile.mkdtemp(prefix='s', dir='/tmp') if os.name != 'nt' else None, groups=groups)
                                 result['gates'].append(dict(cmd=gate, exit=code, seconds=round(time.monotonic() - before, 3)))
                                 if code:
                                     raise ValueError('gate failed: ' + gate)
@@ -381,7 +457,11 @@ def run(job, job_dir, out, keep):
         stop.set()
         thread.join()
         if not keep:
-            rmtree(work)
+            # Never raises: main() would take an OSError here for a broken slot and drop the result.
+            try:
+                remove_checkout(work, groups)
+            except Exception as exc:  # noqa: BLE001 - the result is written; cleanup only logs
+                print(f'cleanup: failed: {exc!r}; left behind {work}', file=sys.stderr)
 
 
 def main(argv=None):
