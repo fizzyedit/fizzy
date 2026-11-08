@@ -331,7 +331,8 @@ const WindowsImpl = struct {
     /// call's result may be live across a single win32 call site.
     threadlocal var utf16_scratch: [1024]u16 = undefined;
     fn utf16Z(s: []const u8) [*:0]const u16 {
-        const n = std.unicode.utf8ToUtf16Le(utf16_scratch[0 .. utf16_scratch.len - 1], s) catch unreachable;
+        // Any string reaches here, and invalid UTF-8 is an error the pointer cannot carry.
+        const n = std.unicode.utf8ToUtf16Le(utf16_scratch[0 .. utf16_scratch.len - 1], s) catch @panic("invalid UTF-8 for a wide string");
         utf16_scratch[n] = 0;
         return @ptrCast(&utf16_scratch[0]);
     }

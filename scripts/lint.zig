@@ -14,6 +14,7 @@ const Rule = enum {
     @"raw-scroll-area",
     @"raw-text-entry",
     @"todo-seam",
+    @"catch-unreachable-comment",
 };
 const Finding = struct { rule: Rule, line: usize, message: []const u8 };
 const Allow = struct { rule: Rule, file: []const u8, count: usize };
@@ -207,6 +208,22 @@ fn analyze(allocator: std.mem.Allocator, source: [:0]const u8) ![]Finding {
         }
     }
     try rawDvuiCalls(allocator, tree, suppressions.items, &findings);
+    const tags = tree.tokens.items(.tag);
+    // `catch unreachable` and `catch |e| unreachable` say why on their line or the one above.
+    for (tags, 0..) |tag, i| {
+        if (tag != .keyword_catch) continue;
+        const payload = i + 4 < tags.len and tags[i + 1] == .pipe and tags[i + 2] == .identifier and tags[i + 3] == .pipe;
+        const at = if (payload) i + 4 else i + 1;
+        if (tags[at] != .keyword_unreachable) continue;
+        const loc = tree.tokenLocation(0, @intCast(at));
+        if (commentStart(source[loc.line_start..loc.line_end]) != null or
+            std.mem.startsWith(u8, std.mem.trimStart(u8, previousLine(source, loc.line_start), " \t"), "//")) continue;
+        try findings.append(allocator, .{
+            .rule = .@"catch-unreachable-comment",
+            .line = loc.line + 1,
+            .message = "catch unreachable needs a // reason saying why the error cannot happen",
+        });
+    }
     var create_line: ?usize = null;
     var has_destroy = false;
     for (0..tree.nodes.len) |index| {
@@ -318,6 +335,13 @@ fn rawDvuiCalls(
     }
 }
 
+/// The line before the one starting at `line_start`; empty on the first line.
+fn previousLine(source: []const u8, line_start: usize) []const u8 {
+    const end = line_start -| 1;
+    const start = if (std.mem.lastIndexOfScalar(u8, source[0..end], '\n')) |i| i + 1 else 0;
+    return source[start..end];
+}
+
 /// The caller owns the findings and frees them with `allocator`.
 fn anytypeReasons(allocator: std.mem.Allocator, source: [:0]const u8) ![]Finding {
     var tree = try std.zig.Ast.parse(allocator, source, .{});
@@ -356,13 +380,9 @@ fn anytypeReasons(allocator: std.mem.Allocator, source: [:0]const u8) ![]Finding
                     std.mem.endsWith(u8, name, "_args")))) continue;
             const loc = tree.tokenLocation(0, token);
             if (anytypeReason(source[loc.line_start..loc.line_end])) continue;
-            if (loc.line_start > 0) {
-                const end = loc.line_start - 1;
-                const start = if (std.mem.lastIndexOfScalar(u8, source[0..end], '\n')) |i| i + 1 else 0;
-                const previous = source[start..end];
-                if (std.mem.startsWith(u8, std.mem.trimStart(u8, previous, " \t"), "//") and
-                    anytypeReason(previous)) continue;
-            }
+            const previous = previousLine(source, loc.line_start);
+            if (std.mem.startsWith(u8, std.mem.trimStart(u8, previous, " \t"), "//") and
+                anytypeReason(previous)) continue;
             try findings.append(allocator, .{
                 .rule = .@"anytype-reason",
                 .line = loc.line + 1,
@@ -867,6 +887,25 @@ test "report-only findings preserve failures from enforced rules" {
     try std.testing.expect(try reportFile(&output.writer, "mixed.zig", &findings, &.{}, &.{}, false));
     try std.testing.expect(std.mem.containsAtLeast(u8, output.written(), 1, "changelog-words: history (report-only)"));
     try std.testing.expect(std.mem.containsAtLeast(u8, output.written(), 1, "anyerror: count 1 exceeds allowance 0"));
+}
+
+test "catch unreachable needs a reason" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    for ([_]struct { [:0]const u8, usize }{
+        .{ "fn t() void { _ = f() catch unreachable; }", 1 },
+        .{ "fn t() void {\n    // fixed 8-byte buffer\n    _ = f() catch unreachable;\n}", 0 },
+        .{ "fn t() void { _ = f() catch unreachable; // reason\n}", 0 },
+        .{ "fn t() void { _ = f() catch |e| unreachable; }", 1 },
+        .{ "fn t() void { a(b() catch unreachable) catch unreachable; }", 2 },
+        .{ "fn t() void { _ = \"catch unreachable\"; }", 0 },
+    }) |case| {
+        var count: usize = 0;
+        for (try analyze(arena.allocator(), case[0])) |finding| {
+            if (finding.rule == .@"catch-unreachable-comment") count += 1;
+        }
+        try std.testing.expectEqual(case[1], count);
+    }
 }
 
 test "dvui.scrollArea is flagged" {

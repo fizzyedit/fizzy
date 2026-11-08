@@ -500,7 +500,8 @@ export fn arena_u8(len: usize) [*c]u8 {
 
 export fn new_font(ptr: [*c]u8, len: usize) void {
     if (win_ok) {
-        win.addFont("Noto", ptr[0..len], gpa) catch unreachable;
+        // addFont allocates and parses bytes the page sent, and an export has no error to return.
+        win.addFont("Noto", ptr[0..len], gpa) catch @panic("could not add the page's font");
     }
 }
 
@@ -1417,8 +1418,10 @@ pub fn logFn(
     args: anytype,
 ) void {
     if (scope != .default) {
+        // Console's drain cannot fail (its doc above).
         js_console.writer.print("({s}): ", .{@tagName(scope)}) catch unreachable;
     }
+    // Console's drain cannot fail (its doc above).
     js_console.writer.print(format, args) catch unreachable;
     js_console.flushAtLevel(message_level);
 }

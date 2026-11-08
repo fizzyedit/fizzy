@@ -133,6 +133,7 @@ pub const Encoder = struct {
     fn put(self: *Encoder, n: usize) void {
         var buf: [10]u8 = undefined;
         var w: std.Io.Writer = .fixed(&buf);
+        // A 64-bit usize takes at most 10 ULEB128 bytes, the size of `buf`.
         w.writeUleb128(n) catch unreachable;
         self.out.appendSliceAssumeCapacity(w.buffered());
     }

@@ -4618,7 +4618,7 @@ test "removing a created place drops it from the tree" {
     if (editor.app.layout.dock) |*dock| created_idx = dock.findPanel("Center/r1");
     try std.testing.expect(created_idx != null);
 
-    editor.app.layout.assign(editor.app.gpa, "Center/r1", &.{}) catch unreachable;
+    try editor.app.layout.assign(editor.app.gpa, "Center/r1", &.{});
     {
         const dock = &(editor.app.layout.dock orelse return error.TestExpectedEqual);
         dock.animated = false;
@@ -6937,7 +6937,8 @@ const DemoStage = struct {
     fn keyframe(ctx: *anyopaque, kf: *const automation.Tape.Keyframe) void {
         from(ctx).keyframes += 1;
         demo_text.clearRetainingCapacity();
-        if (kf.files.len > 0) demo_text.appendSlice(std.testing.allocator, kf.files[0].text) catch unreachable;
+        // Allocation can fail, and the player's callback returns no error.
+        if (kf.files.len > 0) demo_text.appendSlice(std.testing.allocator, kf.files[0].text) catch @panic("out of memory");
         demo_clicks = 0;
         demo_commands = 0;
     }
@@ -6947,7 +6948,8 @@ const DemoStage = struct {
     fn command(ctx: *anyopaque, id: []const u8, args: []const u8) void {
         if (std.mem.eql(u8, id, "demo.ping")) demo_commands += 1;
         demo_command_args.clearRetainingCapacity();
-        demo_command_args.appendSlice(std.testing.allocator, args) catch unreachable;
+        // Allocation can fail, and the player's callback returns no error.
+        demo_command_args.appendSlice(std.testing.allocator, args) catch @panic("out of memory");
         from(ctx).commands += 1;
     }
     fn chordFor(_: *anyopaque, _: []const u8) ?@import("app").keymap.chord.Stroke {
@@ -6980,7 +6982,8 @@ const DemoStage = struct {
         }
         from(ctx).restores += 1;
         demo_text.clearRetainingCapacity();
-        demo_text.appendSlice(std.testing.allocator, snap.text) catch unreachable;
+        // Allocation can fail, and the player's callback returns no error.
+        demo_text.appendSlice(std.testing.allocator, snap.text) catch @panic("out of memory");
         demo_clicks = snap.clicks;
         demo_commands = snap.commands;
         return true;
@@ -12152,8 +12155,10 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
             fn step(ctx: *anyopaque, id: u64, st: sdk.Step) void {
                 const self: *@This() = @ptrCast(@alignCast(ctx));
                 std.debug.assert(id == self.doc);
-                self.kinds.append(std.testing.allocator, st.kind) catch unreachable;
-                self.effects.append(std.testing.allocator, std.testing.allocator.dupe(u8, st.effect) catch unreachable) catch unreachable;
+                // Allocation can fail, and the step callback returns no error.
+                self.kinds.append(std.testing.allocator, st.kind) catch @panic("out of memory");
+                const effect = std.testing.allocator.dupe(u8, st.effect) catch @panic("out of memory");
+                self.effects.append(std.testing.allocator, effect) catch @panic("out of memory");
             }
             fn deinit(self: *@This()) void {
                 for (self.effects.items) |e| std.testing.allocator.free(e);

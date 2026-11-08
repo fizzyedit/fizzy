@@ -601,7 +601,8 @@ const Log = struct {
     }
 
     fn print(self: *Log, comptime fmt: []const u8, args: anytype) void {
-        self.out.print(testing.allocator, fmt ++ "\n", args) catch unreachable;
+        // Allocation can fail, and the sink's print returns no error to carry it.
+        self.out.print(testing.allocator, fmt ++ "\n", args) catch @panic("out of memory");
     }
 
     fn sink(self: *Log) Sink {

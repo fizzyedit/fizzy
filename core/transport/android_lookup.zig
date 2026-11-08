@@ -34,7 +34,8 @@ fn netLookup(
     @memcpy(name[0..host.bytes.len], host.bytes);
     name[host.bytes.len] = 0;
     var port_buf: [8]u8 = undefined;
-    const port = std.fmt.bufPrintSentinel(&port_buf, "{d}", .{options.port}, 0) catch unreachable;
+    // A u16 port is at most 5 digits, and its sentinel fits the 8 bytes too.
+    const port = std.mem.printSentinel(&port_buf, "{d}", .{options.port}, 0) catch unreachable;
 
     const hints: std.c.addrinfo = .{
         .flags = .{ .NUMERICSERV = true },

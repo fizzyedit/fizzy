@@ -202,7 +202,7 @@ pub const StepView = struct {
     /// Each edit in order: `{ pos, removed, inserted }`, slices of the step's bytes.
     pub fn iterator(self: StepView) Iterator {
         var r: std.Io.Reader = .fixed(self.bytes);
-        _ = take(&r) catch unreachable;
+        _ = take(&r) catch unreachable; // `init` read this count
         return .{ .r = r, .left = self.edits };
     }
 
@@ -217,8 +217,8 @@ pub const StepView = struct {
             it.left -= 1;
             // `init` checked every length.
             const pos = take(&it.r) catch unreachable;
-            const removed = it.r.take(take(&it.r) catch unreachable) catch unreachable;
-            const inserted = it.r.take(take(&it.r) catch unreachable) catch unreachable;
+            const removed = it.r.take(take(&it.r) catch unreachable) catch unreachable; // `init` checked it
+            const inserted = it.r.take(take(&it.r) catch unreachable) catch unreachable; // `init` checked it
             return .{ .pos = pos, .removed = removed, .inserted = inserted };
         }
     };

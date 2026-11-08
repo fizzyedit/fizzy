@@ -83,6 +83,8 @@ Source: `lib/std/mem/Allocator.zig` ("Call `destroy` with the result to free the
   `scripts/lint-allow.zon` ratchet, which holds the count.
 - `catch unreachable` and `catch @panic` need a comment saying why the failure cannot happen.
   `catch {}` needs one saying why dropping the error is right.
+  `zig build lint` checks the `catch unreachable` reason (`catch-unreachable-comment`), on the
+  line or the line above; it has no baseline allowance.
 - No `std.debug.print` outside tests and scratch tools. Use `std.log`.
 
 Source: `lib/std` practice (`std` uses named error sets rather than `anyerror!`); Style Guide
