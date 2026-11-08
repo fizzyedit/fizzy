@@ -32,6 +32,8 @@ test {
     _ = @import("widgets/image_viewer_tests.zig");
     // Hold to select, tap to clear, on a text layout.
     _ = @import("widgets/SelectableText.zig");
+    // The menu over a touch selection: fizzy's, labelled, placed over the selection.
+    _ = @import("widgets/selection_controls_tests.zig");
     _ = @import("widgets/text_entry_tests.zig");
     _ = @import("widgets/text_entry_field_tests.zig");
     // A tab's hand beside a split's arrow, and a tapped tab's hover look.

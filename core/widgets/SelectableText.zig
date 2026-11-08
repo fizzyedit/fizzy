@@ -8,7 +8,8 @@
 //! lands on a chat message to scroll it does not select it. `init` turns those rules off
 //! (`touch_edit_just_focused`, `te_first`, `te_focus_on_touchdown`) and runs `core/TouchHold.zig`
 //! over the frame's touch events instead; its hold sets the same `sel_move` and `touch_editing`
-//! dvui's own tap would, so dvui draws the handles and the menu and moves the ends on a drag.
+//! dvui's own tap would, so dvui draws the handles and moves the ends on a drag. The menu is
+//! fizzy's, `SelectionControls`, drawn at the end of `init`; `deinit` turns dvui's off.
 //!
 //! A finger that drags is a scroll: past `dvui.Dragging.threshold` dvui's text layout lets go of
 //! the capture (`processEvent`, touch motion) so an enclosing `ScrollArea` takes it, and the hold
@@ -16,31 +17,42 @@
 //! not the one pressed. `TouchHold`'s slop bounds the drift when nothing lets go first.
 //!
 //! A touch anywhere else clears the selection, in another floating window too. Only the layout's
-//! own Copy / Select all menu and selection handles are not elsewhere: they are windows of their
-//! own, and `dvui.textLayout` takes a press on one before it returns, in the same frame as the
-//! release if need be, so ownership is read per press: a press the call handled (a menu button),
-//! or one on a window holding a handle's `_offset`.
+//! own menu and selection handles are not elsewhere: they are windows of their own, so ownership
+//! is read per press. The menu's window is the one `SelectionControls.isMenuWindow` names; a
+//! handle's is one `dvui.textLayout` took the press on before it returned, in the same frame as
+//! the release if need be, or one holding a handle's `_offset`. A press on a handle or on the text
+//! hides the menu until the release, as dvui's own rule does.
 const std = @import("std");
 const dvui = @import("dvui");
 const touch_press = @import("touch.zig");
 const TouchHold = @import("../TouchHold.zig");
+const SelectionControls = @import("SelectionControls.zig");
 
 const SelectableText = @This();
 
 tl: *dvui.TextLayoutWidget,
 hold: *TouchHold,
+style: SelectionControls.Style,
 
 /// Starts the layout and reads this frame's touch events. Call `deinit` on the result, as for `dvui.textLayout`.
 pub fn init(src: std.builtin.SourceLocation, init_opts: dvui.TextLayoutWidget.InitOptions, opts: dvui.Options) SelectableText {
+    return initStyled(src, init_opts, opts, .{});
+}
+
+/// `init`, with the selection menu drawn in `style`.
+pub fn initStyled(src: std.builtin.SourceLocation, init_opts: dvui.TextLayoutWidget.InitOptions, opts: dvui.Options, style: SelectionControls.Style) SelectableText {
     var tl_opts = init_opts;
     tl_opts.touch_edit_just_focused = false;
     const unhandled = touch_press.unhandledPresses();
     const tl = dvui.textLayout(src, tl_opts, opts);
+    SelectionControls.restoreWanted(tl);
     const self: SelectableText = .{
         .tl = tl,
         .hold = dvui.dataGetPtrDefault(null, tl.data().id, "_hold", TouchHold, .{}),
+        .style = style,
     };
     self.processTouch(unhandled);
+    SelectionControls.menu(.{ .layout = tl }, tl.state.te_show_context_menu, style);
     return self;
 }
 
@@ -50,7 +62,13 @@ pub fn deinit(self: *SelectableText) void {
     // next touch release select a word or toggle editing, the tap rules `init` turned off.
     self.tl.state.te_first = false;
     self.tl.state.te_focus_on_touchdown = false;
+    // dvui's set flag draws dvui's own menu in the next `textLayout`; `init` draws fizzy's from
+    // the bit kept. `tl.deinit` runs dvui's `matchEvent` again, which sets the flag on a touch
+    // release, so it is cleared once more through the state, which outlives the widget.
+    const state = self.tl.state;
+    _ = SelectionControls.takeWanted(self.tl);
     self.tl.deinit();
+    state.te_show_context_menu = false;
     self.* = undefined;
 }
 
@@ -67,11 +85,16 @@ fn processTouch(self: SelectableText, unhandled: touch_press.Presses) void {
         switch (me.action) {
             .press => {
                 if (me.floating_win != dvui.subwindowCurrentId()) {
-                    if (!touch_press.tookPress(unhandled, i, e)) {
+                    if (SelectionControls.isMenuWindow(.{ .layout = tl }, me.floating_win)) {
+                        // A button of the menu, drawn after this, takes it.
+                    } else if (touch_press.tookPress(unhandled, i, e)) {
+                        tl.state.te_show_context_menu = false;
+                    } else {
                         hold.cancel();
                         clear(tl);
                     }
                 } else if (rs.r.contains(me.p) and dvui.clipGet().contains(me.p)) {
+                    tl.state.te_show_context_menu = false;
                     hold.press(me.p.x, me.p.y, dvui.frameTimeNS(), slop);
                 } else {
                     hold.cancel();
@@ -79,10 +102,14 @@ fn processTouch(self: SelectableText, unhandled: touch_press.Presses) void {
                 }
             },
             .motion => hold.move(me.p.x, me.p.y, slop),
-            .release => switch (hold.release(dvui.frameTimeNS())) {
-                .none => {},
-                .tap => clear(tl),
-                .double_tap => selectWordAt(tl, tl.data().id, me.p.x, me.p.y),
+            .release => {
+                // dvui's rule (`matchEvent`): any touch release shows the menu again.
+                if (tl.state.touch_editing) tl.state.te_show_context_menu = true;
+                switch (hold.release(dvui.frameTimeNS())) {
+                    .none => {},
+                    .tap => clear(tl),
+                    .double_tap => selectWordAt(tl, tl.data().id, me.p.x, me.p.y),
+                }
             },
             else => {},
         }
@@ -113,6 +140,7 @@ fn clear(tl: *dvui.TextLayoutWidget) void {
     tl.selection.end = 0;
     tl.selection.cursor = 0;
     tl.state.touch_editing = false;
+    tl.state.te_show_context_menu = false;
     // dvui's own release, run inside `textLayout` before `processTouch`, may have queued a word.
     tl.sel_move = .none;
 }
@@ -384,10 +412,10 @@ test "a tap on a button of the menu, press and release in one frame, keeps the s
     try dvui.testing.settle(testFrame);
     try selectAlpha();
 
-    // dvui puts the menu at the layout's top right, pushed back onto the window: the last of its
-    // buttons is under this point.
-    const x = 286.0 / 300.0;
-    const y = 14.0 / 200.0;
+    // The last of the menu's buttons, Select all, is under this point.
+    const r = SelectionControls.test_last_menu.?.rect;
+    const x = (r.x + r.w - 20) / 300.0;
+    const y = (r.y + r.h / 2) / 200.0;
     try touch(.press, x, y);
     try touch(.release, x, y);
     try frameAfter(16);
