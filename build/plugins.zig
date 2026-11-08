@@ -62,7 +62,7 @@ pub const Wiring = struct {
     workbench_opts: *std.Build.Step.Options,
     /// The executable's root module, which imports each plugin by its name.
     consumer: *std.Build.Module,
-    /// False where markdown does not build (the native exe for wasm).
+    /// False where markdown does not build: the native exe for wasm, and Android (md4zig's translate-c has no NDK headers).
     markdown: bool = true,
 };
 

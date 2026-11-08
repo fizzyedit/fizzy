@@ -879,3 +879,11 @@ fn controlPath(allocator: std.mem.Allocator, main_init: std.process.Init, raw: [
     };
     return @import("app").control.socketPath(allocator, config);
 }
+
+comptime {
+    if (builtin.target.abi.isAndroid()) @export(&sdlMain, .{ .name = "SDL_main" });
+}
+
+fn sdlMain(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
+    return @import("android_sdl_main").run(main, argc, argv);
+}

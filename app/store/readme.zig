@@ -8,7 +8,13 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const dvui = @import("dvui");
-const markdown = @import("markdown");
+const has_markdown = !builtin.target.abi.isAndroid();
+const markdown = if (has_markdown) @import("markdown") else struct {
+    pub const Preview = struct {
+        pub fn deinit(_: *@This()) void {}
+    };
+    pub fn deinitShared() void {}
+};
 const repo_asset = @import("plugin_repo_asset.zig");
 
 const is_wasm = builtin.target.cpu.arch == .wasm32;
@@ -145,6 +151,10 @@ pub const Readme = struct {
             .failed => placeholder("Could not fetch the README.", true),
             .ready => {
                 const bytes = self.bytes orelse return;
+                if (!has_markdown) {
+                    dvui.labelNoFmt(@src(), bytes, .{}, .{ .expand = .horizontal });
+                    return;
+                }
                 // Transparent - the page behind this draws its own background (matching every
                 // other pane in the app); without this the preview's own scroll area painted a
                 // visibly different `.content`-styled fill on top of it.

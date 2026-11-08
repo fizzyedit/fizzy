@@ -15,48 +15,10 @@ pub const dvui_app: dvui.App = .{
 };
 pub const main = dvui.App.main;
 
-// SDL's activity looks this symbol up in the library and calls it on its own thread. This is a
-// static lib linked into a JNI library, so zig's start.zig never runs and never builds the
-// std.process.Init dvui.App.main needs; hand-build the same minimal Init here.
 export fn SDL_main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
-    return runDvuiMain(argc, argv) catch |err| {
-        std.log.err("SDL_main failed: {t}", .{err});
-        return 1;
-    };
+    return @import("android_sdl_main").run(dvui.App.main, argc, argv);
 }
 
-extern "c" var environ: ?[*:null]?[*:0]u8;
-
-fn runDvuiMain(argc: c_int, argv: [*][*:0]u8) !u8 {
-    const gpa = std.heap.c_allocator;
-
-    var arena_allocator: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
-    defer arena_allocator.deinit();
-
-    const args_vector: std.process.Args.Vector = argv[0..@intCast(argc)];
-    const no_environ: [0:null]?[*:0]u8 = .{};
-    const environ_block: std.process.Environ.Block = .{ .slice = std.mem.span(environ orelse &no_environ) };
-
-    var threaded: std.Io.Threaded = .init(gpa, .{
-        .argv0 = .init(.{ .vector = args_vector }),
-        .environ = .{ .block = environ_block },
-    });
-    defer threaded.deinit();
-
-    var environ_map = try std.process.Environ.createMap(.{ .block = environ_block }, gpa);
-    defer environ_map.deinit();
-
-    const preopens = try std.process.Preopens.init(arena_allocator.allocator());
-
-    return dvui.App.main(.{
-        .minimal = .{ .args = .{ .vector = args_vector }, .environ = .{ .block = environ_block } },
-        .arena = &arena_allocator,
-        .gpa = gpa,
-        .io = threaded.io(),
-        .environ_map = &environ_map,
-        .preopens = preopens,
-    });
-}
 pub const panic = dvui.App.panic;
 pub const std_options: std.Options = .{
     .logFn = dvui.App.logFn,

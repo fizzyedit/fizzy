@@ -52,6 +52,7 @@ pub const Dylib = struct {
 };
 
 pub const FizzyExecutable = struct {
+    /// The desktop executable, or Android's static libmain.a for an SDL JNI library.
     exe: *std.Build.Step.Compile,
     /// The built-in plugins built as dynamic libraries: workbench first, then the others in the
     /// order they are linked. Native-only; empty on wasm targets and when plugins are link-only.
@@ -303,22 +304,25 @@ pub fn addFizzyExecutableForTarget(
         .optimize = optimize,
         .backend = .proxy,
         .accesskit = .off,
+        .android_include_path = if (resolved_target.result.abi.isAndroid()) sdl_paths.?.include else @as(?std.Build.LazyPath, null),
     });
     const dvui_proxy_mod = dvui_proxy_dep.module("dvui_proxy");
     const proxy_bridge_plugin_mod = dvui_proxy_dep.module("proxy_bridge");
 
-    const exe = b.addExecutable(.{
-        .name = app_name,
-        .root_module = b.createModule(.{ // private: one per target, and 0.17 refuses a second public "App"
-            .target = resolved_target,
-            .optimize = optimize,
-            // `b.path`, not `.cwd_relative`: this resolves against *fizzy's* build root, which
-            // is what makes the package consumable. A cwd-relative path silently works while
-            // fizzy builds itself (cwd is fizzy's root) and fails with FileNotFound the moment
-            // an outside package depends on fizzy — see fizzyedit/example-app.
-            .root_source_file = b.path("src/Entry.zig"),
-        }),
+    const mod = b.createModule(.{ // private: one per target, and 0.17 refuses a second public "App"
+        .target = resolved_target,
+        .optimize = optimize,
+        // Resolve against fizzy's build root so outside apps can consume the package.
+        .root_source_file = b.path("src/Entry.zig"),
     });
+    const exe = if (resolved_target.result.abi.isAndroid()) blk: {
+        mod.pic = true;
+        mod.addImport("android_sdl_main", @import("android.zig").sdlMainModule(b, resolved_target, optimize));
+        const lib = b.addLibrary(.{ .linkage = .static, .name = "main", .root_module = mod });
+        lib.bundle_ubsan_rt = true;
+        lib.bundle_compiler_rt = true;
+        break :blk lib;
+    } else b.addExecutable(.{ .name = app_name, .root_module = mod });
     exe.root_module.strip = false;
     // The id a crash report names this exact binary by (`app/crash/image.zig`); see
     // `sdk/plugin_sdk.zig`'s `create`.
@@ -411,7 +415,7 @@ pub fn addFizzyExecutableForTarget(
         .backend = native.backend,
         .workbench_opts = workbench_opts,
         .consumer = exe.root_module,
-        .markdown = resolved_target.result.cpu.arch != .wasm32,
+        .markdown = resolved_target.result.cpu.arch != .wasm32 and !resolved_target.result.abi.isAndroid(),
     }, app_plugins);
     const markdown_module = linked.markdown;
     const bundled = sdk.bundledPluginsModule(b, resolved_target, optimize, linked.plugins);
@@ -479,7 +483,7 @@ pub fn addFizzyExecutableForTarget(
         });
     } else null;
 
-    const markdown_dylib: ?*std.Build.Step.Compile = if (dynamic_plugins and
+    const markdown_dylib: ?*std.Build.Step.Compile = if (dynamic_plugins and !resolved_target.result.abi.isAndroid() and
         resolved_target.result.cpu.arch != .wasm32 and
         plugins.linksFizzys(app_plugins, "markdown"))
     blk: {
