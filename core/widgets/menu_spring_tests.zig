@@ -14,13 +14,16 @@ var level: f32 = 1;
 var natural: dvui.Rect.Natural = .{};
 var placed: dvui.Rect.Natural = .{};
 var moving = false;
+var rows: usize = 3;
+/// What the last frame asked of the next: 0 is at once, null only on an event.
+var wait_us: ?u32 = null;
 
 fn draw() void {
     var menu = widgets.floatingMenu(@src(), .{ .from = from, .frost = .{} }, .{ .corners = .round(6) });
     natural = .cast(menu.wd.rect);
     moving = menu.revealing;
     if (dvui.dataGet(null, menu.wd.id, "_morph", glass.Morph)) |m| placed = m.to.rect.scale(1 / dvui.windowNaturalScale(), dvui.Rect.Natural);
-    for (0..3) |i| {
+    for (0..rows) |i| {
         var row = widgets.menuItem(@src(), .{}, .{ .id_extra = i, .min_size_content = .{ .w = 140, .h = 24 } });
         row.deinit();
     }
@@ -31,7 +34,7 @@ fn frame(step_ms: i128) !void {
     backend.motion.publish(level, 0.5, false, false, 1);
     draw();
     const cw = dvui.currentWindow();
-    _ = try cw.end(.{});
+    wait_us = try cw.end(.{});
     try cw.begin(cw.frame_time_ns + step_ms * std.time.ns_per_ms);
 }
 
@@ -39,6 +42,7 @@ fn setup(at: dvui.Rect.Natural, motion_level: f32) void {
     backend.LiquidField.readyInTest(true);
     from = at;
     level = motion_level;
+    rows = 3;
     moving = false;
     placed = .{};
 }
@@ -108,4 +112,28 @@ test "a menu opens the same at 60 and 120 frames a second" {
     try openHeights(16, &at60);
     try openHeights(8, &at120);
     for (at60, 0..) |h, i| try expect(@abs(h - at120[2 * i]) <= 0.5);
+}
+
+test "a menu too tall for the window lands once, its bar and width settled" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 400, .h = 300 } });
+    defer t.deinit();
+    setup(button, 1);
+    rows = 20; // 480 tall in a 300 window: it scrolls, and its bar widens it once it lands.
+    try frame(16);
+    try frame(16);
+    var frames: usize = 0;
+    while (moving) : (frames += 1) {
+        try expect(frames < 300);
+        try frame(16);
+    }
+    // The bar's width moves the target once more; then it rests for good.
+    for (0..120) |_| try frame(16);
+    const width = natural.w;
+    for (0..30) |_| {
+        try frame(16);
+        try equal(width, natural.w);
+        try expect(!moving);
+        try expect(wait_us != 0);
+    }
+    try equal(placed, natural);
 }
