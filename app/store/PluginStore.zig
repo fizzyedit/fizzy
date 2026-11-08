@@ -707,7 +707,7 @@ fn tabButton(src: std.lang.SourceLocation, label: []const u8, id_extra: usize, s
     defer col.deinit();
 
     const tab_font = dvui.Font.theme(.body);
-    const clicked = dvui.button(src, label, .{}, .{
+    const clicked = core.widgets.button(src, label, .{}, .{
         .id_extra = id_extra,
         .background = false,
         .border = dvui.Rect.all(0),
@@ -1154,7 +1154,7 @@ fn drawUpdateCardControls(entry: StoreEntry) void {
         tl.addText(row.reason(), .{});
         tl.deinit();
     };
-    if (dvui.button(@src(), if (failed) "Retry" else "Update", .{}, .{ .gravity_y = 0.5, .font = body.larger(-1.0) }))
+    if (core.widgets.button(@src(), if (failed) "Retry" else "Update", .{}, .{ .gravity_y = 0.5, .font = body.larger(-1.0) }))
         applyPendingUpdate(entry.id);
 }
 
@@ -2243,7 +2243,7 @@ fn drawUnreachablePlaceholder() void {
     });
     tl.addText("Your installed plugins above still work normally.", .{ .color_text = .{ .color = muted.opacity(0.8) } });
     tl.deinit();
-    if (dvui.button(@src(), "Try again", .{}, .{ .gravity_x = 0.5, .margin = .{ .y = 6 } })) {
+    if (core.widgets.button(@src(), "Try again", .{}, .{ .gravity_x = 0.5, .margin = .{ .y = 6 } })) {
         if (catalog) |*c| c.refresh();
     }
 }
@@ -2483,7 +2483,7 @@ fn drawCardShell(entry: StoreEntry, controls: *const fn (StoreEntry) void, row2_
     else
         theme.color(.content, .fill).opacity(0.0);
 
-    var bw: dvui.ButtonWidget = undefined;
+    var bw: core.widgets.Button = undefined;
     bw.init(@src(), .{}, .{
         .id_extra = hashId(entry.id),
         .expand = .horizontal,
@@ -3197,10 +3197,10 @@ fn drawCardControls(entry: StoreEntry) void {
             // Refused, not failed: Retry would only refuse again. Say why, offer to dismiss it,
             // and leave the plugin's own controls (Uninstall among them) below.
             dvui.labelNoFmt(@src(), why, .{}, .{ .gravity_y = 0.5, .color_text = .{ .color = theme.color(.err, .text) } });
-            if (dvui.button(@src(), "Dismiss", .{}, .{ .gravity_y = 0.5 })) queueDismiss(entry.id);
+            if (core.widgets.button(@src(), "Dismiss", .{}, .{ .gravity_y = 0.5 })) queueDismiss(entry.id);
         } else {
             if (selectedRelease(entry)) |rel| {
-                if (dvui.button(@src(), "Retry", .{}, .{ .gravity_y = 0.5, .color_text = .{ .color = theme.color(.err, .text) } }))
+                if (core.widgets.button(@src(), "Retry", .{}, .{ .gravity_y = 0.5, .color_text = .{ .color = theme.color(.err, .text) } }))
                     startDownload(entry.id, rel, .{ .is_update = job.is_update });
             }
             return;
@@ -3255,30 +3255,30 @@ fn drawCardControls(entry: StoreEntry) void {
             if (comptime builtin.target.cpu.arch == .wasm32) {
                 if (updateRelease(entry)) |rel| {
                     if (rel.downloadFor(compat.hostKey())) |dl| {
-                        if (dvui.button(@src(), "Update", .{}, .{ .gravity_y = 0.5, .margin = .{ .x = 4 } }))
+                        if (core.widgets.button(@src(), "Update", .{}, .{ .gravity_y = 0.5, .margin = .{ .x = 4 } }))
                             applyWebUpdate(entry.id, dl.url, dl.sha256);
                     }
                 }
             } else if (updateRelease(entry)) |rel| {
-                if (dvui.button(@src(), "Update", .{}, .{ .gravity_y = 0.5, .margin = .{ .x = 4 } }))
+                if (core.widgets.button(@src(), "Update", .{}, .{ .gravity_y = 0.5, .margin = .{ .x = 4 } }))
                     startDownload(entry.id, rel, .{ .is_update = true });
             }
             // The store lists a newer version, but not one this Fizzy can take: say why, rather
             // than show "store v0.1.32 . installed v0.1.31" and no Update button with no reason.
             if (updateRelease(entry) == null) drawUpdateBlocked(entry);
         } else if (undecided) {
-            if (dvui.button(@src(), "Load", .{}, .{ .gravity_y = 0.5, .margin = .{ .x = 4 } }))
+            if (core.widgets.button(@src(), "Load", .{}, .{ .gravity_y = 0.5, .margin = .{ .x = 4 } }))
                 queueSetEnabled(entry.id, true);
         } else if (broken) {
             // A locally built plugin that lost its load has no registry release to reinstall
             // *from*, so Retry is the whole fix once the author rebuilds it in place: it re-runs
             // the load against whatever is on disk now and clears the failure record on success.
             if (failed) {
-                if (dvui.button(@src(), "Retry", .{}, .{ .gravity_y = 0.5, .margin = .{ .x = 4 } }))
+                if (core.widgets.button(@src(), "Retry", .{}, .{ .gravity_y = 0.5, .margin = .{ .x = 4 } }))
                     queueSetEnabled(entry.id, true);
             }
             if (selectedRelease(entry)) |rel| {
-                if (dvui.button(@src(), "Reinstall", .{}, .{ .gravity_y = 0.5, .margin = .{ .x = 4 } }))
+                if (core.widgets.button(@src(), "Reinstall", .{}, .{ .gravity_y = 0.5, .margin = .{ .x = 4 } }))
                     startDownload(entry.id, rel, .{ .is_update = false });
             } else if (!have_snapshot or untracked) {
                 // No catalog yet (offline, or the first fetch is still running), so we genuinely
@@ -3296,7 +3296,7 @@ fn drawCardControls(entry: StoreEntry) void {
         }
         // Named, like every other action on this row. A lone trash can asks the user to
         // recognise a glyph for the one control here that destroys something.
-        if (dvui.button(@src(), "Uninstall", .{}, .{ .gravity_y = 0.5, .color_text = .{ .color = theme.color(.err, .text) } }))
+        if (core.widgets.button(@src(), "Uninstall", .{}, .{ .gravity_y = 0.5, .color_text = .{ .color = theme.color(.err, .text) } }))
             queueUninstall(entry.id);
         return;
     }
@@ -3307,7 +3307,7 @@ fn drawCardControls(entry: StoreEntry) void {
         return;
     }
     if (selectedRelease(entry) != null) {
-        if (dvui.button(@src(), "Install", .{}, .{ .gravity_y = 0.5 }))
+        if (core.widgets.button(@src(), "Install", .{}, .{ .gravity_y = 0.5 }))
             queueInstall(entry.id);
         return;
     }
@@ -3345,7 +3345,7 @@ fn drawStoreCardControls(entry: StoreEntry) void {
         },
         .failed => {
             if (selectedRelease(entry)) |rel| {
-                if (dvui.button(@src(), "Retry", .{}, .{ .gravity_y = 0.5, .color_text = .{ .color = theme.color(.err, .text) } }))
+                if (core.widgets.button(@src(), "Retry", .{}, .{ .gravity_y = 0.5, .color_text = .{ .color = theme.color(.err, .text) } }))
                     startDownload(entry.id, rel, .{ .is_update = job.is_update });
             }
             return;
@@ -3369,7 +3369,7 @@ fn drawStoreCardControls(entry: StoreEntry) void {
             dvui.labelNoFmt(@src(), "Built-in", .{}, .{ .gravity_y = 0.5, .color_text = .{ .color = muted }, .font = dvui.Font.theme(.mono) });
             return;
         }
-        if (dvui.button(@src(), "Uninstall", .{}, .{ .gravity_y = 0.5, .color_text = .{ .color = theme.color(.err, .text) } }))
+        if (core.widgets.button(@src(), "Uninstall", .{}, .{ .gravity_y = 0.5, .color_text = .{ .color = theme.color(.err, .text) } }))
             queueUninstall(entry.id);
         return;
     }
@@ -3380,7 +3380,7 @@ fn drawStoreCardControls(entry: StoreEntry) void {
         // down-to-line arrow, which read as "download" - a file landing somewhere - when what
         // happens is a plugin arriving in the app.) `queueInstall` rather than `startDownload`
         // so the web takes its own path, which has no download queue at all.
-        if (dvui.button(@src(), "Install", .{}, .{ .gravity_y = 0.5 }))
+        if (core.widgets.button(@src(), "Install", .{}, .{ .gravity_y = 0.5 }))
             queueInstall(entry.id);
         return;
     }
@@ -3457,7 +3457,7 @@ fn drawHeader() !void {
     }) catch "Fizzy SDK ?";
     dvui.labelNoFmt(@src(), host_sdk, .{}, .{ .gravity_y = 0.5 });
 
-    if (dvui.buttonIcon(
+    if (core.widgets.buttonIcon(
         @src(),
         "Refresh",
         icons.tvg.lucide.@"rotate-ccw",
