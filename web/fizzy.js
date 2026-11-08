@@ -8,6 +8,9 @@
 // (`-Dweb-storage`).
 
 export function fieldHints(el, bits) {
+  // Set only once the editor is up: the hidden input exists after `run`, and the backend
+  // sends the hints again whenever they change.
+  if (el === undefined || el === null) return;
   if ((bits >>> 0) === 0xFFFFFFFF) {
     for (const name of ["autocorrect", "spellcheck", "inputmode", "enterkeyhint"]) el.removeAttribute(name);
     el.setAttribute("autocapitalize", "none");
@@ -247,6 +250,9 @@ let activeCopy = null;
  *   device's (`core.platform.formFactor()`). Anything else is ignored.
  * @property {HTMLElement} [fullscreenElement] - What View › Toggle Full Screen shows full screen.
  *   Default: the canvas's parent, so an embed fills the screen and the page around it does not.
+ * @property {string} [wasmUrl] - The editor wasm's URL. Default: the build's `web.wasm`, beside
+ *   `fizzy.js`. A page that bundles fizzy.js passes the same URL its import of the wasm was
+ *   rewritten to (vite's `?url`), where the beside-the-module guess would name the bundle instead.
  * @property {string[]} [plugins] - Ids of plugins to load from `plugins/<id>/<id>.wasm` beside the
  *   app once it is up, each in place of an installed one of the same id: how a developer tries a
  *   build.
@@ -280,7 +286,8 @@ export class Fizzy {
     this.storageName = opts.storage ? buildStorageName + "~" + opts.storage : buildStorageName;
   }
 
-  /** Start the editor. Once per `Fizzy`. */
+  /** Start the editor. Once per `Fizzy`. In page mode the promise resolves after `onReady`, with
+   * the app (dvui's, also kept on this copy as `app`); in worker mode it resolves at once. */
   run() {
     const opts = this.opts;
     const storageName = this.storageName;
@@ -1006,6 +1013,13 @@ export class Fizzy {
     // "pinch fingers together = zoom out".
     let dvuiApp = null;
     const dvuiCanvas = opts.canvas;
+    // The editor wasm: the build's `web.wasm` beside `fizzy.js`, or one the caller named
+    // (`opts.wasmUrl`, absolute or relative to this module). In a bundler's build the module's
+    // URL is the bundle's, so the caller names where its build serves the wasm.
+    const wasmUrl = new URL(
+      opts.wasmUrl ?? "web.wasm?cache-buster=TEMPLATE_HASH_WITH_PADDING__ITS_64_BYTES_LONG_THE_SAME_AS_SHA256",
+      import.meta.url,
+    ).href;
     // The element dvui's text input lives in (set once the editor is up): where text arrives.
     let textInput = null;
     for (const type of ["pointerdown", "focus"]) dvuiCanvas.addEventListener(type, () => { activeCopy = this; }, { capture: true });
@@ -1401,7 +1415,6 @@ export class Fizzy {
     if (!hasWebGl()) {
       onError("This browser does not support WebGL, which fizzy needs to run.");
     } else if (workerMode) {
-      const wasmUrl = new URL("web.wasm?cache-buster=TEMPLATE_HASH_WITH_PADDING__ITS_64_BYTES_LONG_THE_SAME_AS_SHA256", import.meta.url).href;
       // Fetched and compiled now, seen or not. A page opened in a background tab gets no
       // animation frames, so `waitForLayout` holds the worker until the tab is shown; the
       // editor's download used to wait with it, tens of seconds on a slow link. The worker is
@@ -1417,13 +1430,13 @@ export class Fizzy {
         focusEpoch++;
         if (dvuiApp) dvuiApp.requestRender();
       });
-      const wasmUrl = new URL("web.wasm?cache-buster=TEMPLATE_HASH_WITH_PADDING__ITS_64_BYTES_LONG_THE_SAME_AS_SHA256", import.meta.url).href;
-      waitForLayout()
+      const pageLoop = waitForLayout()
         .then(() => {
           const app = new Dvui();
           const imports = {
             ...opts.imports,
-            dvui: { ...app.imports, wasm_field_hints: () => {} },
+            // The hidden input does not exist yet (it does after `run()`); each ask reads it then.
+            dvui: { ...app.imports, wasm_field_hints: (bits) => fieldHints(app.hidden_input, bits) },
             fizzy: fizzyImports(() => wasmInstance),
             env: { __indirect_function_table: functionTable },
           };
@@ -1447,6 +1460,9 @@ export class Fizzy {
           // Late-bind the app reference so the capture-phase wheel listener above can
           // forward pinch deltas into the trackpad accumulator and kick a render.
           dvuiApp = app;
+          // The embedder's, once it is up (this is what `run` resolves with): its hidden
+          // input, screens and request the page's own glue needs.
+          this.app = app;
           const insetBottom = keyboardInset(window, (m) => {
             app.instance.exports.FizzyWebSetKeyboardInset?.(m.bottom);
             app.requestRender();
@@ -1488,12 +1504,16 @@ export class Fizzy {
           onReady();
           // After the first frame: the editor exists once `dvui_init` has run.
           setTimeout(requestUrlPlugins, 0);
+          return app;
         })
         .catch((err) => {
           console.error(err);
           const detail = err instanceof Error ? err.message : String(err);
           onError(`Failed to load the editor (${detail}). Try a hard refresh, or use a recent Chrome, Firefox, or Safari.`);
         });
+      // What the caller awaits. In worker mode it resolves at once: the editor reports
+      // there through `onReady`, pointed at the worker's own state.
+      return pageLoop;
     }
   }
 }

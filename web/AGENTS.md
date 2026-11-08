@@ -10,8 +10,12 @@ The page and its JavaScript (`index.html`, the app's `fizzy.js`, workers). The Z
 - **`fizzy.js` is the app on a page,** `index.html` only the page it runs on.
   `new Fizzy(opts).run()` runs the editor on `opts.canvas`, through dvui's `Dvui` (`web.js`), with
   the wasm's `fizzy` and `env` imports, plus any of the caller's own (`opts.imports`, which keep it
-  on the page's thread). `Fizzy` reads the viewport meta for keyboard policy, never the URL:
-  `index.html` turns its query (`?storage=`, `?persist=`, `?worker=`, `?form=`, `?plugin=`, ...) into options
+  on the page's thread). The editor wasm is the build's `web.wasm` beside `fizzy.js`, or the one
+  `opts.wasmUrl` names (a bundler's build, whose `web.wasm` the caller imports as `?url`). In page
+  mode `run` resolves with the app (`dvui`'s, kept on the `Fizzy` as `app` too) after `onReady`;
+  in worker mode it resolves at once and `opts.onReady` says when the editor is up. `Fizzy` reads the viewport meta
+  for keyboard policy, never the URL: `index.html` turns its query (`?storage=`, `?persist=`,
+  `?worker=`, `?form=`, `?plugin=`, ...) into options
   and shows `onReady`/`onError` itself, and an app built on fizzy passes its own. Nothing wraps
   `WebAssembly.instantiateStreaming`.
 - **Several copies share a page.** `fizzy.js` keeps no per-page state but the compiled wasm (shared by
