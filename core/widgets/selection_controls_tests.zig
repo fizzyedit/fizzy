@@ -66,8 +66,8 @@ fn selected() []const u8 {
     return text[@min(selection.start, text.len)..@min(selection.end, text.len)];
 }
 
-/// A 300x200 window with the text at its top and "alpha" held to select, the finger lifted.
-fn start() !dvui.testing {
+/// A 300x200 window with the text at its top and "alpha" held past the hold, the finger still down.
+fn hold() !dvui.testing {
     const t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 200 } });
     layout_id = null;
     copies = 0;
@@ -80,12 +80,30 @@ fn start() !dvui.testing {
     try frameAfter(500);
     try frameAfter(16);
     try frameAfter(16);
+    return t;
+}
+
+/// `hold`, then the finger lifted.
+fn start() !dvui.testing {
+    const t = try hold();
     try touch(.release, 0.1, 0.05);
     try frameAfter(16);
     try frameAfter(16);
     try frameAfter(16);
     try std.testing.expectEqualStrings("alpha", selected());
     return t;
+}
+
+test "the menu waits for the finger that selects to lift" {
+    var t = try hold();
+    defer t.deinit();
+    try std.testing.expectEqualStrings("alpha", selected());
+    try frameAfter(16);
+    try std.testing.expect(SelectionControls.test_last_menu == null);
+    try touch(.release, 0.1, 0.05);
+    try frameAfter(16);
+    try frameAfter(16);
+    try std.testing.expect(SelectionControls.test_last_menu != null);
 }
 
 test "dvui's menu never shows on plain text" {

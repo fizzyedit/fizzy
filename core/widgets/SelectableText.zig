@@ -20,8 +20,8 @@
 //! own menu and selection handles are not elsewhere: they are windows of their own, so ownership
 //! is read per press. The menu's window is the one `SelectionControls.isMenuWindow` names; a
 //! handle's is one `dvui.textLayout` took the press on before it returned, in the same frame as
-//! the release if need be, or one holding a handle's `_offset`. A press on a handle or on the text
-//! hides the menu until the release, as dvui's own rule does.
+//! the release if need be, or one holding a handle's `_offset`. A press on a handle or on the text,
+//! the hold that selects included, hides the menu until the release, as dvui's own rule does.
 const std = @import("std");
 const dvui = @import("dvui");
 const touch_press = @import("touch.zig");
@@ -52,7 +52,9 @@ pub fn initStyled(src: std.builtin.SourceLocation, init_opts: dvui.TextLayoutWid
         .style = style,
     };
     self.processTouch(unhandled);
-    SelectionControls.menu(.{ .layout = tl }, tl.state.te_show_context_menu, style);
+    // A hold selects with the finger still down; the menu waits for its release, as for any touch
+    // on the text. The wanted bit stays set for then.
+    SelectionControls.menu(.{ .layout = tl }, tl.state.te_show_context_menu and !self.hold.armed, style);
     return self;
 }
 
