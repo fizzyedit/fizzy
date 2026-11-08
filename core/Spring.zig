@@ -29,6 +29,10 @@ pub const Tune = struct {
     /// Damping at playful: under 1 swings past the target and back. Minimal and below are
     /// critically damped (1): no overshoot.
     playful_damping: f32 = 0.5,
+
+    /// The reference spring (foxnne 2026-11-02, the console's chat drop): what splits, joins,
+    /// grows and opens moves on it.
+    pub const playful: Tune = .{ .hz = 2.7, .playful_damping = 0.5 };
 };
 
 /// The damping ratio at the app's motion level: `playful_damping` at playful, 1 at minimal.
