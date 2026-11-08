@@ -4,6 +4,7 @@
 test {
     _ = @import("transport/NativeTransport.zig");
     _ = @import("transport/native_transport_tests.zig");
+    _ = @import("transport/android_lookup_tests.zig");
     _ = @import("vfs/vfs.zig");
     _ = @import("LocalFs.zig");
 }

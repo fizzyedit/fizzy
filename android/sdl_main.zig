@@ -1,4 +1,5 @@
 const std = @import("std");
+const android_lookup = @import("android_lookup");
 
 extern "c" var environ: ?[*:null]?[*:0]u8;
 /// Null when SDL cannot get the app's files directory from Java.
@@ -33,6 +34,7 @@ fn runMain(comptime main: anytype, argc: c_int, argv: [*][*:0]u8) !u8 {
     const no_environ: [0:null]?[*:0]u8 = .{};
     const environ_block: std.process.Environ.Block = .{ .slice = std.mem.span(environ orelse &no_environ) };
 
+    var lookup_vtable: std.Io.VTable = undefined;
     var threaded: std.Io.Threaded = .init(gpa, .{
         .argv0 = .init(.{ .vector = args_vector }),
         .environ = .{ .block = environ_block },
@@ -48,7 +50,7 @@ fn runMain(comptime main: anytype, argc: c_int, argv: [*][*:0]u8) !u8 {
         .minimal = .{ .args = .{ .vector = args_vector }, .environ = .{ .block = environ_block } },
         .arena = &arena_allocator,
         .gpa = gpa,
-        .io = threaded.io(),
+        .io = android_lookup.wrap(threaded.io(), &lookup_vtable),
         .environ_map = &environ_map,
         .preopens = preopens,
     });
