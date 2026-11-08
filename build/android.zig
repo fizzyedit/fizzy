@@ -127,9 +127,15 @@ fn linkLibrary(b: *std.Build, paths: AndroidSdk, arch: std.Target.Cpu.Arch, lib:
 }
 
 pub fn sdlMainModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.OptimizeMode) *std.Build.Module {
-    return b.createModule(.{
+    const mod = b.createModule(.{
         .root_source_file = b.path("android/sdl_main.zig"),
         .target = target,
         .optimize = optimize,
     });
+    mod.addImport("android_lookup", b.createModule(.{
+        .root_source_file = b.path("core/transport/android_lookup.zig"),
+        .target = target,
+        .optimize = optimize,
+    }));
+    return mod;
 }
