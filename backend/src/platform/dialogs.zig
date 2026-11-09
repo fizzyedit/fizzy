@@ -58,7 +58,21 @@ pub fn allocator() std.mem.Allocator {
     return alloc();
 }
 
-pub const DialogFileFilter = c.SDL_DialogFileFilter;
+/// A name and its `;`-separated extensions, laid out as `SDL_DialogFileFilter` so a slice goes to SDL as it is.
+pub const DialogFileFilter = extern struct {
+    name: [*:0]const u8,
+    pattern: [*:0]const u8,
+};
+
+comptime {
+    std.debug.assert(@sizeOf(DialogFileFilter) == @sizeOf(c.SDL_DialogFileFilter));
+    std.debug.assert(@offsetOf(DialogFileFilter, "name") == @offsetOf(c.SDL_DialogFileFilter, "name"));
+    std.debug.assert(@offsetOf(DialogFileFilter, "pattern") == @offsetOf(c.SDL_DialogFileFilter, "pattern"));
+}
+
+fn sdlFilters(filters: []const DialogFileFilter) [*c]const c.SDL_DialogFileFilter {
+    return @ptrCast(filters.ptr);
+}
 
 pub fn showSaveFileDialog(cb: *const fn (?[][:0]const u8) void, filters: []const DialogFileFilter, default_filename: []const u8, default_folder: ?[]const u8) void {
     const default: [:0]const u8 = blk: {
@@ -70,7 +84,7 @@ pub fn showSaveFileDialog(cb: *const fn (?[][:0]const u8) void, filters: []const
     // may inherit extended style and the picker loses normal frame/close affordances.
     const parent: ?*c.SDL_Window = if (builtin.target.os.tag == .windows) null else dvui.currentWindow().backend.impl.window;
     // Never written: `cb` rides as SDL userdata, only cast back and called in `GenericDialogCallback`.
-    c.SDL_ShowSaveFileDialog(GenericSaveDialogCallback, @ptrCast(@alignCast(@constCast(cb))), parent, filters.ptr, @intCast(filters.len), default);
+    c.SDL_ShowSaveFileDialog(GenericSaveDialogCallback, @ptrCast(@alignCast(@constCast(cb))), parent, sdlFilters(filters), @intCast(filters.len), default);
 }
 
 pub fn showOpenFileDialog(cb: *const fn (?[][:0]const u8) void, filters: []const DialogFileFilter, default_filename: []const u8, default_folder: ?[]const u8) void {
@@ -81,7 +95,7 @@ pub fn showOpenFileDialog(cb: *const fn (?[][:0]const u8) void, filters: []const
     defer alloc().free(default);
     const parent: ?*c.SDL_Window = if (builtin.target.os.tag == .windows) null else dvui.currentWindow().backend.impl.window;
     // Never written: `cb` rides as SDL userdata, only cast back and called in `GenericDialogCallback`.
-    c.SDL_ShowOpenFileDialog(GenericOpenDialogCallback, @ptrCast(@alignCast(@constCast(cb))), parent, filters.ptr, @intCast(filters.len), default.ptr, true);
+    c.SDL_ShowOpenFileDialog(GenericOpenDialogCallback, @ptrCast(@alignCast(@constCast(cb))), parent, sdlFilters(filters), @intCast(filters.len), default.ptr, true);
 }
 
 pub fn showOpenFolderDialog(cb: *const fn (?[][:0]const u8) void, default_folder: ?[]const u8) void {

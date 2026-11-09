@@ -15,15 +15,11 @@ const WebFileIo = if (builtin.target.cpu.arch == .wasm32)
 else
     struct {};
 
-// Mirrors `sdl3.SDL_DialogFileFilter`'s layout. Native backend re-exports
-// the SDL3 type as `DialogFileFilter`; the editor uses `fizzy.backend.DialogFileFilter`
-// at call sites so both arches see one coherent type.
+// The shape of native `platform.dialogs.DialogFileFilter`.
 pub const DialogFileFilter = extern struct {
     name: [*:0]const u8,
     pattern: [*:0]const u8,
 };
-/// Back-compat alias: a few internal callers still use the SDL-style name.
-pub const SDL_DialogFileFilter = DialogFileFilter;
 
 pub const custom_titlebar = false;
 pub const titlebar_hit_tested = false;
@@ -163,7 +159,7 @@ pub fn titlebarStripHeight(_: *dvui.Window) f32 {
 
 pub fn setTitlebarColor(_: *dvui.Window, _: dvui.Color) void {}
 
-pub fn setSdlAppMetadata(_: [*:0]const u8, _: [*:0]const u8, _: [*:0]const u8) void {}
+pub fn setAppMetadata(_: [*:0]const u8, _: [*:0]const u8, _: [*:0]const u8) void {}
 
 pub fn setupMacOSMenuBar() void {}
 pub fn teardownMacOSMenuBar() void {}

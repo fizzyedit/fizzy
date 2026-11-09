@@ -251,11 +251,7 @@ pub fn build(
     const sdk_module_web = fw.sdk;
     web_exe.root_module.addImport("fizzy_sdk", sdk_module_web);
 
-    // Three editor files have `const sdl3 = @import("backend").c;` at file
-    // scope. After refactoring all `sdl3.SDL_DialogFileFilter` references
-    // to `fizzy.backend.DialogFileFilter`, those decls became dead — Zig's
-    // lazy analysis skips file-scope consts that no reachable body uses.
-    // So no `backend` module is wired in for the web build.
+    // No `backend` module is wired in for the web build, since fizzy outside backend/ names no SDL.
 
     // What the application links, as the native exe has it (`build/exe.zig`), fizzy's own built
     // here for wasm and the application's re-homed: modules made for the native target get this

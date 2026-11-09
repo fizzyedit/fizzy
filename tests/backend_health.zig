@@ -1,6 +1,7 @@
 //! The native backend's health counters as SDL feeds them (`SDLBackend.countSDLLog`): what SDL
 //! logs at warning and error priority is counted, the first error kept, and every message still
 //! reaches the log output SDL had before. SDL's log needs no window, so this runs headless.
+//! Also what an app hands the backend without naming SDL.
 const std = @import("std");
 const backend = @import("backend");
 const c = backend.c;
@@ -38,4 +39,21 @@ test "SDL's warnings and errors are counted, and passed on to the output it had"
     try std.testing.expectEqual(@as(usize, 4), seen_n);
     try std.testing.expectEqualStrings("an info line", std.mem.sliceTo(&seen[0], 0));
     try std.testing.expectEqualStrings("a critical one", std.mem.sliceTo(&seen[3], 0));
+}
+
+test "the app's metadata reaches SDL through the platform" {
+    backend.platform.setAppMetadata("Fizzy Test", "1.2.3", "dev.fizzyedit.test");
+    try std.testing.expectEqualStrings("Fizzy Test", std.mem.span(c.SDL_GetAppMetadataProperty(c.SDL_PROP_APP_METADATA_NAME_STRING)));
+    try std.testing.expectEqualStrings("dev.fizzyedit.test", std.mem.span(c.SDL_GetAppMetadataProperty(c.SDL_PROP_APP_METADATA_IDENTIFIER_STRING)));
+}
+
+test "a dialog filter is the backend's own type, laid out as SDL's" {
+    const Filter = backend.platform.dialogs.DialogFileFilter;
+    try std.testing.expect(Filter != c.SDL_DialogFileFilter);
+    const filters = [_]Filter{ .{ .name = "Images", .pattern = "png;jpg" }, .{ .name = "Text", .pattern = "txt;md" } };
+    const sdl: [*]const c.SDL_DialogFileFilter = @ptrCast(&filters);
+    for (filters, 0..) |filter, i| {
+        try std.testing.expectEqualStrings(std.mem.span(filter.name), std.mem.span(sdl[i].name));
+        try std.testing.expectEqualStrings(std.mem.span(filter.pattern), std.mem.span(sdl[i].pattern));
+    }
 }
