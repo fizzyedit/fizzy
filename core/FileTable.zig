@@ -1779,6 +1779,7 @@ test "a mount's failed listing is empty for a while, then asked again" {
     // Once the retry window passes it is asked again — and by then the directory exists.
     try mem.putDir("/missing");
     try mem.put("/missing/b.txt", "");
+    // The table owns the listing's heap allocation; the test ages it in place.
     @constCast(failed).read_at_ms -= 2 * failed_retry_ms;
     _ = table.listDir("mem://box/missing");
     table.pump();

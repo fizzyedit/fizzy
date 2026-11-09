@@ -51,6 +51,7 @@ pub fn draw(editor: *Editor) !dvui.App.Result {
     var it: menu_order.Iterator(fizzy.sdk.Host.MenuContribution) = .{
         .menus = editor.app.host.menus.items,
         .own_draw = &drawModelMenu,
+        // Never written: `help_ctx` is only compared with a menu's `ctx`, never dereferenced.
         .help_ctx = @ptrCast(@constCast(model.help)),
     };
     while (it.next()) |menu| {

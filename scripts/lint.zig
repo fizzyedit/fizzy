@@ -16,6 +16,7 @@ const Rule = enum {
     @"raw-button",
     @"todo-seam",
     @"catch-unreachable-comment",
+    @"constcast-comment",
 };
 const Finding = struct { rule: Rule, line: usize, message: []const u8 };
 const Allow = struct { rule: Rule, file: []const u8, count: usize };
@@ -210,15 +211,24 @@ fn analyze(allocator: std.mem.Allocator, source: [:0]const u8) ![]Finding {
     }
     try rawDvuiCalls(allocator, tree, suppressions.items, &findings);
     const tags = tree.tokens.items(.tag);
-    // `catch unreachable` and `catch |e| unreachable` say why on their line or the one above.
+    // `catch unreachable`, `catch |e| unreachable` and `@constCast` say why on their line or the one above.
     for (tags, 0..) |tag, i| {
+        if (tag == .builtin and std.mem.eql(u8, tree.tokenSlice(@intCast(i)), "@constCast")) {
+            const loc = tree.tokenLocation(0, @intCast(i));
+            if (explained(source, loc)) continue;
+            try findings.append(allocator, .{
+                .rule = .@"constcast-comment",
+                .line = loc.line + 1,
+                .message = "@constCast needs a // reason saying why the memory is writable",
+            });
+            continue;
+        }
         if (tag != .keyword_catch) continue;
         const payload = i + 4 < tags.len and tags[i + 1] == .pipe and tags[i + 2] == .identifier and tags[i + 3] == .pipe;
         const at = if (payload) i + 4 else i + 1;
         if (tags[at] != .keyword_unreachable) continue;
         const loc = tree.tokenLocation(0, @intCast(at));
-        if (commentStart(source[loc.line_start..loc.line_end]) != null or
-            std.mem.startsWith(u8, std.mem.trimStart(u8, previousLine(source, loc.line_start), " \t"), "//")) continue;
+        if (explained(source, loc)) continue;
         try findings.append(allocator, .{
             .rule = .@"catch-unreachable-comment",
             .line = loc.line + 1,
@@ -346,6 +356,12 @@ fn rawDvuiCalls(
             break;
         }
     }
+}
+
+/// Whether the token at `loc` has a `//` comment on its line or a comment line just above it.
+fn explained(source: []const u8, loc: std.zig.Ast.Location) bool {
+    return commentStart(source[loc.line_start..loc.line_end]) != null or
+        std.mem.startsWith(u8, std.mem.trimStart(u8, previousLine(source, loc.line_start), " \t"), "//");
 }
 
 /// The line before the one starting at `line_start`; empty on the first line.
@@ -916,6 +932,24 @@ test "catch unreachable needs a reason" {
         var count: usize = 0;
         for (try analyze(arena.allocator(), case[0])) |finding| {
             if (finding.rule == .@"catch-unreachable-comment") count += 1;
+        }
+        try std.testing.expectEqual(case[1], count);
+    }
+}
+
+test "@constCast needs a reason" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    for ([_]struct { [:0]const u8, usize }{
+        .{ "fn t() void { _ = @constCast(x); }", 1 },
+        .{ "fn t() void {\n    // owned by the caller\n    _ = @constCast(x);\n}", 0 },
+        .{ "fn t() void { _ = @constCast(x); // reason\n}", 0 },
+        .{ "fn t() void { _ = .{ @constCast(a), @constCast(b) }; }", 2 },
+        .{ "fn t() void { _ = \"@constCast(x)\"; }", 0 },
+    }) |case| {
+        var count: usize = 0;
+        for (try analyze(arena.allocator(), case[0])) |finding| {
+            if (finding.rule == .@"constcast-comment") count += 1;
         }
         try std.testing.expectEqual(case[1], count);
     }
