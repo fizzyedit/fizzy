@@ -85,6 +85,24 @@ $SDK/platform-tools/adb exec-out screencap -p > hello-after.png
 Confirm that the displayed tap count increases by one in the second screenshot; a different
 image alone does not prove that touch input reached the button.
 
+## Lifecycle check
+
+Leaving and coming back, ten times over, then Back. With the app running:
+
+```sh
+ADB=$ANDROID_HOME/platform-tools/adb
+for i in $(seq 10); do
+  $ADB shell input keyevent KEYCODE_HOME
+  $ADB shell monkey -p dev.fizzy.hello 1
+done
+```
+
+Each time the app comes back it draws at once. Then open a menu and press Back:
+`$ADB shell input keyevent KEYCODE_BACK` closes the menu (Back reaches the app as Escape). Press it
+once more: with nothing left to close the app goes to the background without finishing, and
+`$ADB shell dumpsys activity activities | grep -i fizzy` still lists it. Last,
+`$ADB logcat -d | grep -E " F DEBUG|SDL_GPU"` prints nothing: no crash, no GPU error.
+
 ## Pitfalls
 
 See `AGENTS.md`: the Zig cache, minSdk 24, linking with the NDK's clang, and why Java stays
