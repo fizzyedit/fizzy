@@ -233,15 +233,20 @@ const Probe = struct {
     }
 
     fn change(_: *Display, _: c_ulong, _: c_ulong, _: c_ulong, _: c_int, _: c_int, _: [*]const u8, _: c_int) callconv(.c) c_int {
-        @panic("a refused blur must not write a property");
+        refused("write a property");
     }
 
     fn delete(_: *Display, _: c_ulong, _: c_ulong) callconv(.c) c_int {
-        @panic("a refused blur must not delete a property");
+        refused("delete a property");
     }
 
     fn flush(_: *Display) callconv(.c) c_int {
-        @panic("a refused blur must not flush");
+        refused("flush");
+    }
+
+    fn refused(comptime what: []const u8) noreturn {
+        // An Xlib stub returns no error, so a call the refused path must not make stops the test here.
+        @panic("a refused blur must not " ++ what);
     }
 
     const xlib: Lib = .{

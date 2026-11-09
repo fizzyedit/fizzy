@@ -16,6 +16,7 @@ fn emptyTextureDesc() proxy_bridge.TextureDesc {
 }
 
 fn windowFromCtx(ctx: ?*anyopaque) *dvui.Window {
+    // The host fills ctx with its window before any plugin draws.
     return @ptrCast(@alignCast(ctx orelse @panic("render bridge ctx is null")));
 }
 

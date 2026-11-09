@@ -13,6 +13,7 @@ pub fn component(gpa: std.mem.Allocator, name: []const u8) []const u8 {
         const kept = if (std.ascii.isAlphanumeric(c) or c == '.') c else '-';
         if (kept == '-' and (out.items.len == 0 or out.items[out.items.len - 1] == '-')) continue;
         if (out.items.len == 0 and std.ascii.isDigit(kept)) continue;
+        // Build-only, so a panic fails the build step; std-only, so the lint's build-code test misses it.
         out.append(gpa, kept) catch @panic("OOM");
     }
     const trimmed = std.mem.trimEnd(u8, out.items, "-");

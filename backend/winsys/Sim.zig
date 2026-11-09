@@ -175,6 +175,7 @@ pub fn platform(sim: *Sim) Platform {
 }
 
 fn oom() noreturn {
+    // The platform vtable returns no allocation errors, so the test double stops the test.
     @panic("Sim: out of memory (a test double does not report it)");
 }
 

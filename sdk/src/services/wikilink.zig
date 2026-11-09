@@ -279,10 +279,10 @@ pub const Api = struct {
 
 const testing = std.testing;
 
-fn expectOne(literal: []const u8) Token {
+fn expectOne(literal: []const u8) !Token {
     var buf: [8]Token = undefined;
     const toks = tokenize(literal, &buf);
-    testing.expectEqual(@as(usize, 1), toks.len) catch @panic("expected exactly one token");
+    try testing.expectEqual(@as(usize, 1), toks.len);
     return toks[0];
 }
 
@@ -292,7 +292,7 @@ fn expectNone(literal: []const u8) !void {
 }
 
 test "plain target" {
-    const t = expectOne("[[A]]");
+    const t = try expectOne("[[A]]");
     try testing.expectEqualStrings("A", t.target);
     try testing.expectEqualStrings("", t.alias);
     try testing.expect(!t.embed);
@@ -301,35 +301,35 @@ test "plain target" {
 }
 
 test "alias" {
-    const t = expectOne("[[A|B]]");
+    const t = try expectOne("[[A|B]]");
     try testing.expectEqualStrings("A", t.target);
     try testing.expectEqualStrings("B", t.alias);
     try testing.expectEqualStrings("B", t.label());
 }
 
 test "heading" {
-    const t = expectOne("[[A#H]]");
+    const t = try expectOne("[[A#H]]");
     try testing.expectEqualStrings("A", t.target);
     try testing.expectEqualStrings("H", t.heading);
     try testing.expectEqualStrings("", t.block_id);
 }
 
 test "heading and alias" {
-    const t = expectOne("[[A#H|B]]");
+    const t = try expectOne("[[A#H|B]]");
     try testing.expectEqualStrings("A", t.target);
     try testing.expectEqualStrings("H", t.heading);
     try testing.expectEqualStrings("B", t.alias);
 }
 
 test "block id" {
-    const t = expectOne("[[A#^abc123]]");
+    const t = try expectOne("[[A#^abc123]]");
     try testing.expectEqualStrings("A", t.target);
     try testing.expectEqualStrings("abc123", t.block_id);
     try testing.expectEqualStrings("", t.heading);
 }
 
 test "embed spans the bang" {
-    const t = expectOne("![[A]]");
+    const t = try expectOne("![[A]]");
     try testing.expect(t.embed);
     try testing.expectEqualStrings("A", t.target);
     try testing.expectEqual(@as(usize, 0), t.start);
@@ -337,13 +337,13 @@ test "embed spans the bang" {
 }
 
 test "relative path target" {
-    const t = expectOne("[[../rel/A]]");
+    const t = try expectOne("[[../rel/A]]");
     try testing.expectEqualStrings("../rel/A", t.target);
 }
 
 test "surrounding text is excluded from the span" {
     const src = "see [[A]] now";
-    const t = expectOne(src);
+    const t = try expectOne(src);
     try testing.expectEqualStrings("[[A]]", src[t.start..t.end]);
 }
 
@@ -364,7 +364,7 @@ test "nested brackets keep the inner link" {
 }
 
 test "whitespace around target and alias is trimmed" {
-    const t = expectOne("[[  A  |  B  ]]");
+    const t = try expectOne("[[  A  |  B  ]]");
     try testing.expectEqualStrings("A", t.target);
     try testing.expectEqualStrings("B", t.alias);
 }

@@ -109,6 +109,8 @@ Source: `std` takes `*Writer` or `comptime T: type` wherever it can.
 - `unreachable` marks a branch that is provably dead, with the proof in a comment.
 - `@panic` is for unrecoverable failure at setup: build scripts, entry points, and a
   `catch @panic` with a comment. Past setup, return the error.
+  Outside build code (a file that names `std.Build`), `zig build lint` wants a `//` reason on the
+  line or the line above (`panic-comment`), saying why the program cannot go on.
 - `@ptrCast` needs a comment saying why the cast is sound, except a plain vtable or FFI cast.
   `@constCast` always needs one. `zig build lint` checks it (`constcast-comment`), on the line or
   the line above, with no baseline allowance. The reason says why the memory is writable (or

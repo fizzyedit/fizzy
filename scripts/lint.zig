@@ -17,6 +17,7 @@ const Rule = enum {
     @"todo-seam",
     @"catch-unreachable-comment",
     @"constcast-comment",
+    @"panic-comment",
 };
 const Finding = struct { rule: Rule, line: usize, message: []const u8 };
 const Allow = struct { rule: Rule, file: []const u8, count: usize };
@@ -210,31 +211,7 @@ fn analyze(allocator: std.mem.Allocator, source: [:0]const u8) ![]Finding {
         }
     }
     try rawDvuiCalls(allocator, tree, suppressions.items, &findings);
-    const tags = tree.tokens.items(.tag);
-    // `catch unreachable`, `catch |e| unreachable` and `@constCast` say why on their line or the one above.
-    for (tags, 0..) |tag, i| {
-        if (tag == .builtin and std.mem.eql(u8, tree.tokenSlice(@intCast(i)), "@constCast")) {
-            const loc = tree.tokenLocation(0, @intCast(i));
-            if (explained(source, loc)) continue;
-            try findings.append(allocator, .{
-                .rule = .@"constcast-comment",
-                .line = loc.line + 1,
-                .message = "@constCast needs a // reason saying why the memory is writable",
-            });
-            continue;
-        }
-        if (tag != .keyword_catch) continue;
-        const payload = i + 4 < tags.len and tags[i + 1] == .pipe and tags[i + 2] == .identifier and tags[i + 3] == .pipe;
-        const at = if (payload) i + 4 else i + 1;
-        if (tags[at] != .keyword_unreachable) continue;
-        const loc = tree.tokenLocation(0, @intCast(at));
-        if (explained(source, loc)) continue;
-        try findings.append(allocator, .{
-            .rule = .@"catch-unreachable-comment",
-            .line = loc.line + 1,
-            .message = "catch unreachable needs a // reason saying why the error cannot happen",
-        });
-    }
+    try unexplained(allocator, tree, source, &findings);
     var create_line: ?usize = null;
     var has_destroy = false;
     for (0..tree.nodes.len) |index| {
@@ -355,6 +332,44 @@ fn rawDvuiCalls(
             });
             break;
         }
+    }
+}
+
+/// `catch unreachable`, `catch |e| unreachable`, `@constCast` and `@panic` say why on their line or
+/// the one above, except `@panic` in build code (a file naming `std.Build`), where it fails a step.
+fn unexplained(
+    allocator: std.mem.Allocator,
+    tree: std.zig.Ast,
+    source: []const u8,
+    findings: *std.ArrayList(Finding),
+) !void {
+    const build_time = std.mem.find(u8, source, "std.Build") != null;
+    const tags = tree.tokens.items(.tag);
+    for (tags, 0..) |tag, i| {
+        if (tag == .builtin) {
+            const name = tree.tokenSlice(@intCast(i));
+            const rule: Rule, const message: []const u8 = if (std.mem.eql(u8, name, "@constCast"))
+                .{ .@"constcast-comment", "@constCast needs a // reason saying why the memory is writable" }
+            else if (std.mem.eql(u8, name, "@panic") and !build_time)
+                .{ .@"panic-comment", "@panic needs a // reason saying why the program cannot go on" }
+            else
+                continue;
+            const loc = tree.tokenLocation(0, @intCast(i));
+            if (explained(source, loc)) continue;
+            try findings.append(allocator, .{ .rule = rule, .line = loc.line + 1, .message = message });
+            continue;
+        }
+        if (tag != .keyword_catch) continue;
+        const payload = i + 4 < tags.len and tags[i + 1] == .pipe and tags[i + 2] == .identifier and tags[i + 3] == .pipe;
+        const at = if (payload) i + 4 else i + 1;
+        if (tags[at] != .keyword_unreachable) continue;
+        const loc = tree.tokenLocation(0, @intCast(at));
+        if (explained(source, loc)) continue;
+        try findings.append(allocator, .{
+            .rule = .@"catch-unreachable-comment",
+            .line = loc.line + 1,
+            .message = "catch unreachable needs a // reason saying why the error cannot happen",
+        });
     }
 }
 
@@ -950,6 +965,25 @@ test "@constCast needs a reason" {
         var count: usize = 0;
         for (try analyze(arena.allocator(), case[0])) |finding| {
             if (finding.rule == .@"constcast-comment") count += 1;
+        }
+        try std.testing.expectEqual(case[1], count);
+    }
+}
+
+test "@panic needs a reason outside build code" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    for ([_]struct { [:0]const u8, usize }{
+        .{ "fn t() void { @panic(\"x\"); }", 1 },
+        .{ "fn t() void {\n    // setup failed\n    @panic(\"x\");\n}", 0 },
+        .{ "fn t() void { _ = f() catch @panic(\"OOM\"); // reason\n}", 0 },
+        .{ "fn t() void { a() catch @panic(\"a\"); b() catch @panic(\"b\"); }", 2 },
+        .{ "fn t(b: *std.Build) void { _ = f(b) catch @panic(\"OOM\"); }", 0 },
+        .{ "fn t() void { _ = \"@panic(x)\"; }", 0 },
+    }) |case| {
+        var count: usize = 0;
+        for (try analyze(arena.allocator(), case[0])) |finding| {
+            if (finding.rule == .@"panic-comment") count += 1;
         }
         try std.testing.expectEqual(case[1], count);
     }
