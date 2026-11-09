@@ -353,6 +353,8 @@ test "typing an opener with a selection wraps it instead of replacing it" {
 var ime_text: std.ArrayList(u8) = .empty;
 /// The caret to put the next frame's field at, then null.
 var ime_pending_cursor: ?usize = null;
+/// Text for the next frame to `textSet` after the field's events, then null.
+var ime_pending_set: ?[]const u8 = null;
 
 fn imeEntryFrame() !dvui.App.Result {
     var te = fizzy.core.widgets.TextEntry.init(@src(), .{ .text = .{ .array_list = .{
@@ -366,6 +368,10 @@ fn imeEntryFrame() !dvui.App.Result {
         sel.cursor = cursor;
         sel.end = cursor;
         ime_pending_cursor = null;
+    }
+    if (ime_pending_set) |text| {
+        te.entry.textSet(text, false);
+        ime_pending_set = null;
     }
     te.deinit();
     return .ok;
@@ -401,6 +407,19 @@ test "a focused field its owner clears asks the keyboard to reset to nothing" {
 
     try std.testing.expect(fizzy.core.platform.ime_reset);
     try std.testing.expectEqual(0, fizzy.core.platform.ime_reset_len);
+}
+
+test "a focused field the app sets to text of the same length asks the keyboard to reset" {
+    var t = try imeEntryCtx("hello");
+    defer deinitImeEntry(&t);
+
+    // Same length, and the caret stays at 5: only the text tells the edit apart.
+    ime_pending_set = "world";
+    _ = try dvui.testing.step(imeEntryFrame);
+
+    try std.testing.expectEqualStrings("world", ime_text.items);
+    try std.testing.expect(fizzy.core.platform.ime_reset);
+    try std.testing.expectEqualStrings("world", fizzy.core.platform.ime_reset_buf[0..fizzy.core.platform.ime_reset_len]);
 }
 
 test "typing from the keyboard does not ask it to reset" {

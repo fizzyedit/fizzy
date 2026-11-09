@@ -18,15 +18,28 @@ const TextEntry = @This();
 entry: *dvui.TextEntryWidget,
 hold: *TouchHold,
 style: SelectionControls.Style,
-/// The field's length and caret once this frame's events were done, for `deinit` to tell an edit
-/// the app made after them.
-ime_after: ImeSeen,
+/// The field's text and caret once this frame's events were done, for `deinit` to tell an edit
+/// the app made after them (`te.entry.textSet`). Null when the field had no focus then.
+ime_after: ?ImeSeen,
 /// Whether the app, not the keyboard, changed the text or caret this frame
 /// (`platform.requestImeReset`, asked in `deinit`).
 ime_stale: bool,
 
-/// The field's length and caret at the end of the last frame it had focus, under `_ime_seen`.
-const ImeSeen = struct { len: usize, cursor: usize };
+/// The field's text and caret at the end of the last frame it had focus, under `_ime_seen`. The
+/// hash tells a same-length replacement (`textSet("world")` over `hello`) from no edit.
+const ImeSeen = struct {
+    len: usize,
+    cursor: usize,
+    hash: u64,
+
+    fn of(entry: *dvui.TextEntryWidget) ImeSeen {
+        return .{
+            .len = entry.len,
+            .cursor = entry.textLayout.selection.cursor,
+            .hash = std.hash.Wyhash.hash(0, entry.getText()),
+        };
+    }
+};
 
 /// Starts the field, reads this frame's touch events and draws it. Call `deinit`, as for `dvui.textEntry`.
 pub fn init(src: std.lang.SourceLocation, init_opts: dvui.TextEntryWidget.InitOptions, opts: dvui.Options) TextEntry {
@@ -44,7 +57,7 @@ pub fn initStyled(src: std.lang.SourceLocation, init_opts: dvui.TextEntryWidget.
     // the keyboard's own edits below, which are not the app's.
     var ime_stale = false;
     if (dvui.focusedWidgetId() == id) if (dvui.dataGet(null, id, "_ime_seen", ImeSeen)) |seen| {
-        ime_stale = seen.len != entry.len or seen.cursor != entry.textLayout.selection.cursor;
+        ime_stale = !std.meta.eql(seen, ImeSeen.of(entry));
     };
     // Unfocused fields leave edits queued so only the intended focused field consumes them.
     if (dvui.focusedWidgetId() == entry.data().id) {
@@ -77,7 +90,7 @@ pub fn initStyled(src: std.lang.SourceLocation, init_opts: dvui.TextEntryWidget.
         .entry = entry,
         .hold = dvui.dataGetPtrDefault(null, id, "_hold", TouchHold, .{}),
         .style = style,
-        .ime_after = undefined,
+        .ime_after = null,
         .ime_stale = ime_stale,
     };
     self.keepFocusOnTouchdown();
@@ -94,7 +107,8 @@ pub fn initStyled(src: std.lang.SourceLocation, init_opts: dvui.TextEntryWidget.
     // A hold selects with the finger still down; the menu waits for its release.
     SelectionControls.menu(.{ .entry = entry }, entry.textLayout.state.te_show_context_menu and !self.hold.armed, style);
     if (entry.len != menu_len or !std.meta.eql(menu_sel, selectionOf(entry))) self.ime_stale = true;
-    self.ime_after = .{ .len = entry.len, .cursor = entry.textLayout.selection.cursor };
+    // Only the focused field is compared in `deinit`; skip hashing the others.
+    if (dvui.focusedWidgetId() == id) self.ime_after = .of(entry);
     if (dvui.focusedWidgetId() == entry.data().id) {
         const sel = entry.textLayout.selection;
         const text = entry.getText();
@@ -120,10 +134,12 @@ pub fn deinit(self: *TextEntry) void {
     const state = self.entry.textLayout.state;
     const id = self.entry.data().id;
     if (id == dvui.focusedWidgetId()) {
-        const seen: ImeSeen = .{ .len = self.entry.len, .cursor = self.entry.textLayout.selection.cursor };
+        const seen: ImeSeen = .of(self.entry);
         // Focus came this frame, or the app edited the field: between frames, with the pointer
         // or the touch menu, or after the events (`textSet`, a context menu's Paste).
-        if (self.ime_stale or !std.meta.eql(seen, self.ime_after) or dvui.dataGet(null, id, "_ime_seen", ImeSeen) == null) {
+        if (self.ime_stale or !std.meta.eql(@as(?ImeSeen, seen), self.ime_after) or
+            dvui.dataGet(null, id, "_ime_seen", ImeSeen) == null)
+        {
             platform.requestImeReset(self.entry.getText(), seen.cursor);
         }
         dvui.dataSet(null, id, "_ime_seen", seen);
