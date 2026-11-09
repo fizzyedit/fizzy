@@ -6,8 +6,9 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 /// Called on the Java UI thread when the inset changes, to wake the frame loop. Must be safe
-/// from any thread; never touches dvui.
-pub var wake: ?*const fn () void = null;
+/// from any thread; never touches dvui. Atomic because the backend stores it on SDL's thread
+/// while the activity's listener may already be reporting.
+pub var wake: std.atomic.Value(?*const fn () void) = .init(null);
 
 /// The latest inset in points, as the bits of an f32: written on the Java UI thread, read on the
 /// frame's.
@@ -27,7 +28,7 @@ pub fn keyboardInset() f32 {
 fn nativeInsets(_: ?*anyopaque, _: ?*anyopaque, ime_px: f32, nav_px: f32, density: f32) callconv(.c) void {
     const bits: u32 = @bitCast(points(ime_px, nav_px, density));
     if (latest.swap(bits, .monotonic) == bits) return;
-    if (wake) |f| f();
+    if (wake.load(.acquire)) |f| f();
 }
 
 comptime {

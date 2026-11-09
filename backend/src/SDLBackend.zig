@@ -580,7 +580,7 @@ pub fn initWindow(init_options: InitOptions) !SDLBackend {
     back.window_geometry = new.saved_geometry orelse .{};
 
     try configureBackend(&back, init_options);
-    if (comptime builtin.target.abi.isAndroid()) android_insets.wake = wakeForInsets;
+    if (comptime builtin.target.abi.isAndroid()) android_insets.wake.store(wakeForInsets, .release);
 
     return back;
 }
