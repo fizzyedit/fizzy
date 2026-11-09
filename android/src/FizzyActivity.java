@@ -9,6 +9,7 @@ import android.view.WindowInsets;
 import android.view.WindowInsetsAnimation;
 import android.view.WindowManager;
 import java.util.List;
+import org.libsdl.app.FizzyEdit;
 import org.libsdl.app.SDLActivity;
 
 public class FizzyActivity extends SDLActivity {
@@ -19,6 +20,13 @@ public class FizzyActivity extends SDLActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        // SDL's input connection lets its text go stale on a delete, garbling what follows a
+        // backspace; ours keeps it true, and SDL's ShowTextInputTask reuses this view.
+        if (mLayout != null) {
+            mTextEdit = new FizzyEdit(this);
+            mTextEdit.setVisibility(View.GONE);
+            mLayout.addView(mTextEdit);
+        }
         // Android gives an app 60 Hz unless it asks: take the panel's fastest mode at its resolution.
         Display display = Build.VERSION.SDK_INT >= 30 ? getDisplay() : getWindowManager().getDefaultDisplay();
         Display.Mode current = display.getMode(), best = current;

@@ -2,11 +2,11 @@
 # Package an Android app with the SDK tools; arguments come from build/android.zig.
 set -eu
 
-so=$1 manifest=$2 activity=$3 sdl_java=$4 jar=$5 out=$6 bt=$7 abi=$8 keystore=$9 app_id=${10} label=${11} min_sdk=${12} icon=${13:-}
+so=$1 manifest=$2 activity=$3 edit=$4 sdl_java=$5 jar=$6 out=$7 bt=$8 abi=$9 keystore=${10} app_id=${11} label=${12} min_sdk=${13} icon=${14:-}
 bt=$(cd "$bt" && pwd) # absolute: aapt runs from the staging directory
 stage=$(mktemp -d); trap 'rm -rf "$stage"' EXIT
 mkdir -p "$stage/classes" "$stage/lib/$abi"
-javac --release 17 -cp "$jar" -d "$stage/classes" "$sdl_java"/org/libsdl/app/*.java "$activity"
+javac --release 17 -cp "$jar" -d "$stage/classes" "$sdl_java"/org/libsdl/app/*.java "$edit" "$activity"
 "$bt/d8" --lib "$jar" --min-api "$min_sdk" --output "$stage" $(find "$stage/classes" -name '*.class')
 # Escape both XML attribute syntax and sed's replacement syntax.
 escaped_label=$(printf '%s' "$label" | sed 's/\&/\&amp;/g; s/"/\&quot;/g; s/</\&lt;/g; s/>/\&gt;/g' | sed 's/[\\\&|]/\\\&/g')
