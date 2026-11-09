@@ -10,7 +10,6 @@ const std = @import("std");
 const builtin = @import("builtin");
 const dvui = @import("dvui");
 const layout_file = @import("layout_file.zig");
-const sdl3 = @import("backend").c;
 const singleton = @import("app").single_instance;
 const Constants = @import("../editor/Constants.zig");
 const KeybindSettings = @import("../editor/KeybindSettings.zig");
@@ -432,10 +431,4 @@ pub fn setDynamicNativeMenuShortcut(index: usize, key: ?[]const u8, modifier_mas
     platform.menu.setKeyEquivalent(.{ .section = .extra, .tag = @intCast(index) }, key, modifier_mask);
 }
 
-/// Override the SDL app metadata DVUI sets to its example defaults. On macOS this
-/// is what drives the app menu's `About <name>` / `Hide <name>` / `Quit <name>`
-/// items. Must be called before `setupMacOSMenuBar` so the inserted Help menu
-/// references the right product name.
-pub fn setSdlAppMetadata(name: [*:0]const u8, version: [*:0]const u8, identifier: [*:0]const u8) void {
-    _ = sdl3.SDL_SetAppMetadata(name, version, identifier);
-}
+pub const setAppMetadata = platform.setAppMetadata;

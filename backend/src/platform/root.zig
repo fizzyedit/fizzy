@@ -29,6 +29,12 @@ pub fn quiet() bool {
     return if (comptime own_backend) @import("backend").quiet else false;
 }
 
+/// Set the app menu's `About <name>` / `Hide <name>` / `Quit <name>` on macOS.
+/// Call before the window is made.
+pub fn setAppMetadata(name: [*:0]const u8, version: [*:0]const u8, identifier: [*:0]const u8) void {
+    _ = @import("backend").c.SDL_SetAppMetadata(name, version, identifier);
+}
+
 comptime {
     // The menu bar's Objective-C (`macos/menu_target.m`) calls these back, and it is compiled into
     // every app on macOS (`addPlatformObjC`), so they are kept whether or not the app ever reaches

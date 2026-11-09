@@ -415,6 +415,11 @@ pub var floating_os_windows: enum { asked, all, none } = .asked;
 /// icon. It reads as the active app to those deciding by that (`appActive`).
 pub var quiet: bool = false;
 
+/// The clock the backend times frames by (`Health.frame_start_ns`).
+pub fn ticksNs() u64 {
+    return c.SDL_GetTicksNS();
+}
+
 /// The backend's health counters now (`Health`): frames, presents, swapchain resizes, the OS
 /// windows alive, what SDL logged, frame-time percentiles and each frame's GPU work. Kept current
 /// whether or not anyone reads them; reading them sorts the frame times and asks SDL (and AppKit)

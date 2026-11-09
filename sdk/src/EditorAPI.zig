@@ -15,10 +15,6 @@ const Plugin = @import("Plugin.zig");
 
 const EditorAPI = @This();
 
-/// A name/extension-pattern pair for a native save dialog. Layout matches the backend's
-/// `DialogFileFilter` (which mirrors `SDL_DialogFileFilter`), so fizzy forwards a slice
-/// of these straight to the backend without a copy. `pattern` is a `;`-separated extension
-/// list, e.g. `"png;jpg;jpeg"`.
 /// How an open should land in the tab strip.
 pub const OpenMode = enum(u8) {
     /// Keep it: an ordinary tab, there until closed.
@@ -85,6 +81,10 @@ pub const MenuContext = struct {
     }
 };
 
+/// A name/extension-pattern pair for a file dialog. Layout matches the backend's
+/// `DialogFileFilter`, so fizzy forwards a slice
+/// of these straight to the backend without a copy. `pattern` is a `;`-separated extension
+/// list, e.g. `"png;jpg;jpeg"`.
 pub const SaveDialogFilter = extern struct {
     name: [*:0]const u8,
     pattern: [*:0]const u8,

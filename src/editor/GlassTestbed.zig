@@ -563,7 +563,7 @@ fn saveFrame(self: *GlassTestbed, picture: ?Capture.Source) !void {
                     .captures = health.counts.captures,
                     .program_px = health.counts.program_px,
                     .passes = health.counts.passes,
-                    .frame_ms = @as(f32, @floatFromInt(dvui.backend.c.SDL_GetTicksNS() -| health.frame_start_ns)) / std.time.ns_per_ms,
+                    .frame_ms = @as(f32, @floatFromInt(dvui.backend.ticksNs() -| health.frame_start_ns)) / std.time.ns_per_ms,
                 };
             }
             try self.paired.resize(self.capture.gpa, image.pixels.len);
