@@ -2759,7 +2759,7 @@ const jni = struct {
 
     // anytype: the tuple of `f`'s arguments after the env, a different shape for each function.
     fn call(env: Env, comptime f: Fn, args: anytype) @typeInfo(f.T).@"fn".return_type.? {
-        const ptr: *const f.T = @ptrCast(env.*[f.index].?);
+        const ptr: *const f.T = @ptrCast(@alignCast(env.*[f.index].?));
         return @call(.auto, ptr, .{env} ++ args);
     }
 };
