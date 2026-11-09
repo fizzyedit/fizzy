@@ -209,7 +209,11 @@ pub fn backendModule(dep: *std.Build.Dependency, dvui_mod: *std.Build.Module, op
     const sdl_optimize: std.lang.OptimizeMode = if (opts.optimize == .debug) .fast else opts.optimize;
     const sdl_dep = sdlDependency(b, opts.target, sdl_optimize, opts.sdk);
 
-    const sdl_translate_c: Translator = .init(b.dependency("translate_c", .{}), .{
+    const translate_c = b.dependency("translate_c", .{});
+    // `-fincremental` reaches dependency tools too, and their incremental state is rebuilt from
+    // nothing each time the build runner restarts after a build.zig edit.
+    translate_c.artifact("translate-c").incremental = false;
+    const sdl_translate_c: Translator = .init(translate_c, .{
         .c_source_file = b.path("src/sdl3-c.h"),
         .target = opts.target,
         .optimize = opts.optimize,
@@ -289,6 +293,7 @@ fn patchedSdl(b: *std.Build) ?std.Build.LazyPath {
 
     const upstream = b.lazyDependency("sdl_source", .{}) orelse return null;
     const patch = b.lazyDependency("patch", .{ .source = upstream.path(""), .patches = patches }) orelse return null;
+    patch.artifact("patch").incremental = false;
     return patch.namedLazyPath("patched");
 }
 
