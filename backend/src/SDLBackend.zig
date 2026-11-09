@@ -2694,6 +2694,12 @@ pub fn keyboardInset(_: *SDLBackend) f32 {
     return if (comptime builtin.target.abi.isAndroid()) android_insets.keyboardInset() else 0;
 }
 
+/// Where the display's cutout lies while the window is full screen, in points: Android's, from
+/// the activity's insets (`android_insets`); zero elsewhere.
+pub fn safeInsets(_: *SDLBackend) android_insets.Safe {
+    return if (comptime builtin.target.abi.isAndroid()) android_insets.safeInsets() else .{};
+}
+
 pub fn textInputRect(self: *SDLBackend, rect: ?dvui.Rect.Natural) void {
     // dvui calls this backend hook during Window.end(), while the window is current.
     self.textInputRectWithHints(rect, glass.field_hints.current());
