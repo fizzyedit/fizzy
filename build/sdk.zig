@@ -136,14 +136,28 @@ pub fn wireAppModule(
 }
 
 /// Crash reports (`app/crash/`): std-only, a module of its own so the plugin loader reaches it
-/// from a test rooted at the loader as well as from the app.
+/// from a test rooted at the loader as well as from the app. One per target and mode, as
+/// `buildOptsModule` is: the app, the backend (`sigaction`) and the Android entry share it, and
+/// a second module over the same files would fail the build.
 pub fn crashModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.OptimizeMode) *std.Build.Module {
-    return b.createModule(.{
+    for (crash_modules.items) |m| {
+        if (m.b == b and m.optimize == optimize and m.query.eql(target.query)) return m.module;
+    }
+    const module = b.createModule(.{
         .target = target,
         .optimize = optimize,
         .root_source_file = b.path("app/crash/crash.zig"),
     });
+    crash_modules.append(b.graph.arena, .{ .b = b, .query = target.query, .optimize = optimize, .module = module }) catch @panic("OOM");
+    return module;
 }
+
+var crash_modules: std.ArrayList(struct {
+    b: *std.Build,
+    query: std.Target.Query,
+    optimize: std.lang.OptimizeMode,
+    module: *std.Build.Module,
+}) = .empty;
 
 /// One module per `Options` step, shared by every consumer.
 ///
