@@ -40,6 +40,13 @@ pub var cached_form_override: ?FormFactor = null;
 /// out above it. Written on the UI thread.
 pub var keyboard_inset: f32 = 0;
 
+pub const SafeInsets = struct { top: f32 = 0, left: f32 = 0, right: f32 = 0, bottom: f32 = 0 };
+
+/// Where the display's cutout lies while the app is full screen, in points; zero when the bars
+/// show, because the window is already padded clear of them. The native backend writes it on
+/// Android, on the UI thread.
+pub var safe_insets: SafeInsets = .{};
+
 /// True while an on-screen keyboard is shown. The native backend writes it each frame, on the UI
 /// thread; an app reads it to tell a soft keyboard's Enter from a hardware one's.
 pub var soft_keyboard: bool = false;

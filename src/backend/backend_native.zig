@@ -84,7 +84,8 @@ pub fn frameInsets(win: *dvui.Window) dvui.Rect {
 /// Writes `core.platform.soft_keyboard` from the backend, once a frame on the UI thread, and logs
 /// a change when the backend logs events. Stays false with dvui's stock backend, which cannot say.
 /// On Android it also writes `core.platform.keyboard_inset`, how far the keyboard covers the
-/// window in points (the window keeps its size under it), logged the same way.
+/// window in points (the window keeps its size under it), and `core.platform.safe_insets`, the
+/// display cutout while full screen, each logged the same way.
 pub fn pollSoftKeyboard(win: *dvui.Window) void {
     if (comptime !@import("native_backend").fizzy) return;
     const shown = win.backend.impl.screenKeyboardShown();
@@ -98,6 +99,12 @@ pub fn pollSoftKeyboard(win: *dvui.Window) void {
             std.log.debug("keyboard_inset {d}", .{inset});
         }
         fizzy.core.platform.keyboard_inset = inset;
+        const s = win.backend.impl.safeInsets();
+        const safe: fizzy.core.platform.SafeInsets = .{ .top = s.top, .left = s.left, .right = s.right, .bottom = s.bottom };
+        if (!std.meta.eql(safe, fizzy.core.platform.safe_insets) and win.backend.impl.log_events) {
+            std.log.debug("safe_insets {any}", .{safe});
+        }
+        fizzy.core.platform.safe_insets = safe;
     }
 }
 

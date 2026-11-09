@@ -6,6 +6,7 @@ import android.graphics.Insets;
 import android.view.Display;
 import android.view.View;
 import android.view.WindowInsets;
+import android.view.WindowInsetsController;
 import android.view.WindowInsetsAnimation;
 import android.view.WindowManager;
 import java.util.List;
@@ -28,13 +29,18 @@ public class FizzyActivity extends SDLActivity {
         }
         WindowManager.LayoutParams params = getWindow().getAttributes();
         params.preferredDisplayModeId = best.getModeId();
+        // SDL sets the cutout mode on getAttributes() without setAttributes, so full screen could
+        // stay letterboxed under the cutout.
+        if (Build.VERSION.SDK_INT >= 28) params.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
         getWindow().setAttributes(params);
         listenForInsets();
     }
 
     // The window keeps its size under the keyboard (adjustNothing); the app lays out above it
     // from nativeInsets. SDL's surface keeps its own insets listener: ours is on its parent and
-    // returns the insets unchanged, so they still reach it.
+    // returns the insets unchanged, so they still reach it. With the bars shown the surface is
+    // padded clear of them and the cutout; hidden (full screen) it reaches the edges, and the
+    // cutout goes to the app as safe insets.
     private void listenForInsets() {
         if (Build.VERSION.SDK_INT < 30) {
             getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
@@ -44,8 +50,12 @@ public class FizzyActivity extends SDLActivity {
         content.setOnApplyWindowInsetsListener(new View.OnApplyWindowInsetsListener() {
             @Override
             public WindowInsets onApplyWindowInsets(View v, WindowInsets insets) {
-                Insets bars = insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
-                v.setPadding(bars.left, bars.top, bars.right, insets.getInsets(WindowInsets.Type.navigationBars()).bottom);
+                if (insets.isVisible(WindowInsets.Type.statusBars())) {
+                    Insets bars = insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
+                    v.setPadding(bars.left, bars.top, bars.right, insets.getInsets(WindowInsets.Type.navigationBars()).bottom);
+                } else {
+                    v.setPadding(0, 0, 0, 0);
+                }
                 reportInsets(insets);
                 return insets;
             }
@@ -60,12 +70,37 @@ public class FizzyActivity extends SDLActivity {
     }
 
     private void reportInsets(WindowInsets insets) {
+        Insets safe = insets.isVisible(WindowInsets.Type.statusBars()) ? Insets.NONE : insets.getInsets(WindowInsets.Type.displayCutout());
         nativeInsets(insets.getInsets(WindowInsets.Type.ime()).bottom,
                 insets.getInsets(WindowInsets.Type.navigationBars()).bottom,
-                getResources().getDisplayMetrics().density);
+                getResources().getDisplayMetrics().density,
+                safe.left, safe.top, safe.right, safe.bottom);
     }
 
-    static native void nativeInsets(float imePx, float navPx, float density);
+    static native void nativeInsets(float imePx, float navPx, float density, float safeLeftPx, float safeTopPx, float safeRightPx, float safeBottomPx);
+
+    // Coming back to the window (Home then back, a dialog closing) can show the bars again: hide
+    // them while SDL is full screen. Below API 30 SDL's immersive-sticky flags already do this.
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        hideSystemBars();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        hideSystemBars();
+    }
+
+    private void hideSystemBars() {
+        if (!mFullscreenModeActive || Build.VERSION.SDK_INT < 30) return;
+        getWindow().setDecorFitsSystemWindows(false);
+        WindowInsetsController controller = getWindow().getInsetsController();
+        if (controller == null) return;
+        controller.hide(WindowInsets.Type.systemBars());
+        controller.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+    }
 
     // Back with nothing open leaves to the background, never finishes (API 26-30 would kill the app).
     @Override

@@ -141,6 +141,28 @@ steps, and falling back to 0 when it hides. A screenshot with the keyboard open
 (`$ADB exec-out screencap -p > keyboard.png`) shows the focused field above the keyboard; one on
 a phone with a display cutout shows nothing drawn under the cutout.
 
+## Full screen
+
+An app goes full screen with SDL (`SDL_SetWindowFullscreen`, dvui's `toggleFullscreen`): SDL hides
+the status and navigation bars, immersive-sticky, so an edge swipe shows them over the app and
+they hide again after 2 s. While the bars are hidden the activity stops padding the window and
+lays it out under the cutout (`LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES`), and reports where the
+cutout lies as `core.platform.safe_insets`, in points, for the app to keep content clear of; with
+the bars shown it pads as before and the safe insets are 0. On API 30 and newer it hides the bars
+again when the window regains focus or resumes. The check, on a phone with a cutout, with a hello
+whose tap calls `toggleFullscreen` and `log_events` on:
+
+```sh
+ADB=$ANDROID_HOME/platform-tools/adb
+$ADB logcat -c
+# Tap: the bars hide and the picture reaches the top edge. Swipe from an edge: the bars show over
+# the app and hide again. Home, then back to the app: the bars stay hidden.
+$ADB logcat -d | grep safe_insets
+```
+
+The lines show `safe_insets` with `.top` the cutout's height in points when the bars hide, and
+all zero when full screen is left.
+
 ## Pitfalls
 
 See `AGENTS.md`: the Zig cache, minSdk 24, linking with the NDK's clang, and why Java stays
