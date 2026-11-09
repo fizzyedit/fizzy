@@ -19,6 +19,7 @@ pub const viewport_map = @import("viewport_map.zig");
 pub const materials = @import("materials.zig");
 const text_input_props = @import("text_input_props.zig");
 const TouchSlots = @import("touch_slots.zig");
+const android_back = @import("android_back.zig");
 const glass_look = @import("glass_look");
 /// The OS windows besides the main one an app draws with (`Viewport`).
 pub const viewports = @import("viewports.zig");
@@ -79,6 +80,9 @@ touch_mouse_events: bool = false,
 /// The touch button each finger on the screen presses.
 touch_slots: TouchSlots = .{},
 log_events: bool = false,
+/// The event number of this frame's Back press (Android), given to dvui as Escape: unhandled, it
+/// leaves the app at the frame's `end`.
+back_num: ?u16 = null,
 last_pixel_size: dvui.Size.Physical = .{ .w = 800, .h = 600 },
 last_window_size: dvui.Size.Natural = .{ .w = 800, .h = 600 },
 cursor_last: dvui.enums.Cursor = .arrow,
@@ -461,6 +465,10 @@ pub fn initSDL() !void {
         _ = c.SDL_SetHintWithPriority(c.SDL_HINT_WINDOW_ACTIVATE_WHEN_RAISED, "0", c.SDL_HINT_OVERRIDE);
         _ = c.SDL_SetHintWithPriority(c.SDL_HINT_MAC_BACKGROUND_APP, "1", c.SDL_HINT_OVERRIDE);
     }
+
+    // Back reaches the app as a key and does not finish the activity: Escape first (a menu or
+    // dialog closes), and only an Escape nothing took leaves (`end`).
+    if (comptime builtin.target.abi.isAndroid()) _ = c.SDL_SetHint(c.SDL_HINT_ANDROID_TRAP_BACK_BUTTON, "1");
 
     try toErr(c.SDL_Init(c.SDL_INIT_VIDEO | c.SDL_INIT_EVENTS), "SDL_Init in initWindow");
     // Left to SDL, a bare executable's activation policy is whatever AppKit gives it; an accessory
@@ -2917,6 +2925,9 @@ pub fn renderPresent(self: *SDLBackend) void {
     // others reaches the screen a composite or more after the size it was drawn for, as an edge
     // with nothing on it or a frame cut off (docs/WINDOWS_LIVE_RESIZE.md).
     self.gpu.present(self.clear_window_on_begin, builtin.target.os.tag == .windows and self.inLiveResize());
+    // No swapchain texture (the surface being recreated after a resume): nothing else asks for the
+    // frame that draws it. While paused SDL blocks the loop, so this does not spin there.
+    if (comptime builtin.target.abi.isAndroid()) if (!self.gpu.presented) self.refresh();
     // Shown once there is a frame in it (or empty, above). Not made key — the window it came out of
     // keeps the keyboard until the viewport is clicked — but for a window of the OS's own frame
     // (`.native`), which opens key, as a window an app opens does.
@@ -3131,7 +3142,13 @@ fn mainHeld(self: *SDLBackend) bool {
 /// `clear_window_on_begin`); nothing to do here.
 pub fn clearWindow(_: *SDLBackend) !void {}
 
-pub fn end(_: *SDLBackend) !void {}
+/// Runs inside `Window.end`, while this frame's events still live.
+pub fn end(self: *SDLBackend) !void {
+    if (comptime !builtin.target.abi.isAndroid()) return;
+    defer self.back_num = null;
+    // SDL runs the activity's own Back on its UI thread (`FizzyActivity.superOnBackPressed`).
+    if (android_back.leaves(dvui.events(), self.back_num)) c.SDL_SendAndroidBackButton();
+}
 
 /// The window's drawable size. On macOS the swapchain layer's own (what SDL's Metal renderer
 /// reported, and what fizzy's AppKit sync keeps current during animations); elsewhere SDL's.
@@ -3440,11 +3457,16 @@ pub fn addEvent(self: *SDLBackend, win: *dvui.Window, event: c.SDL_Event) !bool 
                 log.debug("event KEYDOWN {any} {s} {any} {any}\n", .{ sdl_key, @tagName(code), mod, event.key.repeat });
             }
 
-            return try win.addEventKey(.{
+            const repeat = if (sdl3) event.key.repeat else event.key.repeat != 0;
+            const sub = try win.addEventKey(.{
                 .code = code,
-                .action = if (if (sdl3) event.key.repeat else event.key.repeat != 0) .repeat else .down,
+                .action = if (repeat) .repeat else .down,
                 .mod = mod,
             });
+            if (comptime builtin.target.abi.isAndroid()) {
+                if (sdl_key == c.SDLK_AC_BACK and !repeat) self.back_num = win.event_num;
+            }
+            return sub;
         },
         if (sdl3) c.SDL_EVENT_KEY_UP else c.SDL_KEYUP => {
             const sdl_key: i32 = if (sdl3) @intCast(event.key.key) else event.key.keysym.sym;
@@ -3626,6 +3648,12 @@ pub fn addEvent(self: *SDLBackend, win: *dvui.Window, event: c.SDL_Event) !bool 
         },
         c.SDL_EVENT_WILL_ENTER_BACKGROUND => {
             try self.releaseTouches(win);
+            return false;
+        },
+        // SDL blocks the loop while paused and recreates the surface on the next acquire; the
+        // first frame back draws at once rather than at the next input.
+        c.SDL_EVENT_DID_ENTER_FOREGROUND => {
+            self.refresh();
             return false;
         },
         if (sdl3) c.SDL_EVENT_WINDOW_FOCUS_GAINED else c.SDL_WINDOWEVENT_FOCUS_GAINED => {
@@ -3826,7 +3854,7 @@ pub fn SDL_keysym_to_dvui(keysym: i32) dvui.enums.Key {
         c.SDLK_KP_PERIOD => .kp_decimal,
 
         c.SDLK_RETURN => .enter,
-        c.SDLK_ESCAPE => .escape,
+        c.SDLK_ESCAPE, c.SDLK_AC_BACK => .escape,
         c.SDLK_TAB => .tab,
         c.SDLK_LSHIFT => .left_shift,
         c.SDLK_RSHIFT => .right_shift,

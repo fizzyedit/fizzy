@@ -117,6 +117,8 @@ pub const unit_tests = [_]struct {
     .{ .name = "backend-health-tests", .root = "src/Health.zig" },
     // Which touch button each finger on the screen presses; a trackpad's fingers, none.
     .{ .name = "backend-touch-slots-tests", .root = "src/touch_slots.zig" },
+    // Android's Back, given as Escape: it leaves the app only when nothing handled that press.
+    .{ .name = "backend-android-back-tests", .root = "src/android_back.zig" },
     // The windowing interface (`winsys`): window, event, display, clipboard, dnd and IME types,
     // and the platform vtable every backend implements. std-only.
     .{ .name = "backend-winsys-tests", .root = "winsys/root.zig" },
