@@ -1,5 +1,6 @@
 const std = @import("std");
 const android_lookup = @import("android_lookup");
+const crash = @import("crash");
 
 extern "c" var environ: ?[*:null]?[*:0]u8;
 /// Null when SDL cannot get the app's files directory from Java.
@@ -40,6 +41,11 @@ fn runMain(comptime main: anytype, argc: c_int, argv: [*][*:0]u8) !u8 {
         .environ = .{ .block = environ_block },
     });
     defer threaded.deinit();
+    // Threaded.init's own install reached bionic as SIG_DFL, so its cancelling SIGIO killed the
+    // app. deinit still restores right: bionic both wrote and reads its saved bytes in its layout.
+    const interrupt: std.posix.Sigaction = .{ .handler = .{ .handler = doNothing }, .mask = std.posix.sigemptyset(), .flags = 0 };
+    crash.sigaction(.IO, &interrupt, null);
+    crash.sigaction(.PIPE, &interrupt, null);
 
     var environ_map = try std.process.Environ.createMap(.{ .block = environ_block }, gpa);
     defer environ_map.deinit();
@@ -55,3 +61,6 @@ fn runMain(comptime main: anytype, argc: c_int, argv: [*][*:0]u8) !u8 {
         .preopens = preopens,
     });
 }
+
+/// What std.Io.Threaded installs: a signal that only interrupts the blocked call it lands on.
+fn doNothing(_: std.posix.SIG) callconv(.c) void {}

@@ -23,6 +23,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 pub const image = @import("image.zig");
 pub const loaded = @import("loaded.zig");
+pub const sigaction = @import("sigaction.zig").sigaction;
 
 /// Where crash reports can be written: native targets std can catch faults on.
 pub const supported = builtin.target.cpu.arch != .wasm32 and std.debug.have_segfault_handling_support;
@@ -241,16 +242,16 @@ pub fn init(run: Run) void {
             .mask = std.posix.sigemptyset(),
             .flags = std.posix.SA.SIGINFO | std.posix.SA.ONSTACK | std.posix.SA.RESETHAND,
         };
-        std.posix.sigaction(.ABRT, &act, null);
-        std.posix.sigaction(.TRAP, &act, null);
+        sigaction(.ABRT, &act, null);
+        sigaction(.TRAP, &act, null);
         // std's fault handler is told the address but not the `si_code`; note it on the way in.
         for (fault_signals, &prev_fault) |sig, *prev| {
-            std.posix.sigaction(sig, null, prev);
+            sigaction(sig, null, prev);
             // Not std's (or already ours, from an earlier `init`): leave it.
             if (prev.flags & std.posix.SA.SIGINFO == 0 or prev.handler.sigaction == null or prev.handler.sigaction == &onFault) continue;
             var ours = prev.*;
             ours.handler = .{ .sigaction = onFault };
-            std.posix.sigaction(sig, &ours, null);
+            sigaction(sig, &ours, null);
         }
     }
 }
@@ -548,6 +549,7 @@ const win = struct {
 test {
     // The handlers too, so every target's `zig build test` compiles them.
     std.testing.refAllDecls(@This());
+    _ = @import("sigaction_tests.zig");
 }
 
 const test_run: Run = .{ .app = "fizzy", .version = "0.4.2", .sdk = "0.2.22" };

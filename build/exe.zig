@@ -169,6 +169,8 @@ fn fizzyNativeDvui(
         dvui_mod,
         backendOptions(target, optimize, sdl_paths),
     );
+    // The app's own crash module: its `sigaction` speaks bionic's layout on Android.
+    backend.addImport("crash", sdk.crashModule(b, target, optimize));
     return .{ .dep = dep, .dvui = dvui_mod, .backend = backend };
 }
 

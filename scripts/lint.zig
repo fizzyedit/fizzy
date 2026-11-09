@@ -14,6 +14,7 @@ const Rule = enum {
     @"raw-scroll-area",
     @"raw-text-entry",
     @"raw-button",
+    @"raw-sigaction",
     @"todo-seam",
     @"catch-unreachable-comment",
     @"constcast-comment",
@@ -262,8 +263,9 @@ fn analyze(allocator: std.mem.Allocator, source: [:0]const u8) ![]Finding {
     return findings.toOwnedSlice(allocator);
 }
 
-/// A dvui entry point with a shared core wrapper; exceptions name their reason inline.
+/// A dvui entry point (or a std call) with a shared wrapper; exceptions name their reason inline.
 const RawCall = struct {
+    namespace: []const u8 = "dvui",
     name: []const u8,
     rule: Rule,
     message: []const u8,
@@ -281,7 +283,8 @@ const raw_calls = blk: {
         .{ .name = "buttonLabelAndIcon", .call_only = true },
         .{ .name = "ButtonWidget", .call_only = false },
     };
-    var calls: [surfaces.len + 2 + buttons.len]RawCall = undefined;
+    const sigaction_namespaces = [_][]const u8{ "posix", "c" };
+    var calls: [surfaces.len + 2 + buttons.len + sigaction_namespaces.len]RawCall = undefined;
     for (surfaces, 0..) |name, i| calls[i] = .{
         .name = name,
         .rule = .@"raw-transient-surface",
@@ -305,6 +308,13 @@ const raw_calls = blk: {
         .message = "dvui." ++ button.name ++ " has no 44-point touch target; use the core.widgets button",
         .call_only = button.call_only,
     };
+    for (sigaction_namespaces, 0..) |namespace, i| calls[surfaces.len + 2 + buttons.len + i] = .{
+        .namespace = namespace,
+        .name = "sigaction",
+        .rule = .@"raw-sigaction",
+        .message = "std's Sigaction has the wrong layout on 64-bit Android; use crash.sigaction",
+        .call_only = true,
+    };
     break :blk calls;
 };
 
@@ -318,10 +328,10 @@ fn rawDvuiCalls(
     if (tags.len < 3) return;
     for (0..tags.len - 2) |i| {
         if (tags[i] != .identifier or tags[i + 1] != .period or tags[i + 2] != .identifier) continue;
-        if (!std.mem.eql(u8, tree.tokenSlice(@intCast(i)), "dvui")) continue;
+        const namespace = tree.tokenSlice(@intCast(i));
         const name = tree.tokenSlice(@intCast(i + 2));
         for (raw_calls) |banned| {
-            if (!std.mem.eql(u8, name, banned.name)) continue;
+            if (!std.mem.eql(u8, namespace, banned.namespace) or !std.mem.eql(u8, name, banned.name)) continue;
             if (banned.call_only and (i + 3 >= tags.len or tags[i + 3] != .l_paren)) continue;
             const line = tree.tokenLocation(0, @intCast(i)).line + 1;
             if (silenced(suppressions, banned.rule, line)) break;
@@ -995,6 +1005,21 @@ test "dvui.scrollArea is flagged" {
     const findings = try analyze(arena.allocator(), "fn f() void { _ = dvui.scrollArea(@src(), .{}, .{}); }");
     try std.testing.expectEqual(@as(usize, 1), findings.len);
     try std.testing.expectEqual(Rule.@"raw-scroll-area", findings[0].rule);
+}
+
+test "std's sigaction is flagged, a field named sigaction is not" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const findings = try analyze(
+        arena.allocator(),
+        "fn f() void {\n    std.posix.sigaction(.INT, &act, null);\n    _ = std.c.sigaction(.INT, null, null);\n" ++
+            "    crash.sigaction(.INT, &act, null);\n    _ = .{ .sigaction = h };\n}",
+    );
+    try std.testing.expectEqual(@as(usize, 2), findings.len);
+    for (findings, [_]usize{ 2, 3 }) |finding, line| {
+        try std.testing.expectEqual(Rule.@"raw-sigaction", finding.rule);
+        try std.testing.expectEqual(line, finding.line);
+    }
 }
 
 test "dvui.textEntry is flagged" {

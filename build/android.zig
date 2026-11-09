@@ -137,5 +137,7 @@ pub fn sdlMainModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: 
         .target = target,
         .optimize = optimize,
     }));
+    // The instance the app and the backend import, so its files sit in one module.
+    mod.addImport("crash", @import("sdk.zig").crashModule(b, target, optimize));
     return mod;
 }

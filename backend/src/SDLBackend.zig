@@ -22,6 +22,8 @@ const TouchSlots = @import("touch_slots.zig");
 const android_back = @import("android_back.zig");
 const android_insets = @import("android_insets.zig");
 const glass_look = @import("glass_look");
+// The app's crash module, for `sigaction` in bionic's layout on Android.
+const crash = @import("crash");
 /// The OS windows besides the main one an app draws with (`Viewport`).
 pub const viewports = @import("viewports.zig");
 /// dvui's floating windows as OS windows of their own from the one frame (`floatingWindowOs`).
@@ -505,12 +507,12 @@ const quit_signals = struct {
         for (signals, &chained) |sig, *slot| {
             if (slot.* != null) continue;
             var old: posix.Sigaction = undefined;
-            posix.sigaction(sig, null, &old);
+            crash.sigaction(sig, null, &old);
             const h = old.handler.handler;
             if (h == posix.SIG.DFL or h == posix.SIG.IGN or old.flags & posix.SA.SIGINFO != 0) continue;
             var act = old;
             act.handler = .{ .handler = handle };
-            posix.sigaction(sig, &act, null);
+            crash.sigaction(sig, &act, null);
             slot.* = old;
         }
     }
@@ -540,7 +542,7 @@ const quit_signals = struct {
     fn uninstall() void {
         if (comptime builtin.target.os.tag == .windows) return;
         for (signals, &chained) |sig, *slot| if (slot.*) |old| {
-            posix.sigaction(sig, &old, null);
+            crash.sigaction(sig, &old, null);
             slot.* = null;
         };
     }
