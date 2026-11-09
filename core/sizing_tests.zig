@@ -32,6 +32,7 @@ test {
     _ = @import("widgets/image_view_tests.zig");
     // A picture over its rect: takes the taps there, closes on Esc and on its bubble.
     _ = @import("widgets/image_viewer_tests.zig");
+    _ = @import("widgets/image_viewer_grow_tests.zig");
     // Hold to select, tap to clear, on a text layout.
     _ = @import("widgets/SelectableText.zig");
     // The menu over a touch selection: fizzy's, labelled, placed over the selection.
