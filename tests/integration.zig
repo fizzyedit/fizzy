@@ -11575,13 +11575,13 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try dvui.testing.settle(headlessFrame);
     }
 
-    // A tablet held upright stacks the tour's two documents: the window is taller than wide, with
-    // room for two.
+    // A tall window stacks the tour's two documents: after the bars its pane (744 x ~973 pt) is
+    // clear of placement's dead band (h > 1.15 w), with stacked halves that keep split_half.
     {
         const desktop_size = t.backend.size;
         const desktop_pixels = t.backend.size_pixels;
-        t.backend.size = .{ .w = 820, .h = 1180 };
-        t.backend.size_pixels = .{ .w = 820, .h = 1180 };
+        t.backend.size = .{ .w = 820, .h = 1300 };
+        t.backend.size_pixels = .{ .w = 820, .h = 1300 };
         defer {
             t.backend.size = desktop_size;
             t.backend.size_pixels = desktop_pixels;
