@@ -622,6 +622,13 @@ pub const Region = struct {
         return if (self.host.fizzy_api) |a| a.offerRegionChooser(self.token, bounds) else false;
     }
 
+    /// The part of this region a corner button around it takes this frame, physical. A press
+    /// there is the corner's, so a view keeps its controls out of it. Empty when no corner
+    /// reaches into the region.
+    pub fn cornerReach(self: Region) dvui.Rect.Physical {
+        return if (self.host.fizzy_api) |a| a.regionCornerReach(self.token) else .{};
+    }
+
     pub fn deinit(self: Region) void {
         if (self.host.fizzy_api) |a| a.endRegion(self.token);
     }

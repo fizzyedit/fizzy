@@ -11544,6 +11544,28 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
             try std.testing.expect(last.w > strip.w);
             try std.testing.expect(last.x >= strip.x - 1 and last.x < strip.x + strip.w);
         }
+        // A short tab at the strip's end is clear of the place's corner: one tap on its close
+        // button closes it, rather than bringing the corner's button up.
+        {
+            try strip_tmp.dir.writeFile(dvui.io, .{ .sub_path = "strip-tab-5.txt", .data = "" });
+            const path = try std.fs.path.join(gpa, &.{ strip_dir, "strip-tab-5.txt" });
+            defer gpa.free(path);
+            _ = try editor.openFilePath(path, editor.workbench.currentGroupingID());
+            try dvui.testing.settle(headlessFrame);
+            const pane = editor.workbench.workspaces.getPtr(editor.workbench.currentGroupingID()) orelse return error.TestUnexpectedResult;
+            const last = pane.tab_slots[pane.tab_slot_count - 1].rect;
+            const close: dvui.Point.Physical = .{
+                .x = last.x + last.w - (fizzy.core.widgets.tab_status_inset.w + fizzy.core.dialogs.windowHeaderCloseInnerSide() / 2) * dvui.windowNaturalScale(),
+                .y = last.y + last.h / 2,
+            };
+            const cw = dvui.currentWindow();
+            const norm: dvui.Point = .{ .x = close.x / cw.rect_pixels.w, .y = close.y / cw.rect_pixels.h };
+            _ = try cw.addEventPointer(.{ .button = .touch0, .action = .press, .xynorm = norm });
+            _ = try dvui.testing.step(headlessFrame);
+            _ = try cw.addEventPointer(.{ .button = .touch0, .action = .release, .xynorm = norm });
+            try dvui.testing.settle(headlessFrame);
+            try std.testing.expect(editor.docFromPath(path) == null);
+        }
         try editor.demo.play("tour");
         const player = &editor.demo.player;
         var phone_frames: usize = 0;

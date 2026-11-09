@@ -207,9 +207,14 @@ fn drawTabs(self: *Workspace, region: sdk.Host.Region, tabs: []const *sdk.Surfac
     var tabs_anim = dvui.animate(@src(), .{ .duration = core.motion.duration(500_000), .kind = .vertical, .easing = core.motion.enter }, .{});
     defer tabs_anim.deinit();
 
+    // The strip stops short of a corner button reaching into the pane: under it a first tap
+    // brings the corner's button up, so a tab there could never be pressed.
+    const reach = region.cornerReach();
+    const cs = dvui.parentGet().data().contentRectScale();
+    const keep = if (reach.empty()) 0 else @max(0, (cs.r.x + cs.r.w - reach.x) / cs.s);
     var tabs_box = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .expand = .none,
-        .margin = dvui.Rect.all(0),
+        .margin = .{ .w = keep },
         .padding = dvui.Rect.all(0),
         .id_extra = @intCast(self.grouping),
         // Never shorter than a strip: with its only tab in the hand (`Host.viewDragSurface`) it
