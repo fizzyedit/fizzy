@@ -2556,6 +2556,7 @@ pub const fizzy_api_vtable: sdk.EditorAPI.VTable = .{
     .beginViewDrag = fizzyBeginViewDrag,
     .beginViewDragMany = fizzyBeginViewDragMany,
     .offerRegionChooser = fizzyOfferRegionChooser,
+    .regionCornerReach = fizzyRegionCornerReach,
     .viewDragSurface = fizzyViewDragSurface,
     .regionSelect = fizzyRegionSelect,
     .assignSurfaces = fizzyAssignSurfaces,
@@ -5536,6 +5537,11 @@ fn fizzyBeginViewDragMany(ctx: *anyopaque, items: []const sdk.EditorAPI.Carried,
 fn fizzyOfferRegionChooser(ctx: *anyopaque, token: sdk.RegionSpec.Token, bounds: dvui.Rect.Physical) bool {
     const layout = fizzyCtx(ctx).app.frame_layout orelse return false;
     return layout.offerPluginRegionChooser(token, bounds);
+}
+
+fn fizzyRegionCornerReach(ctx: *anyopaque, token: sdk.RegionSpec.Token) dvui.Rect.Physical {
+    const layout = fizzyCtx(ctx).app.frame_layout orelse return .{};
+    return layout.pluginRegionCornerReach(token);
 }
 
 fn fizzyViewDragSurface(ctx: *anyopaque) ?[]const u8 {

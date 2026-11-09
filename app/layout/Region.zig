@@ -737,6 +737,8 @@ fn cornerButton(self: *Layout, opts: InitOptions, keywords: []const []const u8, 
     // explorer) has nothing outside its content, and the glyph's square is its whole target.
     const own_side = (if (carded) corners.tr.radius() * (1 - std.math.sqrt1_2) else 0) + (corner_quarter_depth + 4) * rs.s;
     const sliver: dvui.Rect.Physical = .{ .x = rs.r.x + rs.r.w - own_side, .y = rs.r.y, .w = own_side, .h = own_side };
+    // What of the content the corner takes, for the view drawn in it (`Layout.pluginRegionCornerReach`).
+    self.containers[self.depth - 1].corner_reach = sliver.intersect(crs.r);
     const in_corner = struct {
         fn f(area: dvui.Rect.Physical, content_r: dvui.Rect.Physical, own: dvui.Rect.Physical, p: dvui.Point.Physical) bool {
             return area.contains(p) and (!content_r.contains(p) or own.contains(p));

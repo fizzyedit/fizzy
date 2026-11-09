@@ -223,6 +223,9 @@ pub const Container = struct {
     last_resizable: ?dvui.Id = null,
     /// A non-resizable child has been declared (the leftover, or a grouping box around it).
     saw_base: bool = false,
+    /// The part of this place's content its corner button takes, physical (`Region.cornerButton`).
+    /// A press there is the corner's, never the view's. Empty for a place with no corner.
+    corner_reach: dvui.Rect.Physical = .{},
 
     /// How far this container reaches along `axis`, in points - its width when horizontal, its
     /// height when vertical. The same single number a region calls its extent, measured for the
@@ -1247,6 +1250,19 @@ pub fn pluginRegionMatching(self: *Layout, token: sdk.RegionSpec.Token) []const 
 pub fn pluginRegionSelected(self: *Layout, token: sdk.RegionSpec.Token) ?*Surface {
     const r = self.pluginRegion(token) orelse return null;
     return self.selectedIn(r);
+}
+
+/// The part of a plugin region a corner button around it takes this frame, physical
+/// (`Host.Region.cornerReach`); empty when no corner reaches into it.
+pub fn pluginRegionCornerReach(self: *Layout, token: sdk.RegionSpec.Token) dvui.Rect.Physical {
+    const r = self.pluginRegion(token) orelse return .{};
+    const box = r.box orelse return .{};
+    const content = box.data().contentRectScale().r;
+    for (self.containers[0..self.depth]) |c| {
+        const reach = c.corner_reach.intersect(content);
+        if (!reach.empty()) return reach;
+    }
+    return .{};
 }
 
 /// A plugin region's own chooser (its tab strip) is at `bounds` this frame

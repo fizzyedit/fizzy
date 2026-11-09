@@ -322,6 +322,9 @@ pub const VTable = struct {
     /// preview, and the region's drop zones cover the region less it. True while a carried view
     /// is over it — the plugin's cue to show where it would go in.
     offerRegionChooser: *const fn (ctx: *anyopaque, token: RegionSpec.Token, bounds: dvui.Rect.Physical) bool,
+    /// The part of the region's content a corner button around it takes this frame, physical: a
+    /// press there is the corner's. Empty when no corner reaches into it.
+    regionCornerReach: *const fn (ctx: *anyopaque, token: RegionSpec.Token) dvui.Rect.Physical,
     /// The id of the surface the app's view drag is carrying, if one is — a tab strip leaves it
     /// out while it is in the hand, as it would the tab it is reordering. Carrying several, the
     /// one in hand; carrying something no place takes (`beginViewDragMany`), an id of the drag's
@@ -653,6 +656,10 @@ pub fn beginViewDragMany(self: EditorAPI, items: []const Carried, from: dvui.Rec
 
 pub fn offerRegionChooser(self: EditorAPI, token: RegionSpec.Token, bounds: dvui.Rect.Physical) bool {
     return self.vtable.offerRegionChooser(self.ctx, token, bounds);
+}
+
+pub fn regionCornerReach(self: EditorAPI, token: RegionSpec.Token) dvui.Rect.Physical {
+    return self.vtable.regionCornerReach(self.ctx, token);
 }
 
 pub fn viewDragSurface(self: EditorAPI) ?[]const u8 {
