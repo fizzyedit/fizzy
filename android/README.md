@@ -10,7 +10,7 @@ from `backend/`'s pinned SDL.
 `zig build apk` (`build/android.zig`, in the root build graph) cross-compiles `android/src/main.zig`, dvui and SDL3, links them with the NDK's clang into
 `libmain.so`, and packages `zig-out/fizzy-hello.apk` with the Android SDK's tools (`javac`,
 `d8`, `aapt2`, `zipalign`, `apksigner`). There is no Gradle project: SDL's Java side is compiled
-from the same SDL source the native side is built from, with the 9-line `src/FizzyActivity.java`.
+from the same SDL source the native side is built from, with the short `src/FizzyActivity.java`.
 
 You need a JDK 17 or newer on `PATH` and the Android SDK (platform 35, build-tools 35.0.0, NDK
 27.2.12479018). The build selects the NDK toolchain directory for the host OS. Packaging
@@ -102,6 +102,23 @@ Each time the app comes back it draws at once. Then open a menu and press Back:
 once more: with nothing left to close the app goes to the background without finishing, and
 `$ADB shell dumpsys activity activities | grep -i fizzy` still lists it. Last,
 `$ADB logcat -d | grep -E " F DEBUG|SDL_GPU"` prints nothing: no crash, no GPU error.
+
+## Frame-rate check
+
+The activity asks for the panel's fastest mode at its resolution (Android gives an app 60 Hz
+unless it asks). On a 120 Hz panel, with the app running:
+
+```sh
+ADB=$ANDROID_HOME/platform-tools/adb
+$ADB logcat -d | grep "fizzy: display"                    # the last line says @120 Hz
+$ADB shell dumpsys SurfaceFlinger --list | grep -i fizzy  # the app's SurfaceView layer
+$ADB shell input swipe 500 1500 500 300 120 & $ADB shell dumpsys SurfaceFlinger --latency '<layer>'
+```
+
+During the swipe the median interval between present timestamps (the middle column of the
+`--latency` rows, in ns) is within 0.5 ms of 8.33 ms. At rest, the same `--latency` read twice
+5 s apart shows no new present timestamps. SDL draws into a SurfaceView, so `dumpsys gfxinfo`
+does not count its frames: read SurfaceFlinger.
 
 ## Pitfalls
 

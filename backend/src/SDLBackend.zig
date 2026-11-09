@@ -639,6 +639,7 @@ fn createWindowRenderer(options: InitOptions, share_device_of: ?*GpuRenderer) !s
         scale = 1.0;
     }
     log.info("SDL3 backend scale {d}", .{scale});
+    if (builtin.target.abi.isAndroid()) logDisplayMode(window);
 
     // adjust window size for content scale
     if (scale != 1.0 and saved_geometry == null) {
@@ -828,6 +829,12 @@ pub const WindowGeometry = struct {
 };
 
 // The configuration `initWindow` applies.
+/// Logs the window's display mode through SDL_Log, the one log that reaches logcat on Android.
+fn logDisplayMode(window: *c.SDL_Window) void {
+    const mode = c.SDL_GetCurrentDisplayMode(c.SDL_GetDisplayForWindow(window)) orelse return;
+    c.SDL_Log("fizzy: display %dx%d @%.0f Hz", mode.*.w, mode.*.h, @as(f64, mode.*.refresh_rate));
+}
+
 fn configureBackend(back: *SDLBackend, options: InitOptions) !void {
     var hidden = options.hidden;
     var show_window_in_begin = false;
@@ -3655,6 +3662,11 @@ pub fn addEvent(self: *SDLBackend, win: *dvui.Window, event: c.SDL_Event) !bool 
         // first frame back draws at once rather than at the next input.
         c.SDL_EVENT_DID_ENTER_FOREGROUND => {
             self.refresh();
+            return false;
+        },
+        // The activity's preferred mode reaches SDL with the surface, after `initWindow` read it.
+        c.SDL_EVENT_DISPLAY_CURRENT_MODE_CHANGED => {
+            if (comptime builtin.target.abi.isAndroid()) logDisplayMode(self.window);
             return false;
         },
         if (sdl3) c.SDL_EVENT_WINDOW_FOCUS_GAINED else c.SDL_WINDOWEVENT_FOCUS_GAINED => {
