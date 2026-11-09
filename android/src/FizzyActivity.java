@@ -85,6 +85,19 @@ public class FizzyActivity extends SDLActivity {
                 safe.left, safe.top, safe.right, safe.bottom);
     }
 
+    // Called from the app's frame (SDLBackend.imeReset) when the app, not the keyboard, changed the
+    // focused field: the keyboard's copy of it is stale. `before` is the text before the caret.
+    public static void imeReset(final String before) {
+        final SDLActivity activity = mSingleton;
+        if (activity == null) return;
+        activity.runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                if (mTextEdit instanceof FizzyEdit) ((FizzyEdit) mTextEdit).reset(before);
+            }
+        });
+    }
+
     static native void nativeInsets(float imePx, float navPx, float density, float safeLeftPx, float safeTopPx, float safeRightPx, float safeBottomPx);
 
     // Coming back to the window (Home then back, a dialog closing) can show the bars again: hide

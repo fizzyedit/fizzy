@@ -6,8 +6,10 @@ import android.text.Selection;
 import android.util.Log;
 import android.view.KeyEvent;
 import android.view.View;
+import android.view.inputmethod.BaseInputConnection;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
+import android.view.inputmethod.InputMethodManager;
 
 // In SDL's package because SDLDummyEdit's constructor and SDLInputConnection are package-private.
 public class FizzyEdit extends SDLDummyEdit {
@@ -20,6 +22,24 @@ public class FizzyEdit extends SDLDummyEdit {
         super.onCreateInputConnection(out); // fills out
         ic = new FizzyInputConnection(this);
         return ic;
+    }
+
+    // The app changed the field itself (cleared it, moved the caret): the connection's Editable and
+    // committed text only follow the keyboard's edits, so start both again from `before`, the
+    // text before the caret, and have the keyboard read it anew.
+    void reset(String before) {
+        if (!(ic instanceof FizzyInputConnection)) return;
+        FizzyInputConnection fic = (FizzyInputConnection) ic;
+        Editable e = fic.getEditable();
+        if (e != null) {
+            e.replace(0, e.length(), before);
+            Selection.setSelection(e, e.length());
+            BaseInputConnection.removeComposingSpans(e);
+        }
+        fic.mCommittedText = before;
+        Log.i(FizzyInputConnection.TAG, "reset(\"" + before + "\")");
+        InputMethodManager imm = (InputMethodManager) getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
+        if (imm != null) imm.restartInput(this);
     }
 }
 

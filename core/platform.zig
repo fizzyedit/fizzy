@@ -51,6 +51,29 @@ pub var safe_insets: SafeInsets = .{};
 /// thread; an app reads it to tell a soft keyboard's Enter from a hardware one's.
 pub var soft_keyboard: bool = false;
 
+pub const ime_before = @import("ime_before.zig");
+
+/// Whether the on-screen keyboard's idea of the focused field is stale and must be reset to
+/// `ime_reset_buf[0..ime_reset_len]`, the text before the caret. Written by the focused text field
+/// on the UI thread when the app (not the keyboard) changed its text or caret; read by the native
+/// backend once a frame, which clears it.
+pub var ime_reset: bool = false;
+/// The text before the caret for `ime_reset`: at most `ime_before.max` bytes, starting on a UTF-8
+/// boundary.
+pub var ime_reset_buf: [ime_before.max]u8 = undefined;
+/// How many bytes of `ime_reset_buf` hold the text.
+pub var ime_reset_len: usize = 0;
+
+/// Asks the keyboard to forget what it knows of the focused field and start again from `text`'s
+/// tail before `cursor`. Written by the focused text field on the UI thread when the app (not the
+/// keyboard) changed its text or caret; read by the native backend once a frame.
+pub fn requestImeReset(text: []const u8, cursor: usize) void {
+    const before = ime_before.tail(text, cursor);
+    @memcpy(ime_reset_buf[0..before.len], before);
+    ime_reset_len = before.len;
+    ime_reset = true;
+}
+
 /// The person's Layout setting, written by the editor each frame (held while a demo plays).
 pub var cached_layout_mode: form_factor.LayoutMode = .auto;
 

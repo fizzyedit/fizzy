@@ -201,6 +201,10 @@ export fn FizzyWebSetKeyboardInset(bottom: f32) void {
 /// (`FizzyWebSetKeyboardInset`), so nothing is polled.
 pub fn pollSoftKeyboard(_: *dvui.Window) void {}
 
+/// Symmetric with the native API: the page's hidden field is the keyboard's, and it follows the
+/// field's text itself (`field_edit`), so nothing is reset.
+pub fn pollImeReset(_: *dvui.Window) void {}
+
 /// Symmetric with the native API: nothing to install on web because the JS bootstrap wires
 /// the wheel listener at page load.
 pub fn installTrackpadGestureMonitor() void {}

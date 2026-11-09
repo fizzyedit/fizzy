@@ -497,6 +497,17 @@ text_changed_start: usize = std.math.maxInt(usize),
 text_changed_end: usize = 0, // index of bytes before edits (so matches previous frame)
 text_changed_added: i64 = 0, // bytes added
 edited_outside_last_frame: *bool = undefined,
+/// Whether the app, not the keyboard, changed the text or caret this frame (between frames, in
+/// `textSet`, or from the touch menu); `deinit` then asks the on-screen keyboard to reset
+/// (`core.platform.requestImeReset`).
+ime_stale: bool = false,
+/// Whether a pointer pressed, released or dragged on the field this frame.
+ime_pointer: bool = false,
+/// The selection's start, caret and end when `init` was done, to tell whether a pointer moved them.
+ime_sel: [3]usize = @splat(0),
+
+/// The field's length and caret at the end of the last frame it had focus, under `_ime_seen`.
+const ImeSeen = struct { len: usize, cursor: usize };
 
 /// It's expected to call this when `self` is `undefined`
 pub fn init(self: *TextEntryWidget, src: std.lang.SourceLocation, init_opts: InitOptions, opts: Options) void {
@@ -644,6 +655,7 @@ pub fn init(self: *TextEntryWidget, src: std.lang.SourceLocation, init_opts: Ini
             .margin = Rect.all(2),
         })) {
             self.paste();
+            self.ime_stale = true;
         }
 
         if (dvui.buttonIcon(@src(), "select all", dvui.entypo.swap, .{}, .{}, .{
@@ -651,6 +663,7 @@ pub fn init(self: *TextEntryWidget, src: std.lang.SourceLocation, init_opts: Ini
             .margin = Rect.all(2),
         })) {
             self.textLayout.selection.selectAll();
+            self.ime_stale = true;
         }
 
         if (dvui.buttonIcon(@src(), "cut", dvui.entypo.scissors, .{}, .{}, .{
@@ -677,6 +690,12 @@ pub fn init(self: *TextEntryWidget, src: std.lang.SourceLocation, init_opts: Ini
     sel.start = dvui.findUtf8Start(self.text[0..self.len], sel.start);
     sel.cursor = dvui.findUtf8Start(self.text[0..self.len], sel.cursor);
     sel.end = dvui.findUtf8Start(self.text[0..self.len], sel.end);
+
+    // The owner changed the buffer or caret between frames (a command's paste, a reload).
+    if (self.data().id == dvui.focusedWidgetId()) if (dvui.dataGet(null, self.data().id, "_ime_seen", ImeSeen)) |seen| {
+        if (seen.len != self.len or seen.cursor != sel.cursor) self.ime_stale = true;
+    };
+    self.ime_sel = .{ sel.start, sel.cursor, sel.end };
 
     // textLayout clips to its content, but we need to get events out to our border
     dvui.clipSet(borderClip);
@@ -711,6 +730,14 @@ pub fn processEvents(self: *TextEntryWidget) void {
     for (evts) |*e| {
         if (!self.matchEvent(e))
             continue;
+
+        if (e.evt == .mouse) switch (e.evt.mouse.action) {
+            .press, .release => self.ime_pointer = true,
+            .motion => if (dvui.captured(self.textLayout.data().id)) {
+                self.ime_pointer = true;
+            },
+            else => {},
+        };
 
         // Peek (don't consume) Ctrl/Cmd+left-click for goto-definition, independent of the
         // normal click-to-place-caret handling `processEvent` does below — see `addLink` in
@@ -1491,6 +1518,7 @@ pub fn getText(self: *const TextEntryWidget) []u8 {
 }
 
 pub fn textSet(self: *TextEntryWidget, text: []const u8, selected: bool) void {
+    self.ime_stale = true;
     self.textLayout.selection.selectAll();
     self.textTyped(text, selected);
 }
@@ -2378,6 +2406,18 @@ pub fn copy(self: *TextEntryWidget) void {
 pub fn deinit(self: *TextEntryWidget) void {
     defer if (dvui.widgetIsAllocated(self)) dvui.widgetFree(self);
     defer self.* = undefined;
+
+    const id = self.data().id;
+    if (id == dvui.focusedWidgetId()) {
+        const sel = self.textLayout.selection;
+        const seen: ImeSeen = .{ .len = self.len, .cursor = sel.cursor };
+        // Focus came this frame, the app edited the field, or a pointer moved the caret.
+        const moved = self.ime_pointer and !std.meta.eql(self.ime_sel, [3]usize{ sel.start, sel.cursor, sel.end });
+        if (self.ime_stale or moved or dvui.dataGet(null, id, "_ime_seen", ImeSeen) == null) {
+            @import("core").platform.requestImeReset(self.textGet(), seen.cursor);
+        }
+        dvui.dataSet(null, id, "_ime_seen", seen);
+    } else dvui.dataRemove(null, id, "_ime_seen");
 
     // set clip back to what textLayout had, because it might need it to set
     // the mouse cursor

@@ -81,6 +81,17 @@ pub fn frameInsets(win: *dvui.Window) dvui.Rect {
     const in = platform.linux_titlebar.frameInsets(win.backend.impl.window);
     return .{ .x = in.left, .y = in.top, .w = in.right, .h = in.bottom };
 }
+/// Passes a focused field's request (`core.platform.requestImeReset`) to the on-screen keyboard,
+/// once a frame on the UI thread, and clears it. Only Android's keyboard is told
+/// (`SDLBackend.imeReset`); dvui's stock backend has no keyboard to tell.
+pub fn pollImeReset(win: *dvui.Window) void {
+    const core_platform = fizzy.core.platform;
+    if (!core_platform.ime_reset) return;
+    core_platform.ime_reset = false;
+    if (comptime !@import("native_backend").fizzy) return;
+    win.backend.impl.imeReset(core_platform.ime_reset_buf[0..core_platform.ime_reset_len]);
+}
+
 /// Writes `core.platform.soft_keyboard` from the backend, once a frame on the UI thread, and logs
 /// a change when the backend logs events. Stays false with dvui's stock backend, which cannot say.
 /// On Android it also writes `core.platform.keyboard_inset`, how far the keyboard covers the
