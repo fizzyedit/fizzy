@@ -34,13 +34,28 @@ for (const reset of [0xFFFFFFFF, -1]) {
 }
 
 // Exercise the actual page-mode dvui import expression with a real wasm import.
-// This catches a missing import as a LinkError, even without built web assets.
-const pageImport = source.match(/dvui: (\{ \.\.\.app\.imports, wasm_field_hints: \(\) => \{\} \}),/);
+// This catches a missing import as a LinkError, even without built web assets, and the
+// hints the page's copy now applies to dvui's hidden input, as the worker path does.
+const pageImport = source.match(/dvui: (\{ \.\.\.app\.imports, wasm_field_hints: \(bits\) => fieldHints\(app\.hidden_input, bits\) \}),/);
 assert.ok(pageImport, 'page mode must provide the field-hints import');
+const hintsSource = source.slice(source.indexOf('export function fieldHints'), source.indexOf('// Pixel deltas'))
+  .replace('export function', 'function');
+const pageAttributes = new Map();
+const pageSet = (name, value) => pageAttributes.set(name, value);
+const hidden = { setAttribute: pageSet, removeAttribute: (name) => pageAttributes.delete(name) };
 const existingImport = () => 42;
-const dvui = runInNewContext(`(${pageImport[1]})`, { app: { imports: { existingImport } } });
+// `hidden_input` starts undefined (it exists only once the editor is up) and then the
+// element dvui runs with: the first ask drops, later ones apply.
+let hiddenInput;
+const dvui = runInNewContext(hintsSource + `\n(${pageImport[1]})`, {
+  app: {
+    imports: { existingImport },
+    get hidden_input() { return hiddenInput; },
+  },
+});
 assert.equal(dvui.existingImport, existingImport, 'page mode must preserve dvui imports');
-assert.doesNotThrow(() => dvui.wasm_field_hints(1));
+assert.doesNotThrow(() => dvui.wasm_field_hints(1), 'before `run`, with no hidden input yet');
+assert.equal(pageAttributes.size, 0);
 const str = (s) => [s.length, ...Buffer.from(s)];
 const section = (id, bytes) => [id, bytes.length, ...bytes];
 const module = new WebAssembly.Module(new Uint8Array([
@@ -52,4 +67,11 @@ for (const entry of WebAssembly.Module.imports(module)) {
   assert.equal(typeof dvui[entry.name], 'function');
 }
 new WebAssembly.Instance(module, { dvui });
+hiddenInput = { setAttribute: pageSet, removeAttribute: (name) => pageAttributes.delete(name) };
+dvui.wasm_field_hints(1);
+assert.equal(pageAttributes.get('inputmode'), 'text');
+dvui.wasm_field_hints(192 | (1 << 3));
+assert.equal(pageAttributes.get('enterkeyhint'), 'send');
+dvui.wasm_field_hints(0xFFFFFFFF);
+assert.deepEqual([...pageAttributes], [['autocapitalize', 'none']]);
 console.log('field-hints: ok');
