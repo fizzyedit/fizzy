@@ -135,7 +135,7 @@ Seconds, watch / full (`-` where not run):
 | plugin workbench | 0.33 / 4.8 | 0.19 / 3.5 | 0.33 / 3.7 | 0.32 / 5.9 | 0.19 / 2.2 | 0.13 / 1.9 | 8.0 / 1.7 |
 
 (The first eight rows were measured at commit `5fc11d83`, text and workbench at current `main`;
-no later commit touched the build graph; the app `build_zig` figure on `c367f5a` with tools not incremental. The `text` `comptime_const` watch figure was rerun, 5
+no later commit touched the build graph. The `text` `comptime_const` watch figure was rerun, 5
 runs, after a first sample coalesced with the previous build and read 0.01 s.)
 
 What the table says:
@@ -145,7 +145,7 @@ What the table says:
   and its fix both stay incremental.
 - **A change to `build.zig` is the exception, and a loss**: 7 to 16 s under `--watch` against
   1 to 3 s for a plain rebuild. The build runner restarts and the watched compilations start over;
-  the dependency tools (translate-c, patch, assetpack) are not incremental, so they no longer rebuild (the app's was 49 s). Stop and restart `scripts/watch` after editing a `build.zig` or
+  the dependency tools (translate-c, patch, assetpack) no longer rebuild, so the app's 49 s on `c367f5a` is 15.7 s. Stop and restart `scripts/watch` after editing a `build.zig` or
   `build.zig.zon`, or accept the one slow rebuild.
 - **An SDK `import` or `sig` edit costs seconds**, because every plugin and the app depend on it:
   that is analysis the compiler really has to redo, not a fallback.
