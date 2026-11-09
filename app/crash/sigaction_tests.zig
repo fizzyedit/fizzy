@@ -4,6 +4,9 @@ const builtin = @import("builtin");
 const sig = @import("sigaction.zig");
 const posix = std.posix;
 
+/// Windows has no `std.posix.Sigaction`: the tests compile there, and skip.
+const no_signals = builtin.target.os.tag == .windows;
+
 fn nothing(_: posix.SIG) callconv(.c) void {}
 fn nothingInfo(_: posix.SIG, _: *const posix.siginfo_t, _: ?*anyopaque) callconv(.c) void {}
 
@@ -19,6 +22,7 @@ fn withMask(handler: @FieldType(posix.Sigaction, "handler"), flags: @FieldType(p
 }
 
 test "bionic's sigaction: flags at 0, the handler at 8, the mask at 16, the restorer at 24" {
+    if (no_signals) return error.SkipZigTest;
     try std.testing.expectEqual(32, @sizeOf(sig.Bionic));
     const act = withMask(.{ .handler = nothing }, posix.SA.RESTART);
     const b = sig.toBionic(act);
@@ -35,6 +39,7 @@ test "bionic's sigaction: flags at 0, the handler at 8, the mask at 16, the rest
 }
 
 test "an action survives bionic's layout: its handler, flags and first mask word" {
+    if (no_signals) return error.SkipZigTest;
     const acts = [_]posix.Sigaction{
         withMask(.{ .handler = posix.SIG.IGN }, 0),
         withMask(.{ .handler = nothing }, posix.SA.RESTART),
@@ -52,7 +57,7 @@ test "an action survives bionic's layout: its handler, flags and first mask word
 }
 
 test "on the host, an action installed is the one read back" {
-    if (builtin.target.os.tag == .windows) return error.SkipZigTest;
+    if (no_signals) return error.SkipZigTest;
     const ignore: posix.Sigaction = .{ .handler = .{ .handler = posix.SIG.IGN }, .mask = posix.sigemptyset(), .flags = 0 };
     var before: posix.Sigaction = undefined;
     sig.sigaction(.USR2, &ignore, &before);

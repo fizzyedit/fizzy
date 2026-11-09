@@ -12,6 +12,8 @@ pub const Bionic = extern struct { flags: c_int, handler: usize, mask: c_ulong, 
 /// bionic read the handler from the mask: std.Io's SIGIO handler, which cancelling the losing
 /// connects raises, arrived as SIG_DFL and killed the app. This hands bionic its own layout.
 pub fn sigaction(sig: std.posix.SIG, act: ?*const std.posix.Sigaction, oact: ?*std.posix.Sigaction) void {
+    // Windows has no sigaction for std to link; `crash.zig`'s refAllDecls still compiles this.
+    if (builtin.target.os.tag == .windows) unreachable;
     if (!convert) return std.posix.sigaction(sig, act, oact); // lint-allow(raw-sigaction): std's layout is the libc's here
     var new: Bionic = undefined;
     var old: Bionic = undefined;
