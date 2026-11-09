@@ -222,10 +222,23 @@ pub fn size(source: dvui.ImageSource) dvui.Size {
     return dvui.imageSize(source) catch .{ .w = 0, .h = 0 };
 }
 
+/// The RGBA bytes of a `.pixels` or `.pixelsPMA` source; empty for any other source.
+/// Assumes `.pixels` bytes are writable, as fizzy's own sources (`init`, `fromPixels`) are; a
+/// source over `@embedFile` data may only be read.
+fn rgbaBytes(source: dvui.ImageSource) []u8 {
+    return switch (source) {
+        // dvui types `.pixels` const for any caller; this module's own sources allocate it.
+        .pixels => |p| @constCast(p.rgba)[0 .. p.width * p.height * 4],
+        .pixelsPMA => |p| std.mem.sliceAsBytes(p.rgba)[0 .. p.width * p.height * 4],
+        else => &.{},
+    };
+}
+
+/// Assumes `.pixels` bytes are writable, as fizzy's own sources (`init`, `fromPixels`) are; a
+/// source over `@embedFile` data may only be read.
 pub fn pixels(source: dvui.ImageSource) [][4]u8 {
     switch (source) {
-        .pixels => |p| return @as([*][4]u8, @ptrCast(@constCast(p.rgba.ptr)))[0..(p.width * p.height)],
-        .pixelsPMA => |p| return @as([*][4]u8, @ptrCast(@constCast(p.rgba.ptr)))[0..(p.width * p.height)],
+        .pixels, .pixelsPMA => return std.mem.bytesAsSlice([4]u8, rgbaBytes(source)),
         .texture => |t| return @as([*][4]u8, @ptrCast(t.ptr))[0..(t.width * t.height)],
         else => {},
     }
@@ -294,10 +307,11 @@ pub fn pixelsFromRect(allocator: std.mem.Allocator, source: dvui.ImageSource, re
     return output_pixels;
 }
 
+/// Assumes `.pixels` bytes are writable, as fizzy's own sources (`init`, `fromPixels`) are; a
+/// source over `@embedFile` data may only be read.
 pub fn bytes(source: dvui.ImageSource) []u8 {
     switch (source) {
-        .pixels => |p| return @as([*]u8, @ptrCast(@constCast(p.rgba.ptr)))[0..(p.width * p.height * 4)],
-        .pixelsPMA => |p| return @as([*]u8, @ptrCast(@constCast(p.rgba.ptr)))[0..(p.width * p.height * 4)],
+        .pixels, .pixelsPMA => return rgbaBytes(source),
         .texture => |t| return @as([*]u8, @ptrCast(t.ptr))[0..(t.width * t.height * 4)],
         else => {},
     }
@@ -342,6 +356,8 @@ pub fn pixel(source: dvui.ImageSource, p: dvui.Point) ?[4]u8 {
     return null;
 }
 
+/// Assumes `.pixels` bytes are writable, as fizzy's own sources (`init`, `fromPixels`) are; a
+/// source over `@embedFile` data may only be read.
 pub fn setPixel(source: dvui.ImageSource, p: dvui.Point, color: [4]u8) void {
     if (pixelIndex(source, p)) |index| {
         pixels(source)[index] = color;
@@ -360,6 +376,8 @@ pub fn clearRect(source: dvui.ImageSource, rect: dvui.Rect) void {
     setRect(source, rect, .{ 0, 0, 0, 0 });
 }
 
+/// Assumes `.pixels` bytes are writable, as fizzy's own sources (`init`, `fromPixels`) are; a
+/// source over `@embedFile` data may only be read.
 pub fn setRect(source: dvui.ImageSource, rect: dvui.Rect, color: [4]u8) void {
     const x = @as(usize, @intFromFloat(rect.x));
     const y = @as(usize, @intFromFloat(rect.y));
@@ -471,8 +489,7 @@ pub fn writeToPng(source: dvui.ImageSource, path: []const u8) !void {
     const w: u32 = @intFromFloat(s.w);
     const h: u32 = @intFromFloat(s.h);
     const data: []u8 = switch (source) {
-        .pixels => |p| @as([*]u8, @ptrCast(@constCast(p.rgba.ptr)))[0..(p.width * p.height * 4)],
-        .pixelsPMA => |p| @as([*]u8, @ptrCast(@constCast(p.rgba.ptr)))[0..(p.width * p.height * 4)],
+        .pixels, .pixelsPMA => rgbaBytes(source),
         else => return error.InvalidImageSource,
     };
 
@@ -493,8 +510,7 @@ pub fn writeToPngResolution(source: dvui.ImageSource, path: []const u8, resoluti
     const w: u32 = @intFromFloat(s.w);
     const h: u32 = @intFromFloat(s.h);
     const data: []u8 = switch (source) {
-        .pixels => |p| @as([*]u8, @ptrCast(@constCast(p.rgba.ptr)))[0..(p.width * p.height * 4)],
-        .pixelsPMA => |p| @as([*]u8, @ptrCast(@constCast(p.rgba.ptr)))[0..(p.width * p.height * 4)],
+        .pixels, .pixelsPMA => rgbaBytes(source),
         else => return error.InvalidImageSource,
     };
 
@@ -514,8 +530,7 @@ fn flatRgbaForEncode(source: dvui.ImageSource) !struct { data: []u8, w: u32, h: 
     const w: u32 = @intFromFloat(s.w);
     const h: u32 = @intFromFloat(s.h);
     const data: []u8 = switch (source) {
-        .pixels => |p| @as([*]u8, @ptrCast(@constCast(p.rgba.ptr)))[0..(p.width * p.height * 4)],
-        .pixelsPMA => |p| @as([*]u8, @ptrCast(@constCast(p.rgba.ptr)))[0..(p.width * p.height * 4)],
+        .pixels, .pixelsPMA => rgbaBytes(source),
         else => return error.InvalidImageSource,
     };
     return .{ .data = data, .w = w, .h = h };

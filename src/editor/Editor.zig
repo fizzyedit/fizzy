@@ -2387,6 +2387,7 @@ pub fn postInit(editor: *Editor) !void {
             .id = sub.id,
             .title = sub.title,
             .draw = Menu.drawModelMenu,
+            // Never written: `Menu.drawModelMenu` reads `ctx` back only as `*const Submenu`.
             .ctx = @ptrCast(@constCast(sub)),
         });
     }
@@ -3322,6 +3323,7 @@ fn drawDocSurface(ctx: ?*anyopaque) anyerror!dvui.App.Result {
 
 /// The transport's play goes at the pace `doc`'s track recorded (`HistoryTransport.Pace`).
 fn trackPace(ctx: *const anyopaque, doc: sdk.DocHandle, from: u64, to: u64) ?u32 {
+    // `ctx` is the mutable `editor.app.tracks` registered above; `Pace.ctx` is only typed const.
     const tracks: *Tracks = @ptrCast(@alignCast(@constCast(ctx)));
     const t = tracks.trackOf(doc.id) orelse return null;
     return Tracks.playGap(t, from, to);
@@ -3513,7 +3515,7 @@ pub fn docFromPath(editor: *Editor, path: []const u8) ?sdk.DocHandle {
         path
     else
         fizzy.core.paths.normalize(editor.app.gpa, path) catch return null;
-    defer if (!path_canonical) editor.app.gpa.free(@constCast(key));
+    defer if (!path_canonical) editor.app.gpa.free(key);
 
     for (editor.app.open_files.values()) |doc| {
         const stored = doc.owner.documentPath(doc);

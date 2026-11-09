@@ -3120,6 +3120,8 @@ fn resolveWikilink(
 
     const entry: ResolvedLink = .{
         .status = res.status,
+        // `resolve` allocated the path from `ctx.gpa`; the map entry owns it now, and
+        // `clearResolvedWikilinks` frees it.
         .path = @constCast(res.path),
         .line = res.line,
     };

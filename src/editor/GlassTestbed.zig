@@ -382,6 +382,7 @@ fn rimStep(pixels: []const u8, width: usize, r: dvui.Rect.Physical, icon: dvui.R
 fn writePng(image: Capture.Image, path: []const u8, gpa: std.mem.Allocator) !void {
     var png: std.Io.Writer.Allocating = .init(gpa);
     defer png.deinit();
+    // Never written: the PNG encoder only reads the source's pixels.
     try core.image.writePngToWriter(.{ .pixelsPMA = .{ .rgba = dvui.Color.PMA.sliceFromRGBA(@constCast(image.pixels)), .width = image.width, .height = image.height } }, &png.writer, 0);
     try std.Io.Dir.cwd().writeFile(dvui.io, .{ .sub_path = path, .data = png.written() });
 }

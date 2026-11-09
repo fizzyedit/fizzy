@@ -68,6 +68,7 @@ pub fn showSaveFileDialog(cb: *const fn (?[][:0]const u8) void, filters: []const
     // Do not use our borderless/custom-frame main window as the dialog parent on Windows: the shell
     // may inherit extended style and the picker loses normal frame/close affordances.
     const parent: ?*c.SDL_Window = if (builtin.target.os.tag == .windows) null else dvui.currentWindow().backend.impl.window;
+    // Never written: `cb` rides as SDL userdata, only cast back and called in `GenericDialogCallback`.
     c.SDL_ShowSaveFileDialog(GenericSaveDialogCallback, @ptrCast(@alignCast(@constCast(cb))), parent, filters.ptr, @intCast(filters.len), default);
 }
 
@@ -78,6 +79,7 @@ pub fn showOpenFileDialog(cb: *const fn (?[][:0]const u8) void, filters: []const
     };
     defer alloc().free(default);
     const parent: ?*c.SDL_Window = if (builtin.target.os.tag == .windows) null else dvui.currentWindow().backend.impl.window;
+    // Never written: `cb` rides as SDL userdata, only cast back and called in `GenericDialogCallback`.
     c.SDL_ShowOpenFileDialog(GenericOpenDialogCallback, @ptrCast(@alignCast(@constCast(cb))), parent, filters.ptr, @intCast(filters.len), default.ptr, true);
 }
 
@@ -88,6 +90,7 @@ pub fn showOpenFolderDialog(cb: *const fn (?[][:0]const u8) void, default_folder
     };
     defer alloc().free(default);
     const parent: ?*c.SDL_Window = if (builtin.target.os.tag == .windows) null else dvui.currentWindow().backend.impl.window;
+    // Never written: `cb` rides as SDL userdata, only cast back and called in `GenericDialogCallback`.
     c.SDL_ShowOpenFolderDialog(GenericOpenDialogCallback, @ptrCast(@alignCast(@constCast(cb))), parent, default.ptr, false);
 }
 
@@ -159,7 +162,7 @@ fn wakeForDialogResult() void {
 }
 
 fn GenericDialogCallback(cb: ?*anyopaque, files: [*c]const [*c]const u8, mode: DialogMode) void {
-    const callback: *const fn (?[][:0]const u8) void = @ptrCast(@alignCast(@constCast(cb)));
+    const callback: *const fn (?[][:0]const u8) void = @ptrCast(@alignCast(cb));
 
     // Try to count the number of files until we hit a null pointer.
     var path_count: usize = 0;

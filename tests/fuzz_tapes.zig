@@ -257,9 +257,9 @@ fn apply(app: *BundledApp, step: Step, obs: *Observation) !void {
             if (app.editor.app.frame_layout) |layout| layout.closeFloat("Float 1");
         },
         .missing_anchor => {
-            // Owned tape ops are mutable; corrupt future targets without changing production code.
             obs.corrupted = true;
             const owned = &p.owned.?;
+            // Owned tape ops are mutable; corrupt future targets without changing production code.
             for (@constCast(owned.tape.ops)[@min(p.seq.cursor, owned.tape.ops.len)..]) |*op| {
                 switch (op.do) {
                     .move => |*target| target.tag = "fuzz.missing",

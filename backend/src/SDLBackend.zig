@@ -949,6 +949,7 @@ pub fn setIconFromABGR8888(self: *SDLBackend, data: [*]const u8, icon_w: c_int, 
         icon_w,
         icon_h,
         c.SDL_PIXELFORMAT_ABGR8888,
+        // Never written: SDL takes `void *`, and `SDL_SetWindowIcon` copies the surface it lives for.
         @ptrCast(@constCast(data)),
         4 * icon_w,
     ) orelse return logErr("SDL_CreateSurfaceFrom in setIconFromABGR8888");

@@ -110,7 +110,9 @@ Source: `std` takes `*Writer` or `comptime T: type` wherever it can.
 - `@panic` is for unrecoverable failure at setup: build scripts, entry points, and a
   `catch @panic` with a comment. Past setup, return the error.
 - `@ptrCast` needs a comment saying why the cast is sound, except a plain vtable or FFI cast.
-  `@constCast` always needs one.
+  `@constCast` always needs one. `zig build lint` checks it (`constcast-comment`), on the line or
+  the line above, with no baseline allowance. The reason says why the memory is writable (or
+  never written), not "safe".
 - A file-scope `var` needs a comment naming who writes it and on which thread.
 - In a `///`, "Asserts" means the function checks the condition (safety-checked). "Assumes"
   means it does not (unchecked illegal behavior).
