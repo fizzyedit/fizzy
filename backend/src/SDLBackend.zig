@@ -2694,6 +2694,76 @@ pub fn keyboardInset(_: *SDLBackend) f32 {
     return if (comptime builtin.target.abi.isAndroid()) android_insets.keyboardInset() else 0;
 }
 
+/// The most bytes `imeReset` passes on: `core.ime_before.max`, which the backend cannot import.
+const ime_before_max = 128;
+
+/// Tells the on-screen keyboard the app changed the focused field, so it forgets what it held of
+/// it and starts again from `before`, the text before the caret (not 0-terminated). Calls
+/// `FizzyActivity.imeReset` through JNI on Android; a no-op elsewhere.
+pub fn imeReset(_: *SDLBackend, before: []const u8) void {
+    if (comptime !builtin.target.abi.isAndroid()) return;
+    // JNI's NewStringUTF takes Modified UTF-8, where a 4-byte sequence (an emoji) is invalid:
+    // start after the last one.
+    var from = before.len -| ime_before_max;
+    for (before[from..], from..) |b, i| {
+        if (b & 0xf8 == 0xf0) from = @min(before.len, i + 4);
+    }
+    var buf: [ime_before_max + 1]u8 = undefined;
+    const text = before[from..];
+    @memcpy(buf[0..text.len], text);
+    buf[text.len] = 0;
+
+    const env: jni.Env = @ptrCast(@alignCast(c.SDL_GetAndroidJNIEnv() orelse return));
+    const activity = c.SDL_GetAndroidActivity() orelse return;
+    defer jni.call(env, jni.DeleteLocalRef, .{activity});
+    const class = jni.call(env, jni.GetObjectClass, .{activity}) orelse return;
+    defer jni.call(env, jni.DeleteLocalRef, .{class});
+    const method = jni.call(env, jni.GetStaticMethodID, .{ class, "imeReset", "(Ljava/lang/String;)V" }) orelse {
+        // An activity without the method throws NoSuchMethodError; leave none pending.
+        jni.call(env, jni.ExceptionClear, .{});
+        return;
+    };
+    const string = jni.call(env, jni.NewStringUTF, .{@as([*:0]const u8, buf[0..text.len :0])}) orelse {
+        jni.call(env, jni.ExceptionClear, .{});
+        return;
+    };
+    defer jni.call(env, jni.DeleteLocalRef, .{string});
+    const args = [_]jni.Value{.{ .l = string }};
+    jni.call(env, jni.CallStaticVoidMethodA, .{ class, method, &args });
+    if (jni.call(env, jni.ExceptionCheck, .{}) != 0) jni.call(env, jni.ExceptionClear, .{});
+}
+
+/// The few JNI functions `imeReset` calls, through the `JNIEnv` function table by the indexes
+/// `jni.h` gives them (the backend's translated C has no `jni.h`).
+const jni = struct {
+    const Object = *anyopaque;
+    const Value = extern union { l: ?Object, j: i64 };
+    const Env = *const *const [table_len]?*const anyopaque;
+    const table_len = 233;
+
+    const Fn = struct { index: usize, T: type };
+    /// `void ExceptionClear(JNIEnv*)`
+    const ExceptionClear: Fn = .{ .index = 17, .T = fn (Env) callconv(.c) void };
+    /// `void DeleteLocalRef(JNIEnv*, jobject)`
+    const DeleteLocalRef: Fn = .{ .index = 23, .T = fn (Env, Object) callconv(.c) void };
+    /// `jclass GetObjectClass(JNIEnv*, jobject)`
+    const GetObjectClass: Fn = .{ .index = 31, .T = fn (Env, Object) callconv(.c) ?Object };
+    /// `jmethodID GetStaticMethodID(JNIEnv*, jclass, const char*, const char*)`
+    const GetStaticMethodID: Fn = .{ .index = 113, .T = fn (Env, Object, [*:0]const u8, [*:0]const u8) callconv(.c) ?Object };
+    /// `void CallStaticVoidMethodA(JNIEnv*, jclass, jmethodID, const jvalue*)`
+    const CallStaticVoidMethodA: Fn = .{ .index = 143, .T = fn (Env, Object, Object, [*]const Value) callconv(.c) void };
+    /// `jstring NewStringUTF(JNIEnv*, const char*)`
+    const NewStringUTF: Fn = .{ .index = 167, .T = fn (Env, [*:0]const u8) callconv(.c) ?Object };
+    /// `jboolean ExceptionCheck(JNIEnv*)`
+    const ExceptionCheck: Fn = .{ .index = 228, .T = fn (Env) callconv(.c) u8 };
+
+    // anytype: the tuple of `f`'s arguments after the env, a different shape for each function.
+    fn call(env: Env, comptime f: Fn, args: anytype) @typeInfo(f.T).@"fn".return_type.? {
+        const ptr: *const f.T = @ptrCast(@alignCast(env.*[f.index].?));
+        return @call(.auto, ptr, .{env} ++ args);
+    }
+};
+
 /// Where the display's cutout lies while the window is full screen, in points: Android's, from
 /// the activity's insets (`android_insets`); zero elsewhere.
 pub fn safeInsets(_: *SDLBackend) android_insets.Safe {

@@ -344,6 +344,95 @@ test "typing an opener with a selection wraps it instead of replacing it" {
     try std.testing.expectEqualStrings("(wrap) me", te_text.items);
 }
 
+// -- the on-screen keyboard's reset ---------------------------------------------------------------
+//
+// A keyboard keeps its own copy of the field, learnt from its own edits only. When the app changes
+// the field itself, the focused `core.widgets.TextEntry` asks for a reset (`core.platform`); the
+// keyboard's own typing never does.
+
+var ime_text: std.ArrayList(u8) = .empty;
+/// The caret to put the next frame's field at, then null.
+var ime_pending_cursor: ?usize = null;
+/// Text for the next frame to `textSet` after the field's events, then null.
+var ime_pending_set: ?[]const u8 = null;
+
+fn imeEntryFrame() !dvui.App.Result {
+    var te = fizzy.core.widgets.TextEntry.init(@src(), .{ .text = .{ .array_list = .{
+        .backing = &ime_text,
+        .allocator = std.testing.allocator,
+    } } }, .{});
+    dvui.focusWidget(te.entry.data().id, null, null);
+    if (ime_pending_cursor) |cursor| {
+        const sel = te.entry.textLayout.selection;
+        sel.start = cursor;
+        sel.cursor = cursor;
+        sel.end = cursor;
+        ime_pending_cursor = null;
+    }
+    if (ime_pending_set) |text| {
+        te.entry.textSet(text, false);
+        ime_pending_set = null;
+    }
+    te.deinit();
+    return .ok;
+}
+
+/// A headless window with a focused field over `ime_text` holding `text`, the caret at its end,
+/// settled, and no reset pending.
+fn imeEntryCtx(text: []const u8) !dvui.testing {
+    ime_text.clearRetainingCapacity();
+    try ime_text.appendSlice(std.testing.allocator, text);
+    ime_pending_cursor = text.len;
+    var t = try dvui.testing.init(.{ .allocator = std.testing.allocator });
+    errdefer t.deinit();
+    try dvui.testing.settle(imeEntryFrame);
+    fizzy.core.platform.ime_reset = false;
+    return t;
+}
+
+fn deinitImeEntry(t: *dvui.testing) void {
+    t.deinit();
+    ime_text.deinit(std.testing.allocator);
+    ime_text = .empty;
+    fizzy.core.platform.ime_reset = false;
+}
+
+test "a focused field its owner clears asks the keyboard to reset to nothing" {
+    var t = try imeEntryCtx("hello");
+    defer deinitImeEntry(&t);
+
+    // As the console does after Send.
+    ime_text.clearRetainingCapacity();
+    _ = try dvui.testing.step(imeEntryFrame);
+
+    try std.testing.expect(fizzy.core.platform.ime_reset);
+    try std.testing.expectEqual(0, fizzy.core.platform.ime_reset_len);
+}
+
+test "a focused field the app sets to text of the same length asks the keyboard to reset" {
+    var t = try imeEntryCtx("hello");
+    defer deinitImeEntry(&t);
+
+    // Same length, and the caret stays at 5: only the text tells the edit apart.
+    ime_pending_set = "world";
+    _ = try dvui.testing.step(imeEntryFrame);
+
+    try std.testing.expectEqualStrings("world", ime_text.items);
+    try std.testing.expect(fizzy.core.platform.ime_reset);
+    try std.testing.expectEqualStrings("world", fizzy.core.platform.ime_reset_buf[0..fizzy.core.platform.ime_reset_len]);
+}
+
+test "typing from the keyboard does not ask it to reset" {
+    var t = try imeEntryCtx("hello");
+    defer deinitImeEntry(&t);
+
+    try dvui.testing.writeText("!");
+    _ = try dvui.testing.step(imeEntryFrame);
+
+    try std.testing.expectEqualStrings("hello!", ime_text.items);
+    try std.testing.expect(!fizzy.core.platform.ime_reset);
+}
+
 // -- syntax-highlight query range ---------------------------------------------------------------
 
 /// The highlight range the last drawn frame chose, plus dvui's own record of where each byte

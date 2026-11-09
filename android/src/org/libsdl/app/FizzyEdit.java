@@ -6,8 +6,10 @@ import android.text.Selection;
 import android.util.Log;
 import android.view.KeyEvent;
 import android.view.View;
+import android.view.inputmethod.BaseInputConnection;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
+import android.view.inputmethod.InputMethodManager;
 
 // In SDL's package because SDLDummyEdit's constructor and SDLInputConnection are package-private.
 public class FizzyEdit extends SDLDummyEdit {
@@ -18,8 +20,35 @@ public class FizzyEdit extends SDLDummyEdit {
     @Override
     public InputConnection onCreateInputConnection(EditorInfo out) {
         super.onCreateInputConnection(out); // fills out
-        ic = new FizzyInputConnection(this);
+        // SDL's connection starts empty. restartInput (reset, below) and the keyboard asking again
+        // both come here, so the new one starts from what the old one last sent the app.
+        String before = ic instanceof FizzyInputConnection ? ((FizzyInputConnection) ic).mCommittedText : null;
+        FizzyInputConnection fic = new FizzyInputConnection(this);
+        seed(fic, before == null ? "" : before);
+        ic = fic;
         return ic;
+    }
+
+    // The app changed the field itself (cleared it, moved the caret): the connection's Editable and
+    // committed text only follow the keyboard's edits, so start both again from `before`, the
+    // text before the caret, and have the keyboard read it anew. Public: FizzyActivity, in the
+    // app's package, calls it.
+    public void reset(String before) {
+        if (!(ic instanceof FizzyInputConnection)) return;
+        seed((FizzyInputConnection) ic, before);
+        Log.i(FizzyInputConnection.TAG, "reset(\"" + before + "\")");
+        InputMethodManager imm = (InputMethodManager) getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
+        if (imm != null) imm.restartInput(this);
+    }
+
+    private static void seed(FizzyInputConnection fic, String before) {
+        Editable e = fic.getEditable();
+        if (e != null) {
+            e.replace(0, e.length(), before);
+            Selection.setSelection(e, e.length());
+            BaseInputConnection.removeComposingSpans(e);
+        }
+        fic.mCommittedText = before;
     }
 }
 

@@ -1121,6 +1121,9 @@ fn addTests(
         // Mobile, tablet or desktop from the page's pointer and viewport. std-only (see
         // form_factor.zig); `platform.zig` holds the live value.
         .{ "fizzy-form-factor-tests", "core/form_factor.zig" },
+        // The text before the caret a keyboard is given on a reset. std-only (see
+        // ime_before.zig); `platform.zig` holds the request.
+        .{ "fizzy-ime-before-tests", "core/ime_before.zig" },
         // Fade / blur-fade timeline. std-only (see crossfade.zig) — pictures and the clock
         // live in core/anim.zig.
         .{ "fizzy-crossfade-tests", "core/crossfade.zig" },

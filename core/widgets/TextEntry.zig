@@ -12,11 +12,34 @@ const touch = @import("touch.zig");
 const SelectableText = @import("SelectableText.zig");
 const SelectionControls = @import("SelectionControls.zig");
 const widgets = @import("../widgets.zig");
+const platform = @import("../platform.zig");
 
 const TextEntry = @This();
 entry: *dvui.TextEntryWidget,
 hold: *TouchHold,
 style: SelectionControls.Style,
+/// The field's text and caret once this frame's events were done, for `deinit` to tell an edit
+/// the app made after them (`te.entry.textSet`). Null when the field had no focus then.
+ime_after: ?ImeSeen,
+/// Whether the app, not the keyboard, changed the text or caret this frame
+/// (`platform.requestImeReset`, asked in `deinit`).
+ime_stale: bool,
+
+/// The field's text and caret at the end of the last frame it had focus, under `_ime_seen`. The
+/// hash tells a same-length replacement (`textSet("world")` over `hello`) from no edit.
+const ImeSeen = struct {
+    len: usize,
+    cursor: usize,
+    hash: u64,
+
+    fn of(entry: *dvui.TextEntryWidget) ImeSeen {
+        return .{
+            .len = entry.len,
+            .cursor = entry.textLayout.selection.cursor,
+            .hash = std.hash.Wyhash.hash(0, entry.getText()),
+        };
+    }
+};
 
 /// Starts the field, reads this frame's touch events and draws it. Call `deinit`, as for `dvui.textEntry`.
 pub fn init(src: std.lang.SourceLocation, init_opts: dvui.TextEntryWidget.InitOptions, opts: dvui.Options) TextEntry {
@@ -29,6 +52,13 @@ pub fn initStyled(src: std.lang.SourceLocation, init_opts: dvui.TextEntryWidget.
     const entry = dvui.widgetAlloc(dvui.TextEntryWidget);
     entry.init(src, init_opts, opts);
     SelectionControls.restoreWanted(&entry.textLayout);
+    const id = entry.data().id;
+    // The owner changed the buffer between frames (a console clearing its box after Send). Before
+    // the keyboard's own edits below, which are not the app's.
+    var ime_stale = false;
+    if (dvui.focusedWidgetId() == id) if (dvui.dataGet(null, id, "_ime_seen", ImeSeen)) |seen| {
+        ime_stale = !std.meta.eql(seen, ImeSeen.of(entry));
+    };
     // Unfocused fields leave edits queued so only the intended focused field consumes them.
     if (dvui.focusedWidgetId() == entry.data().id) {
         for (field_edit.take()) |edit| {
@@ -56,19 +86,29 @@ pub fn initStyled(src: std.lang.SourceLocation, init_opts: dvui.TextEntryWidget.
             }
         }
     }
-    const self: TextEntry = .{
+    var self: TextEntry = .{
         .entry = entry,
-        .hold = dvui.dataGetPtrDefault(null, entry.data().id, "_hold", TouchHold, .{}),
+        .hold = dvui.dataGetPtrDefault(null, id, "_hold", TouchHold, .{}),
         .style = style,
+        .ime_after = null,
+        .ime_stale = ime_stale,
     };
     self.keepFocusOnTouchdown();
     // dvui turns the menu and handles on when a touch-editing finger lifts.
     const touch_editing = entry.textLayout.state.touch_editing;
+    const sel_before = selectionOf(entry);
     entry.processEvents();
-    self.processTouch(unhandled, touch_editing);
+    const touched = self.processTouch(unhandled, touch_editing);
+    // A tap's caret lands in `draw`, where the layout applies it.
     entry.draw();
+    if (!std.meta.eql(sel_before, selectionOf(entry)) and (touched or self.mouseOnField())) self.ime_stale = true;
+    const menu_sel = selectionOf(entry);
+    const menu_len = entry.len;
     // A hold selects with the finger still down; the menu waits for its release.
     SelectionControls.menu(.{ .entry = entry }, entry.textLayout.state.te_show_context_menu and !self.hold.armed, style);
+    if (entry.len != menu_len or !std.meta.eql(menu_sel, selectionOf(entry))) self.ime_stale = true;
+    // Only the focused field is compared in `deinit`; skip hashing the others.
+    if (dvui.focusedWidgetId() == id) self.ime_after = .of(entry);
     if (dvui.focusedWidgetId() == entry.data().id) {
         const sel = entry.textLayout.selection;
         const text = entry.getText();
@@ -92,6 +132,18 @@ pub fn deinit(self: *TextEntry) void {
     // the flag on a touch release, so it is cleared once more through the state, which outlives
     // the widget.
     const state = self.entry.textLayout.state;
+    const id = self.entry.data().id;
+    if (id == dvui.focusedWidgetId()) {
+        const seen: ImeSeen = .of(self.entry);
+        // Focus came this frame, or the app edited the field: between frames, with the pointer
+        // or the touch menu, or after the events (`textSet`, a context menu's Paste).
+        if (self.ime_stale or !std.meta.eql(@as(?ImeSeen, seen), self.ime_after) or
+            dvui.dataGet(null, id, "_ime_seen", ImeSeen) == null)
+        {
+            platform.requestImeReset(self.entry.getText(), seen.cursor);
+        }
+        dvui.dataSet(null, id, "_ime_seen", seen);
+    } else dvui.dataRemove(null, id, "_ime_seen");
     _ = SelectionControls.takeWanted(&self.entry.textLayout);
     widgets.textEntryDeinit(self.entry);
     state.te_show_context_menu = false;
@@ -112,7 +164,31 @@ fn keepFocusOnTouchdown(self: TextEntry) void {
     }
 }
 
-fn processTouch(self: TextEntry, unhandled: touch.Presses, touch_editing: bool) void {
+/// The selection's ends and caret, to tell whether something moved them.
+fn selectionOf(entry: *dvui.TextEntryWidget) [3]usize {
+    const sel = entry.textLayout.selection;
+    return .{ sel.start, sel.cursor, sel.end };
+}
+
+/// Whether a mouse press, release or drag of this frame went to the field or its layout.
+fn mouseOnField(self: TextEntry) bool {
+    const entry_id = self.entry.data().id;
+    const layout_id = self.entry.textLayout.data().id;
+    for (dvui.events()) |e| {
+        if (e.evt != .mouse) continue;
+        switch (e.evt.mouse.action) {
+            .press, .release, .motion => {},
+            else => continue,
+        }
+        if (e.target_widgetId == entry_id or e.target_widgetId == layout_id) return true;
+    }
+    return false;
+}
+
+/// Reads this frame's touches on the field; returns whether a tap, double tap or hold placed the
+/// caret or a selection.
+fn processTouch(self: TextEntry, unhandled: touch.Presses, touch_editing: bool) bool {
+    var placed = false;
     const tl = &self.entry.textLayout;
     const hold = self.hold;
     const rs = self.entry.data().borderRectScale();
@@ -143,20 +219,30 @@ fn processTouch(self: TextEntry, unhandled: touch.Presses, touch_editing: bool) 
                 if (e.target_widgetId != tl.data().id) hold.cancel();
                 switch (hold.release(dvui.frameTimeNS())) {
                     .none => {},
-                    .tap => self.tap(me.p, focused, slop, e.num, touch_editing),
-                    .double_tap => SelectableText.selectWordAt(tl, self.entry.data().id, me.p.x, me.p.y),
+                    .tap => {
+                        self.tap(me.p, focused, slop, e.num, touch_editing);
+                        placed = true;
+                    },
+                    .double_tap => {
+                        SelectableText.selectWordAt(tl, self.entry.data().id, me.p.x, me.p.y);
+                        placed = true;
+                    },
                 }
             },
             else => {},
         }
     }
     if (hold.armed and !hold.fired and !dvui.captured(tl.data().id)) hold.cancel();
-    if (hold.due(dvui.frameTimeNS())) SelectableText.selectWordAt(tl, self.entry.data().id, hold.x, hold.y);
+    if (hold.due(dvui.frameTimeNS())) {
+        SelectableText.selectWordAt(tl, self.entry.data().id, hold.x, hold.y);
+        placed = true;
+    }
     if (hold.remaining(dvui.frameTimeNS())) |ns| {
         dvui.timer(tl.data().id, @intCast(@divTrunc(ns, std.time.ns_per_us) + 1));
     }
     tl.state.te_first = false;
     tl.state.te_focus_on_touchdown = false;
+    return placed;
 }
 
 fn tap(self: TextEntry, p: dvui.Point.Physical, was_focused: bool, slop: f32, event_num: u16, touch_editing: bool) void {
