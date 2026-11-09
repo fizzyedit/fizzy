@@ -39,6 +39,8 @@ should_close: bool = false,
 bench_out: ?[]const u8 = null,
 bench_frames: usize = 0,
 bench_times: [120]u32 = @splat(0),
+/// Render targets made over the measured frames.
+bench_targets: u32 = 0,
 window: *dvui.Window = undefined,
 
 // SafeAllocator only where the safety checks are on (Debug, ReleaseSafe): its per-allocation footer
@@ -645,6 +647,7 @@ pub fn AppFrame() !dvui.App.Result {
                 if (frame >= 30 and frame < 150) {
                     const snapshot = health.snapshot();
                     entry.bench_times[frame - 30] = health.lastFrameNs();
+                    entry.bench_targets += snapshot.last_frame.targets;
                     if (frame == 149) {
                         const Bench = fizzy.GlassBench;
                         const cfg = fizzy.editor().glass_bench.?;
@@ -661,6 +664,7 @@ pub fn AppFrame() !dvui.App.Result {
                             .passes = counts.passes,
                             .target_switches = counts.target_switches,
                             .targets = counts.targets,
+                            .targets_made = entry.bench_targets,
                         });
                         const file = try std.Io.Dir.cwd().createFile(dvui.io, path, .{ .truncate = false });
                         defer file.close(dvui.io);

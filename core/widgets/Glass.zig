@@ -4,6 +4,7 @@ const dvui = @import("dvui");
 const glass = @import("../glass.zig");
 const glass_look = @import("glass_look");
 const LiquidField = @import("glass").LiquidField;
+const Spring = @import("../Spring.zig");
 const Glass = @This();
 
 pub const InitOptions = struct {
@@ -54,6 +55,9 @@ pub fn install(self: *Glass) void {
         .radii = radii,
         .round = @reduce(.Min, @as(@Vector(4, f32), radii)) >= 4 * rs.s,
     };
+    // While it morphs, its capture is made the final size from the first frame
+    // (`BlurBackdrop.Pane.reach`), with room for the spring's swing past.
+    var reach: ?dvui.Size.Physical = null;
     var frame: glass.Morph.Frame = .{ .box = target, .t = 1, .blur = 1, .lens = 1, .content_alpha = 1, .moving = false };
     if (o.morph) |morph| {
         const id = self.data().id;
@@ -64,13 +68,17 @@ pub fn install(self: *Glass) void {
         };
         frame = m.step(target, dvui.secondsSinceLastFrame(), rs.s, morph.tune);
         dvui.dataSet(null, id, "_morph", m);
-        if (frame.moving) dvui.refresh(null, @src(), id);
+        if (frame.moving) {
+            dvui.refresh(null, @src(), id);
+            const room = 1 + Spring.swing(morph.tune.spring);
+            reach = .{ .w = target.rect.w * room, .h = target.rect.h * room };
+        }
     }
     const seams = o.seams[0..@min(o.seams.len, LiquidField.max_seams)];
     self.material = if (seams.len > 0) .{ .rect = frame.box.rect, .radii = frame.box.radii, .seams = seams, .blur = o.blur * frame.blur, .lens = o.lens * frame.lens } else null;
     var layer = glass.current();
     if (!layer.active() or !std.meta.eql(layer.clip().?, dvui.clipGet())) {
-        self.owned_layer = glass.layer(self.data().id, .{ .role = o.role, .merge = o.merge });
+        self.owned_layer = glass.layer(self.data().id, .{ .role = o.role, .merge = o.merge, .reach = reach });
         layer = self.owned_layer;
     }
     if (!layer.add(.{

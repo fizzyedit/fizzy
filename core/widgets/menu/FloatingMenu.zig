@@ -16,6 +16,7 @@ const dvui = @import("dvui");
 const glass = @import("../../glass.zig");
 const dialogs = @import("../../dialogs.zig");
 const BlurBackdrop = @import("glass").BlurBackdrop;
+const Spring = @import("../../Spring.zig");
 const screens = @import("../../screens.zig");
 
 /// Natural units a menu stays in from the edges of the screen it opens on — the main window's, or
@@ -115,6 +116,8 @@ scale_val: f32,
 revealing: bool = false,
 /// Corners follow the spring's size progress so they open with the box, natural units.
 grown: ?struct { radius: f32, alpha: f32 } = null,
+/// The size it is growing into, physical, while `revealing` (`BlurBackdrop.Pane.reach`).
+reach: ?dvui.Size.Physical = null,
 /// The alpha its rows were drawn at while it grows, to put back (`deinit`).
 prev_alpha: ?f32 = null,
 menu: Menu,
@@ -258,7 +261,9 @@ pub fn init(self: *FloatingMenu, src: std.lang.SourceLocation, init_opts: InitOp
         var corners = options.cornersGet().finalize(options.themeGet());
         // Growing out of a control: its round corners carried into the menu's.
         if (self.grown) |g| corners = .round(g.radius);
-        BlurBackdrop.frostPane(self.data().id, brs.r, corners, brs.s, frost);
+        var pane = frost;
+        if (self.revealing) pane.reach = self.reach;
+        BlurBackdrop.frostPane(self.data().id, brs.r, corners, brs.s, pane);
         // The shadow as a ring round the glass, after it, so the glass never blurs it in
         // (`core.dialogs.glassShadow`).
         if (options.box_shadow) |bs| @import("../../dialogs.zig").glassShadow(brs.r, corners, brs.s, bs, 1);
@@ -303,6 +308,9 @@ fn reveal(self: *FloatingMenu, from: ?Rect.Natural, grow_from: ?Rect.Natural, ra
     if (full.h <= 0) return;
     const g = grow_from orelse from orelse Rect.Natural.fromPoint(.cast(full.center()));
     const scale = dvui.windowNaturalScale();
+    // Room for its swing past `full`, on the spring `m.step` uses.
+    const room = 1 + Spring.swing((glass.Morph.Tune{}).spring);
+    self.reach = .{ .w = full.w * scale * room, .h = full.h * scale * room };
     var m = dvui.dataGet(null, id, "_morph", glass.Morph) orelse fresh: {
         var m: glass.Morph = .{};
         m.start(.{ .rect = g.scale(scale, Rect.Physical), .radii = @splat(@min(g.w, g.h) * scale / 2), .round = true });

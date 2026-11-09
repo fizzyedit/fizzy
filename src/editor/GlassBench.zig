@@ -4,7 +4,14 @@ const dvui = @import("dvui");
 const core = @import("core");
 const Glass = core.widgets.Glass;
 
-pub const Arm = enum { grid, scene, sheet };
+pub const Arm = enum {
+    grid,
+    scene,
+    sheet,
+    /// Panes that grow out of a capsule into a panel and shut again, over and over, as a menu
+    /// opens out of its button: a capture should be sized once, not at each step of a growth.
+    grow,
+};
 pub const Config = struct { arm: Arm, panes: u8 };
 
 /// The benchmark's per-window frame counter and stripe offset live under this id.
@@ -56,6 +63,8 @@ pub const Row = struct {
     passes: u32,
     target_switches: u32,
     targets: u32,
+    /// Render targets made over the 120 measured frames.
+    targets_made: u32,
 };
 
 /// Appends one machine-readable benchmark row and a newline to writer.
@@ -81,6 +90,35 @@ pub fn draw(cfg: Config) void {
     }) {
         const rect: dvui.Rect = .{ .x = 0, .y = y, .w = window.w, .h = stripe_height };
         rs.rectToPhysical(rect).fill(.{}, .{ .color = .{ .color = dvui.themeGet().color(if (stripe % 2 == 0) .window else .control, .fill) } });
+    }
+
+    if (cfg.arm == .grow) {
+        // Each opens or shuts once every pane has come to rest.
+        const open = dvui.dataGet(null, data_id, "grow_open", bool) orelse true;
+        var moving = false;
+        for (0..cfg.panes) |i| {
+            const step: f32 = @floatFromInt(i);
+            const panel: dvui.Rect = .{ .x = window.w - 16 - 300 - step * 24, .y = 16 + step * 24, .w = 300, .h = 430 };
+            const capsule: dvui.Rect = .{ .x = panel.x + panel.w - 40, .y = panel.y, .w = 40, .h = 40 };
+            var pane = Glass.init(@src(), .{
+                .morph = .{
+                    .from = rs.rectToPhysical(capsule),
+                    // foxnne's chat-drop tune: the largest swing.
+                    .tune = .{ .spring = .{ .hz = 2.7, .playful_damping = 0.5 } },
+                },
+            }, .{
+                .id_extra = i,
+                .rect = if (open) panel else capsule,
+                .corners = .all(if (open) 24 else 20),
+                .margin = .{},
+                .padding = .{},
+            });
+            pane.install();
+            if (dvui.dataGet(null, pane.data().id, "_morph", core.glass.Morph)) |m| moving = moving or m.center.moving or m.size.moving;
+            pane.deinit();
+        }
+        if (!moving) dvui.dataSet(null, data_id, "grow_open", !open);
+        return;
     }
 
     if (cfg.arm == .sheet) {

@@ -174,3 +174,12 @@ lines it appends and rejects reports without retained frame rows.
 ## Benchmarks
 
 `zig build check-bench` compiles every benchmark; `test-integration` runs it, so CI catches a benchmark that no longer builds.
+
+### Glass bench
+
+`scripts/glass-bench.sh [--gpu]` runs fizzy with `FIZZY_GLASS_BENCH=<arm>:<panes>` under
+`xvfb-run`, on lavapipe or with `--gpu` the host's GPU, and prints one row per run of 120 measured
+frames. The arms: `scene` (joined panes over moving stripes), `sheet` (a header, an input and
+round bubbles) and `grow` (panes growing out of a capsule into a panel and shutting again, as a
+menu opens). `grow` should make render targets only while a capture is first sized:
+`targets_made` near 0 per cycle after the first.

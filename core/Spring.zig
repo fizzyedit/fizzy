@@ -41,6 +41,14 @@ pub fn damping(t: Tune) f32 {
     return 1 + (t.playful_damping - 1) * play;
 }
 
+/// How far past its target a resting spring at the motion level swings, as a share of the
+/// distance it set off from: a step response's peak. 0 when damped critically or more.
+pub fn swing(t: Tune) f32 {
+    const z = damping(t);
+    if (z >= 1) return 0;
+    return @exp(-std.math.pi * z / @sqrt(1 - z * z));
+}
+
 /// Move toward `target` over `dt_s` seconds. Returns whether it is still moving — keep frames
 /// coming while it is. A second call in a frame returns what the first did and moves nothing, and
 /// a resting spring starts moving in the frame after the one that gave it a target.

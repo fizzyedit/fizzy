@@ -14618,12 +14618,13 @@ test "glass benchmark row documents counts and measured percentiles" {
         .passes = 3,
         .target_switches = 4,
         .targets = 0,
+        .targets_made = 0,
     });
     const parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, out.written(), .{});
     defer parsed.deinit();
     const object = parsed.value.object;
-    try std.testing.expectEqual(@as(usize, 9), object.count());
-    for ([_][]const u8{ "arm", "panes", "frame_ms_p50", "frame_ms_p95", "program_draws", "program_px", "passes", "target_switches", "targets" }) |key| {
+    try std.testing.expectEqual(@as(usize, 10), object.count());
+    for ([_][]const u8{ "arm", "panes", "frame_ms_p50", "frame_ms_p95", "program_draws", "program_px", "passes", "target_switches", "targets", "targets_made" }) |key| {
         try std.testing.expect(object.contains(key));
     }
     try std.testing.expectEqualStrings("sheet", object.get("arm").?.string);
@@ -14640,6 +14641,27 @@ test "scene:20 draws twenty joined panes" {
     try std.testing.expectEqual(@as(usize, 20), fizzy.core.glass.drawnRects().len);
     try std.testing.expectEqual(jobs_before + 1, fizzy.core.glass.drawnDetails().jobs);
     try std.testing.expectEqual(12 * dvui.parentGet().screenRectScale(.{}).s, fizzy.core.glass.drawnDetails().merge);
+}
+
+test "glass bench grow opens and shuts" {
+    const Bench = fizzy.GlassBench;
+    try std.testing.expectEqual(Bench.Config{ .arm = .grow, .panes = 4 }, Bench.parse("grow:4").?);
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 1000, .h = 800 } });
+    defer t.deinit();
+    fizzy.core.LiquidField.readyInTest(true);
+    var last = true;
+    var flips: usize = 0;
+    for (0..600) |_| {
+        fizzy.core.motion.publish(1, 0.5, false, false, 1);
+        Bench.draw(.{ .arm = .grow, .panes = 1 });
+        const cw = dvui.currentWindow();
+        _ = try cw.end(.{});
+        try cw.begin(cw.frame_time_ns + 16 * std.time.ns_per_ms);
+        const open = dvui.dataGet(null, Bench.data_id, "grow_open", bool) orelse true;
+        if (open != last) flips += 1;
+        last = open;
+        if (flips == 2) break;
+    } else return error.GrowDidNotCycle;
 }
 
 test "the stripes move" {

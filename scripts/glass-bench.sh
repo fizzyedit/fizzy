@@ -25,7 +25,7 @@ if ! "$gpu"; then
     export VK_DRIVER_FILES="$(IFS=:; echo "${drivers[*]}")"
 fi
 : > "$out/cost.jsonl"
-for arm in scene sheet; do
+for arm in scene sheet grow; do
     for panes in 1 4 8 15; do
         profile=$(mktemp -d)
         if ! SDL_VIDEO_DRIVER=x11 FIZZY_PROFILE="$profile" \
@@ -43,13 +43,13 @@ python3 - "$out/cost.jsonl" <<'PY'
 import json
 import sys
 rows = [json.loads(line) for line in open(sys.argv[1])]
-expected = [(arm, n) for arm in ('scene', 'sheet') for n in (1, 4, 8, 15)]
+expected = [(arm, n) for arm in ('scene', 'sheet', 'grow') for n in (1, 4, 8, 15)]
 if [(r['arm'], r['panes']) for r in rows] != expected:
     sys.exit('Missing or unexpected benchmark rows')
-print('| arm | panes | p50 ms | p95 ms | program_draws | program_px | passes | target_switches | targets |')
-print('|---|---:|---:|---:|---:|---:|---:|---:|---:|')
+print('| arm | panes | p50 ms | p95 ms | program_draws | program_px | passes | target_switches | targets | targets_made |')
+print('|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|')
 for r in rows:
-    print('| {arm} | {panes} | {frame_ms_p50:.3f} | {frame_ms_p95:.3f} | {program_draws} | {program_px} | {passes} | {target_switches} | {targets} |'.format(**r))
+    print('| {arm} | {panes} | {frame_ms_p50:.3f} | {frame_ms_p95:.3f} | {program_draws} | {program_px} | {passes} | {target_switches} | {targets} | {targets_made} |'.format(**r))
 if any(r['program_draws'] == 0 for r in rows):
     sys.exit('Glass program did not draw in every row')
 PY
