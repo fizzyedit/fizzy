@@ -32,7 +32,10 @@ closing: bool = false,
 fade_pending: bool = false,
 /// The tapped picture it grows out of and back into; null fades instead.
 from: ?dvui.Rect.Natural = null,
+/// The picture's box between `from` and the rect `draw` is given.
 morph: glass.Morph = .{},
+/// this frame's growth while a picture grows from `from`; null when it fades or is closed
+growing: ?Grow = null,
 
 const fade_us = 180_000;
 const fade_key = "image_viewer_fade";
@@ -53,7 +56,8 @@ pub fn openFrom(self: *ImageViewer, image: ImageView.Image, from: dvui.Rect.Natu
 
 fn openAt(self: *ImageViewer, image: ImageView.Image, from: ?dvui.Rect.Natural) void {
     if (self.image == null) self.morph = .{};
-    self.from = from;
+    // A reopen mid-close turns back from where it is and keeps growing if it was.
+    self.from = from orelse if (self.image != null) self.from else null;
     self.image = image;
     self.closing = false;
     self.fade_pending = true;
@@ -71,8 +75,16 @@ pub fn close(self: *ImageViewer) void {
     self.fade_pending = true;
 }
 
-const Grow = struct { rect: dvui.Rect.Natural, backdrop: f32, moving: bool };
+pub const Grow = struct {
+    /// Where the picture is drawn.
+    rect: dvui.Rect.Natural,
+    /// Its grown share, 0..1.
+    backdrop: f32,
+    /// Whether the picture is still moving.
+    moving: bool,
+};
 
+/// Steps the morph toward `rect`, or back to `from` while closing.
 fn grow(self: *ImageViewer, from: dvui.Rect.Natural, rect: dvui.Rect.Natural) Grow {
     const scale = dvui.windowNaturalScale();
     if (!self.morph.started) self.morph.start(.{ .rect = from.scale(scale, dvui.Rect.Physical) });
@@ -80,25 +92,31 @@ fn grow(self: *ImageViewer, from: dvui.Rect.Natural, rect: dvui.Rect.Natural) Gr
     const target = if (self.closing) from else rect;
     const f = self.morph.step(.{ .rect = target.scale(scale, dvui.Rect.Physical) }, dvui.secondsSinceLastFrame(), scale, .{});
     if (f.moving) dvui.refresh(null, @src(), null);
-    const t = std.math.clamp(f.t, 0, 1);
-    return .{ .rect = f.box.rect.scale(1 / scale, dvui.Rect.Natural), .backdrop = if (self.closing) 1 - t else t, .moving = f.moving };
+    const now = f.box.rect.scale(1 / scale, dvui.Rect.Natural);
+    const dw = rect.w - from.w;
+    const dh = rect.h - from.h;
+    const span = dw * dw + dh * dh;
+    return .{ .rect = now, .backdrop = if (span == 0) 1 else std.math.clamp(((now.w - from.w) * dw + (now.h - from.h) * dh) / span, 0, 1), .moving = f.moving };
 }
 
 /// Draws the viewer over `rect` (natural, the caller's content) when open.
 pub fn draw(self: *ImageViewer, rect: dvui.Rect.Natural, opts: ImageView.Options) !void {
     const image = self.image orelse return;
 
-    const growing = if (self.from) |from| self.grow(from, rect) else null;
+    self.growing = if (self.from) |from| self.grow(from, rect) else null;
+    const growing = self.growing;
     if (self.closing and growing != null and !growing.?.moving) {
         self.image = null;
+        self.growing = null;
         self.closing = false;
         return;
     }
 
     // Keyed by the state's address, so two viewers under one parent keep their own subwindow,
     // fade and canvas. State that moves starts its fade over.
+    const over = if (growing) |g| rect.unionWith(g.rect) else rect;
     var fw: dvui.FloatingWidget = undefined;
-    fw.init(@src(), .{}, .{ .rect = .cast(if (growing) |g| g.rect else rect), .expand = .none, .background = false, .id_extra = @intFromPtr(self) });
+    fw.init(@src(), .{}, .{ .rect = .cast(over), .expand = .none, .background = false, .id_extra = @intFromPtr(self) });
     defer fw.deinit();
     const id = fw.data().id;
     // A floating widget clips to the window; what the viewer draws stays in its rect.
@@ -115,6 +133,7 @@ pub fn draw(self: *ImageViewer, rect: dvui.Rect.Natural, opts: ImageView.Options
         const fade = dvui.animationGet(id, fade_key);
         if (self.closing and (fade == null or fade.?.done())) {
             self.image = null;
+            self.growing = null;
             self.closing = false;
             return;
         }
@@ -127,6 +146,9 @@ pub fn draw(self: *ImageViewer, rect: dvui.Rect.Natural, opts: ImageView.Options
     fw.data().rectScale().r.fill(.all(0), .{ .color = .{ .color = dvui.themeGet().color(.window, .fill).opacity(backdrop_opacity * if (growing) |g| g.backdrop else @as(f32, 1)) }, .fade = 0 });
 
     self.view.canvas.id = id.update("canvas");
+    const picture = if (growing) |g| g.rect else rect;
+    const box = dvui.box(@src(), .{}, .{ .rect = .{ .x = picture.x - over.x, .y = picture.y - over.y, .w = picture.w, .h = picture.h }, .expand = .none });
+    defer box.deinit();
     try self.view.draw(image, .{ .pan_zoom_scheme = opts.pan_zoom_scheme, .fit_button = true });
 
     // The bubble floats clipped only to the screen, so it is sized to stay inside the rect, and
