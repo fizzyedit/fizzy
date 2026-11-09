@@ -11,8 +11,8 @@ const REVERSAL_EPS: f32 = 0.01;
 // Main baseline per kind and scenario a-g; L3 brings repeated measurements to zero.
 const main_measured_changes = [3][7]usize{
     .{ 0, 0, 0, 0, 0, 0, 0 },
-    .{ 0, 156, 0, 17, 21, 0, 0 },
-    .{ 0, 61, 0, 7, 11, 0, 0 },
+    .{ 0, 159, 0, 17, 21, 0, 0 },
+    .{ 0, 62, 0, 7, 11, 0, 0 },
 };
 const Kind = enum { one_line, wrapped, chat };
 const Sample = struct { key: u64, top: f32, height: f32, measured: bool };

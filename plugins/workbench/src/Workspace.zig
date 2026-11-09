@@ -53,6 +53,8 @@ strip_insert: ?usize = null,
 /// The tab (`tab_key`) last seen on the strip's visible part, so the strip scrolls to the selected
 /// tab when the selection moves and not again while the person scrolls it by hand.
 strip_shown: ?usize = null,
+/// The strip's width when `strip_shown` was shown in it: a strip of another width asks again.
+strip_shown_w: f32 = 0,
 /// The gap drawn this frame: where it starts along the strip and how wide it is, physical.
 /// `insertIndexAt` reads the tabs as if it were not there, so the gap does not chase itself.
 gap_x: f32 = 0,
@@ -480,7 +482,9 @@ fn drawTabs(self: *Workspace, region: sdk.Host.Region, tabs: []const *sdk.Surfac
 
         // A selection that moved off the strip's visible part (a new pane's tabs, a phone's narrow
         // strip) is brought on. A tab the strip has not yet grown to reach is asked again until it
-        // shows, and once shown is left to the person's own scrolling.
+        // shows, and once shown is left to the person's own scrolling, until the strip changes
+        // width (a window narrowed to a phone's).
+        if (selected_index == i and scroll_area.data().borderRectScale().r.w != self.strip_shown_w) self.strip_shown = null;
         if (selected_index == i and self.strip_shown != tab_key) {
             const shown = scroll_area.data().borderRectScale().r;
             var tab = slot.data().borderRectScale().r;
@@ -490,6 +494,7 @@ fn drawTabs(self: *Workspace, region: sdk.Host.Region, tabs: []const *sdk.Surfac
                 tab.w = @min(tab.w, shown.w);
                 if (tab.x >= shown.x - 1 and tab.x + tab.w <= shown.x + shown.w + 1) {
                     self.strip_shown = tab_key;
+                    self.strip_shown_w = shown.w;
                 } else {
                     dvui.scrollTo(.{ .screen_rect = tab });
                 }
