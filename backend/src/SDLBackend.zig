@@ -20,6 +20,7 @@ pub const materials = @import("materials.zig");
 const text_input_props = @import("text_input_props.zig");
 const TouchSlots = @import("touch_slots.zig");
 const android_back = @import("android_back.zig");
+const android_insets = @import("android_insets.zig");
 const glass_look = @import("glass_look");
 /// The OS windows besides the main one an app draws with (`Viewport`).
 pub const viewports = @import("viewports.zig");
@@ -579,8 +580,16 @@ pub fn initWindow(init_options: InitOptions) !SDLBackend {
     back.window_geometry = new.saved_geometry orelse .{};
 
     try configureBackend(&back, init_options);
+    if (comptime builtin.target.abi.isAndroid()) android_insets.wake.store(wakeForInsets, .release);
 
     return back;
+}
+
+/// The keyboard inset changed on the Java UI thread: wake the frame, as `refresh` does.
+fn wakeForInsets() void {
+    var ue = std.mem.zeroes(c.SDL_Event);
+    ue.type = c.SDL_EVENT_USER;
+    _ = c.SDL_PushEvent(&ue);
 }
 
 fn createWindowRenderer(options: InitOptions, share_device_of: ?*GpuRenderer) !struct {
@@ -2670,6 +2679,12 @@ pub fn setCursor(self: *SDLBackend, cursor: dvui.enums.Cursor) void {
 /// Whether the OS shows its on-screen keyboard over the main window now.
 pub fn screenKeyboardShown(self: *SDLBackend) bool {
     return c.SDL_ScreenKeyboardShown(self.window);
+}
+
+/// How far the on-screen keyboard covers the window's bottom now, in points: Android's, from the
+/// activity's insets (`android_insets`); 0 elsewhere.
+pub fn keyboardInset(_: *SDLBackend) f32 {
+    return if (comptime builtin.target.abi.isAndroid()) android_insets.keyboardInset() else 0;
 }
 
 pub fn textInputRect(self: *SDLBackend, rect: ?dvui.Rect.Natural) void {

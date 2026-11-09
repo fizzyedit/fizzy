@@ -54,7 +54,8 @@ The result is `zig-out/<app-name>.apk`. Its package id comes from `app-bundle-id
 launcher label from `app-package-title` (or `app-name`), and its PNG launcher icon from
 `app-icon` (fizzy's icon by default). The shared library is always `libmain.so`; the activity's
 Java package stays `dev.fizzyedit.hello` independently of the app id. APKs request INTERNET
-permission and resize the window for the software keyboard.
+permission and keep the window's size under the software keyboard, reporting how far it covers
+the window instead ("Insets check" below).
 
 App APKs require API 26 or newer because the crash reporter uses `pthread_getname_np`;
 the hello keeps API 24. The default Android target API is also supported. Packaging uses the
@@ -119,6 +120,26 @@ During the swipe the median interval between present timestamps (the middle colu
 `--latency` rows, in ns) is within 0.5 ms of 8.33 ms. At rest, the same `--latency` read twice
 5 s apart shows no new present timestamps. SDL draws into a SurfaceView, so `dumpsys gfxinfo`
 does not count its frames: read SurfaceFlinger.
+
+## Insets check
+
+The window keeps its size under the on-screen keyboard (`adjustNothing`, like the web canvas);
+on API 30 and newer the activity pads SDL's layout clear of the status bar, the cutout and the
+navigation bar, and reports how far the keyboard covers the window, each step of its animation,
+as `core.platform.keyboard_inset` in points. Below API 30 the window still resizes for the
+keyboard and the inset stays 0. With `log_events` on and the app running:
+
+```sh
+ADB=$ANDROID_HOME/platform-tools/adb
+$ADB logcat -c
+# Focus a text field, wait for the keyboard, then hide it (Back).
+$ADB logcat -d | grep keyboard_inset
+```
+
+The lines show `keyboard_inset` rising from 0 to the keyboard's height in points in at least 5
+steps, and falling back to 0 when it hides. A screenshot with the keyboard open
+(`$ADB exec-out screencap -p > keyboard.png`) shows the focused field above the keyboard; one on
+a phone with a display cutout shows nothing drawn under the cutout.
 
 ## Pitfalls
 

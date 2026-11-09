@@ -84,6 +84,8 @@ pub fn frameInsets(win: *dvui.Window) dvui.Rect {
 }
 /// Writes `core.platform.soft_keyboard` from the backend, once a frame on the UI thread, and logs
 /// a change when the backend logs events. Stays false with dvui's stock backend, which cannot say.
+/// On Android it also writes `core.platform.keyboard_inset`, how far the keyboard covers the
+/// window in points (the window keeps its size under it), logged the same way.
 pub fn pollSoftKeyboard(win: *dvui.Window) void {
     if (comptime !@import("native_backend").fizzy) return;
     const shown = win.backend.impl.screenKeyboardShown();
@@ -91,6 +93,13 @@ pub fn pollSoftKeyboard(win: *dvui.Window) void {
         std.log.debug("soft_keyboard {}", .{shown});
     }
     fizzy.core.platform.soft_keyboard = shown;
+    if (comptime builtin.target.abi.isAndroid()) {
+        const inset = win.backend.impl.keyboardInset();
+        if (inset != fizzy.core.platform.keyboard_inset and win.backend.impl.log_events) {
+            std.log.debug("keyboard_inset {d}", .{inset});
+        }
+        fizzy.core.platform.keyboard_inset = inset;
+    }
 }
 
 /// Linux: the desktop's blur behind the window's frame this frame — inside its shadow's margin,
