@@ -2,8 +2,13 @@ package dev.fizzyedit.hello;
 
 import android.os.Build;
 import android.os.Bundle;
+import android.graphics.Insets;
 import android.view.Display;
+import android.view.View;
+import android.view.WindowInsets;
+import android.view.WindowInsetsAnimation;
 import android.view.WindowManager;
+import java.util.List;
 import org.libsdl.app.SDLActivity;
 
 public class FizzyActivity extends SDLActivity {
@@ -24,7 +29,43 @@ public class FizzyActivity extends SDLActivity {
         WindowManager.LayoutParams params = getWindow().getAttributes();
         params.preferredDisplayModeId = best.getModeId();
         getWindow().setAttributes(params);
+        listenForInsets();
     }
+
+    // The window keeps its size under the keyboard (adjustNothing); the app lays out above it
+    // from nativeInsets. SDL's surface keeps its own insets listener: ours is on its parent and
+    // returns the insets unchanged, so they still reach it.
+    private void listenForInsets() {
+        if (Build.VERSION.SDK_INT < 30) {
+            getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+            return;
+        }
+        View content = getContentView();
+        content.setOnApplyWindowInsetsListener(new View.OnApplyWindowInsetsListener() {
+            @Override
+            public WindowInsets onApplyWindowInsets(View v, WindowInsets insets) {
+                Insets bars = insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
+                v.setPadding(bars.left, bars.top, bars.right, insets.getInsets(WindowInsets.Type.navigationBars()).bottom);
+                reportInsets(insets);
+                return insets;
+            }
+        });
+        content.setWindowInsetsAnimationCallback(new WindowInsetsAnimation.Callback(WindowInsetsAnimation.Callback.DISPATCH_MODE_CONTINUE_ON_SUBTREE) {
+            @Override
+            public WindowInsets onProgress(WindowInsets insets, List<WindowInsetsAnimation> running) {
+                reportInsets(insets);
+                return insets;
+            }
+        });
+    }
+
+    private void reportInsets(WindowInsets insets) {
+        nativeInsets(insets.getInsets(WindowInsets.Type.ime()).bottom,
+                insets.getInsets(WindowInsets.Type.navigationBars()).bottom,
+                getResources().getDisplayMetrics().density);
+    }
+
+    static native void nativeInsets(float imePx, float navPx, float density);
 
     // Back with nothing open leaves to the background, never finishes (API 26-30 would kill the app).
     @Override
