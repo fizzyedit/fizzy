@@ -1605,7 +1605,7 @@ test "a fling into the top bounces once and settles" {
     try dragBy(-300, 10, true, 10);
     try lift();
     for (0..10) |_| try frameAfter(16);
-    try std.testing.expectApproxEqAbs(@as(f32, 300), t_viewport_y, 0.01);
+    try check("scrolled 300 points in", @abs(t_viewport_y - 300) <= 0.01, t_viewport_y, 300);
     try dragBy(150, 30, true, 0);
     try lift();
 
@@ -1617,7 +1617,7 @@ test "a fling into the top bounces once and settles" {
     var rest_ms: ?u64 = null;
     for (0..120) |i| {
         try frameAfter(16);
-        try std.testing.expect(t_over_y <= 0);
+        try check("past the top only", t_over_y <= 0, t_over_y, 0);
         if (t_over_y < deepest) {
             deepest = t_over_y;
             deepening_frames += 1;
@@ -1634,14 +1634,23 @@ test "a fling into the top bounces once and settles" {
     std.debug.print("bounce: {d:.1} points past the top, home after {?d} ms\n", .{ -deepest, rest_ms });
     // It carries on past the edge for a while, as the coast's speed would take it, and comes
     // back once.
-    try std.testing.expect(deepest < -5);
-    try std.testing.expect(deepening_frames >= 2);
-    try std.testing.expectEqual(@as(usize, 1), turns);
-    try std.testing.expectEqual(@as(f32, 0), t_over_y);
-    try std.testing.expectEqual(@as(f32, 0), t_viewport_y);
-    try std.testing.expect(!t_range_broken);
+    try check("bounce depth", deepest < -5, deepest, -5);
+    try check("frames carrying on past the edge", deepening_frames >= 2, deepening_frames, 2);
+    try check("turns", turns == 1, turns, 1);
+    try check("settled overscroll", t_over_y == 0, t_over_y, 0);
+    try check("settled viewport", t_viewport_y == 0, t_viewport_y, 0);
+    try check("viewport stayed in range", !t_range_broken, t_range_broken, false);
     // Sampled every 16 ms, the whole bounce fits in half a second.
-    try std.testing.expect(rest_ms.? <= 500);
+    try check("home within 500 ms", rest_ms != null and rest_ms.? <= 500, rest_ms, 500);
+}
+
+/// Fail as `std.testing.expectEqual` does, first printing which check failed and both values,
+/// so a failure in a long run says what it saw.
+// anytype: The checks compare points, frame counts, a flag and an optional time, printed as they are.
+fn check(name: []const u8, ok: bool, actual: anytype, expected: anytype) !void {
+    if (ok) return;
+    std.debug.print("check \"{s}\" failed: actual {any}, expected {any}\n", .{ name, actual, expected });
+    return error.TestExpectedEqual;
 }
 
 test "the wheel at the top does not overscroll" {
