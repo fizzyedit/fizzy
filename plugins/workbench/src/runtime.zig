@@ -30,5 +30,6 @@ pub fn files() ?sdk.services.files.Api {
 pub fn workbench() *Workbench {
     if (fizzy_workbench) |w| return w;
     if (sdk.injectedState(Workbench)) |w| return w;
+    // The host wires one of the two at load, before any view runs.
     @panic("workbench pointer not wired");
 }

@@ -49,6 +49,7 @@ fn initialDir(mode: DialogMode) []const u8 {
 }
 
 fn alloc() std.mem.Allocator {
+    // A dialog opens only after startup hands the backend the app's allocator, so arriving first is a wiring bug.
     return app_gpa orelse @panic("backend used before the app supplied an allocator");
 }
 

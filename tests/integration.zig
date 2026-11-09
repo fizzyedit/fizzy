@@ -12156,9 +12156,13 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
                 const self: *@This() = @ptrCast(@alignCast(ctx));
                 std.debug.assert(id == self.doc);
                 // Allocation can fail, and the step callback returns no error.
-                self.kinds.append(std.testing.allocator, st.kind) catch @panic("out of memory");
-                const effect = std.testing.allocator.dupe(u8, st.effect) catch @panic("out of memory");
-                self.effects.append(std.testing.allocator, effect) catch @panic("out of memory");
+                self.record(st) catch @panic("out of memory");
+            }
+            fn record(self: *@This(), st: sdk.Step) !void {
+                try self.kinds.append(std.testing.allocator, st.kind);
+                const effect = try std.testing.allocator.dupe(u8, st.effect);
+                errdefer std.testing.allocator.free(effect);
+                try self.effects.append(std.testing.allocator, effect);
             }
             fn deinit(self: *@This()) void {
                 for (self.effects.items) |e| std.testing.allocator.free(e);

@@ -48,6 +48,7 @@ pub fn superMdAsMarkdown(self: *State, gpa: std.mem.Allocator, id: u64, bytes: [
 }
 
 pub fn previewFor(self: *State, gpa: std.mem.Allocator, id: u64) *Preview {
+    // The void hooks previewReveal and previewFollow (plugin.zig) call this, with no error to carry.
     const gop = self.previews.getOrPut(gpa, id) catch @panic("OOM");
     if (!gop.found_existing) gop.value_ptr.* = .{};
     return gop.value_ptr;
