@@ -513,7 +513,9 @@ fn patchedWebJs(b: *std.Build, dvui_dep: *std.Build.Dependency) std.Build.LazyPa
     }.lessThan);
     const patches = b.allocator.alloc(std.Build.LazyPath, names.items.len) catch @panic("OOM");
     for (patches, names.items) |*p, name| p.* = b.path(b.pathJoin(&.{ patches_dir, name }));
-    const patched = b.dependency("patch", .{ .source = dvui_dep.path(""), .patches = patches }).namedLazyPath("patched");
+    const patch = b.dependency("patch", .{ .source = dvui_dep.path(""), .patches = patches });
+    patch.artifact("patch").incremental = false;
+    const patched = patch.namedLazyPath("patched");
     return patched.path(b, "src/backends/web.js");
 }
 

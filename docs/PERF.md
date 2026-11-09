@@ -123,7 +123,7 @@ Seconds, watch / full (`-` where not run):
 
 | target | new_decl | body | sig | comptime_const | import | compile_error | build_zig |
 |---|---|---|---|---|---|---|---|
-| app | 0.38 / 11.2 | 0.50 / 8.7 | 0.93 / 10.7 | 0.83 / 8.5 | 0.82 / 14.3 | 0.17 / 7.1 | 37.0 / 1.2 |
+| app | 0.38 / 11.2 | 0.50 / 8.7 | 0.93 / 10.7 | 0.83 / 8.5 | 0.82 / 14.3 | 0.17 / 7.1 | 15.7 / 1.2 |
 | core | 1.6 / 16.5 | 2.8 / 12.6 | 2.4 / 13.5 | 2.4 / 19.5 | 0.44 / 28.9 | 0.23 / 12.2 | - |
 | sdk | 0.45 / 24.3 | 2.5 / 9.6 | 5.8 / 15.3 | 4.8 / 24.2 | 12.5 / 28.5 | 0.53 / 9.9 | - |
 | plugin archive | 0.17 / 1.8 | 0.16 / 1.7 | 0.30 / 1.7 | 0.30 / 1.8 | 0.83 / 1.7 | 0.17 / 1.6 | 7.4 / 1.2 |
@@ -135,7 +135,7 @@ Seconds, watch / full (`-` where not run):
 | plugin workbench | 0.33 / 4.8 | 0.19 / 3.5 | 0.33 / 3.7 | 0.32 / 5.9 | 0.19 / 2.2 | 0.13 / 1.9 | 8.0 / 1.7 |
 
 (The first eight rows were measured at commit `5fc11d83`, text and workbench at current `main`;
-no later commit touched the build graph. The `text` `comptime_const` watch figure was rerun, 5
+no later commit touched the build graph; the app `build_zig` figure on `c367f5a` with tools not incremental. The `text` `comptime_const` watch figure was rerun, 5
 runs, after a first sample coalesced with the previous build and read 0.01 s.)
 
 What the table says:
@@ -143,9 +143,9 @@ What the table says:
 - **A saved `.zig` file is fast everywhere**, from 0.1 s (a plugin) to a few seconds (core and the
   SDK, which everything imports), 5 to 60 times quicker than a full rebuild, and a compile error
   and its fix both stay incremental.
-- **A change to `build.zig` is the exception, and a loss**: 7 to 37 s under `--watch` against
-  1 to 3 s for a plain rebuild. The build runner restarts and the watched compilations start over (the
-  app's 37 s is about a full Debug build); the cause is not isolated. Stop and restart `scripts/watch` after editing a `build.zig` or
+- **A change to `build.zig` is the exception, and a loss**: 7 to 16 s under `--watch` against
+  1 to 3 s for a plain rebuild. The build runner restarts and the watched compilations start over;
+  the dependency tools (translate-c, patch, assetpack) are not incremental, so they no longer rebuild (the app's was 49 s). Stop and restart `scripts/watch` after editing a `build.zig` or
   `build.zig.zon`, or accept the one slow rebuild.
 - **An SDK `import` or `sig` edit costs seconds**, because every plugin and the app depend on it:
   that is analysis the compiler really has to redo, not a fallback.

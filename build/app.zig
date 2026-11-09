@@ -671,6 +671,7 @@ pub fn construct(
     frameworks: *Frameworks,
 ) !Built {
     const assetpack = @import("assetpack");
+    b.dependencyFromBuildZig(assetpack, .{}).artifact("assetpack").incremental = false;
     const assets_module = assetpack.pack(b, b.path("assets"), .{});
     // The window's icon, apart from `assets` so an app built on fizzy can give its own.
     const app_icon_files = b.addWriteFiles();

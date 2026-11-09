@@ -85,7 +85,9 @@ fn velopackCModule(
     target: std.Build.ResolvedTarget,
     optimize: std.lang.OptimizeMode,
 ) *std.Build.Module {
-    const tc: Translator = .init(b.dependency("translate_c", .{}), .{
+    const translate_c = b.dependency("translate_c", .{});
+    translate_c.artifact("translate-c").incremental = false;
+    const tc: Translator = .init(translate_c, .{
         .c_source_file = vz.builder.dependency("velopack", .{}).path("include/Velopack.h"),
         .target = target,
         .optimize = optimize,
