@@ -88,6 +88,7 @@ pub fn addApk(b: *std.Build, sdk: AndroidSdk, arch: std.Target.Cpu.Arch, lib: *s
     package.addFileArg(linked.so);
     package.addFileArg(b.path("android/AndroidManifest.xml"));
     package.addFileArg(b.path("android/src/FizzyActivity.java"));
+    package.addFileArg(b.path("android/src/org/libsdl/app/FizzyEdit.java"));
     package.addDirectoryArg(linked.java);
     package.addArg(b.pathJoin(&.{ sdk.dir, "platforms", sdk.platform, "android.jar" }));
     const apk = package.addOutputFileArg(app.apk_name);

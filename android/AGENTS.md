@@ -9,6 +9,8 @@ is not an app entry: fizzy on Android is `build/exe.zig` with an Android target.
 - **SDL needs its Java `SDLActivity`.** SDL3 has no NativeActivity mode, so "no Java at all" would
   mean a second platform layer beside SDL (input, surface, IME over JNI). Java stays until the
   Zig windowing library (plans#51) grows an Android backend.
+- **The keyboard's input connection is ours:** `src/org/libsdl/app/FizzyEdit.java`, in SDL's
+  package because the classes it extends are package-private. SDL's own Java is not patched.
 - **Zig cannot link the library:** it ships no Android libc, so the NDK's clang does, with the
   hello and SDL archives whole (SDL finds its JNI entry points and `SDL_main` by name).
 - **minSdk is 26 for an app APK, 24 for the hello:** `std.Io` calls `preadv64`/`pwritev64`,
