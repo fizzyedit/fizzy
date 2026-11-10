@@ -168,6 +168,22 @@ as `git+https`: the eight above rebased onto upstream `main` (`41f6703`), then:
    depends on content scale, raster rounding or `snap_to_pixels`; snapping only moves where glyphs
    land. Upstream: worth proposing once X2-X3 settle. Test: dvui `zig build test -Dbackend=testing`,
    "a string has one size at every scale".
+16. **text: a wrapping TextLayout can be told its width on its first frame** (`ff7d99f`, dvui#2):
+   `TextLayoutWidget.InitOptions.width_hint` gives a wrapping layout its width before it has been
+   measured, where it otherwise assumes 1000 (the first-frame behaviour below). Upstream: worth
+   proposing with item 15. Test: dvui `zig build test -Dbackend=testing`.
+17. **text: underlines and strike lines follow the drawn baseline and the text size** (`b970c44`,
+   dvui#3). Upstream: worth proposing with item 15. Test: dvui
+   `zig build test -Dbackend=testing`, "an underline sits on the drawn baseline".
+18. **font: a failed font pre-gen frees its FreeType face** (`abc9f27`, dvui#4). Upstream: worth
+   proposing with item 15. Test: dvui `zig build test -Dbackend=testing`, "a strike line sits on
+   the drawn baseline".
+19. **text: glyphs clip to the padding rect, so j and g are not cut** (`50c1b70`, dvui#5).
+   Upstream: worth proposing with item 15. Test: dvui `zig build test -Dbackend=testing`, "a
+   label's ink left of its pen is not clipped".
+20. **text: narrow text breaks at spaces** (`63c6333`, dvui#6): a wrapping layout breaks inside a
+   word only when one word is wider than the line. Upstream: worth proposing with item 15. Test:
+   dvui `zig build test -Dbackend=testing`.
 
 Tags: `fizzy-sdk-0.2.13` → `712f7f7` (the stack before this rebase, still what SDK ≤ 0.2.15
 builds); `fizzy-sdk-0.2.16` → `4428108` (SDK 0.2.16 to 0.2.18); `fizzy-sdk-0.2.19` →
@@ -180,8 +196,8 @@ moves, so the second pin of one version takes a suffix, as the SDL fork's tags d
 pinned); `fizzy-sdk-0.2.30-4` → `44010a3`; `fizzy-sdk-0.2.30-5` →
 `20e56f1` (never pinned on `main`); `fizzy-sdk-0.2.30-6` → `40e664c`, the last pin on Zig 0.16;
 `fizzy-sdk-0.2.30-7` → `1b29a16` on `zig-0.17` (SDK 0.2.30, the first on Zig 0.17);
-`fizzy-sdk-0.2.30-8` → `3d90fdd` (item 14); `fizzy-sdk-0.2.32` → `cb7c42e` (item 15), what
-`sdk/build.zig.zon` pins now.
+`fizzy-sdk-0.2.30-8` → `3d90fdd` (item 14); `fizzy-sdk-0.2.32` → `cb7c42e` (item 15);
+`fizzy-sdk-0.2.33` → `63c6333` (items 16-20), what `sdk/build.zig.zon` pins now.
 
 Fizzy builds dvui in its `custom` backend mode on every target and links its own backends
 (`backend/`, `src/backend/WebBackend.zig`), so dvui's `sdl3` and `web` backends are only built
