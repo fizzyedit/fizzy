@@ -112,6 +112,17 @@ class Artifacts(unittest.TestCase):
 
 
 class ValidateTests(Artifacts):
+    def test_size_skips_zig_test_files_like_the_worker(self):
+        self.git('checkout', '-q', self.sha)
+        (self.base / 'life_list_tests.zig').write_text('test line\n' * 20)
+        self.git('update-index', '--add', '--', 'life_list_tests.zig')
+        self.git('commit', '-qm', 'Zig tests', '-s')
+        (self.out / 'change.mbox').write_text(self.git('format-patch', '--stdout', self.sha + '..HEAD'))
+        self.job['in_bounds'] = ['*_tests.zig']
+        verdict = self.verdict()
+        self.assertFalse(any('too big' in reason for reason in verdict['reasons']), verdict)
+        self.assertEqual(verdict['changed'], dict(files=1, added=20, deleted=0))
+
     def test_accepts_good_write(self):
         verdict = self.verdict()
         self.assertTrue(verdict['accept'], verdict)

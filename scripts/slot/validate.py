@@ -11,7 +11,7 @@ import subprocess
 import sys
 import tempfile
 
-from slot.common import JobError, target
+from slot.common import JobError, is_test_path, is_generated_path, target
 
 
 def run(*args, cwd=None, data=None):
@@ -50,11 +50,6 @@ def matches(path, pattern):
     return match(parts, globs)
 
 
-def test_path(path):
-    return any(x in ('test', 'tests', 'fixtures') for x in path.split('/')) or bool(
-        re.search(r'(^|/)(test[-_].*|.*_test)\.(py|zig)$', path))
-
-
 def patch_checks(job, result, out, base, verdict):
     with tempfile.TemporaryDirectory(prefix='slot-validate-') as tmp:
         root = Path(tmp)
@@ -84,7 +79,7 @@ def patch_checks(job, result, out, base, verdict):
                 continue
             totals['added'] += int(a)
             totals['deleted'] += int(d)
-            if not test_path(path):
+            if not is_test_path(path) and not is_generated_path(path):
                 size += int(a) + int(d)
         verdict['changed'] = totals
         if size > job['limits']['max_changed_lines']:
