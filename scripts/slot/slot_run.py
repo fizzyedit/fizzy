@@ -154,10 +154,10 @@ def contract_doc(work):
     dst = work / 'docs' / 'AGENT_WORK.md'
     if dst.exists() or not src.is_file():
         return
-    dst.parent.mkdir(exist_ok=True)
+    dst.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(src, dst)
     exclude = work / '.git' / 'info' / 'exclude'
-    exclude.parent.mkdir(exist_ok=True)
+    exclude.parent.mkdir(parents=True, exist_ok=True)
     with exclude.open('a') as f:
         f.write('/docs/AGENT_WORK.md\n')
 
