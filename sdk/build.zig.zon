@@ -41,10 +41,10 @@
         // `fizzy-sdk-<version>` tag in the fork before the pin lands. `fizzy-dev` itself stays a
         // working branch and can be rebased freely — the tag, never.
         .dvui = .{
-            // The zig-0.17 branch: fizzy-sdk-0.2.32, one size for a string at every scale and snap
-            // mode (docs/DEPENDENCIES.md, patch 15)
-            .url = "git+https://github.com/fizzyedit/dvui#cb7c42eae384a409d788d90727b0a892d3d15a2b",
-            .hash = "dvui-0.6.0-dev-AQFJmZvRBAE0AxS4ebxC1_tNjVT0j6GEjKyoiHxDOHyN",
+            // The zig-0.17 branch: fizzy-sdk-0.2.33, text wraps at spaces and glyphs are not
+            // clipped (docs/DEPENDENCIES.md, patches 16-20)
+            .url = "git+https://github.com/fizzyedit/dvui#63c633384bce334d6ed234e4c11586051a93aebc",
+            .hash = "dvui-0.6.0-dev-AQFJmU72BAGkU2FYFmbD6pJvk3hQErkOQfDcEpLfK640",
             //.path = "../../dvui",
         },
         .zf = .{
