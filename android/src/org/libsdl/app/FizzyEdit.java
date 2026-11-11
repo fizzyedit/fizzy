@@ -19,10 +19,10 @@ public class FizzyEdit extends SDLDummyEdit {
 
     @Override
     public InputConnection onCreateInputConnection(EditorInfo out) {
-        super.onCreateInputConnection(out); // fills out
         // SDL's connection starts empty. restartInput (reset, below) and the keyboard asking again
-        // both come here, so the new one starts from what the old one last sent the app.
+        // both come here; read the old one before super replaces `ic`, so the new one starts from it.
         String before = ic instanceof FizzyInputConnection ? ((FizzyInputConnection) ic).mCommittedText : null;
+        super.onCreateInputConnection(out); // fills out (and replaces ic)
         FizzyInputConnection fic = new FizzyInputConnection(this);
         seed(fic, before == null ? "" : before);
         ic = fic;
@@ -65,28 +65,28 @@ class FizzyInputConnection extends SDLInputConnection {
     @Override
     public boolean commitText(CharSequence text, int newCursorPosition) {
         boolean r = super.commitText(text, newCursorPosition);
-        log("commitText(\"" + text + "\", " + newCursorPosition + ")");
+        if (tracing()) trace("commitText(\"" + text + "\", " + newCursorPosition + ")");
         return r;
     }
 
     @Override
     public boolean setComposingText(CharSequence text, int newCursorPosition) {
         boolean r = super.setComposingText(text, newCursorPosition);
-        log("setComposingText(\"" + text + "\", " + newCursorPosition + ")");
+        if (tracing()) trace("setComposingText(\"" + text + "\", " + newCursorPosition + ")");
         return r;
     }
 
     @Override
     public boolean setComposingRegion(int start, int end) {
         boolean r = super.setComposingRegion(start, end);
-        log("setComposingRegion(" + start + ", " + end + ")");
+        if (tracing()) trace("setComposingRegion(" + start + ", " + end + ")");
         return r;
     }
 
     @Override
     public boolean finishComposingText() {
         boolean r = super.finishComposingText();
-        log("finishComposingText()");
+        if (tracing()) trace("finishComposingText()");
         return r;
     }
 
@@ -109,7 +109,7 @@ class FizzyInputConnection extends SDLInputConnection {
             e.delete(start, a);
             updateText();
         }
-        log("deleteSurroundingText(" + before + ", " + after + ")");
+        if (tracing()) trace("deleteSurroundingText(" + before + ", " + after + ")");
         return true;
     }
 
@@ -133,8 +133,8 @@ class FizzyInputConnection extends SDLInputConnection {
                 }
                 updateText();
             }
-            log("sendKeyEvent(DEL)");
         }
+        if (tracing()) trace("sendKeyEvent(DEL " + (ev.getAction() == KeyEvent.ACTION_DOWN ? "down" : "up") + ")");
         return true; // DOWN and UP: SDLActivity.handleKeyEvent would send a second backspace
     }
 
@@ -142,7 +142,11 @@ class FizzyInputConnection extends SDLInputConnection {
         return Math.max(0, Math.min(len, i));
     }
 
-    private void log(String call) {
-        if (Log.isLoggable(TAG, Log.VERBOSE)) Log.v(TAG, call + " -> \"" + getEditable() + "\"");
+    private static boolean tracing() {
+        return Log.isLoggable(TAG, Log.VERBOSE);
+    }
+
+    private void trace(String call) {
+        Log.v(TAG, call + " -> \"" + getEditable() + "\"");
     }
 }
