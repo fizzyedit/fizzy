@@ -249,9 +249,12 @@ pub fn start(self: *Server) !void {
     if (std.fs.path.dirname(self.socket_path)) |dir| {
         try Io.Dir.cwd().createDirPath(self.io, dir);
         if (comptime builtin.target.os.tag != .windows) {
-            const st = try Io.Dir.cwd().statFile(self.io, dir, .{ .follow_symlinks = false });
-            if (st.kind != .directory) return error.NotAFolder;
-            try Io.Dir.cwd().setFilePermissions(self.io, dir, .fromMode(0o700), .{ .follow_symlinks = false });
+            // By fd, not by path: std's path chmod without following links is `fchmodat2`, which
+            // Android's seccomp filter kills the app for. `.iterate` keeps the fd from being O_PATH,
+            // which `fchmod` refuses.
+            var folder = try Io.Dir.cwd().openDir(self.io, dir, .{ .follow_symlinks = false, .iterate = true });
+            defer folder.close(self.io);
+            try folder.setPermissions(self.io, .fromMode(0o700));
         }
     }
     // A socket left by a fizzy that did not quit cleanly, or one a fizzy this one takes over from
@@ -899,6 +902,34 @@ test "a request reaches the UI thread and its answer goes back" {
     // And its folder: nobody else reaches it, even before the socket's own mode is set.
     const folder = try Io.Dir.cwd().statFile(io, std.fs.path.dirname(path).?, .{});
     try std.testing.expectEqual(@as(std.posix.mode_t, 0o700), folder.permissions.toMode() & 0o777);
+}
+
+test "a link in the socket folder's place is refused, and its target keeps its mode" {
+    if (!Io.net.has_unix_sockets or builtin.target.os.tag == .windows) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try testSocket(gpa, &tmp);
+    defer gpa.free(path);
+    const link = std.fs.path.dirname(path).?;
+
+    // A folder shared with others, and a link to it where the socket's folder goes.
+    var shared = try tmp.dir.createDirPathOpen(io, "shared", .{ .open_options = .{ .iterate = true } });
+    defer shared.close(io);
+    try shared.setPermissions(io, .fromMode(0o755));
+    const target = try tmp.dir.realPathFileAlloc(io, "shared", gpa);
+    defer gpa.free(target);
+    try Io.Dir.cwd().symLink(io, target, link, .{ .is_directory = true });
+    defer Io.Dir.cwd().deleteFile(io, link) catch {};
+
+    var server: Server = .{ .gpa = gpa, .io = io, .socket_path = path, .wake = noWake };
+    if (server.start()) |_| {
+        server.stop();
+        return error.TestUnexpectedResult;
+    } else |_| {}
+    const st = try tmp.dir.statFile(io, "shared", .{});
+    try std.testing.expectEqual(@as(std.posix.mode_t, 0o755), st.permissions.toMode() & 0o777);
 }
 
 /// A socket path for a test, in a folder of its own that `start` makes and `removeTestSocket`
