@@ -650,3 +650,42 @@ test "the shadow grows the bounds and packs in vec4 11" {
     const u = f.pack(.{ .x = 0, .y = 0, .w = 200, .h = 120 }, false, &.{0});
     try testing.expectEqual([4]f32{ shadow_fade, shadow_offset[0], shadow_offset[1], shadow_alpha }, u.vec4s()[11]);
 }
+
+/// A 300 x 44 bar at (0, 0), radius 22, and `bead`, a 12 pt drop, when there is one.
+fn barWith(bead: ?Point) LiquidField {
+    var f: LiquidField = .{ .merge_px = 14 };
+    f.add(.{ .rect = .{ .x = 0, .y = 0, .w = 300, .h = 44 }, .radii = @splat(22) });
+    if (bead) |c| f.add(Shape.circle(c, 6));
+    return f;
+}
+
+test "a small drop elsewhere leaves a bar's rim whole" {
+    const alone = barWith(null);
+    const with = barWith(.{ .x = 150, .y = 200 });
+    for ([_]Point{ .{ .x = 150, .y = 3 }, .{ .x = 40, .y = 8 }, .{ .x = 4, .y = 22 } }) |p| {
+        const a = alone.sampleWith(p, dropLook());
+        const b = with.sampleWith(p, dropLook());
+        try testing.expectApproxEqAbs(a.steep, b.steep, 1e-4);
+        try testing.expectApproxEqAbs(a.out.x, b.out.x, 1e-4);
+        try testing.expectApproxEqAbs(a.out.y, b.out.y, 1e-4);
+    }
+}
+
+test "a bead joined to a bar leaves its rim whole away from the neck" {
+    const alone = barWith(null);
+    const with = barWith(.{ .x = 270, .y = 52 });
+    try testing.expectEqual(@as(usize, 1), with.clusters().count);
+    for ([_]Point{ .{ .x = 40, .y = 3 }, .{ .x = 40, .y = 41 }, .{ .x = 4, .y = 22 } }) |p| {
+        const a = alone.sampleWith(p, dropLook());
+        const b = with.sampleWith(p, dropLook());
+        try testing.expectApproxEqAbs(a.steep, b.steep, 1e-4);
+    }
+}
+
+test "a small drop's own rim still fits it" {
+    const with = barWith(.{ .x = 150, .y = 200 });
+    var lone: LiquidField = .{ .merge_px = 14 };
+    lone.add(Shape.circle(.{ .x = 150, .y = 200 }, 6));
+    const p: Point = .{ .x = 150, .y = 195 };
+    try testing.expectApproxEqAbs(lone.sampleWith(p, dropLook()).steep, with.sampleWith(p, dropLook()).steep, 1e-4);
+}
