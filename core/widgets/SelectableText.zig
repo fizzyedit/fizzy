@@ -35,12 +35,12 @@ hold: *TouchHold,
 style: SelectionControls.Style,
 
 /// Starts the layout and reads this frame's touch events. Call `deinit` on the result, as for `dvui.textLayout`.
-pub fn init(src: std.builtin.SourceLocation, init_opts: dvui.TextLayoutWidget.InitOptions, opts: dvui.Options) SelectableText {
+pub fn init(src: std.lang.SourceLocation, init_opts: dvui.TextLayoutWidget.InitOptions, opts: dvui.Options) SelectableText {
     return initStyled(src, init_opts, opts, .{});
 }
 
 /// `init`, with the selection menu drawn in `style`.
-pub fn initStyled(src: std.builtin.SourceLocation, init_opts: dvui.TextLayoutWidget.InitOptions, opts: dvui.Options, style: SelectionControls.Style) SelectableText {
+pub fn initStyled(src: std.lang.SourceLocation, init_opts: dvui.TextLayoutWidget.InitOptions, opts: dvui.Options, style: SelectionControls.Style) SelectableText {
     var tl_opts = init_opts;
     tl_opts.touch_edit_just_focused = false;
     const unhandled = touch_press.unhandledPresses();
@@ -116,13 +116,7 @@ fn processTouch(self: SelectableText, unhandled: touch_press.Presses) void {
             else => {},
         }
     }
-    // A press the layout did not take, or a drag it let go of, is not a hold.
-    if (hold.armed and !hold.fired and !dvui.captured(tl.data().id)) hold.cancel();
-
-    if (hold.due(dvui.frameTimeNS())) selectWordAt(tl, tl.data().id, hold.x, hold.y);
-    if (hold.remaining(dvui.frameTimeNS())) |ns| {
-        dvui.timer(tl.data().id, @intCast(@divTrunc(ns, std.time.ns_per_us) + 1));
-    }
+    _ = endHold(hold, tl, tl.data().id);
 }
 
 /// Selects the word under the physical point (`x`, `y`) of `tl` and shows its handles and menu.
@@ -135,6 +129,19 @@ pub fn selectWordAt(tl: *dvui.TextLayoutWidget, focus_id: dvui.Id, x: f32, y: f3
     tl.state.te_show_context_menu = true;
     dvui.focusWidget(focus_id, null, null);
     dvui.refresh(null, @src(), tl.data().id);
+}
+
+/// Call after a frame's touch events. Drops a hold whose press `tl` does not capture (a press it
+/// did not take, or a drag it let go of); when the hold is due, selects the word under it with
+/// `focus_id` focused and returns true. Asks dvui for a frame when the hold will be due.
+pub fn endHold(hold: *TouchHold, tl: *dvui.TextLayoutWidget, focus_id: dvui.Id) bool {
+    if (hold.armed and !hold.fired and !dvui.captured(tl.data().id)) hold.cancel();
+    const fired = hold.due(dvui.frameTimeNS());
+    if (fired) selectWordAt(tl, focus_id, hold.x, hold.y);
+    if (hold.remaining(dvui.frameTimeNS())) |ns| {
+        dvui.timer(tl.data().id, @intCast(@divTrunc(ns, std.time.ns_per_us) + 1));
+    }
+    return fired;
 }
 
 fn clear(tl: *dvui.TextLayoutWidget) void {

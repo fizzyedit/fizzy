@@ -232,14 +232,7 @@ fn processTouch(self: TextEntry, unhandled: touch.Presses, touch_editing: bool) 
             else => {},
         }
     }
-    if (hold.armed and !hold.fired and !dvui.captured(tl.data().id)) hold.cancel();
-    if (hold.due(dvui.frameTimeNS())) {
-        SelectableText.selectWordAt(tl, self.entry.data().id, hold.x, hold.y);
-        placed = true;
-    }
-    if (hold.remaining(dvui.frameTimeNS())) |ns| {
-        dvui.timer(tl.data().id, @intCast(@divTrunc(ns, std.time.ns_per_us) + 1));
-    }
+    if (SelectableText.endHold(hold, tl, self.entry.data().id)) placed = true;
     tl.state.te_first = false;
     tl.state.te_focus_on_touchdown = false;
     return placed;
