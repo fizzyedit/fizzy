@@ -230,9 +230,9 @@ The validator refuses when any of these fails, and lists every failure, not the 
 
 | Result | Action |
 |---|---|
-| write done | push `branch` to the allowed target repo against its fixed base branch (new branch, fails if it exists), open the PR (ready, not draft) with `pr_body` + `Part of fizzyedit/work#N`, labels `area:<x>`, `kind:<agent_kind>` from result.json (never the issue's work-kind labels), `gate:yes` if risky or targeting dvui; dvui also dispatches `review` with `{pr, repo}` to work |
-| rework done | push to the PR's branch, fast-forward only (refuse if head moved), label `rework:<round>` |
-| review done | comment the findings on the PR's pr-thread issue in work (`REVIEW: clean|changes @<sha>`); commit status `agent-review` on `head_sha` (success when clean); follow-ups appended to the PR's follow-up list; `changes` dispatches `rework` (round + 1), round 3 labels `stuck` instead; `clean` runs `gh pr merge --auto` only for Fizzy, never dvui |
+| write done | push `branch` to the allowed target repo against its fixed base branch (new branch, fails if it exists), open the PR (ready, not draft) with `pr_body` + `Part of fizzyedit/work#N`, labels `area:<x>`, `kind:<agent_kind>` from result.json (never the issue's work-kind labels), `gate:yes` if risky or targeting a gated repo; a gated repo (no bridge) also dispatches `pr` with `{pr, sha, author_kind, repo, round: 1}` to work |
+| rework done | push to the PR's branch, fast-forward only (refuse if head moved), label `rework:<round>`; a gated repo also dispatches `pr` with the rework's round |
+| review done | comment the findings on the PR's pr-thread issue in work (`REVIEW: clean|changes @<sha>`), creating it if missing; the thread's title starts with `thread_title(repo, pr)`: `PR #N:` for fizzy, `PR <name>#N:` for another repo (`PR heronin#9:`); commit status `agent-review` on `head_sha` (success when clean); follow-ups appended to the PR's follow-up list; `changes` dispatches `rework` (round + 1), round 3 labels `stuck` instead; `clean` runs `gh pr merge --auto` only for Fizzy, never dvui |
 | declined | comment `APPROACH:` + the decline on the issue, label `arch:needed`, remove `ready` |
 | failed / timeout | comment one line + the report tail on the issue; label `attempt:<n>`; at attempt 2, `stuck` |
 | refused (validator) | comment the reasons on the issue; label `stuck`; nothing pushed |
@@ -249,7 +249,7 @@ write.yml   on: issues labeled ready | repository_dispatch write | workflow_disp
            permissions: {}   (no GITHUB_TOKEN rights)  steps: download job; slot run; upload out
   publish  runs-on [self-hosted, publish]  environment: publish  if: always() && plan succeeded
            steps: checkout fizzy@base.sha; slot validate; create-github-app-token; slot publish
-review.yml  on: repository_dispatch pr {pr, sha, author_kind}  (sent by fizzy's bridge)
+review.yml  on: repository_dispatch pr {pr, sha, author_kind, repo, round}  (fizzy's bridge; publish for gated repos)
   run      runs-on [self-hosted, slot, review-for-<author_kind>]
 rework.yml  on: repository_dispatch rework {pr, round, findings | ci | conflict}
   run      runs-on [self-hosted, slot, kind-<author_kind>]

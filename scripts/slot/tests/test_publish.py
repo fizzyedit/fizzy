@@ -154,20 +154,97 @@ class PublishTests(Artifacts):
             self.assertEqual(gh('api', '--paginate', 'repos/a/b/issues/1/comments'),
                              [dict(body='one'), dict(body='two')])
 
+    def pull(self, repo, number):
+        self.state['objects'][f'repos/{repo}/pulls/{number}'] = dict(
+            state='open', title='example', head=dict(sha=self.head, ref='scripts/example'), base=dict(sha=self.sha))
+        self.state['objects'][f'repos/{repo}/issues/{number}'] = dict(labels=[])
+        self.state_path.write_text(json.dumps(self.state))
+
+    def pr_payload(self, repo, pr, round_number):
+        return dict(event_type='pr', client_payload=dict(pr=pr, sha=self.head, author_kind='codex',
+                                                         repo=repo, round=round_number))
+
+    def publish_creating_threads(self):
+        """publish_twice with `gh issue create` answered in-process, appending to the fake's threads."""
+        from slot.validate import gh as real_gh
+        def gh(*args):
+            if list(args[:2]) != ['issue', 'create']:
+                return real_gh(*args)
+            state = json.loads(self.state_path.read_text())
+            title = args[args.index('--title') + 1]
+            state['threads'].append(dict(number=900 + len(state['threads']), title=title,
+                                         body=args[args.index('--body') + 1]))
+            self.state_path.write_text(json.dumps(state))
+            return f'https://github.com/fizzyedit/work/issues/{state["threads"][-1]["number"]}'
+        with patch('slot.publish.gh', side_effect=gh):
+            return self.publish_twice()
+
     def test_dvui_write_dispatches_review_once(self):
         self.job['base'].update(repo='fizzyedit/dvui', branch='zig-0.17')
+        self.pull('fizzyedit/dvui', 1)
         state, push = self.publish_twice()
         create = next(c for c in state['calls'] if c[:2] == ['pr', 'create'])
         self.assertEqual(create[create.index('--repo') + 1], 'fizzyedit/dvui')
         self.assertEqual(create[create.index('--base') + 1], 'zig-0.17')
         self.assertIn('gate:yes', create)
-        self.assertEqual(state['dispatches'], [dict(event_type='review',
-                         client_payload=dict(pr=1, repo='fizzyedit/dvui'))])
+        self.assertEqual(state['dispatches'], [self.pr_payload('fizzyedit/dvui', 1, 1)])
         self.assertEqual(push.call_count, 1)
+
+    def test_heronin_write_dispatches_pr_once(self):
+        self.job['base']['repo'] = 'fizzyedit/heronin'
+        self.pull('fizzyedit/heronin', 1)
+        state, _ = self.publish_twice()
+        self.assertEqual(state['dispatches'], [self.pr_payload('fizzyedit/heronin', 1, 1)])
+
+    def test_heronin_review_comments_on_its_own_thread(self):
+        self.review()
+        self.job['base']['repo'] = 'fizzyedit/heronin'
+        self.pull('fizzyedit/heronin', 9)
+        self.state['threads'] = [dict(number=722, title='PR #9: fizzy one'),
+                                 dict(number=801, title='PR heronin#9: heronin one')]
+        self.state_path.write_text(json.dumps(self.state))
+        state, _ = self.publish_twice()
+        def reviews(issue):
+            return [c for c in state['comments'].get(f'repos/fizzyedit/work/issues/{issue}/comments', [])
+                    if c['body'].startswith('REVIEW:')]
+        self.assertEqual(len(reviews(801)), 1)
+        self.assertEqual(reviews(722), [])
+        search = next(c for c in state['calls'] if c[:2] == ['issue', 'list'])
+        self.assertEqual(search[search.index('--search') + 1], '"PR heronin#9:" in:title')
+
+    def test_missing_heronin_thread_is_created_once(self):
+        self.review()
+        self.job['base']['repo'] = 'fizzyedit/heronin'
+        self.pull('fizzyedit/heronin', 9)
+        state, _ = self.publish_creating_threads()
+        created = [t for t in state['threads'] if t['number'] >= 900]
+        self.assertEqual(len(created), 1)
+        self.assertEqual(created[0]['title'], 'PR heronin#9: example')
+        self.assertEqual(created[0]['body'],
+                         'Thread for https://github.com/fizzyedit/heronin/pull/9. Work issue: #722')
+        comments = state['comments'][f'repos/fizzyedit/work/issues/{created[0]["number"]}/comments']
+        self.assertEqual(len([c for c in comments if c['body'].startswith('REVIEW:')]), 1)
+
+    def test_dvui_rework_dispatches_review_round_once(self):
+        self.job.update(kind='rework', base=dict(repo='fizzyedit/dvui', sha=self.head),
+                        rework=dict(pr=9, round=2))
+        self.pull('fizzyedit/dvui', 9)
+        state, push = self.publish_twice()
+        self.assertEqual(push.call_count, 1)
+        self.assertEqual(state['dispatches'], [self.pr_payload('fizzyedit/dvui', 9, 2)])
+
+    def test_fizzy_rework_dispatches_nothing(self):
+        self.job.update(kind='rework', base=dict(repo='fizzyedit/fizzy', sha=self.head),
+                        rework=dict(pr=9, round=2))
+        self.pull('fizzyedit/fizzy', 9)
+        state, _ = self.publish_twice()
+        self.assertNotIn('dispatches', state)
 
     def test_dvui_clean_review_never_auto_merges(self):
         self.review()
         self.job['base']['repo'] = 'fizzyedit/dvui'
+        self.state['threads'] = [dict(number=722, title='PR dvui#9: example')]
+        self.state_path.write_text(json.dumps(self.state))
         self.result['review'].update(verdict='clean', findings=[])
         state, _ = self.publish_twice()
         self.assertIn('repos/fizzyedit/dvui/statuses/' + self.head, state['statuses'])
@@ -194,13 +271,15 @@ class PublishTests(Artifacts):
         self.job['base']['repo'] = 'fizzyedit/dvui'
         self.state['prs'] = [dict(number=12, branch=self.job['branch'],
                                  body=f'<!-- slot-job: {self.job["id"]} -->')]
-        self.state_path.write_text(json.dumps(self.state))
+        self.pull('fizzyedit/dvui', 12)
         state, push = self.publish_twice()
         push.assert_not_called()
-        self.assertEqual(state['dispatches'][0]['client_payload'], dict(pr=12, repo='fizzyedit/dvui'))
+        self.assertEqual(state['dispatches'], [self.pr_payload('fizzyedit/dvui', 12, 1)])
 
     def test_dvui_changes_dispatch_carries_repo(self):
         self.review()
         self.job['base']['repo'] = 'fizzyedit/dvui'
+        self.state['threads'] = [dict(number=722, title='PR dvui#9: example')]
+        self.state_path.write_text(json.dumps(self.state))
         state, _ = self.publish_twice()
         self.assertEqual(state['dispatches'][0]['client_payload']['repo'], 'fizzyedit/dvui')

@@ -333,6 +333,19 @@ class SlotRunTests(unittest.TestCase):
         (out / 'agent' / 'result.json').write_bytes(b'\xef\xbb\xbf{"ok": true}')
         self.assertEqual(json.loads(slot_run.read_agent(out, 'result.json')), dict(ok=True))
 
+    def test_bom_led_review_json_is_copied_without_bom(self):
+        agent = self.root / 'bom_review_agent.py'
+        agent.write_text("from pathlib import Path\n"
+                         "import json, sys\n"
+                         "prompt = sys.stdin.read()\n"
+                         "path = Path(prompt.split('Review path: ', 1)[1].splitlines()[0])\n"
+                         "review = json.dumps(dict(verdict='clean', findings=[], follow_ups=[]))\n"
+                         "path.write_bytes(b'\\xef\\xbb\\xbf' + review.encode())\n")
+        self.job['kind'] = 'review'
+        self.assertEqual(self.run_slot(agent=agent), 0, self.detail)
+        self.assertEqual(self.result('done')['review']['verdict'], 'clean')
+        self.assertTrue((self.out / 'agent/review.json').read_bytes().startswith(b'{'))
+
     def test_execute_resolves_command_through_child_path(self):
         bin_dir = Path(self.temp.name) / 'pathbin'
         bin_dir.mkdir()

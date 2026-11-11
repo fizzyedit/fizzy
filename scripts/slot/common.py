@@ -23,6 +23,12 @@ TARGETS = {
 ALLOWED_REF_OWNERS = ('fizzyedit',)
 
 
+def thread_title(repo, number):
+    """The title prefix of a PR's pr-thread issue in work: the one key from a PR to its thread."""
+    name = '' if repo == 'fizzyedit/fizzy' else repo.removeprefix('fizzyedit/')
+    return f'PR {name}#{number}:'
+
+
 def validate_refs(refs):
     """Validate reference checkouts against trusted owner policy."""
     try:
