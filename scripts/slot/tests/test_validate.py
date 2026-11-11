@@ -280,6 +280,11 @@ class ValidateTests(Artifacts):
             self.assertFalse(verdict['accept'])
             self.assertIn('target:', str(verdict['reasons']))
 
+    def test_drive_resolves_to_its_main_branch(self):
+        resolved = target({'base': {'repo': 'https://github.com/fizzyedit/drive.git', 'branch': 'main'}})
+        self.assertEqual(resolved['repo'], 'fizzyedit/drive')
+        self.assertEqual(resolved['branch'], 'main')
+
     def test_heronin_resolves_to_its_main_branch(self):
         resolved = target({'base': {'repo': 'https://github.com/fizzyedit/heronin.git', 'branch': 'main'}})
         self.assertEqual(resolved['repo'], 'fizzyedit/heronin')
