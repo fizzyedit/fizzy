@@ -689,6 +689,7 @@ async function start(init) {
 // console line saying what was measured and chosen (at startup, and whenever it changes).
 let appliedForm = "";
 function applyForm() {
+    if (wasmInstance && wasmInstance.exports.FizzyWebSetUtcOffset) wasmInstance.exports.FizzyWebSetUtcOffset(new Date().getTimezoneOffset());
     const f = env.size.form;
     if (!f || !wasmInstance || !wasmInstance.exports.FizzyWebSetFormFactor) return;
     const key = `${f.coarse}|${f.w}|${f.h}|${f.override}`;

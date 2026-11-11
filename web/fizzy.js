@@ -1112,6 +1112,8 @@ export class Fizzy {
     let appliedForm = "";
     function applyFormMain() {
       const f = formMeasure();
+      const utc = dvuiApp && dvuiApp.instance.exports.FizzyWebSetUtcOffset;
+      if (utc) utc(new Date().getTimezoneOffset());
       const exp = dvuiApp && dvuiApp.instance.exports.FizzyWebSetFormFactor;
       if (!exp) return;
       const key = `${f.coarse}|${f.w}|${f.h}|${f.override}`;

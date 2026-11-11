@@ -35,6 +35,17 @@ pub var cached_form_factor: FormFactor = .desktop;
 /// This visit's `?form=` on web, never stored; null elsewhere.
 pub var cached_form_override: ?FormFactor = null;
 
+pub const utc_offset = @import("utc_offset.zig");
+
+/// The local offset from UTC in seconds east, as it is now: an app formatting a date long ago may
+/// be off by an hour across a DST change. 0 until a backend writes it. A module global, so a dylib
+/// plugin sees its own copy (as `cached_form_factor`). Read it through `utcOffset()`.
+pub var cached_utc_offset_s: i32 = 0;
+
+pub inline fn utcOffset() i32 {
+    return cached_utc_offset_s;
+}
+
 /// How far the on-screen keyboard covers the bottom of the window, in points; 0 when there is
 /// none. The web backend writes it (the canvas keeps its size under a keyboard), and the app lays
 /// out above it. Written on the UI thread.

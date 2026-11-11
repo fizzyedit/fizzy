@@ -119,6 +119,22 @@ pub fn pollSoftKeyboard(win: *dvui.Window) void {
     }
 }
 
+/// Writes `core.platform.cached_utc_offset_s` from SDL's local time, at most once a minute, so a
+/// DST change or a moved laptop shows without a restart (SDL has no time-changed event).
+pub fn pollUtcOffset() void {
+    const c = @import("backend").c;
+    const S = struct {
+        var last: ?c.SDL_Time = null;
+    };
+    var now: c.SDL_Time = undefined;
+    if (!c.SDL_GetCurrentTime(&now)) return;
+    if (S.last) |last| if (@abs(now - last) < 60 * std.time.ns_per_s) return;
+    S.last = now;
+    var dt: c.SDL_DateTime = undefined;
+    if (!c.SDL_TimeToDateTime(now, &dt, true)) return;
+    fizzy.core.platform.cached_utc_offset_s = dt.utc_offset;
+}
+
 /// Linux: the desktop's blur behind the window's frame this frame — inside its shadow's margin,
 /// its corners rounded by `radius` points — or none (null). Whether the compositor blurs behind
 /// windows at all (`platform.linux_titlebar.blurBehind`); false elsewhere.
