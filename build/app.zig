@@ -1121,6 +1121,8 @@ fn addTests(
         // Mobile, tablet or desktop from the page's pointer and viewport. std-only (see
         // form_factor.zig); `platform.zig` holds the live value.
         .{ "fizzy-form-factor-tests", "core/form_factor.zig" },
+        // Seconds east of UTC from the page's `getTimezoneOffset()`. std-only (see utc_offset.zig).
+        .{ "fizzy-utc-offset-tests", "core/utc_offset.zig" },
         // The text before the caret a keyboard is given on a reset. std-only (see
         // ime_before.zig); `platform.zig` holds the request.
         .{ "fizzy-ime-before-tests", "core/ime_before.zig" },

@@ -197,6 +197,16 @@ export fn FizzyWebSetKeyboardInset(bottom: f32) void {
     fizzy.core.platform.keyboard_inset = bottom;
 }
 
+/// Called by the page (through the worker) at start, resize and rotation with
+/// `Date.getTimezoneOffset()`; an out-of-range value leaves `core.platform.utcOffset()` as it was.
+export fn FizzyWebSetUtcOffset(js_minutes: i32) void {
+    const platform = fizzy.core.platform;
+    platform.cached_utc_offset_s = platform.utc_offset.fromJsMinutes(js_minutes) orelse return;
+}
+
+/// Symmetric with the native API: the page reports its offset itself (`FizzyWebSetUtcOffset`).
+pub fn pollUtcOffset() void {}
+
 /// Symmetric with the native API: the page reports its keyboard itself
 /// (`FizzyWebSetKeyboardInset`), so nothing is polled.
 pub fn pollSoftKeyboard(_: *dvui.Window) void {}

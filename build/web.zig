@@ -174,6 +174,7 @@ pub fn build(
         "FizzyWebKeyBuffer",
         "FizzyWebKeyBound",
         "FizzyWebSetFormFactor",
+        "FizzyWebSetUtcOffset",
         "FizzyWebSetKeyboardInset",
         "FizzyWebImageAlloc",
         "FizzyWebImageReady",
