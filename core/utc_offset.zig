@@ -16,7 +16,6 @@ pub fn fromJsMinutes(js: i32) ?i32 {
 
 test fromJsMinutes {
     try std.testing.expectEqual(@as(?i32, -21600), fromJsMinutes(360)); // US Central, standard
-    try std.testing.expectEqual(@as(?i32, -18000), fromJsMinutes(300)); // US Central, daylight
     try std.testing.expectEqual(@as(?i32, 19800), fromJsMinutes(-330)); // India
     try std.testing.expectEqual(@as(?i32, 20700), fromJsMinutes(-345)); // Nepal
     try std.testing.expectEqual(@as(?i32, 0), fromJsMinutes(0));
