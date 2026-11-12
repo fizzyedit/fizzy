@@ -870,15 +870,7 @@ pub fn sampleWith(self: *const LiquidField, p: dvui.Point.Physical, l: glass_loo
         }
         var o: [2]f32 = g;
         const f = if (is_panel) panelDistance(self.panel.?, .{ p.x, p.y }, soft_k, &o) else if (sh.round) d else softBox(.{ p.x, p.y }, c, half, soft_k, &o);
-        if (f < f1) {
-            f2 = f1;
-            o2 = o1;
-            f1 = f;
-            o1 = o;
-        } else if (f < f2) {
-            f2 = f;
-            o2 = o;
-        }
+        keepNearest(f, o, &f1, &o1, &f2, &o2);
     }
     // The place (`edge`): its outside one more shape, its outline cutting the coverage.
     var in_place: f32 = -big;
@@ -912,16 +904,7 @@ pub fn sampleWith(self: *const LiquidField, p: dvui.Point.Physical, l: glass_loo
             h2 = hs;
             al2 = .{ 0, 0 };
         }
-        const o: [2]f32 = .{ -place_out[0], -place_out[1] };
-        if (d < f1) {
-            f2 = f1;
-            o2 = o1;
-            f1 = d;
-            o1 = o;
-        } else if (d < f2) {
-            f2 = d;
-            o2 = o;
-        }
+        keepNearest(d, .{ -place_out[0], -place_out[1] }, &f1, &o1, &f2, &o2);
     }
     const k = @max(self.merge_px, 0.0001);
     var wm: f32 = 0;
@@ -973,6 +956,20 @@ pub fn sampleWith(self: *const LiquidField, p: dvui.Point.Physical, l: glass_loo
         .edge_shade = shade,
         .shadow = self.shadowAt(p, coverage, lens),
     };
+}
+
+/// Keep the two nearest soft distances and their ways out, `f1` the nearest: the program's
+/// `f1`/`f2` and `o1`/`o2`.
+fn keepNearest(f: f32, o: [2]f32, f1: *f32, o1: *[2]f32, f2: *f32, o2: *[2]f32) void {
+    if (f < f1.*) {
+        f2.* = f1.*;
+        o2.* = o1.*;
+        f1.* = f;
+        o1.* = o;
+    } else if (f < f2.*) {
+        f2.* = f;
+        o2.* = o;
+    }
 }
 
 /// The program's `sh` at `p`, where the glass covers `coverage` and its lens is `lens`: one
