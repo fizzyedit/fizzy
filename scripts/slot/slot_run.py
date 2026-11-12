@@ -389,7 +389,7 @@ def run(job, job_dir, out, keep):
                     for name in ('pr-body.md', 'report.md', 'review.json', 'decline.md'):
                         source = work / name
                         if source.is_file():
-                            shutil.copyfile(source, out / 'agent' / name)
+                            (out / 'agent' / name).write_bytes(source.read_bytes().removeprefix(b'\xef\xbb\xbf'))
                             source.unlink()
                 if rc == 64 or rc in config.get('auth_exit', []):
                     raise BrokenSlot('agent not signed in')

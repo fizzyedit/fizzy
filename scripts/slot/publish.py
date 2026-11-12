@@ -7,7 +7,7 @@ import re
 import subprocess
 import tempfile
 
-from slot.common import target
+from slot.common import target, thread_title
 from slot.validate import gh, run
 
 
@@ -91,11 +91,13 @@ def publish(job_dir, out):
         labels(repo, number, ['stuck'])
         return
     result = json.loads((out / 'result.json').read_bytes())
-    def dispatch_review(pr):
-        receipt = f'<!-- slot-review: {job["id"]} -->'
+    def dispatch_review(pr, round_number, receipt_kind='review'):
+        receipt = f'<!-- slot-{receipt_kind}: {job["id"]} -->'
         comments = gh('api', '--paginate', f'repos/{repo}/issues/{number}/comments')
         if not any(receipt in c['body'] for c in comments):
-            payload = dict(event_type='review', client_payload=dict(pr=pr, repo=target_repo))
+            sha = gh('api', f'repos/{target_repo}/pulls/{pr}')['head']['sha']
+            payload = dict(event_type='pr', client_payload=dict(pr=pr, sha=sha, author_kind=result['agent_kind'],
+                                                                repo=target_repo, round=round_number))
             run(os.environ.get('SLOT_GH', 'gh'), 'api', f'repos/{repo}/dispatches',
                 '--input', '-', data=json.dumps(payload).encode())
             comment(repo, number, 'Review dispatched.\n' + receipt, receipt + '\n' + marker)
@@ -114,7 +116,7 @@ def publish(job_dir, out):
             if not any(marker in pr['body'] for pr in prs):
                 raise ValueError('branch belongs to another job')
             if destination['gate']:
-                dispatch_review(prs[0]['number'])
+                dispatch_review(prs[0]['number'], 1)
             return
         push(job, out, result, job['branch'], replace=True)
         body = result['pr_body'] + f'\n\nPart of {repo}#{number}\n\n' + marker
@@ -126,22 +128,30 @@ def publish(job_dir, out):
             args += ['--label', 'gate:yes']
         created = gh(*args)
         if destination['gate']:
-            dispatch_review(int(created.rstrip('/').split('/')[-1]))
+            dispatch_review(int(created.rstrip('/').split('/')[-1]), 1)
     elif job['kind'] == 'rework':
         info = job['rework']
         pr = gh('api', f'repos/{target_repo}/pulls/{info["pr"]}')
         comments = gh('api', '--paginate', f'repos/{target_repo}/issues/{info["pr"]}/comments')
-        if any(marker in c['body'] for c in comments):
-            return
-        push(job, out, result, pr['head']['ref'], job['base']['sha'])
-        labels(target_repo, info['pr'], [f'rework:{info["round"]}'])
-        comment(target_repo, info['pr'], 'Rework published.', marker)
+        if not any(marker in c['body'] for c in comments):
+            push(job, out, result, pr['head']['ref'], job['base']['sha'])
+            labels(target_repo, info['pr'], [f'rework:{info["round"]}'])
+            comment(target_repo, info['pr'], 'Rework published.', marker)
+        if destination['gate']:
+            dispatch_review(info['pr'], info['round'], 'rework-review')
     else:
         info, review = job['for_review'], result['review']
         pr_number, sha = info['pr'], info['head_sha']
+        title = thread_title(target_repo, pr_number)
         threads = gh('issue', 'list', '--repo', repo, '--label', 'pr-thread', '--state', 'all',
-                     '--search', f'PR #{pr_number}: in:title', '--json', 'number,title')
-        threads = [t for t in threads if t['title'].startswith(f'PR #{pr_number}:')]
+                     '--search', f'"{title}" in:title', '--json', 'number,title')
+        threads = [t for t in threads if t['title'].startswith(title)]
+        if not threads:
+            pull = gh('api', f'repos/{target_repo}/pulls/{pr_number}')
+            created = gh('issue', 'create', '--repo', repo, '--title', f'{title} {pull["title"][:90]}',
+                         '--label', 'pr-thread', '--body',
+                         f'Thread for https://github.com/{target_repo}/pull/{pr_number}. Work issue: #{number}')
+            threads = [dict(number=int(created.rstrip('/').split('/')[-1]))]
         if len(threads) != 1:
             raise ValueError('expected exactly one PR thread')
         text = (f'REVIEW: {review["verdict"]} @{sha}\nReviewer: slot/{result["agent_kind"]}\n'
