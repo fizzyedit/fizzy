@@ -20,6 +20,8 @@
 // How far past its place's outline the outside of the place begins, in pixels: far enough that no
 // sliver of it shows inside, near enough that a shape at the outline still runs into it.
 #define EDGE_GAP 1.0
+// Depths of the curve a shape's shorter half needs before its rim is drawn whole (`liquid_glass.room`).
+#define ROOM 3.0
 
 // No SV_POSITION: D3D12 links a pixel shader's inputs to the vertex shader's outputs by register,
 // and the default vertex shader's third output (the instance) sits where a pixel position read
@@ -174,6 +176,13 @@ float outlineAt(float2 q, int first, int count)
     return smin(d1, d2, max(uData[1].x, 0.0001), w);
 }
 
+// How much of its rim a shape of shorter half `half` has room for, its curve `depth` deep
+// (`LiquidField.fitHalf`): each shape's own, blended across a bridge. Never 0, which it divides.
+float fitTo(float half, float depth)
+{
+    return clamp(half / (ROOM * depth), 0.0001, 1.0);
+}
+
 float noise(float2 p)
 {
     return frac(52.9829189 * frac(dot(p, float2(0.06711056, 0.00583715))));
@@ -231,9 +240,9 @@ float4 main(PSInput input) : SV_Target0
         float2 o;
         float f = d;
         if (panel) {
-            f = panelDistance(p, g1.y, o);
+            f = panelDistance(p, g1.y * fitTo(hs, g1.z), o);
         } else if (s2.w < 0.5) {
-            f = softBox(p, s0, g1.y, o);
+            f = softBox(p, s0, g1.y * fitTo(hs, g1.z), o);
         } else {
             o = g;
         }
@@ -295,8 +304,12 @@ float4 main(PSInput input) : SV_Target0
     // folds in (a neck), which is no outline.
     float2 along = lerp(al1, al2, wm) * min(length(outv), 1.0);
     float soft = max(0.0, -F);
-    float steepR = exp(-soft / g1.z);
-    float steepL = exp(-soft / g1.w);
+    // The depths fitted to the shapes here, blended as they are: a small drop's rim its own size,
+    // a bar's whole beside it.
+    float hr = lerp(h1, h2, wm);
+    float fitR = fitTo(hr, g1.z);
+    float steepR = exp(-soft / (g1.z * fitR));
+    float steepL = exp(-soft / (g1.w * fitTo(hr, g1.w)));
     float b = clamp(mat.x, 0.0, 1.0);
     float lens = mat.y;
 
@@ -315,7 +328,7 @@ float4 main(PSInput input) : SV_Target0
         disp = g5.z * W * lens * t * t;
         uv = clamp((p - outv * disp - g0.xy) * g0.zw, 0.0, 1.0);
     } else {
-        uv = clamp((p + outv * (g2.x * lens * steepR) - g0.xy) * g0.zw, 0.0, 1.0);
+        uv = clamp((p + outv * (g2.x * fitR * lens * steepR) - g0.xy) * g0.zw, 0.0, 1.0);
     }
     float4 frost = Frost.SampleLevel(FrostSampler, uv, 0.0);
     float4 sharp = g4.w > 0.5 ? Sharp.SampleLevel(SharpSampler, uv, 0.0) : frost;

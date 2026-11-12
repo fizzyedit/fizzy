@@ -414,9 +414,11 @@ pub const uniform_vec4s = header_vec4s + shape_vec4s * max_shapes;
 pub const Uniforms = extern struct {
     /// Where the frost starts, and 1 / its size: physical pixels to its uv.
     frost_map: [4]f32,
-    /// Merge width, the soft field's softness, the refraction's depth, the light's depth.
+    /// Merge width, the soft field's softness, the refraction's depth, the light's depth; the last
+    /// three unfitted, the program fitting them to each shape (`fitHalf`).
     depths: [4]f32,
-    /// How far the rim reaches out, how clear it is, the rim line's width, how much light.
+    /// How far the rim reaches out (unfitted, as `depths`), how clear it is, the rim line's width,
+    /// how much light.
     rim: [4]f32,
     /// Premultiplied.
     tint: [4]f32,
@@ -461,13 +463,12 @@ fn look(self: *const LiquidField) liquid_glass.Look {
     return .{ .refraction = self.refraction };
 }
 
-/// The scale the rim is drawn at (`liquid_glass.rimScale`), fitted to the smallest shape: the
-/// program's rim is one for the whole field, and on a smaller shape a rim sized for a bigger one
-/// would be all rim. Every shape is glass whatever its size (`liquid_glass.fit`).
-fn rimScale(self: *const LiquidField, depth_px: f32) f32 {
-    var f: f32 = 1;
-    for (0..self.shapeCount()) |i| f = @min(f, liquid_glass.fit(self.shapeAt(i).rect, depth_px));
-    return self.scale * f;
+/// How much of its rim a shape of shorter half `half` has room for, its curve `depth_px` deep
+/// (`liquid_glass.fit`): each shape's own, blended across a bridge, so a small drop beside a bar
+/// draws a rim its own size and leaves the bar's whole. The program's `fitTo`.
+fn fitHalf(half: f32, depth_px: f32) f32 {
+    if (depth_px <= 0) return 1;
+    return std.math.clamp(half / (liquid_glass.room * depth_px), 0, 1);
 }
 
 /// The uniforms for drawing over `frost`, a picture of `covered`, the shapes in `order`: the
@@ -479,13 +480,12 @@ pub fn pack(self: *const LiquidField, covered: dvui.Rect.Physical, has_sharp: bo
         const a = @as(f32, @floatFromInt(t.a)) / 255;
         break :blk .{ @as(f32, @floatFromInt(t.r)) / 255 * a, @as(f32, @floatFromInt(t.g)) / 255 * a, @as(f32, @floatFromInt(t.b)) / 255 * a, a };
     } else @splat(0);
-    // The curve, its reach and its corners at the fitted scale; the rim line at the field's.
-    const rim = self.rimScale(liquid_glass.depthPx(self.look(), s));
-    const glow = self.rimScale(liquid_glass.falloff * s);
+    // The curve, its reach and its corners at the field's scale, unfitted: the program fits them
+    // to each shape (`fitHalf`).
     var u: Uniforms = .{
         .frost_map = .{ covered.x, covered.y, 1 / @max(covered.w, 1), 1 / @max(covered.h, 1) },
-        .depths = .{ self.merge_px, liquid_glass.softness * rim, liquid_glass.depthPx(self.look(), rim), liquid_glass.falloff * glow },
-        .rim = .{ liquid_glass.refraction * rim * self.refraction, liquid_glass.clarity * @min(1, self.refraction), rim_line_width * s, @min(1, self.refraction) },
+        .depths = .{ self.merge_px, liquid_glass.softness * s, liquid_glass.depthPx(self.look(), s), liquid_glass.falloff * s },
+        .rim = .{ liquid_glass.refraction * s * self.refraction, liquid_glass.clarity * @min(1, self.refraction), rim_line_width * s, @min(1, self.refraction) },
         .tint = tint,
         .face = .{ if (self.window) 2 else std.math.clamp(self.mix, 0, 1), std.math.clamp(self.lift, 0, 1), if (self.tint != null) 1 else 0, if (has_sharp) 1 else 0 },
         .dither = .{ 1.0 / 255.0, 0, 0, 0 },
@@ -824,14 +824,15 @@ pub fn sampleWith(self: *const LiquidField, p: dvui.Point.Physical, l: glass_loo
     var d2: f32 = big;
     var m1: [3]f32 = @splat(0);
     var m2: [3]f32 = @splat(0);
+    var h1: f32 = 1e9;
+    var h2: f32 = 1e9;
     var f1: f32 = big;
     var f2: f32 = big;
     var o1: [2]f32 = @splat(0);
     var o2: [2]f32 = @splat(0);
     var al1: [2]f32 = @splat(0);
     var al2: [2]f32 = @splat(0);
-    const rim = self.rimScale(liquid_glass.depthPx(self.look(), self.scale));
-    const soft_k = liquid_glass.softness * rim;
+    const depth = liquid_glass.depthPx(self.look(), self.scale);
     for (0..self.shapeCount()) |shape_index| {
         const sh = self.shapeAt(shape_index);
         const is_panel = shape_index == self.len and self.panel != null;
@@ -841,6 +842,7 @@ pub fn sampleWith(self: *const LiquidField, p: dvui.Point.Physical, l: glass_loo
         const lim = @min(half[0], half[1]);
         const radii: [4]f32 = .{ @min(sh.radii[0], lim), @min(sh.radii[1], lim), @min(sh.radii[2], lim), @min(sh.radii[3], lim) };
         const d = if (is_panel) panelDistance(self.panel.?, .{ p.x, p.y }, 0, &g) else roundBox(.{ p.x - c[0], p.y - c[1] }, half, radii, &g);
+        const soft_k = liquid_glass.softness * self.scale * fitHalf(lim, depth);
         const mat: [3]f32 = .{ sh.blur, sh.lens, sh.light };
         var al: [2]f32 = .{ 0, 0 };
         if (lanes.edge[3] > 0) {
@@ -854,26 +856,21 @@ pub fn sampleWith(self: *const LiquidField, p: dvui.Point.Physical, l: glass_loo
         if (d < d1) {
             d2 = d1;
             m2 = m1;
+            h2 = h1;
             al2 = al1;
             d1 = d;
             m1 = mat;
+            h1 = lim;
             al1 = al;
         } else if (d < d2) {
             d2 = d;
             m2 = mat;
+            h2 = lim;
             al2 = al;
         }
         var o: [2]f32 = g;
         const f = if (is_panel) panelDistance(self.panel.?, .{ p.x, p.y }, soft_k, &o) else if (sh.round) d else softBox(.{ p.x, p.y }, c, half, soft_k, &o);
-        if (f < f1) {
-            f2 = f1;
-            o2 = o1;
-            f1 = f;
-            o1 = o;
-        } else if (f < f2) {
-            f2 = f;
-            o2 = o;
-        }
+        keepNearest(f, o, &f1, &o1, &f2, &o2);
     }
     // The place (`edge`): its outside one more shape, its outline cutting the coverage.
     var in_place: f32 = -big;
@@ -891,28 +888,23 @@ pub fn sampleWith(self: *const LiquidField, p: dvui.Point.Physical, l: glass_loo
     if (self.edge != null and !cut) {
         const d = edge_gap - in_place;
         const mat: [3]f32 = .{ m1[0], m1[1], 0 };
+        const hs = h1;
         if (d < d1) {
             d2 = d1;
             m2 = m1;
+            h2 = h1;
             al2 = al1;
             d1 = d;
             m1 = mat;
+            h1 = hs;
             al1 = .{ 0, 0 };
         } else if (d < d2) {
             d2 = d;
             m2 = mat;
+            h2 = hs;
             al2 = .{ 0, 0 };
         }
-        const o: [2]f32 = .{ -place_out[0], -place_out[1] };
-        if (d < f1) {
-            f2 = f1;
-            o2 = o1;
-            f1 = d;
-            o1 = o;
-        } else if (d < f2) {
-            f2 = d;
-            o2 = o;
-        }
+        keepNearest(d, .{ -place_out[0], -place_out[1] }, &f1, &o1, &f2, &o2);
     }
     const k = @max(self.merge_px, 0.0001);
     var wm: f32 = 0;
@@ -954,7 +946,7 @@ pub fn sampleWith(self: *const LiquidField, p: dvui.Point.Physical, l: glass_loo
         .d = dist,
         .coverage = coverage,
         .out = .{ .x = out[0], .y = out[1] },
-        .steep = @exp(-soft / liquid_glass.depthPx(self.look(), rim)),
+        .steep = @exp(-soft / (depth * fitHalf(std.math.lerp(h1, h2, wm), depth))),
         .blur = std.math.lerp(m1[0], m2[0], wm),
         .lens = lens,
         .light = std.math.lerp(m1[2], m2[2], wm),
@@ -964,6 +956,20 @@ pub fn sampleWith(self: *const LiquidField, p: dvui.Point.Physical, l: glass_loo
         .edge_shade = shade,
         .shadow = self.shadowAt(p, coverage, lens),
     };
+}
+
+/// Keep the two nearest soft distances and their ways out, `f1` the nearest: the program's
+/// `f1`/`f2` and `o1`/`o2`.
+fn keepNearest(f: f32, o: [2]f32, f1: *f32, o1: *[2]f32, f2: *f32, o2: *[2]f32) void {
+    if (f < f1.*) {
+        f2.* = f1.*;
+        o2.* = o1.*;
+        f1.* = f;
+        o1.* = o;
+    } else if (f < f2.*) {
+        f2.* = f;
+        o2.* = o;
+    }
 }
 
 /// The program's `sh` at `p`, where the glass covers `coverage` and its lens is `lens`: one
