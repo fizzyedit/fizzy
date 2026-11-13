@@ -279,6 +279,28 @@ pub fn wireAppLayout(
     }
 }
 
+/// Wire an app-owned themes module against this target's framework modules: the editor appends
+/// its themes beside the user's when the build was given one (`-Dapp-theme`, see
+/// `build/app.zig`).
+pub fn wireAppThemes(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.lang.OptimizeMode,
+    app_theme: ?std.Build.LazyPath,
+    dvui: *std.Build.Module,
+    consumer: *std.Build.Module,
+) void {
+    if (app_theme) |path| {
+        const mod = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = path,
+        });
+        mod.addImport("dvui", dvui);
+        consumer.addImport("app_theme", mod);
+    }
+}
+
 /// The whole of a `.zon` shape's generated module: import the file as a `Shape` — which is where
 /// it is type-checked, at comptime, against the field names and enums `Shape` declares —
 /// and hand it to the same walk a hand-written shape's calls would have performed itself.

@@ -242,6 +242,11 @@ plugins_drawing: bool = false,
 ignore: IgnoreRules = .{},
 
 themes: std.ArrayList(dvui.Theme) = .empty,
+/// The theme a fresh settings store starts on, from a plugin's `Host.setDefaultTheme` —
+/// pulled in `postInit`. The host keeps its own copy; this is ours (owned, freed in
+/// `deinit`). Set before the first frame draws, so the fallback chain in
+/// `resolveSettingsTheme` sees it.
+default_theme_override: ?[]const u8 = null,
 
 /// An open document's presence in the surface registry, by document id. A document is a surface
 /// for exactly as long as it is open: registered in `insertOpenDoc`, taken back on close. What
@@ -639,6 +644,15 @@ pub fn init(
         if (comptime builtin.target.cpu.arch != .wasm32) {
             appendUserThemes(app.allocator, &editor) catch |err| {
                 dvui.log.err("Failed to prepare user themes folder: {s}", .{@errorName(err)});
+            };
+        }
+
+        // The app's own themes, contributed at `-Dapp-theme` (see `build/app.zig`). Before
+        // fizzy's own, so an app's themes sit beside the user's at the top of the picker.
+        if (comptime build_opts.has_app_theme) {
+            @import("app_theme").add(app.allocator, &editor.themes) catch |err| {
+                dvui.log.err("Failed to append the app's themes: {t}", .{err});
+                return error.FailedToAppendAppThemes;
             };
         }
 
@@ -1731,12 +1745,20 @@ const WebPluginRequest = struct {
         App.syncLoadedPluginDvuiContexts(&editor.app);
         App.syncLoadedPluginRenderBridge(&editor.app);
         for (editor.app.host.plugins.items) |p| {
-            if (std.mem.eql(u8, p.id, req.id)) p.initPlugin() catch {
-                dvui.log.err("web plugin '{s}': initPlugin failed — see the plugin's own log", .{req.id});
-            };
+            if (std.mem.eql(u8, p.id, req.id)) {
+                p.initPlugin() catch {
+                    dvui.log.err("web plugin '{s}': initPlugin failed — see the plugin's own log", .{req.id});
+                };
+            }
         }
         rebuildKeybinds(editor);
         editor.rebuildExtensionOwnerCache();
+        // The freshly loaded plugin may have registered themes: pull them and re-apply sizes
+        // and the settings theme, as `postInit` does for startup plugins.
+        if (try editor.importHostThemes()) {
+            editor.applyFontSizesFromSettings();
+            editor.applySettingsTheme();
+        }
         if (takeWebFileTypePrompt(gpa, req.id)) editor.maybeShowFileTypeDialog(req.id) catch |err|
             dvui.log.err("web plugin '{s}': file-type prompt: {s}", .{ req.id, @errorName(err) });
         // Remembered here, not by the page when it linked the module: the page cannot know
@@ -2364,6 +2386,19 @@ pub fn postInit(editor: *Editor) !void {
     // Fizzy built-in: Plugin store (owner = null; not a plugin). Registered just before
     // Settings so its icon sits directly above the cog in the sidebar rail.
     try PluginStore.register(editor.pluginManager());
+
+    // Plugins that registered themes and a default in `initPlugin`: pull them now, since the
+    // editor's own theme apply ran in `init`, before any plugin existed. Re-sized and applied
+    // like the built-ins; a registered default names what a fresh settings store starts on.
+    if (try editor.importHostThemes()) {
+        editor.applyFontSizesFromSettings();
+        try editor.applySettingsTheme();
+    } else if (editor.app.host.default_theme) |name| {
+        editor.setDefaultThemeOverride(name) catch |err| {
+            dvui.log.warn("Failed to set the plugin default theme: {s}", .{@errorName(err)});
+        };
+        try editor.applySettingsTheme();
+    }
 
     // Fizzy built-in: Settings (owner = null; not a plugin).
     try editor.app.host.registerSurface(.{
@@ -3597,6 +3632,19 @@ pub fn applyFontSizesFromSettings(editor: *Editor) void {
 /// Select a theme from `editor.themes` matching `settings.theme`: trim, legacy file-name aliases, then exact and case-insensitive name match. Falls back to `Settings.default_theme`, then the first entry, and logs if the stored value did not match anything.
 fn resolveSettingsTheme(editor: *Editor) *dvui.Theme {
     const trimmed = std.mem.trim(u8, editor.app.settings.theme, &std.ascii.whitespace);
+    // An empty stored setting means "the app decides": a plugin's runtime default
+    // (`Host.setDefaultTheme`), then the comptime one (`Settings.default_theme`).
+    if (trimmed.len == 0) {
+        const fallback = editor.default_theme_override orelse Settings.default_theme;
+        for (editor.themes.items) |*t| {
+            if (std.mem.eql(u8, t.name, fallback)) return t;
+        }
+        dvui.log.warn(
+            "Default theme \"{s}\" did not match any known theme; falling back to the first.",
+            .{fallback},
+        );
+        return &editor.themes.items[0];
+    }
     const candidate = App.themeFilenameToName(trimmed) orelse trimmed;
 
     for (editor.themes.items) |*t| {
@@ -3627,9 +3675,47 @@ fn shapedTheme(editor: *const Editor, base: dvui.Theme) dvui.Theme {
     return theme;
 }
 
+/// Pull the themes plugins registered (`Host.registerTheme`) into `editor.themes`: an entry
+/// of the same name is replaced in place, new ones appended. Returns how many changed, so the
+/// caller knows whether to re-apply sizes and the settings theme.
+pub fn importHostThemes(editor: *Editor) !usize {
+    var changed: usize = 0;
+    for (editor.app.host.themes.items) |ht| {
+        var replaced = false;
+        for (editor.themes.items) |*t| {
+            if (std.mem.eql(u8, t.name, ht.name)) {
+                t.* = ht.theme;
+                replaced = true;
+                break;
+            }
+        }
+        if (!replaced) try editor.themes.append(editor.app.allocator, ht.theme);
+        changed += 1;
+        _ = replaced;
+    }
+    if (editor.app.host.default_theme) |name| editor.setDefaultThemeOverride(name) catch |err| {
+        dvui.log.warn("Failed to set the plugin default theme: {s}", .{@errorName(err)});
+    };
+    return changed;
+}
+
+/// Store the plugin-declared default theme (`Host.setDefaultTheme`, pulled with the themes).
+pub fn setDefaultThemeOverride(editor: *Editor, name: []const u8) !void {
+    if (editor.default_theme_override) |o| {
+        if (std.mem.eql(u8, o, name)) return;
+        editor.app.gpa.free(o);
+    }
+    editor.default_theme_override = try editor.app.gpa.dupe(u8, name);
+}
+
 pub fn applySettingsTheme(editor: *Editor) !void {
     const t = resolveSettingsTheme(editor);
-    if (!std.mem.eql(u8, editor.app.settings.theme, t.name)) {
+    // An empty stored setting means "the app decides": leave it empty, so a plugin's runtime
+    // default keeps working after restart. A stored name is kept in step with what resolved
+    // (the legacy file-name alias case canonicalizes here).
+    if (editor.app.settings.theme.len > 0 and
+        !std.mem.eql(u8, editor.app.settings.theme, t.name))
+    {
         try Settings.setThemeName(&editor.app.settings, editor.app.gpa, t.name);
     }
     dvui.themeSet(editor.shapedTheme(t.*));
@@ -7394,6 +7480,7 @@ pub fn rawCloseFileID(editor: *Editor, id: u64) !void {
 pub fn deinit(editor: *Editor) !void {
     if (editor.person_save_deadline_ns != null) editor.savePerson();
     defer editor.app.gpa.free(editor.person_dir);
+    if (editor.default_theme_override) |o| editor.app.gpa.free(o);
     // Freed however this ends: the fallible steps below may return early.
     defer editor.app.deinit();
     // A demo playing at quit leaves the user's layout and settings as `Demo.begin` flushed them:
