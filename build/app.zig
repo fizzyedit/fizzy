@@ -105,6 +105,7 @@ pub const Config = struct {
     app_repo_url_set: bool,
     app_issues_url: []const u8,
     app_layout_path: ?std.Build.LazyPath,
+    app_theme_path: ?std.Build.LazyPath,
     web_storage: []const u8,
     static_workbench: bool,
     static_text: bool,
@@ -526,7 +527,23 @@ pub fn readConfig(b: *std.Build, target: std.Build.ResolvedTarget, opts: Options
         "app-layout",
         "App-owned layout file (pub fn layout(?*anyopaque, *Layout))",
     );
+    // A consumer that wants its own themes passes `-Dapp-theme=` (a LazyPath to
+    // `pub fn add(gpa, themes: *std.ArrayList(dvui.Theme)) !void`), which the editor appends
+    // beside the user's, and `-Dapp-default-theme=` names the theme a fresh settings store
+    // starts with. Fizzy itself ships its own three and starts on `Fizzy Dark`.
+    const app_theme_path = b.option(
+        std.Build.LazyPath,
+        "app-theme",
+        "App-owned themes file (pub fn add(gpa, *std.ArrayList(dvui.Theme)) !void)",
+    );
+    const app_default_theme = b.option(
+        []const u8,
+        "app-default-theme",
+        "The theme a fresh settings store starts with (default: Fizzy Dark)",
+    );
     build_opts.addOption(bool, "has_app_layout", app_layout_path != null);
+    build_opts.addOption(bool, "has_app_theme", app_theme_path != null);
+    build_opts.addOption([]const u8, "app_default_theme", app_default_theme orelse "");
     // The frame of fizzy's own shape an app keeps (`src/editor/Chrome.zig`); the defaults are
     // fizzy's own.
     const chrome_sidebar_edge = b.option(
@@ -631,6 +648,7 @@ pub fn readConfig(b: *std.Build, target: std.Build.ResolvedTarget, opts: Options
         .app_repo_url_set = app_repo_url_set,
         .app_issues_url = app_issues_url,
         .app_layout_path = app_layout_path,
+        .app_theme_path = app_theme_path,
         .web_storage = web_storage,
         .static_workbench = static_workbench,
         .static_text = static_text,
@@ -696,6 +714,7 @@ pub fn construct(
         assets_module,
         app_icon_module,
         cfg.app_layout_path,
+        cfg.app_theme_path,
         try @import("sdk.zig").pluginsFor(b, opts.app_plugins, .web),
         opts.web_plugin_deps,
         opts.web_plugin_dirs,
@@ -784,6 +803,7 @@ fn native(
     const app_repo_url = cfg.app_repo_url;
     const app_repo_url_fallback = cfg.app_repo_url_fallback;
     const app_layout_path = cfg.app_layout_path;
+    const app_theme_path = cfg.app_theme_path;
     const static_workbench = cfg.static_workbench;
     const static_text = cfg.static_text;
     const static_image = cfg.static_image;
@@ -808,6 +828,7 @@ fn native(
         velopack_enabled,
         app_name,
         app_layout_path,
+        app_theme_path,
         app_plugins,
         dynamic_plugins,
     );
@@ -857,6 +878,7 @@ fn native(
             true,
             app_name,
             app_layout_path,
+            app_theme_path,
             app_plugins,
             dynamic_plugins,
         );
@@ -1535,6 +1557,11 @@ fn addTests(
         .optimize = optimize,
         .root_source_file = b.path("src/fizzy.zig"),
     });
+    // The app's themes module, when the build was given one (`-Dapp-theme`): the editor's
+    // comptime `has_app_theme` branch imports it.
+    if (cfg.app_theme_path) |path| {
+        fizzy_test_module.addAnonymousImport("app_theme", .{ .root_source_file = path });
+    }
     fizzy_test_module.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
     fizzy_test_module.addImport("backend", dvui_testing_dep.module("testing"));
     // The testing backend has no viewports (`backend_web.viewports`).
