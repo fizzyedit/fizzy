@@ -172,7 +172,10 @@ else
 
 fn default(allocator: std.mem.Allocator) !Settings {
     return .{
-        .theme = try allocator.dupe(u8, default_theme),
+        // Empty: "the app decides" — the runtime default from a plugin
+        // (`Host.setDefaultTheme`), else `default_theme`. The stored name is
+        // written when the user picks.
+        .theme = try allocator.dupe(u8, ""),
     };
 }
 

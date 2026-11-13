@@ -35,6 +35,14 @@ pub const OpenAction = @import("menus.zig").OpenAction;
 pub const accounts = @import("accounts.zig");
 pub const Command = @import("Command.zig");
 pub const Demo = @import("Demo.zig");
+
+/// A theme a plugin registered (`Host.registerTheme`): the theme by value, its name the host's
+/// own copy, and who registered it, so the themes go with the plugin when it retires.
+pub const HostTheme = struct {
+    owner: ?*Plugin = null,
+    name: []u8,
+    theme: dvui.Theme,
+};
 pub const Claim = @import("Claim.zig");
 pub const Step = @import("Step.zig");
 pub const Author = @import("Author.zig");
@@ -265,6 +273,10 @@ open_actions: std.ArrayList(OpenAction) = .empty,
 demos: std.ArrayList(Demo) = .empty,
 /// Moves whenever `demos` changes, so the app lists them again only then.
 demos_generation: u32 = 0,
+/// Plugins' themes (`registerTheme`): the theme by value, and its name the host's own copy.
+themes: std.ArrayList(HostTheme) = .empty,
+/// The theme a fresh settings store starts on (`setDefaultTheme`), the host's own copy.
+default_theme: ?[]u8 = null,
 /// Who the user is signed in as, per service (`accounts.Provider`). The host draws the disc.
 account_providers: std.ArrayList(accounts.Provider) = .empty,
 /// Pure-data menu leaf items the native (macOS NSMenu) menu builder consumes; see
@@ -390,6 +402,9 @@ pub fn deinit(self: *Host) void {
     self.open_actions.deinit(self.allocator);
     for (self.demos.items) |d| self.freeDemo(d);
     self.demos.deinit(self.allocator);
+    for (self.themes.items) |t| self.allocator.free(t.name);
+    self.themes.deinit(self.allocator);
+    if (self.default_theme) |d| self.allocator.free(d);
     self.account_providers.deinit(self.allocator);
     self.native_menu_items.deinit(self.allocator);
     self.commands.deinit(self.allocator);
@@ -1078,6 +1093,7 @@ fn dropRegistrations(self: *Host, plugin: *Plugin) void {
     removeOwned(MenuSectionContribution, &self.menu_sections, plugin);
     removeOwned(OpenAction, &self.open_actions, plugin);
     removeOwned(RailItemContribution, &self.rail_items, plugin);
+    self.removeThemesOf(plugin);
     self.removeDemosOf(plugin);
     removeOwned(accounts.Provider, &self.account_providers, plugin);
     removeOwned(NativeMenuItem, &self.native_menu_items, plugin);
@@ -1646,6 +1662,46 @@ fn freeDemo(self: *Host, d: Demo) void {
     self.allocator.free(d.name);
     self.allocator.free(d.title);
     self.allocator.free(d.tape);
+}
+
+/// Register a theme the editor appends beside the user's and the app's — see
+/// `Editor.themes`. Copied: only the theme's `name` is kept; its font families must outlive
+/// the registration (literals, as `Font.find` takes). A theme of the same name replaces the
+/// old entry in place, so a reloaded plugin updates its theme instead of duplicating it.
+pub fn registerTheme(self: *Host, owner: ?*Plugin, theme: dvui.Theme) !void {
+    const name = try self.allocator.dupe(u8, theme.name);
+    errdefer self.allocator.free(name);
+    for (self.themes.items) |*t| {
+        if (std.mem.eql(u8, t.name, theme.name)) {
+            self.allocator.free(t.name);
+            t.* = .{ .owner = owner, .name = name, .theme = theme };
+            return;
+        }
+    }
+    try self.themes.append(self.allocator, .{ .owner = owner, .name = name, .theme = theme });
+}
+
+/// The theme a fresh settings store starts on, when the stored setting is empty ("the app
+/// decides"). The host keeps its own copy; calling again replaces it.
+pub fn setDefaultTheme(self: *Host, name: []const u8) !void {
+    if (self.default_theme) |d| {
+        if (std.mem.eql(u8, d, name)) return;
+        self.allocator.free(d);
+    }
+    self.default_theme = try self.allocator.dupe(u8, name);
+}
+
+fn removeThemesOf(self: *Host, plugin: *Plugin) void {
+    var w: usize = 0;
+    for (self.themes.items) |t| {
+        if (t.owner == plugin) {
+            self.allocator.free(t.name);
+            continue;
+        }
+        self.themes.items[w] = t;
+        w += 1;
+    }
+    self.themes.items.len = w;
 }
 
 fn removeDemosOf(self: *Host, plugin: *Plugin) void {
@@ -3158,6 +3214,40 @@ test "pluginForExtension honors a user assignment and ignores a stale one" {
     try testing.expectEqual(&text, host.pluginForExtension(".png").?);
 
     Fake.override = null;
+}
+
+test "registerTheme keeps its own copy, replaces by name, and a plugin's themes go with it" {
+    var host = Host.init(testing.allocator);
+    defer host.deinit();
+    const vtable = Plugin.VTable{};
+    var plugin = Plugin{ .state = undefined, .vtable = &vtable, .id = "guide", .display_name = "Guide" };
+    try host.registerPlugin(&plugin);
+
+    var name_buf = "Graphl Dark".*;
+    try host.registerTheme(&plugin, .{ .name = &name_buf, .dark = true });
+    // Nothing points into what the plugin handed over.
+    name_buf[0] = 'x';
+    try testing.expectEqualStrings("Graphl Dark", host.themes.items[0].name);
+    try testing.expect(host.themes.items[0].dark);
+    try testing.expectEqual(@as(usize, 1), host.themes.items.len);
+
+    // Same name replaces in place rather than duplicating.
+    try host.registerTheme(&plugin, .{ .name = "Graphl Dark", .dark = false });
+    try testing.expectEqual(@as(usize, 1), host.themes.items.len);
+    try testing.expect(!host.themes.items[0].dark);
+
+    try host.registerTheme(&plugin, .{ .name = "Graphl Light" });
+    try testing.expectEqual(@as(usize, 2), host.themes.items.len);
+
+    // The runtime default: stored as the host's own copy, replaced by calling again.
+    try host.setDefaultTheme("Graphl Dark");
+    try host.setDefaultTheme("Graphl Light");
+    try testing.expectEqualStrings("Graphl Light", host.default_theme.?);
+
+    const themes = host.themes.items.len;
+    host.unregisterPlugin(&plugin);
+    try testing.expectEqual(@as(usize, 0), host.themes.items.len);
+    _ = themes;
 }
 
 test "registerDemo keeps its own copy, refuses a name twice, and a plugin's demos go with it" {
