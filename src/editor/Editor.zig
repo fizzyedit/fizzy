@@ -642,6 +642,15 @@ pub fn init(
             };
         }
 
+        // The app's own themes, contributed at `-Dapp-theme` (see `build/app.zig`). Before
+        // fizzy's own, so an app's themes sit beside the user's at the top of the picker.
+        if (comptime build_opts.has_app_theme) {
+            @import("app_theme").add(app.allocator, &editor.themes) catch |err| {
+                dvui.log.err("Failed to append the app's themes: {t}", .{err});
+                return error.FailedToAppendAppThemes;
+            };
+        }
+
         editor.themes.append(app.allocator, fizzy_dark) catch {
             dvui.log.err("Failed to append theme", .{});
             return error.FailedToAppendTheme;
