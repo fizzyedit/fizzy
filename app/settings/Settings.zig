@@ -8,7 +8,13 @@ const build_opts = @import("build_opts");
 
 const Settings = @This();
 
-pub const default_theme = "Fizzy Dark";
+/// The theme a fresh settings store starts with: the app's (`-Dapp-default-theme`,
+/// `build/app.zig`), or fizzy's. It names one of the themes the editor registers (fizzy's, the
+/// user's, or the app's own at `-Dapp-theme`); a name nothing registered logs and falls back.
+pub const default_theme = if (@hasDecl(build_opts, "app_default_theme") and build_opts.app_default_theme.len > 0)
+    build_opts.app_default_theme
+else
+    "Fizzy Dark";
 
 /// Duration after the last edit before autosave runs (during normal operation).
 pub const autosave_timeout_ns: i128 = 500 * 1_000_000;
