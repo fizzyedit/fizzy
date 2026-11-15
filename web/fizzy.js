@@ -142,15 +142,22 @@ export function keyboardInset(win, send, canvas = null, owns = () => true) {
   const vv = win.visualViewport;
   const viewport = win.document?.querySelector('meta[name="viewport"]')?.content ?? "";
   const overlays = /(?:^|[,;])\s*interactive-widget\s*=\s*overlays-content\s*(?:[,;]|$)/i.test(viewport);
+  // Only phones and tablets have a soft keyboard. On a desktop, a window shrinking after
+  // focusin would otherwise read as one and pin the canvas height to the stale focusin rect.
+  const softKeyboard = win.matchMedia?.("(pointer: coarse) and (hover: none)").matches ?? true;
   // A resizing viewport and VK geometry can use different origins. Measure only the
   // visual viewport unless the page explicitly requests an overlay (or has no VV API).
-  const vk = overlays || !vv ? win.navigator?.virtualKeyboard : null;
+  const vk = softKeyboard && (overlays || !vv) ? win.navigator?.virtualKeyboard : null;
+  const keyboardTop = () => {
+    if (!softKeyboard) return Infinity;
+    if (!vk) return vv ? vv.height + vv.offsetTop : win.innerHeight;
+    const { y, height } = vk.boundingRect;
+    return height ? y ?? win.innerHeight - height : Infinity;
+  };
   const update = () => {
     const current = rect();
     const base = rest ?? current;
-    const edge = vk ? (vk.boundingRect.height ? vk.boundingRect.y ?? win.innerHeight - vk.boundingRect.height : Infinity)
-      : vv ? vv.height + vv.offsetTop : win.innerHeight;
-    const next = owns() ? Math.max(0, base.bottom - edge) : 0;
+    const next = owns() ? Math.max(0, base.bottom - keyboardTop()) : 0;
     // resizes-content pages shrink the CSS canvas as well. Keep the focused canvas's layout
     // height until the keyboard closes, so both dvui loops see the same backing-store size.
     if (canvas && next > 0 && current.height < base.height) {

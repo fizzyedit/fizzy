@@ -61,7 +61,7 @@ const document = Object.assign(new Target(), {
 const window = Object.assign(new Target(), {
   visualViewport: Object.assign(new Target(), { height: 100, offsetTop: 0 }),
   devicePixelRatio: 1, scrollX: 0, scrollY: 0, localStorage: new Map(), parent: null,
-  dispatchEvent() {}, matchMedia: () => ({ matches: false, addEventListener() {} }),
+  dispatchEvent() {}, matchMedia: (q) => ({ matches: q === "(pointer: coarse) and (hover: none)", addEventListener() {} }),
 });
 window.parent = window;
 Object.assign(globalThis, {

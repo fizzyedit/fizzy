@@ -14,6 +14,20 @@ class Target {
   fire(type) { this.listeners[type]?.(); }
 }
 
+// A desktop has no soft keyboard: a window shrinking after focusin is not an inset.
+{
+  const vv = Object.assign(new Target(), { height: 800, offsetTop: 0 });
+  const win = Object.assign(new Target(), { navigator: {}, innerHeight: 800, visualViewport: vv, matchMedia: () => ({ matches: false }) });
+  const canvas = { style: { height: '100%' }, getBoundingClientRect: () => ({ bottom: 800, height: 800 }) };
+  const sent = [];
+  keyboardInset(win, (m) => sent.push(m), canvas);
+  win.fire('focusin');
+  vv.height = win.innerHeight = 500;
+  win.fire('resize');
+  assert.deepEqual(sent, []);
+  assert.equal(canvas.style.height, '100%');
+}
+
 // Chrome on Android: the VirtualKeyboard API, with the browser told not to resize or pan.
 {
   const vk = Object.assign(new Target(), { overlaysContent: false, boundingRect: { height: 0 } });
