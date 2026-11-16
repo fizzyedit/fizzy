@@ -242,6 +242,15 @@ plugins_drawing: bool = false,
 ignore: IgnoreRules = .{},
 
 themes: std.ArrayList(dvui.Theme) = .empty,
+/// The defaults `app.settings` follows: `Settings.builtin_defaults` with the ones plugins gave
+/// (`Host.settings.setDefault`) applied over them. What `Settings.serialize` diffs against.
+settings_defaults: Settings = Settings.builtin_defaults,
+/// Holds the strings in `settings_defaults` that a plugin's default brought.
+settings_defaults_arena: std.heap.ArenaAllocator,
+/// Which fields the stored settings file sets: a plugin's default leaves those alone.
+settings_stored: Settings.Fields = .empty,
+/// `Host.settings.generation` when its defaults were last applied.
+settings_defaults_generation: u32 = 0,
 
 /// An open document's presence in the surface registry, by document id. A document is a surface
 /// for exactly as long as it is open: registered in `insertOpenDoc`, taken back on close. What
@@ -479,6 +488,7 @@ pub fn init(
         .infobar = try .init(),
         .last_titlebar_color = dvui.themeGet().color(.control, .fill),
         .themes = .empty,
+        .settings_defaults_arena = .init(app.allocator),
         .workbench = .init(app.allocator),
     };
 
@@ -498,7 +508,7 @@ pub fn init(
         const settings_path = try std.fs.path.join(app.allocator, &.{ editor.app.config_folder, "settings.zon" });
         defer app.allocator.free(settings_path);
         editor.loadPerson(settings_path);
-        editor.app.settings = try Settings.load(app.allocator, settings_path, plugins_dir);
+        editor.app.settings = try Settings.load(app.allocator, settings_path, plugins_dir, &editor.settings_stored);
     }
 
     editor.loadSavedLayout();
@@ -721,7 +731,7 @@ pub fn init(
     // overlay), otherwise the very first autosave after startup would spuriously rewrite the
     // file just because this seed only accounted for fizzy's own fields, not `.plugins`.
     if (comptime builtin.target.cpu.arch == .wasm32) {
-        const serialized = try Settings.serialize(&editor.app.settings, app.allocator);
+        const serialized = try Settings.serialize(&editor.app.settings, &editor.settings_defaults, app.allocator);
         defer app.allocator.free(serialized);
         editor.app.settings_last_saved_hash = std.hash.Wyhash.hash(0, serialized);
     } else {
@@ -1737,6 +1747,8 @@ const WebPluginRequest = struct {
         }
         rebuildKeybinds(editor);
         editor.rebuildExtensionOwnerCache();
+        editor.applyHostSettingDefaults() catch |err|
+            dvui.log.err("web plugin '{s}': settings defaults: {s}", .{ req.id, @errorName(err) });
         if (takeWebFileTypePrompt(gpa, req.id)) editor.maybeShowFileTypeDialog(req.id) catch |err|
             dvui.log.err("web plugin '{s}': file-type prompt: {s}", .{ req.id, @errorName(err) });
         // Remembered here, not by the page when it linked the module: the page cannot know
@@ -2360,6 +2372,11 @@ pub fn postInit(editor: *Editor) !void {
         web_editor = editor;
         PluginLoader.init(editor.app.gpa);
     }
+
+    // Settings defaults plugins gave in `initPlugin`: applied now, since the editor's own settings
+    // apply ran in `init`, before any plugin existed. Before the store registers, which follows a
+    // setting a plugin may have given a default.
+    try editor.applyHostSettingDefaults();
 
     // Fizzy built-in: Plugin store (owner = null; not a plugin). Registered just before
     // Settings so its icon sits directly above the cog in the sidebar rail.
@@ -3594,7 +3611,7 @@ pub fn applyFontSizesFromSettings(editor: *Editor) void {
     }
 }
 
-/// Select a theme from `editor.themes` matching `settings.theme`: trim, legacy file-name aliases, then exact and case-insensitive name match. Falls back to `Settings.default_theme`, then the first entry, and logs if the stored value did not match anything.
+/// Select a theme from `editor.themes` matching `settings.theme`: trim, legacy file-name aliases, then exact and case-insensitive name match. Falls back to the default theme (`settings_defaults`), then the first entry, and logs if the stored value did not match anything.
 fn resolveSettingsTheme(editor: *Editor) *dvui.Theme {
     const trimmed = std.mem.trim(u8, editor.app.settings.theme, &std.ascii.whitespace);
     const candidate = App.themeFilenameToName(trimmed) orelse trimmed;
@@ -3607,10 +3624,10 @@ fn resolveSettingsTheme(editor: *Editor) *dvui.Theme {
     }
     dvui.log.warn(
         "Saved theme \"{s}\" did not match any known theme; falling back to \"{s}\".",
-        .{ trimmed, Settings.default_theme },
+        .{ trimmed, editor.settings_defaults.theme },
     );
     for (editor.themes.items) |*t| {
-        if (std.mem.eql(u8, t.name, Settings.default_theme)) return t;
+        if (std.mem.eql(u8, t.name, editor.settings_defaults.theme)) return t;
     }
     std.debug.assert(editor.themes.items.len > 0);
     return &editor.themes.items[0];
@@ -3625,6 +3642,29 @@ fn shapedTheme(editor: *const Editor, base: dvui.Theme) dvui.Theme {
     theme.corner.rx *= k;
     theme.corner.y *= k;
     return theme;
+}
+
+/// Apply the defaults plugins gave the app's settings (`Host.settings.setDefault`), once they have
+/// initialized (at startup, and when a web plugin loads) and only when they changed since the last
+/// time: a setting the user has not set moves to its plugin's default (`Settings.applyDefault`).
+/// Re-applies what depends on them.
+fn applyHostSettingDefaults(editor: *Editor) !void {
+    const defaults = &editor.app.host.settings;
+    if (defaults.generation == editor.settings_defaults_generation) return;
+    editor.settings_defaults_generation = defaults.generation;
+    for (defaults.entries.items) |e| {
+        Settings.applyDefault(
+            &editor.app.settings,
+            &editor.settings_defaults,
+            editor.settings_stored,
+            editor.app.gpa,
+            editor.settings_defaults_arena.allocator(),
+            e.key,
+            e.zon,
+        ) catch |err| dvui.log.warn("settings default {s} = {s} not applied: {s}", .{ e.key, e.zon, @errorName(err) });
+    }
+    editor.applyHoldMenuDuration();
+    try editor.applySettingsTheme();
 }
 
 pub fn applySettingsTheme(editor: *Editor) !void {
@@ -3749,7 +3789,7 @@ fn composeSettingsText(editor: *Editor, gpa: std.mem.Allocator, settings_path: [
     // tape plays (a plugin's flags, a file type's owner) writes theirs, not the tape's.
     var own = editor.app.settings;
     editor.demo.personsSettings(&own);
-    const fizzy_text = try Settings.serialize(&own, gpa);
+    const fizzy_text = try Settings.serialize(&own, &editor.settings_defaults, gpa);
     defer gpa.free(fizzy_text);
 
     const existing = fizzy.core.fs.readZ(gpa, dvui.io, settings_path) catch null;
@@ -3922,7 +3962,7 @@ pub fn reconcileExternalSettingsChange(editor: *Editor) void {
     // settle before this runs at all).
     var parsed_arena: std.heap.ArenaAllocator = .init(gpa);
     defer parsed_arena.deinit();
-    const parsed = Settings.parseOnly(gpa, parsed_arena.allocator(), data) catch |err| {
+    const parsed = Settings.parseOnly(gpa, parsed_arena.allocator(), data, &editor.settings_defaults, &editor.settings_stored) catch |err| {
         dvui.log.warn("settings watcher: could not parse external settings.zon change ({s}); skipping this reconciliation", .{@errorName(err)});
         return;
     };
@@ -7578,6 +7618,7 @@ pub fn deinit(editor: *Editor) !void {
     // The documents themselves went with their owners' `deinit` above; this is the app's index.
     editor.app.open_files.deinit(editor.app.gpa);
     editor.themes.deinit(editor.app.gpa);
+    editor.settings_defaults_arena.deinit();
     // What `init` joined onto the config folder, then the folder itself.
     if (editor.app.host.plugins_dir) |dir| editor.app.gpa.free(dir);
     editor.app.host.plugins_dir = null;

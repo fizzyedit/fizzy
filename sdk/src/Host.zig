@@ -13,11 +13,11 @@ const DocHandle = @import("DocHandle.zig");
 const document = @import("document.zig");
 const RegionSpec = @import("RegionSpec.zig");
 const language = @import("language.zig");
-const settings = @import("settings.zig");
+const plugin_settings = @import("settings.zig");
 
 pub const Host = @This();
 
-pub const SettingsSchema = settings.SettingsSchema;
+pub const SettingsSchema = plugin_settings.SettingsSchema;
 
 pub const LanguageSupport = language.LanguageSupport;
 pub const TreeSitterHighlight = language.TreeSitterHighlight;
@@ -35,6 +35,7 @@ pub const OpenAction = @import("menus.zig").OpenAction;
 pub const accounts = @import("accounts.zig");
 pub const Command = @import("Command.zig");
 pub const Demo = @import("Demo.zig");
+pub const SettingDefaults = @import("SettingDefaults.zig");
 pub const Claim = @import("Claim.zig");
 pub const Step = @import("Step.zig");
 pub const Author = @import("Author.zig");
@@ -265,6 +266,8 @@ open_actions: std.ArrayList(OpenAction) = .empty,
 demos: std.ArrayList(Demo) = .empty,
 /// Moves whenever `demos` changes, so the app lists them again only then.
 demos_generation: u32 = 0,
+/// Defaults plugins give the app's own settings (`settings.setDefault("theme", "Graphl Dark")`).
+settings: SettingDefaults,
 /// Who the user is signed in as, per service (`accounts.Provider`). The host draws the disc.
 account_providers: std.ArrayList(accounts.Provider) = .empty,
 /// Pure-data menu leaf items the native (macOS NSMenu) menu builder consumes; see
@@ -357,7 +360,7 @@ surface_titles: std.StringHashMapUnmanaged([]u8) = .empty,
 selections: std.AutoHashMapUnmanaged(u64, []const u8) = .empty,
 
 pub fn init(allocator: std.mem.Allocator) Host {
-    return .{ .allocator = allocator };
+    return .{ .allocator = allocator, .settings = .{ .allocator = allocator } };
 }
 
 pub fn deinit(self: *Host) void {
@@ -390,6 +393,7 @@ pub fn deinit(self: *Host) void {
     self.open_actions.deinit(self.allocator);
     for (self.demos.items) |d| self.freeDemo(d);
     self.demos.deinit(self.allocator);
+    self.settings.deinit();
     self.account_providers.deinit(self.allocator);
     self.native_menu_items.deinit(self.allocator);
     self.commands.deinit(self.allocator);
@@ -3160,6 +3164,23 @@ test "pluginForExtension honors a user assignment and ignores a stale one" {
     Fake.override = null;
 }
 
+test "settings.setDefault keeps its value as ZON text, replacing by key" {
+    var host = Host.init(testing.allocator);
+    defer host.deinit();
+    try host.settings.setDefault("theme", "Graphl Dark");
+    try host.settings.setDefault("plugin_marketplace", true);
+    try host.settings.setDefault("input_scheme", .trackpad);
+    try host.settings.setDefault("plugin_marketplace", false);
+    const entries = host.settings.entries.items;
+    try testing.expectEqual(@as(usize, 3), entries.len);
+    try testing.expectEqualStrings("theme", entries[0].key);
+    try testing.expectEqualStrings("\"Graphl Dark\"", entries[0].zon);
+    try testing.expectEqualStrings("plugin_marketplace", entries[1].key);
+    try testing.expectEqualStrings("false", entries[1].zon);
+    try testing.expectEqualStrings(".trackpad", entries[2].zon);
+    try testing.expectEqual(@as(u32, 4), host.settings.generation);
+}
+
 test "registerDemo keeps its own copy, refuses a name twice, and a plugin's demos go with it" {
     var host = Host.init(testing.allocator);
     defer host.deinit();
@@ -3270,7 +3291,7 @@ test "unregisterPlugin removes a plugin's contributions, service, and resets act
     try host.registerFileRowFillColor(.{ .owner = &plugin, .color = noColor });
     try host.registerFileRowDecorator(.{ .owner = &plugin, .draw = noDecoration });
     try host.registerPainter(.{ .owner = &plugin, .draw = noPaint });
-    const empty_access: settings.Access = .{
+    const empty_access: plugin_settings.Access = .{
         .getBool = struct {
             fn f(_: *anyopaque, _: usize) bool {
                 return false;

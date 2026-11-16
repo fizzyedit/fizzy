@@ -159,12 +159,12 @@ pub fn migrateToPerPluginEnabled(allocator: std.mem.Allocator, settings_zon_path
     // `disabled_plugins` list - are ignored), so the rewritten file drops that list for free.
     var parsed_arena: std.heap.ArenaAllocator = .init(allocator);
     defer parsed_arena.deinit();
-    const parsed = Settings.parseOnly(allocator, parsed_arena.allocator(), data) catch |err| {
+    const parsed = Settings.parseOnly(allocator, parsed_arena.allocator(), data, &Settings.builtin_defaults, null) catch |err| {
         dvui.log.warn("settings: could not re-serialize fizzy's own fields for R12 migration ({s}); skipping", .{@errorName(err)});
         return;
     };
 
-    const fizzy_text = Settings.serialize(&parsed, allocator) catch |err| {
+    const fizzy_text = Settings.serialize(&parsed, &Settings.builtin_defaults, allocator) catch |err| {
         dvui.log.warn("settings: could not serialize fizzy's own fields for R12 migration ({s}); skipping", .{@errorName(err)});
         return;
     };
@@ -293,8 +293,8 @@ pub fn personMotion(gpa: std.mem.Allocator, io: std.Io, settings_path: []const u
         person.motion = level;
         try core.person.save(io, person_dir, person);
     }
-    const parsed = try Settings.parseOnly(gpa, arena.allocator(), data);
-    const own = try Settings.serialize(&parsed, gpa);
+    const parsed = try Settings.parseOnly(gpa, arena.allocator(), data, &Settings.builtin_defaults, null);
+    const own = try Settings.serialize(&parsed, &Settings.builtin_defaults, gpa);
     defer gpa.free(own);
     const composed = try SettingsPluginsZon.composeMergedText(gpa, own, data, &.{});
     defer gpa.free(composed);
