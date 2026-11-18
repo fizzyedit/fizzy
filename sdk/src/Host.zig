@@ -1514,10 +1514,28 @@ pub fn unregisterSurface(self: *Host, id: []const u8) void {
     for (self.surfaces.items, 0..) |*s, i| {
         if (std.mem.eql(u8, s.id, id)) {
             self.dropSurfaceTitle(id);
+            self.dropSelectionsOf(s.id);
             _ = self.surfaces.orderedRemove(i);
             return;
         }
     }
+}
+
+/// Forget every selection naming `id`: `setSelectionForKey` keeps the registry's own slice, and
+/// a surface's owner may free the id as soon as it is unregistered (a closed document's is), so
+/// a selection left behind would be compared against freed bytes by the next `Layout.pick`.
+fn dropSelectionsOf(self: *Host, id: []const u8) void {
+    var stale: [16]u64 = undefined;
+    var n: usize = 0;
+    var it = self.selections.iterator();
+    while (it.next()) |e| {
+        const sel = e.value_ptr.*;
+        if (sel.ptr == id.ptr and sel.len == id.len and n < stale.len) {
+            stale[n] = e.key_ptr.*;
+            n += 1;
+        }
+    }
+    for (stale[0..n]) |key| _ = self.selections.remove(key);
 }
 
 /// Rename a surface: what its tab, the picker and menus call it from now on. The Host keeps its
@@ -4011,6 +4029,29 @@ test "a surface's title can change: the Host keeps the copy, and frees it with t
     host.unregisterSurface("chat.doc:/chats/a.chat");
     host.unregisterPlugin(&plugin);
     try testing.expectEqual(@as(u32, 0), host.surface_titles.count());
+}
+
+test "a surface's selections go with it: a closed tab's freed id is never compared again" {
+    const noopDraw = struct {
+        fn f(_: ?*anyopaque) anyerror!dvui.App.Result {
+            return .ok;
+        }
+    }.f;
+    var host = Host.init(testing.allocator);
+    defer host.deinit();
+    const vt = Plugin.VTable{};
+    var plugin = Plugin{ .state = undefined, .vtable = &vt, .id = "text", .display_name = "Text" };
+    try host.registerPlugin(&plugin);
+    // Ids the way the editor makes them: owned by the registrant, freed after unregistering.
+    const id = try testing.allocator.dupe(u8, "text.doc:/a.zig");
+    try host.registerSurface(.{ .id = id, .owner = &plugin, .title = "a.zig", .keywords = keywords.ide.editor, .draw = noopDraw });
+    host.setSelectionForKey(7, id);
+    try testing.expect(host.selectionForKey(7) != null);
+
+    host.unregisterSurface(id);
+    testing.allocator.free(id);
+    // Nothing names the surface any more, so nothing reads what was freed.
+    try testing.expect(host.selectionForKey(7) == null);
 }
 
 test "a step is its author's, the person's when nobody else acts, and the top follows the owner" {

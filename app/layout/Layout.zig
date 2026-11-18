@@ -971,13 +971,19 @@ fn drawSwapped(self: *Layout, slot: u64, s: *Surface, pack: ?*dvui.BoxWidget, bl
 
     const Ctx = struct {
         layout: *Layout,
-        id: []const u8,
+        /// The outgoing surface by the hash of its id, never the id itself: a closed document's
+        /// surface id is freed by the time its place fades to the next tab, and the registry's
+        /// slice in `prev_id` would then be compared against freed bytes.
+        key: ?u64,
         pack: ?*dvui.BoxWidget,
 
         fn drawPrev(ctx: *anyopaque) void {
             const c: *@This() = @ptrCast(@alignCast(ctx));
-            if (c.layout.host.surfaceById(c.id)) |old| {
+            const key = c.key orelse return;
+            for (c.layout.host.surfaces.items) |*old| {
+                if (std.hash.Wyhash.hash(0, old.id) != key) continue;
                 _ = surfaceDraw(old) catch {};
+                return;
             }
         }
 
@@ -987,7 +993,7 @@ fn drawSwapped(self: *Layout, slot: u64, s: *Surface, pack: ?*dvui.BoxWidget, bl
         }
     };
 
-    var ctx: Ctx = .{ .layout = self, .id = tr.prev_id, .pack = pack };
+    var ctx: Ctx = .{ .layout = self, .key = tr.prev_key, .pack = pack };
     const had = tr.prev_id.len > 0;
     // Nothing to swap from - the first thing this place shows: fade it in instead.
     if (!had) {
