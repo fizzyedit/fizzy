@@ -1514,10 +1514,28 @@ pub fn unregisterSurface(self: *Host, id: []const u8) void {
     for (self.surfaces.items, 0..) |*s, i| {
         if (std.mem.eql(u8, s.id, id)) {
             self.dropSurfaceTitle(id);
+            self.dropSelectionsOf(s.id);
             _ = self.surfaces.orderedRemove(i);
             return;
         }
     }
+}
+
+/// Forget every selection naming `id`: `setSelectionForKey` keeps the registry's own slice, and
+/// a surface's owner may free the id as soon as it is unregistered (a closed document's is), so
+/// a selection left behind would be compared against freed bytes by the next `Layout.pick`.
+fn dropSelectionsOf(self: *Host, id: []const u8) void {
+    var stale: [16]u64 = undefined;
+    var n: usize = 0;
+    var it = self.selections.iterator();
+    while (it.next()) |e| {
+        const sel = e.value_ptr.*;
+        if (sel.ptr == id.ptr and sel.len == id.len and n < stale.len) {
+            stale[n] = e.key_ptr.*;
+            n += 1;
+        }
+    }
+    for (stale[0..n]) |key| _ = self.selections.remove(key);
 }
 
 /// Rename a surface: what its tab, the picker and menus call it from now on. The Host keeps its
