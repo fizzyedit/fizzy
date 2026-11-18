@@ -4031,6 +4031,29 @@ test "a surface's title can change: the Host keeps the copy, and frees it with t
     try testing.expectEqual(@as(u32, 0), host.surface_titles.count());
 }
 
+test "a surface's selections go with it: a closed tab's freed id is never compared again" {
+    const noopDraw = struct {
+        fn f(_: ?*anyopaque) anyerror!dvui.App.Result {
+            return .ok;
+        }
+    }.f;
+    var host = Host.init(testing.allocator);
+    defer host.deinit();
+    const vt = Plugin.VTable{};
+    var plugin = Plugin{ .state = undefined, .vtable = &vt, .id = "text", .display_name = "Text" };
+    try host.registerPlugin(&plugin);
+    // Ids the way the editor makes them: owned by the registrant, freed after unregistering.
+    const id = try testing.allocator.dupe(u8, "text.doc:/a.zig");
+    try host.registerSurface(.{ .id = id, .owner = &plugin, .title = "a.zig", .keywords = keywords.ide.editor, .draw = noopDraw });
+    host.setSelectionForKey(7, id);
+    try testing.expect(host.selectionForKey(7) != null);
+
+    host.unregisterSurface(id);
+    testing.allocator.free(id);
+    // Nothing names the surface any more, so nothing reads what was freed.
+    try testing.expect(host.selectionForKey(7) == null);
+}
+
 test "a step is its author's, the person's when nobody else acts, and the top follows the owner" {
     var host: Host = .init(std.testing.allocator);
     defer host.deinit();
