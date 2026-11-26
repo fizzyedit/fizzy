@@ -35,7 +35,9 @@ fn msvcTranslations(b: *std.Build, roots: []const *std.Build.Step.Compile) ![]Tr
                 if (rt.os.tag == .windows and rt.abi == .msvc) try out.append(b.allocator, .{ .step = tc });
             } else if (owner.cast(std.Build.Step.Run)) |run| {
                 const target = toolTarget(run) orelse continue;
-                if (std.mem.endsWith(u8, target, "-windows-msvc")) try out.append(b.allocator, .{ .tool = run });
+                // `<arch>-windows.<min>-msvc` once fizzy raises the minimum (`win10_rs4`).
+                if (std.mem.find(u8, target, "-windows") != null and std.mem.endsWith(u8, target, "-msvc"))
+                    try out.append(b.allocator, .{ .tool = run });
             }
         }
     }

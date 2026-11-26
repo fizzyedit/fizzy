@@ -12,6 +12,7 @@ zig build test --summary all   # show per-artifact pass/fail counts
 zig build test-integration     # headless dvui + SDK tests (needs MSVC on Windows)
 zig build test-all             # unit + integration + test-sdk-version
 zig build check-tests-reached  # every test block is compiled into some test binary
+zig build test-autoupdate      # the updater end to end (minutes; see below)
 ```
 
 To narrow down to a single failing test while you debug:
@@ -146,6 +147,45 @@ What's intentionally **not** here yet:
   loading to work in CI without a real project root, theme bring-up
   without a config dir, and a way to dismiss startup dialogs.
 - Anything that goes through SDL (file dialogs, native menus).
+
+### The auto-updater, end to end
+
+`zig build test-autoupdate` (`autoupdate.zig`, wired in `build/autoupdate_test.zig`) packages the
+app twice with `zig build package`, as 1.0.0 and 1.0.1, each into a prefix of its own, installs
+1.0.0 into a folder of its own and runs it three times against a feed it serves over HTTP: a feed
+nobody answers (the check fails), an empty one (nothing to install), and 1.0.1's, where it asks
+for the install through the control server (`fizzy.update.install`, what the update toast's
+button does) and waits for Velopack to replace the install. The replaced install must then log
+that it is 1.0.1.
+
+The install is what a person would have: on Linux the AppImage, on Windows the portable zip
+unpacked (Velopack keeps its downloads beside it), on macOS the portable zip's bundle in an
+`Applications` folder under a home of the test's own (fizzy updates a bundle only there, and
+Velopack keeps its downloads under the home). It needs `vpk` like `zig build package`, and is not
+part of `zig build test`; CI runs it on all three when the updater or the packaging changes. The
+runs open a window, quietly (`FIZZY_QUIET`), on whatever display they are given; on Linux, to keep
+them off the desktop, run it under Xvfb with Wayland unset:
+
+```sh
+env -u WAYLAND_DISPLAY xvfb-run -a zig build test-autoupdate
+```
+
+Windows packages build for the MSVC ABI, as releases do, which CI cross-compiles from Linux. For a
+target of another OS the step runs nothing and installs the test with both packages into
+`zig-out/autoupdate/`, to run on that OS:
+
+```sh
+zig build msvcup-setup
+zig build test-autoupdate -Dtarget=x86_64-windows-msvc
+# then, on Windows, from zig-out:
+autoupdate\fizzy-autoupdate-test.exe fizzy Fizzy autoupdate\1.0.0 1.0.0 autoupdate\1.0.1 1.0.1
+```
+
+On Linux it clears Velopack's download folder for the app, `/var/tmp/velopack/<app-name>/`, before
+and after. `FIZZY_AUTOUPDATE_KEEP=1` keeps its work folder (`fizzy-autoupdate-*` in the system's
+temporary folder: the profile, the install, Velopack's log but on Windows, where it is in
+`%LOCALAPPDATA%\velopack\`). An app built on fizzy gets the same step with
+`fizzy.addAutoUpdateTestStep(b, fizzy_dep)` after `addPackageSteps`.
 
 ## Adding a new test
 

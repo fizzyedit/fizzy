@@ -131,6 +131,7 @@ pub fn applyAtExit() bool {
         auto_update.logVpkError("fizzy autoupdate: wait_exit_then_apply_updates failed");
         return false;
     }
+    std.log.info("fizzy autoupdate: applying the update once this process exits", .{});
     return true;
 }
 

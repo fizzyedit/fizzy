@@ -62,6 +62,7 @@ jobs:
     outputs:
       code: ${{ steps.filter.outputs.code }}
       sdl: ${{ steps.filter.outputs.sdl }}
+      autoupdate: ${{ steps.filter.outputs.autoupdate }}
     steps:
       # A pull request checks out its merge commit, whose first parent is the base: depth 2
       # holds both.
@@ -70,7 +71,9 @@ jobs:
           fetch-depth: 2
       # `sdl`: SDL's patches, or the backend's build that applies them and pins SDL, changed, so
       # the suites for those patches run (the `sdl` job, and a step of the macOS test job).
-      - name: Anything besides docs? Anything of SDL's?
+      # `autoupdate`: the updater, the packaging or the dependencies changed, so the `autoupdate`
+      # jobs package two versions and update one to the other.
+      - name: Anything besides docs? Anything of SDL's? Of the updater's?
         id: filter
         shell: bash
         env:
@@ -82,18 +85,18 @@ jobs:
           set -euo pipefail
           if [ "$DRAFT" = true ]; then
             echo "::notice::draft pull request: nothing was built; the full CI runs at gh pr ready"
-            printf 'code=false\nsdl=false\n' >> "$GITHUB_OUTPUT"
+            printf 'code=false\nsdl=false\nautoupdate=false\n' >> "$GITHUB_OUTPUT"
             exit 0
           fi
           case "$EVENT" in
             pull_request) base=HEAD^1 ;;
             merge_group) base=$QUEUE_BASE ;;
             push) base=$PUSH_BEFORE ;;
-            *) printf 'code=true\nsdl=true\n' >> "$GITHUB_OUTPUT"; exit 0 ;;
+            *) printf 'code=true\nsdl=true\nautoupdate=true\n' >> "$GITHUB_OUTPUT"; exit 0 ;;
           esac
           # A base that can't be fetched (a force push's old tip) builds everything.
           if ! git cat-file -e "$base^{commit}" 2>/dev/null && ! git fetch --depth=1 origin "$base"; then
-            printf 'code=true\nsdl=true\n' >> "$GITHUB_OUTPUT"
+            printf 'code=true\nsdl=true\nautoupdate=true\n' >> "$GITHUB_OUTPUT"
             exit 0
           fi
           # Assigned first, so a failing diff fails the job (and `ci-ok`) rather than reading as
@@ -101,6 +104,7 @@ jobs:
           files=$(git diff --name-only "$base" HEAD)
           code=false
           sdl=false
+          autoupdate=false
           while IFS= read -r f; do
             case "$f" in
               "" | *.md | doc/* | LICENSE*) ;;
@@ -110,9 +114,16 @@ jobs:
               backend/patches/* | backend/build.zig | backend/build.zig.zon | .github/workflows/ci.yml)
                 sdl=true; echo "SDL's suites: $f changed" ;;
             esac
+            case "$f" in
+              app/update/* | build/package.zig | build/velopack.zig | build/msvc.zig | build/macos_dmg.sh | \
+              build/autoupdate_test.zig | tests/autoupdate.zig | build.zig.zon | .config/dotnet-tools.json | \
+              .github/workflows/ci.yml)
+                autoupdate=true; echo "auto-update: $f changed" ;;
+            esac
           done <<< "$files"
           echo "code=$code" >> "$GITHUB_OUTPUT"
           echo "sdl=$sdl" >> "$GITHUB_OUTPUT"
+          echo "autoupdate=$autoupdate" >> "$GITHUB_OUTPUT"
 
   # Every tracked .zig and .zon file as `zig fmt` writes it. Needs Zig and nothing else: no
   # dependencies, no cache, a few seconds.
@@ -790,13 +801,139 @@ jobs:
           kill "$weston_pid" "$xvfb_pid" || true
           exit "$status"
 
+  # The auto-updater end to end (`zig build test-autoupdate`, tests/README.md): the app packaged
+  # as 1.0.0 and 1.0.1, and 1.0.0 installed, checked against a feed and updated to 1.0.1. Run only
+  # when the updater, the packaging or a dependency changed (`changes`' `autoupdate`): two Debug
+  # packages are minutes each. No Zig cache, as in the `sdl` job: it is rare, and its two package
+  # builds share one run's cache. Linux and macOS package natively; Windows packages are
+  # cross-compiled from Linux, as release.yml builds them, and run on Windows below.
+  autoupdate:
+    name: Auto-update (${{ matrix.name }})
+    needs: changes
+    if: needs.changes.outputs.autoupdate == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, name: Linux }
+          - { os: macos-15, name: macOS }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+          use-cache: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0"
+      - name: Pre-create Zig cache tmp/
+        run: mkdir -p "$ZIG_GLOBAL_CACHE_DIR/tmp" "$ZIG_LOCAL_CACHE_DIR/tmp"
+      - name: Install lavapipe and a headless display
+        if: matrix.name == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            mesa-vulkan-drivers libvulkan1 xvfb xauth \
+            libx11-6 libxext6 libxrandr2 libxcursor1 libxi6 libxfixes3 libxss1 libxtst6 libxkbcommon0
+          echo "VK_DRIVER_FILES=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -n 1)" >> "$GITHUB_ENV"
+      - name: Fetch dependencies (with retries)
+        run: bash scripts/ci-retry.sh zig build --fetch
+      - name: Package 1.0.0 and 1.0.1, update one to the other
+        run: |
+          if [ "${{ matrix.name }}" = Linux ]; then
+            bash scripts/ci-retry.sh xvfb-run -a -s "-screen 0 1280x1024x24" zig build test-autoupdate --summary all
+          else
+            bash scripts/ci-retry.sh zig build test-autoupdate --summary all
+          fi
+
+  autoupdate-windows-packages:
+    name: Auto-update (Windows packages, cross-compiled)
+    needs: changes
+    if: needs.changes.outputs.autoupdate == 'true'
+    # 24.04: 26.04 has no ciopfs, which the MSVC SDK's case-insensitive mount needs.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+          use-cache: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0"
+      - name: Pre-create Zig cache tmp/
+        run: mkdir -p "$ZIG_GLOBAL_CACHE_DIR/tmp" "$ZIG_LOCAL_CACHE_DIR/tmp"
+      - name: Fetch dependencies (with retries)
+        run: |
+          bash scripts/ci-retry.sh zig build --fetch
+          bash scripts/ci-retry.sh zig build --fetch -Dtarget=x86_64-windows-msvc
+      # The MSVC toolchain and Windows SDK, as release.yml sets them up and caches them.
+      - name: MSVC SDK cache key
+        id: msvc-key
+        run: echo "pin=$(grep -o 'velopack_zig-[A-Za-z0-9._-]*' build.zig.zon | head -1)" >> "$GITHUB_OUTPUT"
+      - name: Cache MSVC SDK
+        uses: actions/cache@v4
+        with:
+          path: .velopack-msvc-real
+          key: msvc-sdk-${{ steps.msvc-key.outputs.pin }}
+      - name: Setup MSVC SDK
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y ciopfs
+          mkdir -p .velopack-msvc-real .velopack-msvc
+          ciopfs .velopack-msvc-real .velopack-msvc
+          n=0
+          until [ "$n" -ge 5 ]; do
+            zig build msvcup-setup && break
+            n=$((n + 1))
+            echo "msvcup-setup attempt $n failed, sleeping $((n * 15))s..."
+            sleep $((n * 15))
+          done
+          [ "$n" -lt 5 ] || { echo "msvcup-setup failed after 5 attempts"; exit 1; }
+      - name: Package 1.0.0 and 1.0.1 with the test
+        run: bash scripts/ci-retry.sh zig build test-autoupdate -Dtarget=x86_64-windows-msvc --summary all
+      - uses: actions/upload-artifact@v4
+        with:
+          name: autoupdate-windows
+          path: zig-out/autoupdate
+          if-no-files-found: error
+          retention-days: 3
+
+  autoupdate-windows:
+    name: Auto-update (Windows)
+    needs: [changes, autoupdate-windows-packages]
+    if: needs.changes.outputs.autoupdate == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: autoupdate-windows
+          path: autoupdate
+      # pwsh, not Git Bash: the test takes its folder from %TEMP%, which it must see as Windows
+      # names it.
+      - name: Update 1.0.0 to 1.0.1
+        shell: pwsh
+        run: .\autoupdate\fizzy-autoupdate-test.exe fizzy Fizzy autoupdate\1.0.0 1.0.0 autoupdate\1.0.1 1.0.1
+
   # The required check. Drafts run only changes. Otherwise, every selected job must succeed;
-  # only jobs deliberately excluded by the code/SDL filters may be skipped. Add each new job
-  # to needs and to CODE_RESULTS or SDL_RESULT so the required check includes its result.
+  # only jobs deliberately excluded by the code/SDL/auto-update filters may be skipped. Add each new
+  # job to needs and to CODE_RESULTS, SDL_RESULT or AUTOUPDATE_RESULTS so the required check
+  # includes its result.
   ci-ok:
     name: ci-ok
     if: always() && !(github.event_name == 'pull_request' && github.event.pull_request.draft)
-    needs: [changes, format, test, examples, integration, verdict, windows-fizzy-backend, sdl]
+    needs: [changes, format, test, examples, integration, verdict, windows-fizzy-backend, sdl, autoupdate, autoupdate-windows-packages, autoupdate-windows]
     runs-on: ubuntu-latest
     steps:
       - name: Every selected job passed
@@ -807,6 +944,8 @@ jobs:
           SDL: ${{ needs.changes.outputs.sdl }}
           CODE_RESULTS: ${{ needs.format.result }} ${{ needs.test.result }} ${{ needs.examples.result }} ${{ needs.integration.result }} ${{ needs.verdict.result }} ${{ needs.windows-fizzy-backend.result }}
           SDL_RESULT: ${{ needs.sdl.result }}
+          AUTOUPDATE: ${{ needs.changes.outputs.autoupdate }}
+          AUTOUPDATE_RESULTS: ${{ needs.autoupdate.result }} ${{ needs.autoupdate-windows-packages.result }} ${{ needs.autoupdate-windows.result }}
         run: |
           set -euo pipefail
           [ "$CHANGES" = success ]
@@ -818,3 +957,8 @@ jobs:
           case "$SDL" in true) expected=success ;; false) expected=skipped ;; *) exit 1 ;; esac
           echo "SDL job: $SDL_RESULT (expected $expected)"
           [ "$SDL_RESULT" = "$expected" ]
+          case "$AUTOUPDATE" in true) expected=success ;; false) expected=skipped ;; *) exit 1 ;; esac
+          for r in $AUTOUPDATE_RESULTS; do
+            echo "auto-update job: $r (expected $expected)"
+            [ "$r" = "$expected" ]
+          done
