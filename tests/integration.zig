@@ -14346,11 +14346,11 @@ test "settings: an untouched in-app material is not written; a chosen one is" {
     const Settings = @import("app").settings.Settings;
     const gpa = std.testing.allocator;
     var s: Settings = .{};
-    const plain = try s.serialize(gpa);
+    const plain = try s.serialize(&Settings.builtin_defaults, gpa);
     defer gpa.free(plain);
     try std.testing.expect(std.mem.find(u8, plain, "in_app_material") == null);
     s.in_app_material = .frost;
-    const chosen = try s.serialize(gpa);
+    const chosen = try s.serialize(&Settings.builtin_defaults, gpa);
     defer gpa.free(chosen);
     try std.testing.expect(std.mem.find(u8, chosen, ".in_app_material = .frost") != null);
 }
@@ -14361,17 +14361,17 @@ test "settings: a fresh profile starts with glass off; a saved material is kept"
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
 
-    const fresh = try Settings.parseOnly(gpa, arena.allocator(), ".{}");
+    const fresh = try Settings.parseOnly(gpa, arena.allocator(), ".{}", &Settings.builtin_defaults, null);
     try std.testing.expectEqual(fizzy.core.material.Kind.none, fresh.window_material);
     try std.testing.expectEqual(@as(?fizzy.core.material.Kind, null), fresh.in_app_material);
 
-    const saved = try Settings.parseOnly(gpa, arena.allocator(), ".{ .window_material = .liquid, .in_app_material = .frost }");
+    const saved = try Settings.parseOnly(gpa, arena.allocator(), ".{ .window_material = .liquid, .in_app_material = .frost }", &Settings.builtin_defaults, null);
     try std.testing.expectEqual(fizzy.core.material.Kind.liquid, saved.window_material);
     try std.testing.expectEqual(@as(?fizzy.core.material.Kind, .frost), saved.in_app_material);
 
     var chosen: Settings = .{};
     chosen.window_material = .liquid;
-    const written = try chosen.serialize(gpa);
+    const written = try chosen.serialize(&Settings.builtin_defaults, gpa);
     defer gpa.free(written);
     try std.testing.expect(std.mem.find(u8, written, ".window_material = .liquid") != null);
 }
