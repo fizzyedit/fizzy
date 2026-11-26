@@ -290,6 +290,9 @@ pub fn addFizzyExecutableForTarget(
     /// `Host.layout_ctx`. The file imports `dvui`, `app`, `core`, and `fizzy_sdk` — not
     /// `fizzy` / `Editor` — so the module graph does not cycle.
     app_layout: ?std.Build.LazyPath,
+    /// Consumer-owned themes file (`-Dapp-theme`). When set, Editor appends its themes beside
+    /// the user's. The file imports `dvui`.
+    app_theme: ?std.Build.LazyPath,
     /// Every plugin the application links, in registration order: fizzy's own
     /// (`fizzy.plugins`, built here) and the application's, each a static module from a plugin
     /// package (`plugin_dep.module("plugin")`). Listed in the generated `bundled_plugins` module
@@ -458,6 +461,7 @@ pub fn addFizzyExecutableForTarget(
         sdk_module,
         exe.root_module,
     );
+    sdk.wireAppThemes(b, resolved_target, optimize, app_theme, dvui_mod, exe.root_module);
 
     var dylibs: std.ArrayList(Dylib) = .empty;
     const workbench_dylib: ?*std.Build.Step.Compile = if (dynamic_plugins and

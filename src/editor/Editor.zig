@@ -642,6 +642,15 @@ pub fn init(
             };
         }
 
+        // The app's own themes, contributed at `-Dapp-theme` (see `build/app.zig`). Before
+        // fizzy's own, so an app's themes sit beside the user's at the top of the picker.
+        if (comptime build_opts.has_app_theme) {
+            @import("app_theme").add(app.allocator, &editor.themes) catch |err| {
+                dvui.log.err("Failed to append the app's themes: {t}", .{err});
+                return error.FailedToAppendAppThemes;
+            };
+        }
+
         editor.themes.append(app.allocator, fizzy_dark) catch {
             dvui.log.err("Failed to append theme", .{});
             return error.FailedToAppendTheme;
@@ -1737,6 +1746,8 @@ const WebPluginRequest = struct {
         }
         rebuildKeybinds(editor);
         editor.rebuildExtensionOwnerCache();
+        editor.pullPluginContributions() catch |err|
+            dvui.log.err("web plugin '{s}': themes: {s}", .{ req.id, @errorName(err) });
         if (takeWebFileTypePrompt(gpa, req.id)) editor.maybeShowFileTypeDialog(req.id) catch |err|
             dvui.log.err("web plugin '{s}': file-type prompt: {s}", .{ req.id, @errorName(err) });
         // Remembered here, not by the page when it linked the module: the page cannot know
@@ -2364,6 +2375,8 @@ pub fn postInit(editor: *Editor) !void {
     // Fizzy built-in: Plugin store (owner = null; not a plugin). Registered just before
     // Settings so its icon sits directly above the cog in the sidebar rail.
     try PluginStore.register(editor.pluginManager());
+
+    try editor.pullPluginContributions();
 
     // Fizzy built-in: Settings (owner = null; not a plugin).
     try editor.app.host.registerSurface(.{
@@ -3625,6 +3638,33 @@ fn shapedTheme(editor: *const Editor, base: dvui.Theme) dvui.Theme {
     theme.corner.rx *= k;
     theme.corner.y *= k;
     return theme;
+}
+
+/// What plugins registered in `initPlugin` that the editor holds itself, pulled once they have
+/// initialized (at startup, and when a web plugin loads), since the editor's own apply ran in
+/// `init`, before any plugin existed: their themes. Re-applies the settings theme when any came.
+fn pullPluginContributions(editor: *Editor) !void {
+    if ((try editor.importHostThemes()) > 0) try editor.applySettingsTheme();
+}
+
+/// Pull the themes plugins registered (`Host.registerTheme`) into `editor.themes`: an entry
+/// of the same name is replaced in place, new ones appended. Returns how many it pulled, so the
+/// caller knows whether to re-apply the settings theme.
+pub fn importHostThemes(editor: *Editor) !usize {
+    var changed: usize = 0;
+    for (editor.app.host.themes.items) |ht| {
+        var replaced = false;
+        for (editor.themes.items) |*t| {
+            if (std.mem.eql(u8, t.name, ht.name)) {
+                t.* = ht.theme;
+                replaced = true;
+                break;
+            }
+        }
+        if (!replaced) try editor.themes.append(editor.app.gpa, ht.theme);
+        changed += 1;
+    }
+    return changed;
 }
 
 pub fn applySettingsTheme(editor: *Editor) !void {
