@@ -147,7 +147,10 @@ pub fn build(b: *std.Build) !void {
     var frameworks: app.Frameworks = .{};
     _ = try app.construct(b, target, optimize, base, cfg, &frameworks);
     // On the configure pass that fetches Velopack there is no `package` step to run.
-    if (cfg.vz != null) @import("build/package.zig").addPackageAllStep(b, cfg.no_emit);
+    if (cfg.vz != null) {
+        @import("build/package.zig").addPackageAllStep(b, cfg.no_emit);
+        @import("build/autoupdate_test.zig").addStep(b, b, target, cfg.app_name, cfg.app_display_name);
+    }
 }
 
 /// What `build` parsed for a `defer-app` consumer, so `buildApp` need not re-declare the
@@ -381,6 +384,30 @@ pub fn addPackageSteps(b: *std.Build, fizzy_dep: *std.Build.Dependency) !void {
     }).step);
     b.step("desktop", "Alias for `zig build package`").dependOn(step);
     @import("build/package.zig").addPackageAllStep(b, d.cfg.no_emit);
+}
+
+/// `zig build test-autoupdate` for an app built with `buildApp` and `addPackageSteps`, as a step of
+/// the app's own build `b`: its `package` run twice from its build root, as 1.0.0 and 1.0.1, with
+/// the options its command line was given, then fizzy's `tests/autoupdate.zig` checks that the
+/// 1.0.0 install updates itself in place from a feed holding 1.0.1, on Linux, macOS and Windows
+/// (`build/autoupdate_test.zig`). An app that already has a `test-autoupdate` step gets
+/// `error.AutoUpdateTestStepTaken`.
+///
+/// ```zig
+/// try fizzy.addPackageSteps(b, fizzy_dep);
+/// try fizzy.addAutoUpdateTestStep(b, fizzy_dep);
+/// ```
+pub fn addAutoUpdateTestStep(b: *std.Build, fizzy_dep: *std.Build.Dependency) !void {
+    if (b.top_level_steps.contains("test-autoupdate")) {
+        std.log.err("fizzy.addAutoUpdateTestStep: this build already has a `test-autoupdate` step", .{});
+        return error.AutoUpdateTestStepTaken;
+    }
+    const d = deferred orelse @panic("fizzy.addAutoUpdateTestStep: pass `.@\"defer-app\" = true` to " ++
+        "b.dependency(\"fizzy\", ...) and call fizzy.buildApp first");
+    if (!d.built) @panic("fizzy.addAutoUpdateTestStep: call fizzy.buildApp first");
+    // The configure pass that fetches Velopack builds no package steps.
+    if (d.cfg.vz == null) return;
+    @import("build/autoupdate_test.zig").addStep(b, fizzy_dep.builder, d.target, d.cfg.app_name, d.cfg.app_display_name);
 }
 
 /// `zig build web` for an app built with `buildApp`, as a step of the app's own build `b`: fizzy's

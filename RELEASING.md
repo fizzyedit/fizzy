@@ -213,7 +213,9 @@ missing.
 
 ## Testing the auto-updater without a real release
 
-There are two paths:
+`zig build test-autoupdate` does it end to end on Linux, macOS and Windows: it packages 1.0.0 and
+1.0.1, serves 1.0.1's feed, and checks the 1.0.0 install replaces itself (`tests/README.md`). By
+hand there are two paths:
 
 1. **Local feed.** Run `zig build packageall -Doptimize=ReleaseFast`, then
    point a built copy at the local output dir:

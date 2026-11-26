@@ -272,37 +272,11 @@ pub fn addPackageAllStep(b: *std.Build, no_emit: bool) void {
         return;
     }
 
-    // This build's command-line options, sorted so the command lines are the same each run.
-    // Not the target's own (each run names its own target), and the Windows MSVC ones only for
-    // the runs that build for it. `-Doptimize` only as given: an app's build may not declare it.
+    // This build's options but the target's own (each run names its own target), and the Windows
+    // MSVC ones only for the runs that build for it.
     const target_options = [_][]const u8{ "target", "cpu", "ofmt", "dynamic-linker" };
     const msvc_options = [_][]const u8{ "windows-msvc-libc", "fetch-msvc" };
-    var common: std.ArrayList([]const u8) = .empty;
-    var msvc_only: std.ArrayList([]const u8) = .empty;
-    switch (b.graph.release_mode) {
-        .off => {},
-        .any => common.append(b.allocator, "--release") catch @panic("OOM"),
-        else => |mode| common.append(b.allocator, b.fmt("--release={s}", .{@tagName(mode)})) catch @panic("OOM"),
-    }
-    var it = b.user_input_options.iterator();
-    while (it.next()) |entry| {
-        const name = entry.key_ptr.*;
-        if (isOneOf(name, &target_options)) continue;
-        const list = if (isOneOf(name, &msvc_options)) &msvc_only else &common;
-        switch (entry.value_ptr.*) {
-            .flag => list.append(b.allocator, b.fmt("-D{s}", .{name})) catch @panic("OOM"),
-            .scalar => |v| list.append(b.allocator, b.fmt("-D{s}={s}", .{ name, v })) catch @panic("OOM"),
-            .list => |l| for (l.items) |v|
-                list.append(b.allocator, b.fmt("-D{s}={s}", .{ name, v })) catch @panic("OOM"),
-            // Only a `b.dependency` call passes these, never a command line.
-            .map, .lazy_path, .lazy_path_list => {},
-        }
-    }
-    for ([_][][]const u8{ common.items, msvc_only.items }) |items| std.mem.sort([]const u8, items, {}, struct {
-        fn lessThan(_: void, l: []const u8, r: []const u8) bool {
-            return std.mem.lessThan(u8, l, r);
-        }
-    }.lessThan);
+    const options = commandLineOptions(b, &target_options, &msvc_options);
 
     // Build order is deliberately fail-fast: Windows first (most likely to
     // fail on a fresh CI runner because of MSVC SDK setup, libc.ini paths,
@@ -324,8 +298,8 @@ pub fn addPackageAllStep(b: *std.Build, no_emit: bool) void {
         const zig_pkg_run = b.addSystemCommand(
             &.{ b.graph.zig_exe, "build", "package", b.fmt("-Dtarget={s}", .{triple}) },
         );
-        zig_pkg_run.addArgs(common.items);
-        if (std.mem.endsWith(u8, triple, "-windows-msvc")) zig_pkg_run.addArgs(msvc_only.items);
+        zig_pkg_run.addArgs(options.common);
+        if (std.mem.endsWith(u8, triple, "-windows-msvc")) zig_pkg_run.addArgs(options.apart);
         // This build's own build file, from the cwd this build was run in (inherited): a
         // relative path option (`-Dapp-icon=…`) is relative to that cwd, as it was here.
         zig_pkg_run.addArgs(&.{ "--build-file", b.root.joinString(b.allocator, "build.zig") catch @panic("OOM") });
@@ -333,6 +307,44 @@ pub fn addPackageAllStep(b: *std.Build, no_emit: bool) void {
         prev_step = &zig_pkg_run.step;
     }
     packageall_step.dependOn(prev_step.?);
+}
+
+/// This build's command line, for another `zig build` of the same build file: its release mode and
+/// each `-D` option, sorted so the command lines are the same each run. An option named in `skip`
+/// is left out; one named in `apart` goes in `.apart` instead of `.common`. `-Doptimize` only as
+/// given: an app's build may not declare it.
+pub fn commandLineOptions(
+    b: *std.Build,
+    skip: []const []const u8,
+    apart: []const []const u8,
+) struct { common: []const []const u8, apart: []const []const u8 } {
+    var common: std.ArrayList([]const u8) = .empty;
+    var apart_list: std.ArrayList([]const u8) = .empty;
+    switch (b.graph.release_mode) {
+        .off => {},
+        .any => common.append(b.allocator, "--release") catch @panic("OOM"),
+        else => |mode| common.append(b.allocator, b.fmt("--release={s}", .{@tagName(mode)})) catch @panic("OOM"),
+    }
+    var it = b.user_input_options.iterator();
+    while (it.next()) |entry| {
+        const name = entry.key_ptr.*;
+        if (isOneOf(name, skip)) continue;
+        const list = if (isOneOf(name, apart)) &apart_list else &common;
+        switch (entry.value_ptr.*) {
+            .flag => list.append(b.allocator, b.fmt("-D{s}", .{name})) catch @panic("OOM"),
+            .scalar => |v| list.append(b.allocator, b.fmt("-D{s}={s}", .{ name, v })) catch @panic("OOM"),
+            .list => |l| for (l.items) |v|
+                list.append(b.allocator, b.fmt("-D{s}={s}", .{ name, v })) catch @panic("OOM"),
+            // Only a `b.dependency` call passes these, never a command line.
+            .map, .lazy_path, .lazy_path_list => {},
+        }
+    }
+    for ([_][][]const u8{ common.items, apart_list.items }) |items| std.mem.sort([]const u8, items, {}, struct {
+        fn lessThan(_: void, l: []const u8, r: []const u8) bool {
+            return std.mem.lessThan(u8, l, r);
+        }
+    }.lessThan);
+    return .{ .common = common.items, .apart = apart_list.items };
 }
 
 fn isOneOf(name: []const u8, names: []const []const u8) bool {

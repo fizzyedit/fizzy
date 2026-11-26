@@ -22,6 +22,7 @@ const sdk = @import("fizzy_sdk");
 const Keymap = @import("app").keymap.Keymap;
 const adapter = @import("app").keymap.dvui_adapter;
 const restart = @import("app").restart;
+const update_notify = @import("app").update.update_notify;
 const AppInfo = @import("app").AppInfo;
 
 pub const Keybinds = @This();
@@ -191,6 +192,9 @@ const fizzy_commands = [_]FizzyCommand{
     // control server reads the screen as text, and waits for a load to land before it looks.
     .{ .id = "fizzy.screen", .title = "What Is on Screen", .bind = null, .params = ScreenArgs.params, .runWith = ScreenArgs.bind(cmdScreen), .visibility = .internal },
     .{ .id = "fizzy.settled", .title = "Wait Until Settled", .bind = null, .params = SettledArgs.params, .runWith = SettledArgs.bind(cmdSettled), .visibility = .internal },
+    // For programs: an end-to-end test of the updater installs what the launch check found
+    // (`tests/autoupdate.zig`). A person has the update toast and About.
+    .{ .id = "fizzy.update.install", .title = "Install the Update", .bind = null, .params = UpdateInstallArgs.params, .runWith = UpdateInstallArgs.bind(cmdUpdateInstall), .visibility = .internal },
 } ++ open_folder_commands ++ automation_commands;
 
 /// Demo automation (`Editor.Demo`): the transport for whichever demo is loaded — the palette
@@ -764,6 +768,20 @@ fn cmdSettled(state: *anyopaque, args: SettledArgs.Args, call: *sdk.Command.Call
     if (editor.demo.service.api.settled()) return call.returns(true);
     const now = std.Io.Clock.awake.now(dvui.io).nanoseconds;
     try editor.later_settles.append(editor.app.gpa, .{ .ticket = call.later(), .deadline_ns = now + @as(i96, args.timeout_ms) * std.time.ns_per_ms });
+}
+
+const UpdateInstallArgs = sdk.Command.Params(struct {});
+
+/// Downloads the update the launch check found and restarts into it, as the update toast's
+/// Relaunch to update does; fails when the check found none or has not answered yet.
+// lint-allow(anyerror): the handler `Command.Params.bind` takes.
+fn cmdUpdateInstall(_: *anyopaque, _: UpdateInstallArgs.Args, call: *sdk.Command.Call) anyerror!void {
+    switch (update_notify.appUpdateState()) {
+        .available => update_notify.kickInstall(),
+        .installing => {},
+        .checking => return call.fail("the launch update check has not answered yet", .{}),
+        .none => return call.fail("no update is available", .{}),
+    }
 }
 
 const TracksArgs = sdk.Command.Params(struct {});

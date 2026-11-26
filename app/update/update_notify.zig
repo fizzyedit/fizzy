@@ -141,17 +141,33 @@ fn worker(
         phase.store(@backingInt(Phase.done_no), .release);
         return;
     };
+    // One line per launch saying what the check found, which `tests/autoupdate.zig` reads.
     switch (summary) {
         .available => |v| {
+            std.log.info("fizzy autoupdate: update available: {s}", .{v});
             const n = @min(v.len, remote_ver.len);
             @memcpy(remote_ver[0..n], v[0..n]);
             remote_ver_len = n;
             phase.store(@backingInt(Phase.done_yes), .release);
         },
-        .no_update, .remote_empty => {
+        .no_update => {
+            std.log.info("fizzy autoupdate: no update available", .{});
             phase.store(@backingInt(Phase.done_no), .release);
         },
-        else => {
+        .remote_empty => {
+            std.log.info("fizzy autoupdate: remote feed empty", .{});
+            phase.store(@backingInt(Phase.done_no), .release);
+        },
+        .failed => {
+            var err_buf: [512]u8 = undefined;
+            std.log.warn("fizzy autoupdate: check failed: {s}", .{auto_update.lastErrorSlice(&err_buf)});
+            phase.store(@backingInt(Phase.done_no), .release);
+        },
+        .install_layout_unsupported => {
+            std.log.info("fizzy autoupdate: this install cannot update in place", .{});
+            phase.store(@backingInt(Phase.done_no), .release);
+        },
+        .unavailable, .no_feed => {
             phase.store(@backingInt(Phase.done_no), .release);
         },
     }
